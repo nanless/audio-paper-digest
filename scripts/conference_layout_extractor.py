@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""会议 PDF 增强型确定性本地抽取器（Wave 13 Track 13.2 Companion v2）。
+"""会议 PDF 增强型确定性本地布局抽取器。
 
-与冻结的 v1 抽取器 `scripts/conference_extractor.py` 保持完全隔离：
+与冻结的旧版抽取器 `scripts/conference_extractor.py` 保持完全隔离：
 - `conference_extractor.py` 及其历史冷重放 SHA 锚点零修改，旧版 `verify_extraction` 原样保留；
-- 本模块面向新会议批次提供 Wave 10/12 拉齐能力：
+- 本模块面向新会议批次提供与日更齐平的版面与证据能力：
   1. 双栏感知文本重排（解决 IEEE/ISCA/ICASSP/Interspeech `sort=True` 左右栏交错）；
   2. 288 DPI 高清自适应插图裁切（兼容图注在图下或图上、跨栏图、旋转页与 2 MiB/24 MiB 体积上限）；
   3. Booktabs 横线表 + 严格网格表 + 旋转 `sidewaystable` + 跨页 `Table N (continued)` 拼接 + 音频/语音/音乐专业指标词典无框表回退；
-  4. 接入 `pdf_author_extract.py` v2 首页几何作者机构抽取，并保留 OpenReview / IEEE / ISCA / ACL / NeurIPS 官方元数据中的原始机构信息；
-  5. 完整继承 v1 的 `O_NOFOLLOW`/`O_EXCL` 安全文件读取、严格防重键 JSON 解析、原页视觉审计与逐字节 `verify_extraction_v2` 重放核验。
+  4. 接入 `pdf_author_extract.py` 首页几何作者机构抽取，并保留 OpenReview / IEEE / ISCA / ACL / NeurIPS 官方元数据中的原始机构信息；
+  5. 完整继承旧版的 `O_NOFOLLOW`/`O_EXCL` 安全文件读取、严格防重键 JSON 解析、原页视觉审计与逐字节 `verify_extraction_enhanced` 重放核验。
 """
 
 from __future__ import annotations
@@ -78,20 +78,20 @@ import pdf_author_extract
 import pdf_figure_table_extract
 
 
-EXTRACTOR_V2_NAME = "audio-paper-digest-conference-structured-v2"
-EXTRACTOR_V2_CONTRACT = "conference-pdf-extraction-v2"
-ARTIFACT_V2_CONTRACT = "conference-structured-artifacts-v2-enhanced"
-ARTIFACT_V2_PROFILE = "conference-pdf-replayable-layout-v2"
-RECEIPT_V2_CONTRACT = "conference-pdf-extraction-receipt-v2-enhanced"
-VERIFICATION_V2_CONTRACT = "conference-pdf-extraction-verification-v2-enhanced"
+EXTRACTOR_ENHANCED_NAME = "audio-paper-digest-conference-structured-enhanced"
+EXTRACTOR_ENHANCED_CONTRACT = "conference-pdf-extraction-enhanced"
+ARTIFACT_ENHANCED_CONTRACT = "conference-structured-artifacts-enhanced"
+ARTIFACT_ENHANCED_PROFILE = "conference-pdf-replayable-layout-enhanced"
+RECEIPT_ENHANCED_CONTRACT = "conference-pdf-extraction-receipt-enhanced"
+VERIFICATION_ENHANCED_CONTRACT = "conference-pdf-extraction-verification-enhanced"
 OFFICIAL_METADATA_AUTHOR_CONTRACT = "conference-official-metadata-author-evidence-v1"
 
 FIGURE_TARGET_DPI = 288
 FIGURE_SCALE_LADDER: tuple[float, ...] = (4.0, 3.0, 2.0, 1.6, 1.3, 1.0, 0.8, 0.6)
 MAX_FIGURE_LONG_EDGE_PX = 2400
 MAX_FIGURE_PIXELS = 12_000_000
-MAX_FIGURES_V2 = 64
-MAX_TABLES_V2 = 64
+MAX_FIGURES_ENHANCED = 64
+MAX_TABLES_ENHANCED = 64
 
 # 覆盖 ASR / 说话人 / 语音增强与分离 / TTS 与音质 / 音频编解码 / 音乐与通用音频生成 / 效率与通用 ML 指标。
 # 避免将常见英文正文单词（如 is/map/mean/score/loss/change/avg/overall）纳入小写匹配。
@@ -121,8 +121,8 @@ AUDIO_METRIC_UPPER_ACRONYMS: frozenset[str] = frozenset({
     "IS", "FD", "KL", "F0", "F1", "MAP", "SIG", "BAK", "OVL", "SIM", "HZ",
 })
 
-_EXTRACTOR_V2_DEPENDENCY_FILES: tuple[str, ...] = (
-    "conference_extractor_v2.py",
+_EXTRACTOR_ENHANCED_DEPENDENCY_FILES: tuple[str, ...] = (
+    "conference_layout_extractor.py",
     "conference_extractor.py",
     "pdf_figure_table_extract.py",
     "pdf_author_extract.py",
@@ -134,16 +134,16 @@ _PLACEHOLDER_AFFILIATION_RE = re.compile(
 )
 
 
-def extractor_v2_dependency_sha256s() -> dict[str, str]:
+def extractor_enhanced_dependency_sha256s() -> dict[str, str]:
     base = Path(__file__).absolute().parent
     return {
         name: sha256_bytes(read_regular_bytes(base / name))
-        for name in _EXTRACTOR_V2_DEPENDENCY_FILES
+        for name in _EXTRACTOR_ENHANCED_DEPENDENCY_FILES
     }
 
 
-def extractor_v2_implementation_sha256() -> str:
-    return _stable_hash(extractor_v2_dependency_sha256s())
+def extractor_enhanced_implementation_sha256() -> str:
+    return _stable_hash(extractor_enhanced_dependency_sha256s())
 
 
 def _clean_structure_text(value: str, maximum: int = 4000) -> str:
@@ -378,13 +378,13 @@ def _extract_page_text_two_column_aware(doc: Any, page: Any) -> str:
             temp_doc.close()
 
 
-def extract_pages_v2(pdf_bytes: bytes) -> list[str]:
+def extract_pages_enhanced(pdf_bytes: bytes) -> list[str]:
     """双栏感知的逐页 PDF 文本抽取。"""
     try:
         fitz = importlib.import_module("fitz")
     except ImportError as exc:
         raise ConferenceExtractionDependencyError(
-            "PyMuPDF is required for conference PDF v2 extraction; install requirements.txt"
+            "PyMuPDF is required for conference PDF enhanced extraction; install requirements.txt"
         ) from exc
     try:
         with _quiet_pymupdf_output():
@@ -410,7 +410,7 @@ def extract_pages_v2(pdf_bytes: bytes) -> list[str]:
         raise
     except Exception as exc:
         raise ConferencePdfExtractionError(
-            f"PyMuPDF v2 could not extract the PDF ({type(exc).__name__})"
+            f"PyMuPDF enhanced extractor could not extract the PDF ({type(exc).__name__})"
         ) from exc
     if not pages:
         raise ConferencePdfExtractionError("PDF contains no pages")
@@ -637,7 +637,7 @@ def _audio_borderless_tables_on_page(
     return records
 
 
-def extract_tables_v2(doc: Any, pdf_sha: str) -> list[dict[str, Any]]:
+def extract_tables_enhanced(doc: Any, pdf_sha: str) -> list[dict[str, Any]]:
     """融合 booktabs/网格/旋转表/跨页续表与音频指标无框表的会议表格抽取。"""
     primary_tables = pdf_figure_table_extract._extract_pdf_tables(doc, pdf_sha)
     records: list[dict[str, Any]] = []
@@ -700,7 +700,7 @@ def extract_tables_v2(doc: Any, pdf_sha: str) -> list[dict[str, Any]]:
 
     # 对 booktabs / 网格未覆盖的实验表，补跑音频专业指标无框表回退（同时兼容旋转页与 sidewaystable）。
     for page_idx, page in enumerate(doc, start=1):
-        if len(records) >= MAX_TABLES_V2:
+        if len(records) >= MAX_TABLES_ENHANCED:
             break
         explicit_rot, caps = page_captions.get(page_idx, (None, []))
         if not caps or all(str(c["number"]).upper() in recovered_numbers for c in caps):
@@ -722,7 +722,7 @@ def extract_tables_v2(doc: Any, pdf_sha: str) -> list[dict[str, Any]]:
 
     records.sort(key=lambda item: (item["page"], item["sort_y0"], item["sort_x0"], item["caption"]))
     final_records: list[dict[str, Any]] = []
-    for idx, rec in enumerate(records[:MAX_TABLES_V2], start=1):
+    for idx, rec in enumerate(records[:MAX_TABLES_ENHANCED], start=1):
         final_records.append({
             "ordinal": idx,
             "page": rec["page"],
@@ -734,7 +734,7 @@ def extract_tables_v2(doc: Any, pdf_sha: str) -> list[dict[str, Any]]:
     return final_records
 
 
-def _render_figure_png_v2(
+def _render_figure_png_enhanced(
     page: Any,
     clip_bbox: list[float] | tuple[float, float, float, float],
     remaining_total_bytes: int,
@@ -775,7 +775,7 @@ def _render_figure_png_v2(
     return None
 
 
-def extract_figures_v2(doc: Any) -> list[dict[str, Any]]:
+def extract_figures_enhanced(doc: Any) -> list[dict[str, Any]]:
     """使用几何图框定位与 288 DPI 阶梯渲染提取会议论文插图。"""
     fitz = importlib.import_module("fitz")
     records: list[dict[str, Any]] = []
@@ -783,7 +783,7 @@ def extract_figures_v2(doc: Any) -> list[dict[str, Any]]:
     total_asset_bytes = 0
 
     for page_num, page in enumerate(doc, start=1):
-        if len(records) >= MAX_FIGURES_V2:
+        if len(records) >= MAX_FIGURES_ENHANCED:
             break
         temp_doc = None
         work_page = page
@@ -808,7 +808,7 @@ def extract_figures_v2(doc: Any) -> list[dict[str, Any]]:
             if not visual_rects:
                 continue
             for cap in fig_caps:
-                if len(records) >= MAX_FIGURES_V2:
+                if len(records) >= MAX_FIGURES_ENHANCED:
                     break
                 num_key = str(cap["number"]).upper()
                 if num_key in seen_numbers:
@@ -824,7 +824,7 @@ def extract_figures_v2(doc: Any) -> list[dict[str, Any]]:
                     crop_bbox[2] + offset_x,
                     crop_bbox[3] + offset_y,
                 ]
-                rendered = _render_figure_png_v2(
+                rendered = _render_figure_png_enhanced(
                     page, render_bbox, MAX_TOTAL_FIGURE_ASSET_BYTES - total_asset_bytes
                 )
                 if rendered is None:
@@ -984,12 +984,12 @@ def extract_official_metadata_authors(
     }
 
 
-def extract_conference_authors_v2(
+def extract_conference_authors_enhanced(
     pdf_bytes: bytes,
     metadata: dict[str, Any] | None = None,
     metadata_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """同时提取 PDF 首页几何作者机构（pdf_author_extract v2）与官方元数据机构信息。"""
+    """同时提取 PDF 首页几何作者机构与官方元数据机构信息。"""
     pdf_page1 = None
     try:
         with _quiet_pymupdf_output():
@@ -1009,7 +1009,7 @@ def extract_conference_authors_v2(
     }
 
 
-def _extract_formulas_v2(
+def _extract_formulas_enhanced(
     doc: Any,
     visual_audit: dict[str, Any],
     format_reference: dict[str, Any] | None,
@@ -1065,7 +1065,7 @@ def _extract_formulas_v2(
     return formulas
 
 
-def extract_structures_v2(
+def extract_structures_enhanced(
     pdf_bytes: bytes,
     visual_audit: dict[str, Any],
     format_reference: dict[str, Any] | None = None,
@@ -1074,7 +1074,7 @@ def extract_structures_v2(
         fitz = importlib.import_module("fitz")
     except ImportError as exc:
         raise ConferenceExtractionDependencyError(
-            "PyMuPDF is required for conference PDF v2 structured extraction"
+            "PyMuPDF is required for conference PDF enhanced structured extraction"
         ) from exc
     pdf_sha = sha256_bytes(pdf_bytes)
     try:
@@ -1083,9 +1083,9 @@ def extract_structures_v2(
             try:
                 if doc.needs_pass:
                     raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
-                tables = extract_tables_v2(doc, pdf_sha)
-                figures = extract_figures_v2(doc)
-                formulas = _extract_formulas_v2(doc, visual_audit, format_reference)
+                tables = extract_tables_enhanced(doc, pdf_sha)
+                figures = extract_figures_enhanced(doc)
+                formulas = _extract_formulas_enhanced(doc, visual_audit, format_reference)
                 return _json_safe_deep({
                     "tables": tables,
                     "formulas": formulas,
@@ -1097,17 +1097,17 @@ def extract_structures_v2(
         raise
     except Exception as exc:
         raise ConferencePdfExtractionError(
-            f"PyMuPDF v2 structured extraction failed ({type(exc).__name__})"
+            f"PyMuPDF enhanced structured extraction failed ({type(exc).__name__})"
         ) from exc
 
 
-def run_extraction_v2(
+def run_extraction_enhanced(
     manifest_name: str,
     *,
     apply: bool,
     source_root: Path = DEFAULT_STAGING_SOURCE_DIR,
 ) -> dict[str, Any]:
-    """运行增强版 v2 会议 PDF 确定性抽取，继承 v1 全部文件安全与不可变落盘边界。"""
+    """运行增强版会议 PDF 确定性抽取，继承旧版全部文件安全与不可变落盘边界。"""
     manifest_name = _safe_name(manifest_name, SAFE_JSON_NAME, "manifest name")
     root_fd = _open_root(Path(source_root))
     try:
@@ -1142,7 +1142,7 @@ def run_extraction_v2(
             fitz = importlib.import_module("fitz")
         except ImportError as exc:
             raise ConferenceExtractionDependencyError(
-                "PyMuPDF is required for conference PDF v2 extraction; install requirements.txt"
+                "PyMuPDF is required for conference PDF enhanced extraction; install requirements.txt"
             ) from exc
         backend_info = {"name": "pymupdf", "version": str(getattr(fitz, "VersionBind", "unknown"))}
         options = dict(request["options"])
@@ -1154,7 +1154,7 @@ def run_extraction_v2(
         blocked_reason: dict[str, str] | None = None
 
         try:
-            pages = extract_pages_v2(pdf_bytes)
+            pages = extract_pages_enhanced(pdf_bytes)
             pages = [_normalize_page_text(p) for p in pages]
             text_bytes, ranges = _page_ranges(pages)
             page_count = len(pages)
@@ -1181,8 +1181,8 @@ def run_extraction_v2(
                 raise ConferencePdfExtractionError(
                     f"PDF visual audit failed ({type(exc).__name__})"
                 ) from exc
-            structures = extract_structures_v2(pdf_bytes, visual_audit, request)
-            author_evidence = extract_conference_authors_v2(pdf_bytes, metadata, metadata_sha)
+            structures = extract_structures_enhanced(pdf_bytes, visual_audit, request)
+            author_evidence = extract_conference_authors_enhanced(pdf_bytes, metadata, metadata_sha)
             minimum_text_characters = options["minimumTextCharacters"]
             short = non_whitespace < minimum_text_characters
             status = "blocked" if short else "ready"
@@ -1198,8 +1198,8 @@ def run_extraction_v2(
                 else None
             )
             artifact = {
-                "contract": ARTIFACT_V2_CONTRACT,
-                "profile": ARTIFACT_V2_PROFILE,
+                "contract": ARTIFACT_ENHANCED_CONTRACT,
+                "profile": ARTIFACT_ENHANCED_PROFILE,
                 "offsetUnit": OFFSET_UNIT,
                 "flattenedTextSha256": sha256_bytes(text_bytes),
                 "pages": ranges,
@@ -1209,9 +1209,9 @@ def run_extraction_v2(
                 "visualAudit": visual_audit,
                 "authorEvidence": author_evidence,
                 "extractorProfile": {
-                    "readingOrder": "two-column-aware-v2",
+                    "readingOrder": "two-column-aware",
                     "figureTargetDpi": FIGURE_TARGET_DPI,
-                    "tableRecovery": "booktabs-grid-audio-metrics-v2",
+                    "tableRecovery": "booktabs-grid-audio-metrics",
                 },
             }
             artifact = _json_safe_deep(artifact)
@@ -1238,7 +1238,7 @@ def run_extraction_v2(
             "sha256": sha256_bytes(artifact_bytes),
         }
         receipt_body = {
-            "contract": RECEIPT_V2_CONTRACT,
+            "contract": RECEIPT_ENHANCED_CONTRACT,
             "status": status,
             "textReplayable": status == "ready",
             "structuredReplayable": status == "ready",
@@ -1250,10 +1250,10 @@ def run_extraction_v2(
                 "pdf": {**request["source"]["pdf"], "sha256": pdf_sha},
             },
             "extractor": {
-                "contract": EXTRACTOR_V2_CONTRACT,
-                "name": EXTRACTOR_V2_NAME,
-                "implementationSha256": extractor_v2_implementation_sha256(),
-                "dependencySha256s": extractor_v2_dependency_sha256s(),
+                "contract": EXTRACTOR_ENHANCED_CONTRACT,
+                "name": EXTRACTOR_ENHANCED_NAME,
+                "implementationSha256": extractor_enhanced_implementation_sha256(),
+                "dependencySha256s": extractor_enhanced_dependency_sha256s(),
                 "backend": backend_info,
             },
             "options": options,
@@ -1274,7 +1274,7 @@ def run_extraction_v2(
         if apply:
             _reserve_and_write(root_fd, outputs_to_write)
         return {
-            "contract": EXTRACTOR_V2_CONTRACT,
+            "contract": EXTRACTOR_ENHANCED_CONTRACT,
             "status": status,
             "mode": "apply" if apply else "dry-run",
             "paperId": request["paperId"],
@@ -1289,8 +1289,8 @@ def run_extraction_v2(
         os.close(root_fd)
 
 
-def verify_extraction_v2(manifest_name: str, *, source_root: Path = DEFAULT_STAGING_SOURCE_DIR) -> dict[str, Any]:
-    """从原始封存 PDF 重跑 v2 增强抽取器，逐字节比对每个派生文件。"""
+def verify_extraction_enhanced(manifest_name: str, *, source_root: Path = DEFAULT_STAGING_SOURCE_DIR) -> dict[str, Any]:
+    """从原始封存 PDF 重跑增强布局抽取器，逐字节比对每个派生文件。"""
     manifest_name = _safe_name(manifest_name, SAFE_JSON_NAME, "manifest name")
     root_fd = _open_root(Path(source_root))
     try:
@@ -1307,7 +1307,7 @@ def verify_extraction_v2(manifest_name: str, *, source_root: Path = DEFAULT_STAG
     finally:
         os.close(root_fd)
 
-    with tempfile.TemporaryDirectory(prefix="conference-extraction-v2-verify-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="conference-extraction-enhanced-verify-") as temporary:
         replay_root = Path(temporary).resolve()
         for name, raw in ((manifest_name, manifest_bytes), (metadata_name, metadata_bytes), (pdf_name, pdf_bytes)):
             target = replay_root / name
@@ -1317,14 +1317,14 @@ def verify_extraction_v2(manifest_name: str, *, source_root: Path = DEFAULT_STAG
                 while written < len(raw):
                     count = os.write(fd, raw[written:])
                     if count <= 0:
-                        raise OSError("short write while preparing v2 extraction replay")
+                        raise OSError("short write while preparing enhanced extraction replay")
                     written += count
                 os.fsync(fd)
             finally:
                 os.close(fd)
-        result = run_extraction_v2(manifest_name, apply=True, source_root=replay_root)
+        result = run_extraction_enhanced(manifest_name, apply=True, source_root=replay_root)
         if result["status"] != "ready":
-            raise _fail(f"replayed v2 extraction is not ready: status={result['status']!r}")
+            raise _fail(f"replayed enhanced extraction is not ready: status={result['status']!r}")
         replayed_outputs = {
             key: (replay_root / name).read_bytes()
             for key, name in request["outputs"].items()
@@ -1333,12 +1333,12 @@ def verify_extraction_v2(manifest_name: str, *, source_root: Path = DEFAULT_STAG
     for key in request["outputs"]:
         if current_outputs[key] != replayed_outputs[key]:
             raise _fail(
-                f"existing {key} differs from a fresh pinned v2 extraction replay: "
+                f"existing {key} differs from a fresh pinned enhanced extraction replay: "
                 f"actual {sha256_bytes(current_outputs[key])}, expected {sha256_bytes(replayed_outputs[key])}"
             )
-    receipt = _strict_json_object(replayed_outputs["receiptFile"], "replayed v2 receipt")
+    receipt = _strict_json_object(replayed_outputs["receiptFile"], "replayed enhanced receipt")
     body = {
-        "contract": VERIFICATION_V2_CONTRACT,
+        "contract": VERIFICATION_ENHANCED_CONTRACT,
         "status": "verified",
         "paperId": request["paperId"],
         "sourceIdentity": request["sourceIdentity"],
@@ -1348,37 +1348,37 @@ def verify_extraction_v2(manifest_name: str, *, source_root: Path = DEFAULT_STAG
         "textSha256": sha256_bytes(replayed_outputs["textFile"]),
         "artifactsSha256": sha256_bytes(replayed_outputs["artifactsFile"]),
         "receiptFileSha256": sha256_bytes(replayed_outputs["receiptFile"]),
-        "receiptSha256": _expected_sha(receipt.get("receiptSha256"), "replayed v2 receipt.receiptSha256"),
+        "receiptSha256": _expected_sha(receipt.get("receiptSha256"), "replayed enhanced receipt.receiptSha256"),
     }
     return {**body, "verificationSha256": _stable_hash(body)}
 
 
 __all__ = [
-    "ARTIFACT_V2_CONTRACT",
-    "ARTIFACT_V2_PROFILE",
+    "ARTIFACT_ENHANCED_CONTRACT",
+    "ARTIFACT_ENHANCED_PROFILE",
     "AUDIO_METRIC_UPPER_ACRONYMS",
     "AUDIO_METRIC_WORDS",
-    "EXTRACTOR_V2_CONTRACT",
-    "EXTRACTOR_V2_NAME",
+    "EXTRACTOR_ENHANCED_CONTRACT",
+    "EXTRACTOR_ENHANCED_NAME",
     "FIGURE_SCALE_LADDER",
     "FIGURE_TARGET_DPI",
     "OFFICIAL_METADATA_AUTHOR_CONTRACT",
-    "RECEIPT_V2_CONTRACT",
-    "VERIFICATION_V2_CONTRACT",
-    "extract_conference_authors_v2",
-    "extract_figures_v2",
+    "RECEIPT_ENHANCED_CONTRACT",
+    "VERIFICATION_ENHANCED_CONTRACT",
+    "extract_conference_authors_enhanced",
+    "extract_figures_enhanced",
     "extract_official_metadata_authors",
-    "extract_pages_v2",
-    "extract_structures_v2",
-    "extract_tables_v2",
-    "extractor_v2_dependency_sha256s",
-    "extractor_v2_implementation_sha256",
-    "run_extraction_v2",
-    "verify_extraction_v2",
+    "extract_pages_enhanced",
+    "extract_structures_enhanced",
+    "extract_tables_enhanced",
+    "extractor_enhanced_dependency_sha256s",
+    "extractor_enhanced_implementation_sha256",
+    "run_extraction_enhanced",
+    "verify_extraction_enhanced",
 ]
 
 
 if __name__ == "__main__":
     from runtime_guard import require_external_runtime
 
-    require_external_runtime("conference_extractor_v2.py")
+    require_external_runtime("conference_layout_extractor.py")

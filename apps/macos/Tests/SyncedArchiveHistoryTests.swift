@@ -6,7 +6,7 @@ import Foundation
         let directory = manager.temporaryDirectory.appendingPathComponent("synced-archive-" + UUID().uuidString)
         try manager.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? manager.removeItem(at: directory) }
-        let fixture = try Data(contentsOf: URL(fileURLWithPath: "tests/fixtures/workbench/full-webdav-sync-v1.json"))
+        let fixture = try Data(contentsOf: URL(fileURLWithPath: "tests/fixtures/workbench/full-webdav-sync.json"))
         let root = try JSONSerialization.jsonObject(with: fixture) as! [String: Any]
         let sources = root["sources"] as! [[String: Any]]
         let base = directory.appendingPathComponent("SyncedArchiveHistory")

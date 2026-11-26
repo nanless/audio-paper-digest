@@ -9,7 +9,7 @@ This repository maintains three default LLM/API content workflows: daily digests
 | Layer | Entry Points & Adapters | Shared Core |
 |---|---|---|
 | Daily digest | `full-fetch.js`, `deep-analysis-only.js`, `batch-analyze.js`, `refresh-api-reader.js`, `reanalyze.js`, `reanalyze-selected.js` | `analysis-engine.js`, `deep-analyzer.js`, `analysis-contract.js` |
-| Official conferences | `official-conference-acquire.js`, `conference-discover.js`, `conference-filter-run.js`, `conference-process.js`, `migrate-conference-process.js` | Same engine, Reader, 8-dim rubric (`scoring-rubric-v2.js`), 9-facet taxonomy |
+| Official conferences | `official-conference-acquire.js`, `conference-discover.js`, `conference-filter-run.js`, `conference-process.js`, `migrate-conference-process.js` | Same engine, Reader, 8-dim rubric (`scoring-rubric.js`), 9-facet taxonomy |
 | Historical updates | `historical-outdated-audit.js`, `historical-direct-rewrite-inputs.js`, `historical-direct-rewrite-plan.js`, `historical-direct-rewrite-run.js`, `history-resume.js` | Same engine with isolated historical scope and provenance adapters |
 | Page rendering | `generate-blog.py`, `conference-page-render.py`, `historical-page-render.py`, `lib/historical-direct-aggregate.js` | `publish-to-blog.py`, `paper_reader_presentation.py`, `tag_presentation.py` |
 | Review & push | `review-blog.py`, `push-blog.py`, `publish-conference.py`, `lib/historical-direct-publication.js`, `verify-web.js` | `publish_common.py`, `blog_reader_binding_verifier.py`, `markdown_hugo_gate.py` |
@@ -27,6 +27,7 @@ This repository maintains three default LLM/API content workflows: daily digests
 | `npm run history:outdated` | `historical-outdated-audit.js` | Read-only audit of outdated historical blog pages under `content/posts/` with ready-to-run rewrite commands |
 | `npm run locks` | `locks.js` | Bounded read-only view of local and shared-blog locks plus stale-lock preview |
 | `npm run recover` / `manifest:new` | `recover.js` / `manifest-new.js` | Summarize failure causes & next actions; prepare source-bound manual correction manifests |
+| `npm run reanalyze:selected -- <arxivId...>` | `reanalyze-selected.js` | Reanalyze only selected papers from the current sealed batch (supports source-bound fact feedback & `--natural-resource-prose`, no re-fetch) |
 | `npm run table:check` / `review:overrides` | `table-check.js` / `review-overrides-cli.js` | Offline table precheck; validate strict-schema review false-positive override notes |
 | `npm run papers:compact` | `compact-papers-ledger.js` | Atomically compact `data/current/papers.json` while preserving complete records |
 | `npm run storage:pdf-dedupe` / `storage:report` / `storage:prune` | `runtime-storage.js` / `storage-report.js` | Byte-verify & CoW-dedupe duplicate PDFs, print retention advice, and preview reference-aware pruning |
@@ -38,7 +39,7 @@ This repository maintains three default LLM/API content workflows: daily digests
 
 ### Opt-in / Standalone Evolution Modules
 
-- `conference_extractor_v2.py`: layout-aware conference PDF extractor (now default `v2` for new conference runs with two-column reflow, structured tables, and 288 DPI crops; `conference_extractor.py` remains byte-frozen for historical receipts).
+- `conference_layout_extractor.py`: layout-aware conference PDF extractor (now default `enhanced` mode for new conference runs with two-column reflow, structured tables, and 288 DPI crops; `conference_extractor.py` remains byte-frozen for historical receipts).
 - `lib/arxiv-tex-source.js`, `arxiv_tex_extract.py`: on-demand arXiv `/src/<id>` LaTeX source AST sidecar fetcher and safe parser.
 - `generate-scripts-index.js`: regenerate or `--check` [scripts/INDEX.md](INDEX.md).
 

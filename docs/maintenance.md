@@ -22,6 +22,17 @@
 
 新增或删改 `scripts/` 下的模块时，先运行 `node scripts/generate-scripts-index.js` 重新生成完整机器索引 [scripts/INDEX.md](../scripts/INDEX.md)，再同步更新面向维护者的入口指南 [scripts/README.md](../scripts/README.md) 与 [scripts/README.en.md](../scripts/README.en.md)，并运行 `tests/scripts-index.test.js`。新增 Python 模块还须运行 `tests/python/test_runtime_guard.py`：内部库也可能被直接执行，正常导入通过不能代替直接入口的沙箱拒绝检查。这些检查纳入本次定向验证，完整验收仍按上面的流程执行。
 
+### 删除代码或旧入口前核对四类依赖
+
+没有普通 `import` 或 `require` 并不说明模块已无用途（例如 `scripts/test-api-key.js` 是显式诊断命令，`manual/` 仍承接旧记录核验）。删除前依次核对：
+
+1. `package.json` 的 npm 入口及直接诊断命令。
+2. 静态导入、动态加载、跨语言子进程和内部工作线程。
+3. 测试、旧格式读取器、来源证明和签名重放。
+4. 提示词的原路径、Git blob 和原声明 SHA。
+
+确无调用的写入接口可以移除，但旧来源、检查点、响应、失败、费用、签名及必要读取器继续保留；兼容测试在临时目录验证正常读取、字节变化、来源变化、缺文件和伪造外层 SHA，不补建材料或改写原记录。
+
 ## 改代码时该同步哪里
 
 | 变更 | 首要实现 | 需要核对的调用或读取位置 |
@@ -105,7 +116,7 @@ Python 发布冷核也须重放这条完整网格规则：先核当篇四份封�
 
 ## Reader 专项修改的核对边界
 
-完整表格格值的符号副本投影由 `lib/reader-source-display.js` 和 Python 发布器同步执行。`✓\checkmark`、`×\times` 仅在完整格且显式同值时合并，保留原 DOM、数字、精度、单位和来源 SHA；错配符号、运算续式及来源证明路径中的裸重复必须仍被拒绝。当前共享投影还处理匿名宏 `\anon[匿名写法]真名`、行内公式定界符 `\(...\)`、`{,}` 千位写法、完整相邻数值重复、重复符号、简单指数和整格纯上下标；它只改显示副本。两侧共用 `tests/fixtures/reader-cell-tex-display.json`，改一侧必须同步另一侧和语料。回归须包含完整真实矩阵与丢格、坐标、单位篡改，不能只测字符串替换。
+完整表格格值的符号副本投影由 `lib/reader-source-display.js` 的 `projectReaderCellTexDisplay()` 和 Python 发布器的 `_project_reader_cell_tex_display()` 同步执行。`✓\checkmark`、`×\times` 仅在完整格且显式同值时合并，保留原 DOM、数字、精度、单位和来源 SHA；错配符号、运算续式及来源证明路径中的裸重复必须仍被拒绝。当前共享投影还处理匿名宏 `\anon[匿名写法]真名`、行内公式定界符 `\(...\)`、`{,}` 千位写法、完整相邻数值重复、重复符号、简单指数和整格纯上下标；它只改显示副本。两侧共用 `tests/fixtures/reader-cell-tex-display.json`（contract `reader-cell-tex-display-parity-v1`），改任一侧必须在同一变更中同步另一侧、更新该语料并运行两侧回归；只改一侧或不同步语料会导致分析端与发布端对同一单元格给出不同结果。回归须包含完整真实矩阵与丢格、坐标、单位篡改，不能只测字符串替换。
 
 Reader-only 完成判据必须重放真实父子反馈组合，不能把已通过的原签名按子包单独重算。只读完成作用域禁止写盘和模型请求；旧父恢复须在调用分析前核验主检查点，并在每次保存前拒绝 Reader 之外的上游变化（图片下载阶段、图片清单与图片叙述合同除外）。错误路径应完整还原内存及保存回调，回归同时覆盖原对象和不同的传入检查点。真实旧包、四来源、原稿和负例都要验证，详见[事实反馈恢复](reader-explicit-retry.md#已完成主文的独立-reader-事实反馈)。
 
@@ -143,7 +154,7 @@ Reader 的数字来源核验保留完整数值，不能把 `130130`、无 TeX �
 
 ## 并发与原子性
 
-JSON 保存使用原子写入。读改写时取得公共文件锁，在锁内重读最新正式分析记录，只合并本次论文或字段，再递增 `generation`。不能把锁外的整份旧数组写回去覆盖其他任务。
+JSON 保存使用原子写入。读改写时取得公共文件锁，在锁内重读最新正式分析记录，只合并本次论文或字段，再递增 `generation`。不能把锁外的整份旧数组写回去覆盖其他任务。来源文件描述符采用有界读取（最多读到原大小与预算上限加 1 字节增长哨兵），末端仍核对身份与 SHA；临时文件仅清理由本次独占创建且 inode 匹配的对象，保护 `EEXIST`、短写、I/O 错误、回读变化和改名后的他人对象。账号错误 `type`/`code` 按精确字符串核对，`metadata` 按原顺序取首个合法 JSON 对象（合法空对象不跳过）。
 
 长任务定时更新运行或锁记录，并设置有效期限；只有程序确认持有者与期限符合失效条件时，才能回收。Node 分析队列遇到运行级错误会停止领取新论文。Python 页面审查通过 `run_bounded_llm_tasks()` 按指定并发数量安排任务，运行级故障后停止提交新任务，等待已开始的任务保存结果，再报告原故障；保存同时失败时也保留该异常。普通内容拒稿保存审计后继续剩余页面，最终汇总阻断；服务、存储、字节漂移或凭证损坏仍按各调用方的运行级故障规则处理，不能把任意异常转成内容失败。
 
@@ -233,7 +244,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ### 解释疑似误报，不改正式结论
 
-- `npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]`：只读核对误报解释，按页面 SHA 与逐字 claim 匹配，不修改失败文件或凭证，也不授予正式审查或发布资格。诊断报告 v2 的 `matched` 统计实际命中的解释条目，`matchedIssues` 与 `matches` 记录本次问题位置；`inputDeclaredOverridden` 单列原输入的旧标记，`sourceFailureSha256` 绑定原文件字节。严格退出码由 `currentMatchVerdict` 决定：仍有 error 或未完整解释的失败页退出 1，诊断无阻断退出 0，执行或参数错误退出 2。旧 `pendingBlockedFiles`、`overriddenFailedPages`、`wouldPass` 及 `legacyProjection` 保留旧投影，不能作为新退出依据。此变化会使只靠输入旧 `overridden` 标记的旧调用返回非零。`receiptCheck` 仅报告参考提交字段是否相等，`receiptContractVerified` 始终为 false；字段冲突退出 2，缺字段明确告警。失败文件显式日期冲突同样退出 2；旧文件缺日期时 `failureDateCheck` 明确未比对，`formalScopeVerified` 始终为 false。同一失败页中原有的 `overridden` 位置也须由本次匹配覆盖，不能用另一条新解释掩盖。`--json` 的正常诊断输出为单份 JSON，告警写入 stderr。
+- `npm run review:overrides -- --date DATE --file OVERRIDES.json [--receipt RECEIPT.json]`：只读核对误报解释，按页面 SHA 与逐字 claim 匹配，不修改失败文件或凭证，也不授予正式审查或发布资格。现行诊断报告的 `matched` 统计实际命中的解释条目，`matchedIssues` 与 `matches` 记录本次问题位置；`inputDeclaredOverridden` 单列原输入的旧标记，`sourceFailureSha256` 绑定原文件字节。严格退出码由 `currentMatchVerdict` 决定：仍有 error 或未完整解释的失败页退出 1，诊断无阻断退出 0，执行或参数错误退出 2。旧 `pendingBlockedFiles`、`overriddenFailedPages`、`wouldPass` 及 `legacyProjection` 保留旧投影，不能作为新退出依据。此变化会使只靠输入旧 `overridden` 标记的旧调用返回非零。`receiptCheck` 仅报告参考提交字段是否相等，`receiptContractVerified` 始终为 false；字段冲突退出 2，缺字段明确告警。失败文件显式日期冲突同样退出 2；旧文件缺日期时 `failureDateCheck` 明确未比对，`formalScopeVerified` 始终为 false。同一失败页中原有的 `overridden` 位置也须由本次匹配覆盖，不能用另一条新解释掩盖。`--json` 的正常诊断输出为单份 JSON，告警写入 stderr。
 
 ### 检查推送后的收尾步骤
 
@@ -253,9 +264,9 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 - `npm run digest:scorecard -- --date YYYY-MM-DD [--run-id ID]`：快速读取当日分片用量日志，统计各阶段耗时、前缀缓存命中、推理占比与瞬断。
 - `npm run papers:compact`：原子压缩 `data/current/papers.json` 账本文件，保留完整记录并将权限收紧为 `0600`。
 - `npm run storage:pdf-dedupe [--apply]`：逐字节核验 `data/runtime/` 重复 PDF；`--apply` 经内核独占写时复制（APFS `clonefile`）回收重复空间而不删减任何路径。
-- `npm run digest:calibrate -- --dry-run|--replay|--live`：基于封存分析结果做瑞士轮 Bradley-Terry 批后相对分校准，输出伴生 `score-calibration-v1.json`，不改写原 `scoringAudit`。
+- `npm run digest:calibrate -- --dry-run|--replay|--live`：基于封存分析结果做瑞士轮 Bradley-Terry 批后相对分校准，输出伴生 `score-calibration.json`，不改写原 `scoringAudit`。
 - `npm run podcast:generate -- --date YYYY-MM-DD [--dry-run]`：基于已分析日批生成每日播客脚本、调用 IndexTTS2 合成音频并可选发布至 GitHub Release；所需 11 个 `PD_PODCAST_*` / `PD_INDEXTTS_*` 环境变量详见 `env.example` 与 `scripts/lib/env-schema.js`。
-- 独立提取器 `scripts/conference_extractor_v2.py` 与 `scripts/lib/arxiv-tex-source.js` / `scripts/arxiv_tex_extract.py` 作为按需模块保留，`scripts/conference_extractor.py` 因历史凭证哈希保持冻结。
+- 独立提取器 `scripts/conference_layout_extractor.py` 与 `scripts/lib/arxiv-tex-source.js` / `scripts/arxiv_tex_extract.py` 作为按需模块保留，`scripts/conference_extractor.py` 因历史凭证哈希保持冻结。
 
 ## 存储保留建议
 
@@ -288,7 +299,7 @@ gh workflow run ci.yml --ref main
 
 ### 完整覆盖与并行范围
 
-CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装（`static` 分片跳过下载）。主 `verify` 矩阵统一覆盖 Node `20.x`、`22.x`、`24.x` 各四个 `verify --suite javascript --shard I/4 --allow-empty`（Node 24 分片自动附加 `NODE_OPTIONS=--test-reporter=tap`）；Python 测试（`tests/python`、`manual/tests/python` 与 `tests/reader_pdf_*_test.py` 三步）及 `--suite static`（含语法、`docs-consistency` 与只读数据校验）各在 Node 22 运行一次，且 `static` 分片跳过 Playwright Chromium、Noto CJK 与 Hugo 安装以节省耗时。共十四个验证分片，加三个 `test (node-version)` 汇总检查。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22、Python 3.11 与 Android SDK，安装根与 `apps/macos` 依赖（含 `katex`）后，运行全部 11 份非设备合约/发行 Python 测试、`apps/android/AssetsChannel.test.mjs` 与 `./gradlew :app:testDebugUnitTest :app:lintDebug --no-daemon`。macOS 客户端测试由独立作业 `client-macos` 单列：固定 `macos-15-intel`（避开托管 arm64 容量排队，正式 `arm64` 发行包仍按[Mac 版构建与发行](mac-app-release.md)在本机生成），配置 Node 22 与 Python 3.11 后运行 `VERIFY_PROJECT_DISABLE_FILE_LOGS=1 bash apps/macos/test.sh`。两个客户端作业都不并入 `test` 汇总检查。
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装（`static` 分片跳过下载）。主 `verify` 矩阵统一覆盖 Node `20.x`、`22.x`、`24.x` 各四个 `verify --suite javascript --shard I/4 --allow-empty`（Node 24 分片自动附加 `NODE_OPTIONS=--test-reporter=tap`）；Python 测试（`tests/python`、`manual/tests/python` 与 `tests/reader_pdf_*_test.py` 三步）及 `--suite static`（含语法、`docs-consistency` 与只读数据校验）各在 Node 22 运行一次，且 `static` 分片跳过 Playwright Chromium、Noto CJK 与 Hugo 安装以节省耗时。共十四个验证分片，加三个 `test (node-version)` 汇总检查。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22、Python 3.11 与 Android SDK，安装 `apps/macos` 依赖（含 `katex`）后，按字典序遍历运行 `apps/android/Tests/*.test.py` 全部非设备合约/发行 Python 测试（保底至少 11 份）、`apps/android/AssetsChannel.test.mjs` 与 `./gradlew :app:testDebugUnitTest :app:lintDebug --no-daemon`。macOS 客户端测试由独立作业 `client-macos` 单列：固定 `macos-15-intel`（避开托管 arm64 容量排队，正式 `arm64` 发行包仍按[Mac 版构建与发行](mac-app-release.md)在本机生成），配置 Node 22 与 Python 3.11 后运行 `VERIFY_PROJECT_DISABLE_FILE_LOGS=1 bash apps/macos/test.sh`。两个客户端作业都不并入 `test` 汇总检查。
 
 JavaScript 文件集从权威 `npm test` 命令推导，由 Node 原生分片且片内仍串行；全部 JavaScript、Python、语法、数据和真实 Hugo 要求保留。全部验证任务成功后，`test (20.x)`、`test (22.x)`、`test (24.x)` 才报告完整通过；分支保护应把三者都设为必需；缺片、失败或取消都不能冒充通过。每片保存日志。同分支被后续验收替代的旧纯 CI 可取消，此规则不用于 Pages 发布。本地默认 `verify` 仍完整串行，本地入口仅检查已安装版本，不自动下载或升级。
 

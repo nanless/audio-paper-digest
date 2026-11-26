@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests" / "python"))
 
 import conference_extractor as v1_extractor  # noqa: E402
-import conference_extractor_v2 as v2_extractor  # noqa: E402
+import conference_layout_extractor as layout_extractor  # noqa: E402
 from paper_identity import canonical_conference_paper_id  # noqa: E402
 import protocol_codec as protocols  # noqa: E402
 from project_env_isolation import (  # noqa: E402
@@ -176,7 +176,7 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
 
     def test_v2_two_column_reading_order_fixes_interleaving(self):
         pdf_bytes = _build_two_column_conference_pdf()
-        pages_v2 = v2_extractor.extract_pages_v2(pdf_bytes)
+        pages_v2 = layout_extractor.extract_pages_enhanced(pdf_bytes)
         self.assertEqual(len(pages_v2), 2)
         page1 = pages_v2[0]
         # Title must appear before left column; ALL left column lines must appear before right column!
@@ -199,11 +199,11 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
 
     def test_v2_high_dpi_figures_and_booktabs_plus_audio_metric_tables(self):
         pdf_bytes = _build_two_column_conference_pdf()
-        pdf_sha = v2_extractor.sha256_bytes(pdf_bytes)
+        pdf_sha = layout_extractor.sha256_bytes(pdf_bytes)
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         try:
-            figures = v2_extractor.extract_figures_v2(doc)
-            tables = v2_extractor.extract_tables_v2(doc, pdf_sha)
+            figures = layout_extractor.extract_figures_enhanced(doc)
+            tables = layout_extractor.extract_tables_enhanced(doc, pdf_sha)
         finally:
             doc.close()
 
@@ -218,7 +218,7 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
         width, height = struct.unpack(">II", png[16:24])
         # Vector figure is ~430pt wide; at 288 DPI (4x) width >= 1500px (vs v1 1.6x ~688px)!
         self.assertGreaterEqual(width, 1400)
-        self.assertLessEqual(max(width, height), v2_extractor.MAX_FIGURE_LONG_EDGE_PX)
+        self.assertLessEqual(max(width, height), layout_extractor.MAX_FIGURE_LONG_EDGE_PX)
 
         # Both Booktabs Table 1 (UTMOS/PESQ/STOI/SI-SDR/RTF) and Borderless Table 2 (FAD/CLAP/ViSQOL/RTF) recovered!
         self.assertEqual(len(tables), 2)
@@ -245,9 +245,9 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
             },
         }
         meta_bytes = json.dumps(meta, ensure_ascii=False).encode("utf-8")
-        meta_sha = v2_extractor.sha256_bytes(meta_bytes)
+        meta_sha = layout_extractor.sha256_bytes(meta_bytes)
 
-        extracted = v2_extractor.extract_conference_authors_v2(pdf_bytes, meta, meta_sha)
+        extracted = layout_extractor.extract_conference_authors_enhanced(pdf_bytes, meta, meta_sha)
         pdf_auth = extracted["pdfPage1Authors"]
         self.assertIsNotNone(pdf_auth)
         self.assertEqual(pdf_auth["contract"], "pdf-page1-author-evidence-v2")
@@ -257,7 +257,7 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
 
         meta_auth = extracted["officialMetadataAuthors"]
         self.assertIsNotNone(meta_auth)
-        self.assertEqual(meta_auth["contract"], v2_extractor.OFFICIAL_METADATA_AUTHOR_CONTRACT)
+        self.assertEqual(meta_auth["contract"], layout_extractor.OFFICIAL_METADATA_AUTHOR_CONTRACT)
         self.assertEqual(meta_auth["metadataSha256"], meta_sha)
         self.assertEqual(meta_auth["authors"], [
             {"name": "Alice Zhang", "affiliations": ["Tsinghua University"]},
@@ -271,7 +271,7 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
                 {"name": "Dave Park", "institution": "KAIST"},
             ]
         }
-        obj_auth = v2_extractor.extract_official_metadata_authors(obj_meta, "a" * 64)
+        obj_auth = layout_extractor.extract_official_metadata_authors(obj_meta, "a" * 64)
         self.assertEqual(obj_auth["authors"], [
             {"name": "Carol Wu", "affiliations": ["MIT"]},
             {"name": "Dave Park", "affiliations": ["KAIST"]},
@@ -281,7 +281,7 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
             "authors": ["Eva Chen", "Frank Liu"],
             "affiliations": ["EPFL", ["ETH Zurich", "Unknown"]],
         }
-        par_auth = v2_extractor.extract_official_metadata_authors(parallel_meta, "b" * 64)
+        par_auth = layout_extractor.extract_official_metadata_authors(parallel_meta, "b" * 64)
         self.assertEqual(par_auth["authors"], [
             {"name": "Eva Chen", "affiliations": ["EPFL"]},
             {"name": "Frank Liu", "affiliations": ["ETH Zurich"]},
@@ -315,7 +315,7 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
                 "source": {
                     "metadata": {
                         "file": "paper.json",
-                        "sha256": v2_extractor.sha256_bytes(meta_bytes),
+                        "sha256": layout_extractor.sha256_bytes(meta_bytes),
                         "identityEvidence": {
                             "conferenceIdPointer": "/conferenceId",
                             "conferenceYearPointer": "/year",
@@ -336,7 +336,7 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
                     },
                     "pdf": {
                         "file": "paper.pdf",
-                        "sha256": v2_extractor.sha256_bytes(pdf_bytes),
+                        "sha256": layout_extractor.sha256_bytes(pdf_bytes),
                         "provenance": {
                             "kind": "official-pdf",
                             "locator": "https://www.isca-archive.org/interspeech_2026/zhang26_interspeech.pdf",
@@ -357,29 +357,29 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
             }
             (root / "extract-v2.json").write_text(json.dumps(request), encoding="utf-8")
 
-            res = v2_extractor.run_extraction_v2("extract-v2.json", apply=True, source_root=root)
+            res = layout_extractor.run_extraction_enhanced("extract-v2.json", apply=True, source_root=root)
             self.assertEqual(res["status"], "ready")
-            self.assertEqual(res["contract"], v2_extractor.EXTRACTOR_V2_CONTRACT)
+            self.assertEqual(res["contract"], layout_extractor.EXTRACTOR_ENHANCED_CONTRACT)
             artifacts = json.loads((root / "paper-v2.artifacts.json").read_text(encoding="utf-8"))
-            self.assertEqual(artifacts["contract"], v2_extractor.ARTIFACT_V2_CONTRACT)
+            self.assertEqual(artifacts["contract"], layout_extractor.ARTIFACT_ENHANCED_CONTRACT)
             self.assertEqual(artifacts["extractorProfile"]["figureTargetDpi"], 288)
             self.assertEqual(len(artifacts["figures"]), 1)
             self.assertEqual(len(artifacts["tables"]), 2)
             self.assertIsNotNone(artifacts["authorEvidence"]["pdfPage1Authors"])
             self.assertIsNotNone(artifacts["authorEvidence"]["officialMetadataAuthors"])
 
-            verified = v2_extractor.verify_extraction_v2("extract-v2.json", source_root=root)
+            verified = layout_extractor.verify_extraction_enhanced("extract-v2.json", source_root=root)
             self.assertEqual(verified["status"], "verified")
-            self.assertEqual(verified["contract"], v2_extractor.VERIFICATION_V2_CONTRACT)
+            self.assertEqual(verified["contract"], layout_extractor.VERIFICATION_ENHANCED_CONTRACT)
 
             # Tampering with derived text must fail byte-for-byte replay
             (root / "paper-v2.txt").write_text("tampered", encoding="utf-8")
-            with self.assertRaisesRegex(v1_extractor.ConferenceExtractionIntegrityError, "fresh pinned v2 extraction replay"):
-                v2_extractor.verify_extraction_v2("extract-v2.json", source_root=root)
+            with self.assertRaisesRegex(v1_extractor.ConferenceExtractionIntegrityError, "fresh pinned enhanced extraction replay"):
+                layout_extractor.verify_extraction_enhanced("extract-v2.json", source_root=root)
 
     def test_historical_direct_conference_renders_v5_implementation_specs_and_audio_signal_specs(self):
         restore_environment_after(self)
-        from test_reader_structured_v5 import build_structured_v5_publication_paper, reseal_v5
+        from test_reader_structured_pipeline import build_structured_v5_publication_paper, reseal_v5
         paper = build_structured_v5_publication_paper()
         paper.pop("arxivId", None)
         paper["directPaperId"] = "conference:interspeech:2026:conference-paper-id:zhang26_interspeech"
@@ -442,7 +442,7 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
         )
         v3_identity = {
             **identity_header,
-            "conferencePdfAuthorParser": "conference-pdf-author-pdf-page1-v3",
+            "conferencePdfAuthorParser": "conference-pdf-author-pdf-page1",
             "sourceDomSha256": dom_sha,
             "sourceTextSha256": source_sha,
             "metadataSha256": meta_sha,
@@ -510,19 +510,19 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
         pdf_bytes = doc.tobytes()
         doc.close()
         with fitz.open(stream=pdf_bytes, filetype="pdf") as opened:
-            tables = v2_extractor.extract_tables_v2(opened, v2_extractor.sha256_bytes(pdf_bytes))
+            tables = layout_extractor.extract_tables_enhanced(opened, layout_extractor.sha256_bytes(pdf_bytes))
         self.assertEqual(tables, [])
 
         # 2. Malformed non-dict author entries must not crash and dependencySha256s covers all 4 modules
         malformed = {"authors": [123, ["bad"], "Alice Zhang"], "authorAffiliations": {"Alice Zhang": ["MIT"]}}
-        extracted = v2_extractor.extract_official_metadata_authors(malformed, "f" * 64)
+        extracted = layout_extractor.extract_official_metadata_authors(malformed, "f" * 64)
         self.assertIsNotNone(extracted)
         self.assertEqual(extracted["authors"], [{"name": "Alice Zhang", "affiliations": ["MIT"]}])
-        deps = v2_extractor.extractor_v2_dependency_sha256s()
+        deps = layout_extractor.extractor_enhanced_dependency_sha256s()
         self.assertEqual(
             set(deps.keys()),
             {
-                "conference_extractor_v2.py",
+                "conference_layout_extractor.py",
                 "conference_extractor.py",
                 "pdf_figure_table_extract.py",
                 "pdf_author_extract.py",
@@ -551,14 +551,14 @@ class Wave13Track132ConferenceParityTests(unittest.TestCase):
         pdf2 = doc2.tobytes()
         doc2.close()
         with fitz.open(stream=pdf2, filetype="pdf") as opened2:
-            t2 = v2_extractor.extract_tables_v2(opened2, v2_extractor.sha256_bytes(pdf2))
+            t2 = layout_extractor.extract_tables_enhanced(opened2, layout_extractor.sha256_bytes(pdf2))
         self.assertEqual(len(t2), 1)
         self.assertIn("STOI", " ".join(t2[0]["cells"][0]))
         self.assertIn("0.95", " ".join(t2[0]["cells"][-1]))
 
         # 4. R2 P2-2: 300-char truncation trims trailing space identically to JS
         long_aff = ("A" * 299) + " University"
-        self.assertEqual(v2_extractor._clean_structure_text(long_aff, 300), "A" * 299)
+        self.assertEqual(layout_extractor._clean_structure_text(long_aff, 300), "A" * 299)
 
 
 if __name__ == "__main__":

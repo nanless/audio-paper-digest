@@ -5652,7 +5652,7 @@ has_dataset: 否
         // 冻结的期望值是 v1 时代的记录，常量冻结之后 v1 提示词又被改写过，
         // 所以它逐项都不等于当前从 v1 文件重算的值。这里如实记录这个漂移，
         // 不把常量改成当前值来伪装成一致。
-        for (const [stage, frozen] of Object.entries(deep.CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256)) {
+        for (const [stage, frozen] of Object.entries(deep.LEGACY_CORE_SUMMARY_RUNTIME_PROMPT_SHA256)) {
             assert.notStrictEqual(observed[stage], frozen,
                 `${stage} 的 v1 时代期望值仍等于当前重算值，常量语义需要复核`);
         }

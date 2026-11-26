@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 
-const fixture = JSON.parse(readFileSync(join(__dirname, 'fixtures/workbench/full-webdav-sync-v1.json')));
+const fixture = JSON.parse(readFileSync(join(__dirname, 'fixtures/workbench/full-webdav-sync.json')));
 const offlineFixture = JSON.parse(readFileSync(join(__dirname, '../apps/android/app/src/test/resources/offline-swift-vectors.json')));
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 

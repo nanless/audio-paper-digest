@@ -1602,16 +1602,16 @@ function collectDraftIssues(draft, parserError, options = {}) {
                 return index >= 0 && Number.isInteger(tableIndex) && tableIndex >= 1
                     && parserError.message.startsWith(`读者文章 tableBindings[${index}]（[[TABLE_${tableIndex}]]）与第 `);
             })());
-    const V5_STRUCTURED_ERROR_CODES = new Set([
-        'READER_V5_SECTION_STRUCTURE',
+    const STRUCTURED_ERROR_CODES = new Set([
+        'READER_SECTION_STRUCTURE',
         'READER_FIGURE_SEMANTIC_MISPLACEMENT',
         'READER_INVALID_IMPLEMENTATION_SPECS',
         'READER_INVALID_CHINESE_CAPTION',
         'READER_RESULT_ABLATION_MISPLACEMENT',
         'READER_TABLE_EXTREMA_CONTRADICTION'
     ]);
-    const preciseV5Error = Boolean(parserError && V5_STRUCTURED_ERROR_CODES.has(parserError.code) && parserIssues.length > 0);
-    if (parserError && !hasSameCountIssue && !hasTableMisalignmentIssues && !languageError && !preciseFactError && !preciseSelectionError && !preciseV5Error) {
+    const preciseStructuredError = Boolean(parserError && STRUCTURED_ERROR_CODES.has(parserError.code) && parserIssues.length > 0);
+    if (parserError && !hasSameCountIssue && !hasTableMisalignmentIssues && !languageError && !preciseFactError && !preciseSelectionError && !preciseStructuredError) {
         if (orderError.ignoreMessageForRepair) {
             issues.push(orderError.summary);
         } else if (parserError.code === TABLE_COUNT_ISSUE_CODE) {
@@ -1654,9 +1654,9 @@ function collectDraftIssues(draft, parserError, options = {}) {
                         // 也不能漏掉 v5 的 implementationSpecs，否则反馈会自毒化诱发模型输出 version:3。
                         if (own(value, 'contract')) {
                             rootFields = ['contract', 'schemaFingerprint', 'readerTitle', 'oneSentenceThesis',
-                                ...ARRAY_FIELDS, ...(readerFormat.V5_OPTIONAL_DRAFT_FIELDS || ['implementationSpecs'])];
+                                ...ARRAY_FIELDS, ...(readerFormat.STRUCTURED_OPTIONAL_DRAFT_FIELDS || ['implementationSpecs'])];
                             if (value.contract === currentDraftHeader.contract) {
-                                rawEditorialProfile = readerFormat.STRUCTURED_V5;
+                                rawEditorialProfile = readerFormat.STRUCTURED_EDITORIAL;
                                 if (typeof value.schemaFingerprint !== 'string'
                                     || value.schemaFingerprint !== currentDraftHeader.schemaFingerprint) {
                                     issues.push({
@@ -1671,7 +1671,7 @@ function collectDraftIssues(draft, parserError, options = {}) {
                         }
                     }
                     addUnknownFields(value, rootFields, '根对象');
-                    const rawFormatLimits = rawEditorialProfile === readerFormat.STRUCTURED_V5
+                    const rawFormatLimits = readerFormat.isStructuredEditorial(rawEditorialProfile)
                         ? limitsForDraftFormat({ editorialProfile: rawEditorialProfile })
                         : limitsForDraftFormat(value);
                     if (Array.isArray(value.sections)) {
@@ -1683,16 +1683,16 @@ function collectDraftIssues(draft, parserError, options = {}) {
                         value.sections.forEach((section, index) => addUnknownFields(section,
                             ['kind', 'heading', 'body'], `sections[${index}]`));
                     }
-                    const isStructuredV5Raw = readerFormat.isStructuredV5(rawFormatLimits.editorialProfile);
+                    const isStructuredEditorialRaw = readerFormat.isStructuredEditorial(rawFormatLimits.editorialProfile);
                     for (const [field, allowed] of [
                         ['conceptBridges', ['terms', 'sectionKind', 'marker', 'explanation']],
-                        ['figurePlacements', ['figureOrdinal', 'targetKind', 'marker', 'focusPoints', ...(isStructuredV5Raw ? ['chineseCaption'] : [])]],
+                        ['figurePlacements', ['figureOrdinal', 'targetKind', 'marker', 'focusPoints', ...(isStructuredEditorialRaw ? ['chineseCaption'] : [])]],
                         ['formulaBindings', ['formulaOrdinal', 'targetKind', 'marker']]
                     ]) {
                         if (Array.isArray(value[field])) value[field].forEach((node, index) =>
                             addUnknownFields(node, allowed, `${field}[${index}]`));
                     }
-                    if (isStructuredV5Raw && value.implementationSpecs && typeof value.implementationSpecs === 'object'
+                    if (isStructuredEditorialRaw && value.implementationSpecs && typeof value.implementationSpecs === 'object'
                         && !Array.isArray(value.implementationSpecs)) {
                         const readerFormat = require('./reader-record-format');
                         addUnknownFields(value.implementationSpecs,
@@ -1808,10 +1808,10 @@ function collectDraftIssues(draft, parserError, options = {}) {
         sourceText: options.sourceText,
         sourceTextChars: options.sourceTextChars
     });
-    const isStructuredV5Draft = (() => {
+    const isStructuredEditorialDraft = (() => {
         try {
             const rf = require('./reader-record-format');
-            return rf.isStructuredV5(rf.draftEditorialProfile(draft));
+            return rf.isStructuredEditorial(rf.draftEditorialProfile(draft));
         } catch {
             return false;
         }
@@ -1823,7 +1823,7 @@ function collectDraftIssues(draft, parserError, options = {}) {
             message: `读者文章篇幅预估为 ${chineseChars} 个汉字（标题、正文和术语组合解释；不含来源对应记录），`
                 + `完整文章要求 ${minChineseChars}–${maxChineseChars} 个汉字；`
                 + (chineseChars < minChineseChars
-                    ? `目前估计至少还需 ${minChineseChars - chineseChars} 字。${isStructuredV5Draft
+                    ? `目前估计至少还需 ${minChineseChars - chineseChars} 字。${isStructuredEditorialDraft
                         ? '仅在不重复已有事实的前提下，围绕尚未展开的机制、条件或实验细节做实质补充。'
                         : '修复表格时同时扩写已有方法、执行顺序或实验比较段落，保留正确事实。'}`
                     : '压缩重复段落，保留正确事实。')
@@ -2705,13 +2705,13 @@ function buildRepairTargets(draft, issues, options = {}) {
         const ranks = draft.sections.map(section => READER_SECTION_KINDS.indexOf(section?.kind));
         if (ranks.some((value, index) => value < 0 || index > 0 && value < ranks[index - 1])) return [];
         const wanted = missing[0], rank = READER_SECTION_KINDS.indexOf(wanted);
-        const isCohesiveV4 = require('./reader-record-format').isModernEditorialProfile(limitsForDraftFormat(draft).editorialProfile);
+        const isCohesiveEditorial = require('./reader-record-format').isModernEditorialProfile(limitsForDraftFormat(draft).editorialProfile);
         const closingCount = (counts.get('limitation') || 0) + (counts.get('synthesis') || 0);
-        const replaceableKinds = isCohesiveV4
+        const replaceableKinds = isCohesiveEditorial
             ? new Set(['background', 'related_work', 'component', 'training', 'experiment_setup', 'ablation', 'reproduction'])
             : new Set(['component', 'ablation']);
         const targets = draft.sections.flatMap((section, index) => {
-            const isClosingReplaceable = isCohesiveV4
+            const isClosingReplaceable = isCohesiveEditorial
                 && ['limitation', 'synthesis'].includes(section.kind)
                 && closingCount >= 2;
             if (!replaceableKinds.has(section.kind) && !isClosingReplaceable && counts.get(section.kind) < 2) return [];
@@ -2755,13 +2755,13 @@ function buildRepairTargets(draft, issues, options = {}) {
         const points = placement?.focusPoints;
         const focusLimits = limitsForDraftFormat(draft);
         const readerFormat = require('./reader-record-format');
-        const isCohesiveV4 = readerFormat.isModernEditorialProfile(focusLimits.editorialProfile);
-        const isStructuredV5 = readerFormat.isStructuredV5(focusLimits.editorialProfile);
-        const minFocusCount = isCohesiveV4 ? 0 : focusLimits.minimumFocusPoints;
-        const minFocusChars = isCohesiveV4 ? 6 : 12;
+        const isCohesiveEditorial = readerFormat.isModernEditorialProfile(focusLimits.editorialProfile);
+        const isStructuredEditorial = readerFormat.isStructuredEditorial(focusLimits.editorialProfile);
+        const minFocusCount = isCohesiveEditorial ? 0 : focusLimits.minimumFocusPoints;
+        const minFocusChars = isCohesiveEditorial ? 6 : 12;
         const sortedPlacementKeys = placement ? Object.keys(placement).sort().join(',') : '';
         const allowedPlacementKeys = sortedPlacementKeys === 'figureOrdinal,focusPoints,marker,targetKind'
-            || (isStructuredV5 && sortedPlacementKeys === 'chineseCaption,figureOrdinal,focusPoints,marker,targetKind');
+            || (isStructuredEditorial && sortedPlacementKeys === 'chineseCaption,figureOrdinal,focusPoints,marker,targetKind');
         if (placement && allowedPlacementKeys
             && Array.isArray(options.availableFigureOrdinals) && options.availableFigureOrdinals.includes(placement.figureOrdinal)
             && marker === `[[FIGURE_${placement.figureOrdinal}]]` && section?.kind === placement.targetKind
@@ -3726,15 +3726,27 @@ function readerLengthShortfall(issue) {
     return estimated ? Math.max(0, Number(estimated[2]) - Number(estimated[1])) : 0;
 }
 
-let _cachedFrozenRepairV11Text = null;
-function readFrozenRepairV11Text() {
-    if (_cachedFrozenRepairV11Text === null) {
-        _cachedFrozenRepairV11Text = require('./prompt-evidence.js')
-            .readPromptEvidenceBytes('prompts/api-reader-repair-v11.md')
-            .toString('utf8');
-    }
-    return _cachedFrozenRepairV11Text;
-}
+const REPAIR_COMPLEX_OPERATION_PROTOCOL = [
+    '【表格与来源绑定规则】',
+    '表格前后要有相邻的解释段，数字与单位均须在原文核对；差值、百分比、换算值不得自算，单位不得自加；公式只用原文编号占位符，图像描述只依据本次实际收到的像素。',
+    '表格输出方式以本提示词和本轮授权路径为准。论文证据中的 `TABLE_J_SELECTION.action` 若要求手写 Markdown、逐格填写 `cellBindings` 或不用 `TABLE` 标记，那是在说明旧式 `artifact_table` 兼容方式，不会禁止这里的 `completeTable`。展示完整原表时，若本轮同时授权该表来源记录和对应正文，优先明确声明 `completeTable`，正文使用唯一独占一段的 `[[TABLE_N]]`，由程序按完整原始 DOM 矩阵生成全部行列；没有这两个授权时不能转换模式；已有合法完整原表标记且仅修本轮已授权来源编号时，正文保持原样。不要把 DOM 表格数字抄成 Markdown 再用 `source_quotes` 声明来源，也不得借此改未授权字段。',
+    '',
+    '四种互斥表格结构（N 为最终文章第 N 张表，J 为原始 `TABLE_J` 编号，不可混用字段）：',
+    '1. `source_quotes`：`{"tableIndex":N,"sourceType":"source_quotes","sourceTableOrdinal":null,"cellBindings":[],"sourceQuotes":["全文中的连续原句字符串"]}`。`cellBindings` 必须为空数组，不可放 `quoteIndex`/`value`/坐标；`sourceQuotes` 每项为 12–4000 字符连续原句，对应正文直接写完整 Markdown 表（去掉 `[[TABLE_N]]`）。单位只可来自与该数值同一语境的逐字原句，多行列头 `mean(SD),s` 不给后续裸数字提供逐值单位证据；无法逐值绑定时保留有证据列，无证据数字不得入表。',
+    '2. `completeTable`：`{"tableIndex":N,"completeTable":{"sourceTableOrdinal":J}}`。从其他模式切入须同时获准修改该来源记录和对应正文并放唯一独占一段的 `[[TABLE_N]]`；`eligible=false` 仅禁止 `selection`，不禁止 `completeTable`，仍须通过完整 DOM、单位、数字和正文检查。',
+    '3. `selection`：`{"tableIndex":N,"selection":{"sourceTableOrdinal":J,"sourceRows":[0,1],"sourceColumns":[0,1]}}`。仅 `TABLE_J_SELECTION` 为 `eligible=true` 时可用，正文独占一段写 `[[TABLE_N]]`，不可混带 `sourceType`/`cellBindings`/`sourceQuotes`。选择前逐表核对 `TABLE_J_INDEX_RULES` 与 `TABLE_J_SHAPE`（如 rows=16 合法行索引为 0..15，columns 同理），`sourceRows`/`sourceColumns` 各至少 2 项、整数不重复且 `sourceRows` 含真实表头行与至少一行数据；切勿原样回传反馈中的非法或重复索引。',
+    '4. `artifact_table`：`{"tableIndex":N,"sourceType":"artifact_table","sourceTableOrdinal":J,"cellBindings":[{"renderedRow":0,"renderedColumn":0,"sourceRow":0,"sourceColumn":0}],"sourceQuotes":[]}`。正文直接写 Markdown 表，不用 `TABLE` 占位符，`cellBindings` 须覆盖表头与全部数据格并逐字匹配原始 DOM。',
+    '',
+    '【明确授权的原子操作协议（仅当 `atomicOperation.kind` 精确匹配时生效）】',
+    '- `delete_top_level_program_metadata_v1`：只输出 `{"version":1,"rawSha256":"原样复制原始草稿SHA","deleteFields":["sourceBindingsContract","sourceBindingsSha256"]}`，不输出 `replacements` 或其他字段；未授权时严禁自删顶层字段。',
+    '- `reorganize_existing_sections_v1`：只替换 `/sections` 完整数组，重组为合规小节数（每项仅含 `kind`/`heading`/`body`），保留全部正确文字、数字、单位、条件与图表公式标记顺序，旧额外字段核对原文后并入允许正文，其余顶层字段与绑定由程序保留。',
+    '- `complete_existing_table_bindings_v1`：只替换获准的 `/tableBindings` 完整数组，不改正文、不删移表；新数组长度须为 `expectedTableCount` 并按正文表序连续编号，仅允许修改 `mutableBindingIndices` 列出的旧索引，新增项只能用匹配已有 Markdown 表的 `artifact_table` 或 `source_quotes`（不可改为需新增标记的 `selection`）。',
+    '- `relocate_result_table_v1`：一次完成搬移：从 `donorSectionPath` 删除恰好 1 张表或 `[[TABLE_N]]`，在 `destinationSectionPath` 结果/消融小节现有表或 `[[TABLE_N]]` 之前插入继承 `donorGlobalTableIndex` 的带数字 Markdown 表，不改对应 `tableIndex`，三个 `requiredReplacementPaths` 全部输出并保留表前比较问题与表后解释。',
+    '- `add_result_table_v1`：不搬移或复制已有表，只改 `destinationSectionPath` 与 `bindingPath` 对应 `source_quotes` 记录；在正文按 `tableIndex` 位置新增恰好 1 张含至少 4 个原文数字的标准 Markdown 结果表，本次只补这一张，剩余已声明的缺表在后续修复中逐项补齐，数字/单位/基线须由连续原句逐字支持，两个 `requiredReplacementPaths` 全部输出并保留表前后解释。',
+    '',
+    '【多表同修与标记对齐】',
+    '多张表结构错误与篇幅不足并存时，相关来源记录与正文一并修复（最多 8 项，不删占位符敷衍）；`FORMULA`/`BRIDGE` 标记须独占一段且仅出现一次，其 `targetKind`/`sectionKind` 须与实际所在小节 `kind` 一致。'
+].join('\n');
 
 function repairOperationProtocol(context) {
     if (context.atomicOperation?.kind === READER_VERSION_METADATA_KIND) return '本轮是 replace_reader_version_4_with_3_v1 原子操作，仅把完整旧 JSON 的顶层 version 数字 4 改为 3。'
@@ -3742,22 +3754,11 @@ function repairOperationProtocol(context) {
         + '只输出 {"version":1,"rawSha256":"复制 atomicOperation.rawSha256","fromVersion":4,"toVersion":3}。'
         + '不输出完整文章、replacements、deleteFields 或任何额外字段；原文其余字节由程序保留，修复后仍完整核验整篇。';
     if (!context.atomicOperation && context.targets.every(target => /^\/(?:sections\/\d+\/body|conceptBridges\/\d+)$/.test(target.path))) return '本轮不修改表格、公式、图片及其来源声明；已有标记保持原样。';
-    // 复杂结构仍使用冻结的完整来源协议，其正文同时进入实现指纹（进程内惰性缓存避免重复 git cat-file）。
-    const frozen = readFrozenRepairV11Text();
-    const blocks = frozen.split('~~~');
-    const marker = '\n如果本次 `atomicOperation.kind` 明确为 `delete_top_level_program_metadata_v1`';
-    if (blocks.length !== 3 || blocks[1].split(marker).length !== 2) throw new Error('局部修复的来源操作协议缺失或边界不唯一');
-    const tableStart = '\n介绍组合术语时，';
-    const tableEnd = '\n当前校验问题和有来源的外部修订反馈：';
-    if (blocks[1].split(tableStart).length !== 2 || blocks[1].split(tableEnd).length !== 2) throw new Error('局部修复的表格操作协议边界不唯一');
-    const tableRules = tableStart.trimStart() + blocks[1].split(tableStart)[1].split(tableEnd)[0];
-    const operationRules = blocks[1].split(marker)[1].replace(
-        '{"version":1,"draftSha256":', JSON.stringify(currentNodePatchHeader()).slice(0, -1) + ',"draftSha256":');
-    return tableRules.replace('（`reader-complete-table-declaration-v1`）', '') + '\n' + marker.trimStart() + operationRules
+    return REPAIR_COMPLEX_OPERATION_PROTOCOL
         + (context.sealedPdfQuoteDocumentAvailable === true
-        ? '\n仅当本次证据提供了独立的封存 PDF 原字符全文时，source_quotes 绑定可额外声明 pdfSourceQuotes:[连续逐字原文字符串]。'
-        + 'HTML 引文仍写 sourceQuotes，不得把 PDF 引文冒充 HTML；两数组至少一项非空。PDF 引文只合并空白，每项12–4000字符，必须唯一连续且不能裁数字、符号、精度或单位；'
-        + '模型不得输出 sealedPdfQuoteEvidence，它仅由程序重读官方封存 PDF 生成。现有表格每格数字、单位、比较条件和全部正文校验仍完整执行。' : '');
+            ? '\n仅当本次证据提供了独立的封存 PDF 原字符全文时，source_quotes 绑定可额外声明 pdfSourceQuotes:[连续逐字原文字符串]。'
+            + 'HTML 引文仍写 sourceQuotes，不得把 PDF 引文冒充 HTML；两数组至少一项非空。PDF 引文只合并空白，每项12–4000字符，必须唯一连续且不能裁数字、符号、精度或单位；'
+            + '模型不得输出 sealedPdfQuoteEvidence，它仅由程序重读官方封存 PDF 生成。现有表格每格数字、单位、比较条件和全部正文校验仍完整执行。' : '');
 }
 
 function repairTableEvidenceGuidance(draft, issues, targets, sourceText, options) {
@@ -4388,7 +4389,6 @@ function readerRepairImplementationSha256() {
     return shaText([fs.readFileSync(__filename, 'utf8'),
         fs.readFileSync(path.join(__dirname, 'reader-target-ordinal-patch.js'), 'utf8'),
         require('./prompt-evidence.js').readPromptEvidenceBytes(CONCEPT_TERMS_PROMPT_PATH).toString('utf8'),
-        readFrozenRepairV11Text(),
         fs.readFileSync(require.resolve('./reader-request-diagnostics.js'), 'utf8'),
         ...['reader-record-format.js', 'reader-stage-protocols.js', 'reader-candidate-format.js',
             'reader-diagnostic-format.js', 'reader-ordinal-format.js', 'reader-section-format.js', 'reader-identity-format.js',

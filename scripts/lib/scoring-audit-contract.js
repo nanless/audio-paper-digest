@@ -10,7 +10,7 @@ const {
 } = require('../utils.js');
 const scoringFormat = require('./scoring-record-format');
 const readerIdentityFormat = require('./reader-identity-format');
-const scoringRubricV2 = require('./scoring-rubric-v2');
+const scoringRubric = require('./scoring-rubric');
 const protocolCodec = require('./protocol-codec');
 const {
     stableFingerprint,
@@ -21,7 +21,7 @@ const {
     normalizeArtifactProbeUrl
 } = require('./public-resource-probe.js');
 
-const SCORING_DIMENSIONS = Object.freeze([
+const LEGACY_SCORING_DIMENSIONS = Object.freeze([
     { key: 'innovation', machineKey: 'innovation', label: '创新性', max: 2 },
     { key: 'technicalRigor', machineKey: 'technical_rigor', label: '技术严谨性', max: 1.5 },
     { key: 'experimentalSufficiency', machineKey: 'experimental_sufficiency', label: '实验充分性', max: 1.5 },
@@ -32,15 +32,15 @@ const SCORING_DIMENSIONS = Object.freeze([
     { key: 'engineering', machineKey: 'engineering_score', label: '工程/实践价值', max: 1.5 }
 ]);
 
-const SCORING_DIMENSIONS_V2 = Object.freeze(
-    SCORING_DIMENSIONS.map(spec => Object.freeze({ ...spec, max: 10 }))
+const SCORING_DIMENSIONS = Object.freeze(
+    LEGACY_SCORING_DIMENSIONS.map(spec => Object.freeze({ ...spec, max: 10 }))
 );
 
 function getScoringDimensionsForRubric(rubricVersion) {
-    return scoringRubricV2.isV2Rubric(rubricVersion) ? SCORING_DIMENSIONS_V2 : SCORING_DIMENSIONS;
+    return scoringRubric.isUnifiedRubric(rubricVersion) ? SCORING_DIMENSIONS : LEGACY_SCORING_DIMENSIONS;
 }
 
-function isV2EvidenceProfileHeader(header) {
+function isUnifiedEvidenceProfileHeader(header) {
     if (!header || !Object.hasOwn(header, 'schemaFingerprint')) return false;
     try {
         const schema = protocolCodec.declaredSchema(
@@ -67,18 +67,18 @@ function getTypeAwareEvidenceGuide(documentType) {
         || '先依据主要贡献形态确定文档类型，再使用对应证据标准；不得机械套用方法论文的消融要求。';
 }
 
-const AUDIT_TOP_LEVEL_KEYS = Object.freeze(['documentType', 'confidence', 'dimensions']);
-const AUDIT_TOP_LEVEL_KEYS_V2 = Object.freeze([
+const LEGACY_AUDIT_TOP_LEVEL_KEYS = Object.freeze(['documentType', 'confidence', 'dimensions']);
+const AUDIT_TOP_LEVEL_KEYS = Object.freeze([
     'documentType', 'confidence', 'evidenceProfile', 'dimensions'
 ]);
 const AUDIT_ITEM_KEYS = Object.freeze(['reason', 'score']);
-const SCORING_EVIDENCE_PROFILE_KEYS = Object.freeze([
+const LEGACY_SCORING_EVIDENCE_PROFILE_KEYS = Object.freeze([
     'multiComponentClaimed', 'ablationStatus', 'targetEvaluation',
     'sampleScaleReported', 'deploymentMeasured', 'publicGeneralizationEvaluated',
     'engineeringEvidence', 'evidenceBoundary', 'evidenceIds'
 ]);
-const SCORING_EVIDENCE_PROFILE_KEYS_V2 = Object.freeze([
-    ...SCORING_EVIDENCE_PROFILE_KEYS,
+const SCORING_EVIDENCE_PROFILE_KEYS = Object.freeze([
+    ...LEGACY_SCORING_EVIDENCE_PROFILE_KEYS,
     'primaryStrengths', 'primaryDefects'
 ]);
 
@@ -238,11 +238,13 @@ function assertExactObjectKeys(value, expectedKeys, context) {
 }
 
 function recalculateScoringAudit(audit) {
-    const rubricVersion = scoringRubricV2.isV2Rubric(audit?.rubricVersion)
-        ? scoringRubricV2.SCORING_RUBRIC_V2
-        : scoringRubricV2.SCORING_RUBRIC_V1;
-    if (rubricVersion === scoringRubricV2.SCORING_RUBRIC_V2) {
-        const calc = scoringRubricV2.calculateV2WeightedTotal(audit.documentType, audit.dimensions);
+    const rawRubric = String(audit?.rubricVersion || '').trim();
+    const isUnified = scoringRubric.isUnifiedRubric(rawRubric);
+    const rubricVersion = isUnified
+        ? rawRubric
+        : scoringRubric.LEGACY_SCORING_RUBRIC;
+    if (isUnified) {
+        const calc = scoringRubric.calculateWeightedTotal(audit.documentType, audit.dimensions);
         return {
             ...audit,
             rubricVersion,
@@ -253,7 +255,7 @@ function recalculateScoringAudit(audit) {
             rankBucket: calc.rankBucket
         };
     }
-    const subtotal = SCORING_DIMENSIONS.reduce(
+    const subtotal = LEGACY_SCORING_DIMENSIONS.reduce(
         (sum, spec) => sum + normalizeScoreToOneDecimal(audit.dimensions[spec.key].score),
         0
     );
@@ -295,7 +297,7 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null, options = {}) {
     const hasEvidenceProfile = Object.prototype.hasOwnProperty.call(parsed, 'evidenceProfile');
     assertExactObjectKeys(
         parsed,
-        hasEvidenceProfile ? AUDIT_TOP_LEVEL_KEYS_V2 : AUDIT_TOP_LEVEL_KEYS,
+        hasEvidenceProfile ? AUDIT_TOP_LEVEL_KEYS : LEGACY_AUDIT_TOP_LEVEL_KEYS,
         '评分审计顶层'
     );
     if (typeof parsed.documentType !== 'string' || !parsed.documentType.trim()) {
@@ -310,16 +312,16 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null, options = {}) {
     const confidence = parsed.confidence.trim();
     if (!['高', '中', '低'].includes(confidence)) throw new Error('评分审计 confidence 非法');
     let evidenceProfile = null;
-    let isV2 = scoringRubricV2.isV2Rubric(options?.rubricVersion);
+    let isUnified = scoringRubric.isUnifiedRubric(options?.rubricVersion);
     if (hasEvidenceProfile) {
         evidenceProfile = parsed.evidenceProfile;
         const evidenceHeader = scoringFormat.evidenceProfileHeader(evidenceProfile);
         if (!evidenceHeader) throw new Error('评分证据说明的格式或结构指纹无效');
-        const profileIsV2 = isV2EvidenceProfileHeader(evidenceHeader);
-        if (profileIsV2) isV2 = true;
-        const expectedProfileKeys = profileIsV2
-            ? SCORING_EVIDENCE_PROFILE_KEYS_V2
-            : SCORING_EVIDENCE_PROFILE_KEYS;
+        const profileIsUnified = isUnifiedEvidenceProfileHeader(evidenceHeader);
+        if (profileIsUnified) isUnified = true;
+        const expectedProfileKeys = profileIsUnified
+            ? SCORING_EVIDENCE_PROFILE_KEYS
+            : LEGACY_SCORING_EVIDENCE_PROFILE_KEYS;
         assertExactObjectKeys(
             evidenceProfile, [...Object.keys(evidenceHeader), ...expectedProfileKeys], '评分证据说明'
         );
@@ -390,12 +392,12 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null, options = {}) {
                 throw new Error(`评分证据画像 evidenceBoundary 引用了账本外 ID: ${[...new Set(unknownBoundaryIds)].join(', ')}`);
             }
         }
-        if (profileIsV2) {
+        if (profileIsUnified) {
             validateEvidenceClaimList(evidenceProfile.primaryStrengths, 'primaryStrengths', 1, 3, allowedEvidenceIds);
             validateEvidenceClaimList(evidenceProfile.primaryDefects, 'primaryDefects', 0, 3, allowedEvidenceIds);
         }
     }
-    const rubricVersion = isV2 ? scoringRubricV2.SCORING_RUBRIC_V2 : scoringRubricV2.SCORING_RUBRIC_V1;
+    const rubricVersion = isUnified ? scoringRubric.CURRENT_SCORING_RUBRIC : scoringRubric.LEGACY_SCORING_RUBRIC;
     const dimSpecs = getScoringDimensionsForRubric(rubricVersion);
     assertExactObjectKeys(parsed.dimensions, dimSpecs.map(spec => spec.key), '评分审计 dimensions');
 
@@ -414,10 +416,10 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null, options = {}) {
             throw new Error(`评分审计维度 ${spec.key} 分数越界`);
         }
         if (spec.key === 'openSource') {
-            if (isV2 && !scoringRubricV2.isV2OpenSourceAnchor(score)) {
-                throw new Error(`评分审计维度 openSource 必须使用固定锚点 ${scoringRubricV2.V2_OPEN_SOURCE_ANCHORS.join('/')}`);
+            if (isUnified && !scoringRubric.isOpenSourceAnchor(score)) {
+                throw new Error(`评分审计维度 openSource 必须使用固定锚点 ${scoringRubric.UNIFIED_OPEN_SOURCE_ANCHORS.join('/')}`);
             }
-            if (!isV2 && !isOpenSourceScoreAnchor(score)) {
+            if (!isUnified && !isOpenSourceScoreAnchor(score)) {
                 throw new Error(`评分审计维度 openSource 必须使用固定锚点 ${OPEN_SOURCE_SCORE_ANCHORS.join('/')}`);
             }
         }
@@ -449,7 +451,7 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null, options = {}) {
     }
 
     return recalculateScoringAudit({
-        ...(isV2 ? { rubricVersion } : {}),
+        ...(isUnified ? { rubricVersion } : {}),
         documentType, confidence, dimensions,
         ...(evidenceProfile ? { evidenceProfile } : {})
     });
@@ -458,7 +460,7 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null, options = {}) {
 function applyScoringEvidenceCaps(audit) {
     const profile = audit?.evidenceProfile;
     if (!profile) return audit;
-    const isV2 = scoringRubricV2.isV2Rubric(audit?.rubricVersion);
+    const isUnified = scoringRubric.isUnifiedRubric(audit?.rubricVersion);
     const updated = structuredClone(audit);
     const capsApplied = [];
     const cap = (dimension, maximum, rule, explanation) => {
@@ -468,12 +470,12 @@ function applyScoringEvidenceCaps(audit) {
         item.score = maximum;
         item.reason = `${item.reason} ${explanation}，本项最高计 ${maximum.toFixed(1)} 分。`;
     };
-    const capsCfg = scoringRubricV2.V2_EVIDENCE_CAPS;
+    const capsCfg = scoringRubric.UNIFIED_EVIDENCE_CAPS;
     const isReportWithPublicGen = ['模型报告', '系统技术报告'].includes(updated.documentType)
         && ['public', 'mixed'].includes(profile.targetEvaluation)
         && profile.publicGeneralizationEvaluated === true;
     if (profile.multiComponentClaimed && profile.ablationStatus === 'none') {
-        const noAblationCap = isV2
+        const noAblationCap = isUnified
             ? (isReportWithPublicGen
                 ? capsCfg.multiComponentWithoutDirectAblationReportPublicGenExpMax
                 : capsCfg.multiComponentWithoutDirectAblationExpMax)
@@ -486,7 +488,7 @@ function applyScoringEvidenceCaps(audit) {
         );
     }
     if (profile.multiComponentClaimed && profile.ablationStatus === 'partial') {
-        const partialCap = isV2
+        const partialCap = isUnified
             ? (isReportWithPublicGen ? capsCfg.multiComponentPartialAblationReportPublicGenExpMax : capsCfg.multiComponentPartialAblationDefaultExpMax)
             : (isReportWithPublicGen ? 1.4 : 1.3);
         cap('experimentalSufficiency', partialCap, 'multi_component_with_partial_ablation', '多组件的因果贡献只有部分消融支持');
@@ -494,7 +496,7 @@ function applyScoringEvidenceCaps(audit) {
     if (profile.targetEvaluation === 'internal' && !profile.sampleScaleReported) {
         cap(
             'experimentalSufficiency',
-            isV2 ? capsCfg.internalEvalWithoutSampleScaleExpMax : 1.2,
+            isUnified ? capsCfg.internalEvalWithoutSampleScaleExpMax : 1.2,
             'internal_evaluation_without_sample_scale',
             '内部评测未报告样本规模'
         );
@@ -502,11 +504,11 @@ function applyScoringEvidenceCaps(audit) {
     if (profile.engineeringEvidence === 'claim_only') {
         cap(
             'engineering',
-            isV2 ? capsCfg.engineeringClaimOnlyMax : 1.0,
+            isUnified ? capsCfg.engineeringClaimOnlyMax : 1.0,
             'engineering_claim_without_measured_or_reusable_evidence',
             '当前证据仅以叙述或间接指标支持工程价值，未包含部署测量或可复用的工程成果'
         );
-    } else if (isV2
+    } else if (isUnified
         && ['系统技术报告', '应用研究'].includes(updated.documentType)
         && !profile.deploymentMeasured
         && profile.targetEvaluation === 'internal') {
@@ -518,11 +520,11 @@ function applyScoringEvidenceCaps(audit) {
         );
     }
     const recalculated = recalculateScoringAudit(updated);
-    const nonHighMax = isV2 ? capsCfg.nonHighConfidenceTotalMax : 9.0;
+    const nonHighMax = isUnified ? capsCfg.nonHighConfidenceTotalMax : 9.0;
     if (recalculated.confidence !== '高' && recalculated.total > nonHighMax) {
         throw new Error(`评分置信度不是“高”时总分不得超过 ${nonHighMax.toFixed(1)}`);
     }
-    const noAblationInternalMax = isV2 ? capsCfg.multiComponentNoAblationInternalTotalMax : 8.5;
+    const noAblationInternalMax = isUnified ? capsCfg.multiComponentNoAblationInternalTotalMax : 8.5;
     if (profile.multiComponentClaimed && profile.ablationStatus === 'none'
         && profile.targetEvaluation === 'internal' && recalculated.total > noAblationInternalMax) {
         throw new Error(`多组件主张缺少直接消融且主要依赖内部评测时，总分不得超过 ${noAblationInternalMax.toFixed(1)}`);
@@ -531,11 +533,11 @@ function applyScoringEvidenceCaps(audit) {
 }
 
 function applyScoringAuditResult(analysis, audit) {
-    const isV2 = scoringRubricV2.isV2Rubric(audit?.rubricVersion);
+    const isUnified = scoringRubric.isUnifiedRubric(audit?.rubricVersion);
     const dimSpecs = getScoringDimensionsForRubric(audit?.rubricVersion);
     let updated = mergeSectionByTitle(analysis, '评分', `${Number(audit.total).toFixed(1)}/10`);
-    if (isV2) {
-        updated = setMachineSummaryField(updated, 'rubric_version', scoringRubricV2.SCORING_RUBRIC_V2);
+    if (isUnified) {
+        updated = setMachineSummaryField(updated, 'rubric_version', scoringRubric.CURRENT_SCORING_RUBRIC);
     }
     updated = setMachineSummaryField(updated, 'document_type', audit.documentType);
     updated = setMachineSummaryField(updated, 'rank_bucket', audit.rankBucket);
@@ -876,9 +878,9 @@ function reasonDeniesVerifiedAvailableResourceType(reason, verifiedAvailableType
 
 function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceIdentity = null, sourceEvidence = '', options = {}) {
     const current = parseAnalysis(analysis) || {};
-    const isV2 = scoringRubricV2.isV2Rubric(audit?.rubricVersion);
+    const isUnified = scoringRubric.isUnifiedRubric(audit?.rubricVersion);
     const artifactProbes = Array.isArray(options?.artifactProbes) ? options.artifactProbes : [];
-    const scores = isV2
+    const scores = isUnified
         ? { complete: 10.0, incompleteDocs: 8.0, partial: 6.0, promise: 3.0, demo: 1.5, closed: 0.0 }
         : { complete: 1.5, incompleteDocs: 1.2, partial: 1.0, promise: 0.5, demo: 0.2, closed: 0.0 };
     let verifiedAvailableTypes = null;
@@ -898,7 +900,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
         : [current.hasCode, current.hasModel, current.hasDataset]
             .some(value => value === '是' || value === 'yes');
     if (audit.documentType === '理论研究') {
-        if (!isV2) return applyScoringEvidenceCaps(audit);
+        if (!isUnified) return applyScoringEvidenceCaps(audit);
         if (!hasReleasedArtifact) {
             // 理论研究不因正文出现公式就白嫖满分开源；无已核验验证代码/数据时最高仅计 3.0（B_t=0.2 → 最多 +0.06）。
             if (audit.dimensions.openSource.score > scores.promise) {
@@ -977,14 +979,14 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
         const isDatasetPaper = audit.documentType === '数据集与基准';
         const isCodeOnlyType = ['理论研究', '综述'].includes(audit.documentType);
         const hasCompleteCoreRelease = !allAvailableCorePlaceholder && (
-            isV2 && isDatasetPaper
+            isUnified && isDatasetPaper
                 ? substantiveAvailableTypes.has('dataset')
-                : (isV2 && isCodeOnlyType
+                : (isUnified && isCodeOnlyType
                     ? (substantiveAvailableTypes.has('code') || substantiveAvailableTypes.has('dataset'))
                     : (substantiveAvailableTypes.has('code') && substantiveAvailableTypes.has('model')))
         );
         const hasCompleteDocumentation = substantiveCoreResources.some(resource => (
-            (resource?.type === 'code' || (isDatasetPaper && isV2 && resource?.type === 'dataset'))
+            (resource?.type === 'code' || (isDatasetPaper && isUnified && resource?.type === 'dataset'))
             && resource?.availability === 'available'
             && resource?.documentationEvidence?.completeness === 'complete'
             && validRepositoryDocumentationEvidence(
@@ -992,7 +994,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
             )
         ));
         const hasPartialDocumentation = substantiveCoreResources.some(resource => (
-            (resource?.type === 'code' || (isDatasetPaper && isV2 && resource?.type === 'dataset'))
+            (resource?.type === 'code' || (isDatasetPaper && isUnified && resource?.type === 'dataset'))
             && resource?.availability === 'available'
             && resource?.documentationEvidence?.completeness === 'partial'
             && Object.values(resource?.documentationEvidence?.capabilities || {}).some(Boolean)
@@ -1008,7 +1010,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
                     ...audit.dimensions,
                     openSource: {
                         score: scores.complete,
-                        reason: isDatasetPaper && isV2
+                        reason: isDatasetPaper && isUnified
                             ? `[A_OPEN] 已验证核心数据集当前可用且官方文档完整，符合数据集与基准类核心材料和文档完整开放的 ${scores.complete.toFixed(1)} 分标准。`
                             : `[A_OPEN] 已验证代码仓库与模型权重当前可用，且官方仓库 README 完整覆盖安装、推理与微调文档，符合核心材料和文档完整开放的 ${scores.complete.toFixed(1)} 分标准。`
                     }
@@ -1023,7 +1025,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
                     ...audit.dimensions,
                     openSource: {
                         score: scores.incompleteDocs,
-                        reason: isDatasetPaper && isV2
+                        reason: isDatasetPaper && isUnified
                             ? `[A_OPEN] 已验证核心数据集当前可用且文档可访问但尚未完整覆盖全部使用说明，符合核心材料开放但文档不完整的 ${scores.incompleteDocs.toFixed(1)} 分标准。`
                             : `[A_OPEN] 已验证代码仓库与模型权重当前可用，且官方仓库 README 可访问但尚未覆盖全部安装、推理与微调文档，符合核心材料开放但文档不完整的 ${scores.incompleteDocs.toFixed(1)} 分标准。`
                     }
@@ -1031,7 +1033,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
             };
             return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
         }
-        if (isDatasetPaper && isV2 && substantiveAvailableTypes.has('dataset') && openSource.score < scores.incompleteDocs && substantiveAvailableTypes.has('code')) {
+        if (isDatasetPaper && isUnified && substantiveAvailableTypes.has('dataset') && openSource.score < scores.incompleteDocs && substantiveAvailableTypes.has('code')) {
             const normalizedAudit = {
                 ...audit,
                 dimensions: {
@@ -1044,7 +1046,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
             };
             return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
         }
-        if (isV2 && !hasCompleteCoreRelease && openSource.score > scores.partial) {
+        if (isUnified && !hasCompleteCoreRelease && openSource.score > scores.partial) {
             const labels = { code: '代码', model: '模型权重', dataset: '数据集' };
             const available = ['code', 'model', 'dataset']
                 .filter(type => substantiveAvailableTypes.has(type))
@@ -1062,7 +1064,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
             };
             return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
         }
-        if (isV2 && hasCompleteCoreRelease && !hasCompleteDocumentation && openSource.score > scores.incompleteDocs) {
+        if (isUnified && hasCompleteCoreRelease && !hasCompleteDocumentation && openSource.score > scores.incompleteDocs) {
             const normalizedAudit = {
                 ...audit,
                 dimensions: {
@@ -1112,15 +1114,15 @@ function revalidateScoringAudit(audit, allowedEvidenceIds) {
 
 module.exports = {
     SCORING_DIMENSIONS,
-    SCORING_DIMENSIONS_V2,
+    LEGACY_SCORING_DIMENSIONS,
     getScoringDimensionsForRubric,
     TYPE_AWARE_EVIDENCE_GUIDES,
     getTypeAwareEvidenceGuide,
     AUDIT_TOP_LEVEL_KEYS,
-    AUDIT_TOP_LEVEL_KEYS_V2,
+    LEGACY_AUDIT_TOP_LEVEL_KEYS,
     AUDIT_ITEM_KEYS,
     SCORING_EVIDENCE_PROFILE_KEYS,
-    SCORING_EVIDENCE_PROFILE_KEYS_V2,
+    LEGACY_SCORING_EVIDENCE_PROFILE_KEYS,
     OPEN_SOURCE_DEFICIT,
     VERIFIED_RESOURCE_DENIAL,
     REPRODUCIBILITY_DEFICIT,

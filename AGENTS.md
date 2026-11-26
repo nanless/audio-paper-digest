@@ -102,10 +102,10 @@ npm run digest:prepare -- YYYY-MM-DD
 - **锁与事实义务**：同篇写入须持规范化 arXiv ID 锁并递增 `generation`；来源绑定的定向事实反馈须先在锁内持久化 `analysisFactReviewObligation`，未完成义务与最新失败均阻断成功和发布。
 - **会议恢复与迁移细则**：并发后处理池、本地超时串行复试、`--postprocess-only`、`--source-corrections`、混合追加窗口、零请求人工修正、博客拒稿 Reader 维护与认证 PDF 独立出版视图的全部低层边界统一维护在[会议恢复与迁移执行细则](docs/conference-workflow.md#会议恢复与迁移执行细则从-agentsmd-归口)。ICML/OpenReview 跨标题预印本唯一白名单例外仍仅为 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`，不得推广。
 - **内容与来源契约**：
-  - 内部主分析含 13 个一级标题，其中 `核心摘要` 为 `700–1,400` 汉字（目标 `850–1,150`）、`10–26` 句的 3–4 段粗体引导全景导读摘要。
-  - 最终博客正文来自 `beginner-researcher` API Reader（现行契约 `structured-pipeline-v5`）：5–9 节（推荐 5–7 节），小节标题直接写明具体问题、核心机制或实验发现（禁止“方法”“实验”等空洞单名及强套“功能锚点 + 冒号”前缀），5000–18000 中文字，0–4 个可选术语桥（`conceptBridges`），含结构化 `implementationSpecs`，论文原图采用紧凑 4 段式自然图文衔接（不强插 `> **看图路径：**`）。历史归档按原登记 `schemaFingerprint` 冷核兼容。
+  - 内部主分析含 13 个一级标题，其中 `核心摘要`（现行规范 `executive-abstract`）为 `700–1,400` 汉字（目标 `850–1,150`）、`10–26` 句的 3–4 段粗体引导全景导读摘要。
+  - 最终博客正文来自 `beginner-researcher` API Reader（现行契约 `structured-pipeline`）：5–9 节（推荐 5–7 节），小节标题直接写明具体问题、核心机制或实验发现（禁止“方法”“实验”等空洞单名及强套“功能锚点 + 冒号”前缀），5000–18000 中文字，0–4 个可选术语桥（`conceptBridges`），含结构化 `implementationSpecs`，论文原图采用紧凑 4 段式自然图文衔接（不强插 `> **看图路径：**`）。历史归档（含旧 `structured-pipeline-v5`、`executive-abstract-v4`）按原登记 `schemaFingerprint` 冷核兼容。
   - 表格单元格须对应原表 DOM 或逐字引文（覆盖全部数字与单位），展示公式由程序写入结构化原 TeX；作者机构与外部资源可达状态逐项核对来源，仅 `available` 可写“已开源/可用”。
-  - 评分采用八维 `type-aware-v2`（全维度 `0–10`，代码重算封顶 `10`），标签从 400 项九维词表选择并写中文首选（仅 8 个既定英文专名可保留原形且须配中文别名）。日更封存 SVG 异常时可从同篇四源绑定 PDF 派生原页（`reader-sealed-pdf-page-asset-v1`）或走 `reader-official-inline-svg-pixels-v2` 回退裁切。摘要级分析默认不可发布。
+  - 评分采用八维 `type-aware`（全维度 `0–10`，代码重算封顶 `10`；旧 `type-aware-v2`/`type-aware-v1` 归档保持冷核兼容），标签从 400 项九维词表选择并写中文首选（仅 8 个既定英文专名可保留原形且须配中文别名）。日更封存 SVG 异常时可从同篇四源绑定 PDF 派生原页（`reader-sealed-pdf-page-asset-v1`）或走 `reader-official-inline-svg-pixels-v2` 回退裁切。摘要级分析默认不可发布。
 
 ## 博客三阶段与远端证明
 

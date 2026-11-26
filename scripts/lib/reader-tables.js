@@ -975,7 +975,7 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
     const seenOrdinalDataCells = new Map();
     const seenTableIndexes = new Set();
     const seenPlainNodes = new Set();
-    const isStructuredV5 = options?.editorialProfile === require('./reader-record-format').STRUCTURED_V5;
+    const isStructuredEditorial = require('./reader-record-format').isStructuredEditorial(options?.editorialProfile);
     const extractOrdinalDataCellCoords = (ordinal, cellBindings) => {
         if (!Number.isInteger(ordinal) || !Array.isArray(cellBindings) || cellBindings.length === 0) return null;
         const sourceTable = (artifacts?.tables || []).find(t => t?.ordinal === ordinal);
@@ -992,7 +992,7 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
         return dataCoords.size > 0 ? dataCoords : allCoords;
     };
     const findOverlappingOrdinalTable = (ordinal, coordsSet) => {
-        if (!isStructuredV5 || !Number.isInteger(ordinal) || !coordsSet || coordsSet.size === 0) return null;
+        if (!isStructuredEditorial || !Number.isInteger(ordinal) || !coordsSet || coordsSet.size === 0) return null;
         const priorList = seenOrdinalDataCells.get(ordinal);
         if (!priorList || priorList.length === 0) return null;
         for (const prev of priorList) {
@@ -1254,7 +1254,7 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
     if (copiedSections.some(section => /\[\[TABLE_[^\]]*\]\]/.test(String(section.body || '')))) {
         throw new Error('读者文章存在未绑定的 TABLE marker');
     }
-    if (checkDuplicates && isStructuredV5 && Array.isArray(artifacts?.tables) && artifacts.tables.length >= 2) {
+    if (checkDuplicates && isStructuredEditorial && Array.isArray(artifacts?.tables) && artifacts.tables.length >= 2) {
         const isPureAblationTable = table => {
             const cap = String(table?.caption || '');
             return /\b(?:ablation|ablations)\b|消融/i.test(cap)

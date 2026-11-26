@@ -164,9 +164,9 @@ test('返回值具备深拷贝隔离，调用方修改返回对象不会污染�
     assert.equal(parser.parseConferencePdfAuthors(confText).authors[0].name, 'Dai Gao');
     assert.match(parser.parseConferencePdfAuthors(confText).authors[0].affiliations[0], /Soochow University/);
 
-    const confV2 = parser.parseConferencePdfAuthorsV2(confText);
+    const confV2 = parser.parseConferencePdfAuthorsFromLines(confText);
     confV2.authors[1].affiliations[0] = 'Tampered Aff V2';
-    assert.equal(parser.parseConferencePdfAuthorsV2(confText).authors[1].affiliations[0], 'Qilu University of Technology, China');
+    assert.equal(parser.parseConferencePdfAuthorsFromLines(confText).authors[1].affiliations[0], 'Qilu University of Technology, China');
 });
 
 test('HTML 单字节、sourceSha256、authors、apiReaderAuthors 或磁盘封存文件变化均立即失效', async t => {

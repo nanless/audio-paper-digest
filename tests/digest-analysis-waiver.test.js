@@ -231,3 +231,221 @@ test('评分未收敛只在明确豁免后才退出阻断集合', async t => {
     assert.equal(report.analysis.waived, 1);
     assert.deepEqual(report.analysis.scoringStabilityUnresolvedIds, []);
 });
+
+test('validateCurrentDataFiles 在合法 analysisWaiver 下通过 partial_failed 批次（含无正文与阶段失败），并在缺失、无效或篡改时拒绝', async t => {
+    const { validateCurrentDataFiles } = require('../scripts/validate-data-files.js');
+    const { validatedDecisionInputSha256 } = require('../scripts/lib/filter-scope-evidence.js');
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'validate-data-waiver-e2e-'));
+    const previousDir = Config.CURRENT_DIR;
+    const previousFiles = { ...Config.FILES };
+    const currentDir = path.join(root, 'current');
+    fs.mkdirSync(currentDir, { recursive: true });
+    const files = {
+        fetchCheckpoint: path.join(currentDir, 'fetch-checkpoint.json'),
+        rawCandidates: path.join(currentDir, 'raw-candidates.json'),
+        filterDecisions: path.join(currentDir, 'filter-decisions.json'),
+        filteredPapers: path.join(currentDir, 'filtered-papers.json'),
+        deepAnalysisResult: path.join(currentDir, 'deep-analysis-result.json'),
+        papers: path.join(currentDir, 'papers.json'),
+        analysisWaiverDir: path.join(currentDir, 'analysis-waivers'),
+        dailyFreshSourceRunsDir: path.join(currentDir, 'daily-runs')
+    };
+    Config.CURRENT_DIR = currentDir;
+    Object.assign(Config.FILES, files);
+    t.after(() => {
+        Config.CURRENT_DIR = previousDir;
+        Object.assign(Config.FILES, previousFiles);
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    const batchDate = '2026-09-08';
+    const timestamp = '2026-09-08T10:00:00.000+08:00';
+    const batchId = 'f'.repeat(16);
+    const fingerprints = {
+        candidateFingerprint: 'a'.repeat(16),
+        sourceConfigFingerprint: 'b'.repeat(16),
+        blogDedupFingerprint: 'c'.repeat(16)
+    };
+    const filterConfigFingerprint = 'd'.repeat(16);
+    const batchIds = ['2609.20001', '2609.20002', '2609.20003', '2609.20004', '2609.20005'];
+
+    const plan = daily.createDailyFreshSourcePlan({
+        batchDate,
+        batchId,
+        rootDir: files.dailyFreshSourceRunsDir,
+        papers: batchIds.map(arxivId => ({ arxivId }))
+    });
+    await daily.captureDailyFreshSources(plan, {
+        concurrency: 1,
+        capture: options => sourceCapture.captureFreshArxivRewriteSource(options, {
+            fetchText: async id => {
+                const text = `${id}\n${validAnalysisText()}\n${validAnalysisText()}`;
+                const structuredArtifacts = {
+                    version: 1, source: 'html', flattenedTextSha256: sha(text),
+                    tables: [], formulas: [], figures: []
+                };
+                structuredArtifacts.payloadSha256 = sha(JSON.stringify(structuredArtifacts));
+                return {
+                    text, source: 'html', sourceId: id, url: `https://arxiv.org/html/${id}`,
+                    fetchedAt: `${batchDate}T00:00:00.000Z`, imageInfos: [], structuredArtifacts,
+                    htmlAvailability: 'available', htmlAttempts: 1, warnings: []
+                };
+            },
+            fetchPdf: async id => ({
+                bytes: Buffer.from(`%PDF-1.4\n${id}\n%%EOF\n`),
+                url: `https://arxiv.org/pdf/${id}.pdf`,
+                fetchedAt: `${batchDate}T00:00:01.000Z`
+            })
+        })
+    });
+
+    const categoryOrder = Config.ARXIV_CATEGORIES.map(category => category.id);
+    const rawPapers = batchIds.map(arxivId => ({ arxivId }));
+    const checkpoint = {
+        timestamp, batchDate, batchId, ...fingerprints,
+        historicalDedupIds: [],
+        categoryOrder,
+        arxiv: Object.fromEntries(categoryOrder.map((id, idx) => {
+            const list = idx === 0 ? rawPapers : [];
+            return [id, { status: 'complete', papers: list, papersCount: list.length, papersSha256: stableSha256(list), health: { id, ok: true } }];
+        })),
+        huggingface: { status: 'complete', papers: [], papersCount: 0, papersSha256: stableSha256([]), health: { ok: true } }
+    };
+    checkpoint.fetchSourcesSha256 = stableSha256({
+        arxiv: Object.fromEntries(Object.entries(checkpoint.arxiv).sort(([a], [b]) => a.localeCompare(b))
+            .map(([id, entry]) => [id, { status: entry.status, papersCount: entry.papersCount, papersSha256: entry.papersSha256 }])),
+        huggingface: { status: 'complete', papersCount: 0, papersSha256: checkpoint.huggingface.papersSha256 }
+    });
+    fs.writeFileSync(files.fetchCheckpoint, JSON.stringify(checkpoint));
+    const integrity = { batchDate, batchId, rawPapersSha256: stableSha256(rawPapers), fetchSourcesSha256: checkpoint.fetchSourcesSha256 };
+    fs.writeFileSync(files.rawCandidates, JSON.stringify({
+        timestamp, ...fingerprints, ...integrity,
+        stats: { beforeBlogSkip: batchIds.length, afterBlogSkip: batchIds.length, skippedFromBlog: 0, arxivOnly: batchIds.length, hfOnly: 0, both: 0 },
+        sourceHealth: {
+            arxiv: { categories: categoryOrder.map(id => ({ id, ok: true })) },
+            huggingface: { ok: true }
+        },
+        papers: rawPapers
+    }));
+    const emptyInputSha = validatedDecisionInputSha256({ arxivId: batchIds[0] });
+    fs.writeFileSync(files.filterDecisions, JSON.stringify({
+        timestamp, ...fingerprints, ...integrity,
+        filterModel: 'model-a', filterPromptHash: 'hash-a', filterConfigFingerprint,
+        stats: { totalCandidates: batchIds.length, decided: batchIds.length, related: batchIds.length, complete: true },
+        decisions: Object.fromEntries(batchIds.map(id => [id, {
+            related: true, filterModel: 'model-a', filterPromptHash: 'hash-a', inputSha256: emptyInputSha
+        }]))
+    }));
+    fs.writeFileSync(files.filteredPapers, JSON.stringify({
+        timestamp, ...fingerprints, ...integrity,
+        filterModel: 'model-a', filterPromptHash: 'hash-a', filterConfigFingerprint,
+        status: 'complete',
+        stats: { afterBlogSkip: batchIds.length, afterFilter: batchIds.length, afterArchiveSkip: batchIds.length, decisionCount: batchIds.length },
+        papers: batchIds.map(arxivId => ({ arxivId, fetchBatchDate: batchDate }))
+    }));
+
+    const boundPapers = await Promise.all(batchIds.map(id => sourceBoundPaper(plan, id)));
+    // 0: 正常成功
+    const okPaper = boundPapers[0];
+    // 1: 无正文失败（primaryAnalysis transient_failure，无 analysis/parsed/checkpoint）
+    const noBodyPaper = structuredClone(boundPapers[1]);
+    noBodyPaper.analysis = null;
+    noBodyPaper.parsed = null;
+    delete noBodyPaper.scoringRubricVersion;
+    delete noBodyPaper.apiReaderArticle;
+    noBodyPaper.analysisManifest.stages = {
+        primaryAnalysis: { status: 'transient_failure', error: 'HTTP 503 upstream timeout' }
+    };
+    noBodyPaper.latestAnalysisAttemptError = 'HTTP 503 upstream timeout';
+    // 2: 有正文但 apiReaderArticle 失败，且 papers.json 保留旧成功（analyzed / analysis_failed）
+    const readerFailedPaper = structuredClone(boundPapers[2]);
+    delete readerFailedPaper.apiReaderArticle;
+    readerFailedPaper.analysisManifest.stages.apiReaderArticle = { status: 'invalid_output', error: 'Reader 校验失败' };
+    readerFailedPaper.latestAnalysisAttemptError = 'Reader 校验失败';
+    // 3: 有正文但 tagSelection 失败
+    const tagFailedPaper = structuredClone(boundPapers[3]);
+    delete tagFailedPaper.analysisManifest.stages.taxonomySelection;
+    tagFailedPaper.analysisManifest.stages.tagSelection = { status: 'invalid_output', error: '标签选择失败' };
+    tagFailedPaper.latestAnalysisAttemptError = '标签选择失败';
+    // 4: 有正文但 scoringAudit 存在未收敛 stabilityWarning: true
+    const stabilityWarningPaper = structuredClone(boundPapers[4]);
+    stabilityWarningPaper.analysisManifest.stages.scoringAudit.stabilityWarning = true;
+    stabilityWarningPaper.latestAnalysisAttemptError = '评分稳定性告警未收敛';
+
+    const deep = {
+        batchDate,
+        batchId,
+        status: 'partial_failed',
+        stats: { analysisStatus: 'partial_failed', remainingFailed: 4, totalAfterMerge: 5 },
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(plan),
+        papers: [okPaper, noBodyPaper, readerFailedPaper, tagFailedPaper, stabilityWarningPaper]
+    };
+    const database = {
+        papers: {
+            [batchIds[0]]: { arxivId: batchIds[0], fetchBatchDate: batchDate, digestStatus: { status: 'analyzed', latestAttemptStatus: 'analyzed', batchDate } },
+            [batchIds[1]]: { arxivId: batchIds[1], fetchBatchDate: batchDate, digestStatus: { status: 'analysis_failed', latestAttemptStatus: 'analysis_failed', batchDate } },
+            [batchIds[2]]: { arxivId: batchIds[2], fetchBatchDate: batchDate, digestStatus: { status: 'analyzed', latestAttemptStatus: 'analysis_failed', batchDate } },
+            [batchIds[3]]: { arxivId: batchIds[3], fetchBatchDate: batchDate, digestStatus: { status: 'analysis_failed', latestAttemptStatus: 'analysis_failed', batchDate } },
+            [batchIds[4]]: { arxivId: batchIds[4], fetchBatchDate: batchDate, digestStatus: { status: 'analysis_failed', latestAttemptStatus: 'analysis_failed', batchDate } }
+        }
+    };
+    const saveState = () => {
+        fs.writeFileSync(files.deepAnalysisResult, JSON.stringify(deep));
+        fs.writeFileSync(files.papers, JSON.stringify(database));
+    };
+    saveState();
+
+    // 负向 1：未登记 waiver 时，真实 validateCurrentDataFiles 必须报出各项失败阻断
+    const unwaivedIssues = validateCurrentDataFiles(files);
+    assert.ok(unwaivedIssues.length > 0);
+    const unwaivedText = unwaivedIssues.join('\n');
+    assert.match(unwaivedText, /缺少有效 parsed 评分缓存/);
+    assert.match(unwaivedText, /apiReaderArticle 尚未完成|缺少 Reader v3 完整绑定/);
+    assert.match(unwaivedText, /tagSelection|标签阶段/);
+    assert.match(unwaivedText, /评分稳定性告警尚未形成有效二次审计 resolution/);
+
+    // 正向：登记覆盖 4 篇失败论文的合法 waiver 后，不改写三份封存文件即可通过真实 validateCurrentDataFiles
+    const waivedIds = batchIds.slice(1);
+    const created = createAnalysisWaiver({
+        date: batchDate,
+        paperIds: waivedIds,
+        reason: '用户明确豁免本批 4 篇不同阶段失败论文，保留封存来源与原失败记录。',
+        files
+    });
+    assert.deepEqual(validateCurrentDataFiles(files), []);
+
+    // 负向 2：waiver 被篡改无效时必须立即拒绝
+    const tamperedWaiver = structuredClone(created.payload);
+    tamperedWaiver.requestedBy = 'agent';
+    delete tamperedWaiver.waiverSha256;
+    tamperedWaiver.waiverSha256 = stableSha256(tamperedWaiver);
+    fs.writeFileSync(created.output, JSON.stringify(tamperedWaiver));
+    const invalidWaiverIssues = validateCurrentDataFiles(files).join('\n');
+    assert.match(invalidWaiverIssues, /analysis waiver invalid/);
+    assert.match(invalidWaiverIssues, /评分稳定性告警尚未形成有效二次审计 resolution/);
+
+    // 负向 3：篡改 stats.remainingFailed 与真实未完成数不一致（即使重新签 waiver 也必须拒绝）
+    deep.stats.remainingFailed = 0;
+    saveState();
+    createAnalysisWaiver({
+        date: batchDate,
+        paperIds: waivedIds,
+        reason: '重新签署豁免以验证 tampered remainingFailed 仍被拒绝。',
+        files
+    });
+    const tamperedStatsIssues = validateCurrentDataFiles(files).join('\n');
+    assert.match(tamperedStatsIssues, /stats\.remainingFailed \(0\) 与逐篇检查得到的未完成数量 \(4\) 不一致/);
+    deep.stats.remainingFailed = 4;
+
+    // 负向 4：无正文豁免失败论文在 papers.json 中声称 analyzed/analyzed 或缺失合法状态必须拒绝
+    database.papers[batchIds[1]].digestStatus = { status: 'analyzed', latestAttemptStatus: 'analyzed', batchDate };
+    saveState();
+    createAnalysisWaiver({
+        date: batchDate,
+        paperIds: waivedIds,
+        reason: '重新签署豁免以验证损坏的 papers.json digestStatus 仍被拒绝。',
+        files
+    });
+    const badDigestIssues = validateCurrentDataFiles(files).join('\n');
+    assert.match(badDigestIssues, /深度分析已豁免，但 digestStatus/);
+});

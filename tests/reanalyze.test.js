@@ -157,3 +157,101 @@ test('reanalyze.js 模块加载不执行顶层环境检查、日志设置或 CLI
     assert.equal(child.status, 0, child.stderr);
     assert.equal(child.stdout.trim(), 'ok');
 });
+
+test('reanalyzeSelected 使用注入的 options.analyzeBatch 并在非函数时显式报错', async t => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const crypto = require('node:crypto');
+    const Config = require('../scripts/config.js');
+    const daily = require('../scripts/lib/daily-fresh-source-plan.js');
+    const sourceCapture = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
+    const { validAnalysisPaper, validAnalysisText } = require('./valid-analysis-fixture.js');
+
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reanalyze-injected-batch-'));
+    const prevFiles = { ...Config.FILES };
+    const date = '2026-11-25';
+    const paperId = '2611.00001';
+    const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+    Config.FILES.deepAnalysisResult = path.join(root, 'deep-analysis-result.json');
+    Config.FILES.deepAnalysisResultLegacy = path.join(root, 'deep-analysis-result-legacy.json');
+    Config.FILES.papers = path.join(root, 'papers.json');
+    Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'daily-runs');
+    t.after(() => {
+        Object.assign(Config.FILES, prevFiles);
+        delete require.cache[require.resolve('../scripts/reanalyze-selected.js')];
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    const plan = daily.createDailyFreshSourcePlan({
+        batchDate: date,
+        batchId: 'reanalyze-di-test',
+        papers: [{ arxivId: paperId }]
+    });
+    await daily.captureDailyFreshSources(plan, {
+        concurrency: 1,
+        capture: options => sourceCapture.captureFreshArxivRewriteSource(options, {
+            fetchText: async id => {
+                const text = `${id}\n${validAnalysisText()}`;
+                const structuredArtifacts = { version: 1, source: 'html', flattenedTextSha256: sha(text), tables: [], formulas: [], figures: [] };
+                structuredArtifacts.payloadSha256 = sha(JSON.stringify(structuredArtifacts));
+                return {
+                    text, source: 'html', sourceId: id, url: `https://arxiv.org/html/${id}`,
+                    fetchedAt: `${date}T00:00:00.000Z`, imageInfos: [], structuredArtifacts,
+                    htmlAvailability: 'available', htmlAttempts: 1, warnings: []
+                };
+            },
+            fetchPdf: async id => ({
+                bytes: Buffer.from(`%PDF-1.4\n${id}\n%%EOF\n`),
+                url: `https://arxiv.org/pdf/${id}.pdf`,
+                fetchedAt: `${date}T00:00:01.000Z`
+            })
+        })
+    });
+
+    const initialPaper = {
+        arxivId: paperId,
+        title: 'Injected analyzeBatch fixture paper',
+        analysis: null,
+        error: 'previous failure'
+    };
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({
+        batchDate: date,
+        status: 'failed',
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(plan),
+        papers: [initialPaper]
+    }));
+    fs.writeFileSync(Config.FILES.papers, JSON.stringify({
+        papers: {
+            [paperId]: {
+                arxivId: paperId,
+                title: initialPaper.title,
+                digestStatus: { status: 'analysis_failed', latestAttemptStatus: 'analysis_failed', batchDate: date }
+            }
+        }
+    }));
+
+    delete require.cache[require.resolve('../scripts/reanalyze-selected.js')];
+    const selected = require('../scripts/reanalyze-selected.js');
+
+    await assert.rejects(
+        selected.reanalyzeSelected([paperId], { analyzeBatch: 'not-a-function' }),
+        /analyzeBatch 必须是函数/
+    );
+
+    const calls = [];
+    const recoveredPaper = validAnalysisPaper(paperId, { title: initialPaper.title, fetchBatchDate: date });
+    const fakeAnalyzeBatch = async (toReanalyze, batchOptions) => {
+        calls.push({ ids: toReanalyze.map(p => p.arxivId), hasPrepareLocked: typeof batchOptions.preparePaperLocked === 'function' });
+        if (typeof batchOptions.onPaperResultLocked === 'function') {
+            await batchOptions.onPaperResultLocked(toReanalyze[0], { success: true, result: recoveredPaper });
+        }
+        return { results: [recoveredPaper], stats: { success: 1, failed: 0 } };
+    };
+
+    const result = await selected.reanalyzeSelected([paperId], { analyzeBatch: fakeAnalyzeBatch });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], { ids: [paperId], hasPrepareLocked: true });
+    assert.equal(result.status, 'complete');
+    assert.equal(result.exitCode, 0);
+});

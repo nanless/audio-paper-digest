@@ -281,7 +281,6 @@ test('公开生成器把续段计划绑定实际请求SHA和v2协议，不增加
                 '../scripts/lib/reader-repair.js',
                 '../scripts/lib/reader-target-ordinal-patch.js',
                 '../prompts/current/api-reader-concept-terms.md',
-                '../prompts/api-reader-repair-v11.md',
                 '../scripts/lib/reader-request-diagnostics.js',
                 ...['reader-record-format.js', 'reader-stage-protocols.js', 'reader-candidate-format.js',
             'reader-diagnostic-format.js', 'reader-ordinal-format.js', 'reader-section-format.js', 'reader-identity-format.js',

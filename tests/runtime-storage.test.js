@@ -1638,6 +1638,79 @@ describe('运行时重复 PDF 写时复制克隆去重 (pdf-dedupe)', () => {
         }
     });
 
+    it('支持 official-conference-pdf-receipt-v2 和 extended 扁平凭证，并拒绝缺失、非法或越界字段', () => {
+        const projectRoot = makeProject();
+        try {
+            const pdfBytesV2 = '%PDF-official-v2-body';
+            const hashV2 = crypto.createHash('sha256').update(pdfBytesV2).digest('hex');
+            const pdfV2 = writeFile(projectRoot, 'data/runtime/official-conference-acquisitions/emnlp-2026/pdfs/paper1.pdf', pdfBytesV2);
+            const receiptV2 = path.join(projectRoot, 'data/runtime/official-conference-acquisitions/emnlp-2026/receipts/paper1.json');
+            fs.mkdirSync(path.dirname(receiptV2), { recursive: true });
+            fs.writeFileSync(receiptV2, JSON.stringify({
+                contract: 'official-conference-pdf-receipt-v2',
+                pdfFile: 'pdfs/paper1.pdf',
+                pdfSha256: hashV2
+            }));
+
+            const pdfExt = writeFile(projectRoot, 'data/runtime/official-conference-acquisitions/ismir-2026/pdfs/paper1-dup.pdf', pdfBytesV2);
+            const receiptExt = path.join(projectRoot, 'data/runtime/official-conference-acquisitions/ismir-2026/receipts/paper1-dup.json');
+            fs.mkdirSync(path.dirname(receiptExt), { recursive: true });
+            fs.writeFileSync(receiptExt, JSON.stringify({
+                contract: 'official-conference-pdf-receipt-extended',
+                pdfFile: 'pdfs/paper1-dup.pdf',
+                pdfSha256: hashV2
+            }));
+
+            const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+            assert.strictEqual(report.blockers.length, 0, JSON.stringify(report.blockers));
+            assert.strictEqual(report.duplicateGroups.length, 1);
+            assert.strictEqual(report.duplicateGroups[0].occurrenceCount, 2);
+            assert.ok(report.pdfFiles.some(item => item.path === pdfV2 && item.hash === hashV2 && item.declaredHashMismatch === false));
+            assert.ok(report.pdfFiles.some(item => item.path === pdfExt && item.hash === hashV2 && item.declaredHashMismatch === false));
+
+            // --hash-bytes 检测扩展凭证声明 SHA 与真实字节不一致
+            fs.writeFileSync(receiptExt, JSON.stringify({
+                contract: 'official-conference-pdf-receipt-extended',
+                pdfFile: 'pdfs/paper1-dup.pdf',
+                pdfSha256: '0'.repeat(64)
+            }));
+            const mismatchReport = getPdfDuplicateReport({ projectRoot, hashBytes: true, nowMs: NOW_MS });
+            const mismatchRec = mismatchReport.pdfFiles.find(item => item.path === pdfExt);
+            assert.strictEqual(mismatchRec.declaredHashMismatch, true);
+
+            // 负向测试：缺失 pdfFile、越界路径、非法 pdfSha256 均记录 invalid_receipt blocker
+            const badDir = path.join(projectRoot, 'data/runtime/official-conference-acquisitions/bad-2026/receipts');
+            fs.mkdirSync(badDir, { recursive: true });
+            const missingFileReceipt = path.join(badDir, 'missing-file.json');
+            const escapeReceipt = path.join(badDir, 'escape.json');
+            const badShaReceipt = path.join(badDir, 'bad-sha.json');
+            fs.writeFileSync(missingFileReceipt, JSON.stringify({
+                contract: 'official-conference-pdf-receipt-v2',
+                pdfSha256: hashV2
+            }));
+            fs.writeFileSync(escapeReceipt, JSON.stringify({
+                contract: 'official-conference-pdf-receipt-v2',
+                pdfFile: '../emnlp-2026/pdfs/paper1.pdf',
+                pdfSha256: hashV2
+            }));
+            fs.writeFileSync(badShaReceipt, JSON.stringify({
+                contract: 'official-conference-pdf-receipt-extended',
+                pdfFile: 'pdfs/ok.pdf',
+                pdfSha256: 'not-a-sha256'
+            }));
+            const badReport = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+            for (const badPath of [missingFileReceipt, escapeReceipt, badShaReceipt]) {
+                assert.strictEqual(
+                    badReport.blockers.some(item => item.type === 'invalid_receipt' && item.path === badPath),
+                    true,
+                    `expected invalid_receipt blocker for ${badPath}, got ${JSON.stringify(badReport.blockers)}`
+                );
+            }
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
+
     it('buildPrunePlan 纳入共享博客锁检查并拒绝符号链接/硬链接 .env', () => {
         const projectRoot = makeProject();
         try {

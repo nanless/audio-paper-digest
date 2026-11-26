@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * Safe lossless compaction CLI for data/current/papers.json (Wave 14.6A).
+ * Safe lossless compaction CLI for data/current/papers.json.
  *
  * Defaults to --dry-run (strictly zero filesystem writes, including zero log files).
  * Pass --write to verify archive proofs outside the lock, acquire the papers.json

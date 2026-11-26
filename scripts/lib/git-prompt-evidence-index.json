@@ -273,6 +273,12 @@
         "prompts/current/deep-analysis.md"
       ]
     },
+    "10ee37e6baeea9e30110bae192eca7705554933451f73c97dd1bf404ff5f379a": {
+      "blobOid": "ac988da822e22cce8de80531e2f3a83b37ccf374",
+      "paths": [
+        "prompts/current/scoring-audit.md"
+      ]
+    },
     "128e4df8b3ce5a47377404228bfd4d7ba4c0671195000c0e36a28a6249a8973b": {
       "blobOid": "a4e448dabfee09a3c76afb528dfda51d2dd05344",
       "paths": [
@@ -1154,6 +1160,12 @@
         "prompts/api-reader-article-v8.md"
       ]
     },
+    "75e31f1696fb97f6ca363da70e91bd701475cc48e72acd09258acb0b42a91c50": {
+      "blobOid": "20ae4bffd78911b268c6f58176225696f0a8bb26",
+      "paths": [
+        "prompts/current/core-summary-repair.md"
+      ]
+    },
     "764e854986d745135d62c158660258592d76037ec96d5d9e47c2ed1d32a308d6": {
       "blobOid": "31b904ed9cddd1cd15a07ddf7d872d77ade49876",
       "paths": [
@@ -1411,6 +1423,12 @@
       "blobOid": "0d656d83b99bdff9aeec082163c82975fe366602",
       "paths": [
         "manual/prompts/manual-analysis-record.md"
+      ]
+    },
+    "9436dfae5acc0b6c47ff5c62b631eb1b643890fa59996e15991e58c29f592336": {
+      "blobOid": "5bf9a1d8602478c87441b464fc831b21d66b7fe6",
+      "paths": [
+        "prompts/current/gap-fill.md"
       ]
     },
     "94538e5b36381eec2296eaab132f342a4123c47f976aec801340db6d0793bede": {
@@ -1908,6 +1926,12 @@
         "prompts/deep-analysis.md"
       ]
     },
+    "c3d4bbd5ce2d2c1e1e3fdc719180d21635a81b8b17903f1751b55e7fa5ff6ced": {
+      "blobOid": "9ca7cd3fefe40a80c8253fdd2214054f8070f181",
+      "paths": [
+        "prompts/current/deep-analysis.md"
+      ]
+    },
     "c4e1bad94945aa5984d47d4a09c98f7137a5ca75ed013da7e1b34e4ca5b2272d": {
       "blobOid": "b7d46d15b0900698dfde13717c7f893e440fe50e",
       "paths": [
@@ -1918,6 +1942,12 @@
       "blobOid": "7b1af0faa31300013e96df6e8244b4e76d8755c7",
       "paths": [
         "manual/prompts/manual-analysis-record.md"
+      ]
+    },
+    "c5f6110e3ca4c8b92d9076cd1acb7b4380790841b98b0df53584c0a87027a8fd": {
+      "blobOid": "e045023fc2ecec6974c099fcd1d5e84fb2fba4db",
+      "paths": [
+        "prompts/current/method-fill.md"
       ]
     },
     "c72a2a8c9588ce85b0141848d42bc872c429dea6eebd42f93aaff48739a73be5": {
@@ -1972,6 +2002,12 @@
       "blobOid": "cf20575b7b93946fa167e9efa059bf4a545f7492",
       "paths": [
         "prompts/history/cc2a767c82cbcae776660626d2f009bd2a8d99494e81e526f6cdfeb306aceaf6.md"
+      ]
+    },
+    "cc5992a16a472e71c1427a32d495debd329d2c67cb945d47bf3e1b084aca168f": {
+      "blobOid": "b1e0c6dbedb4b047bbc78b09ea61e38a22f059b8",
+      "paths": [
+        "prompts/current/structure-repair.md"
       ]
     },
     "ccef1e8e6a7d7b9e6e0de8da124149c4e8d31b6ecd137434609e1f957bcff829": {
@@ -2280,6 +2316,12 @@
       "blobOid": "f2037693bd574f25f8850cc69fd7e321397db6ab",
       "paths": [
         "prompts/en/deep-analysis.md"
+      ]
+    },
+    "f45609d3a7b9aa2cf34c295e363ac529c7689432cf661f1ac45f651b9a2b8386": {
+      "blobOid": "c663ab80297272cfed1d44388d8b43b1d8bbd036",
+      "paths": [
+        "prompts/current/api-reader-repair.md"
       ]
     },
     "f58e7eabc6f35341284909ce393a5572ff2bd4f86a0a9b47719aa25ca6f93a13": {

@@ -99,7 +99,7 @@ import Foundation
         let malformedBytes=encoded(malformed),malformedFile=malformedDirectory.appendingPathComponent("personal.json");try malformedBytes.write(to:malformedFile)
         var refused=false;do{_=try DesktopStore(directory:malformedDirectory)}catch{refused=true}
         check("malformed v1 refuses bootstrap",refused);check("malformed bootstrap keeps original bytes",try Data(contentsOf:malformedFile)==malformedBytes)
-        let fixtureURL=URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("tests/fixtures/workbench-favorite-collections-v1.json")
+        let fixtureURL=URL(fileURLWithPath:FileManager.default.currentDirectoryPath).appendingPathComponent("tests/fixtures/workbench-favorite-collections.json")
         let shared=try JSONSerialization.jsonObject(with:Data(contentsOf:fixtureURL)) as! [String:Any]
         for fixture in shared["validationCases"] as! [[String:Any]] {
             let name=fixture["name"] as! String,object=fixture["personal"] as! [String:Any],valid=fixture["valid"] as! Bool

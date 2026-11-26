@@ -27,7 +27,7 @@ import java.util.UUID
 @RunWith(AndroidJUnit4::class)
 class FullWorkspaceCloudInstrumentedTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
-    private val fixture by lazy { JSONObject(instrumentation.context.assets.open("full-webdav-sync-v1.json").bufferedReader().use { it.readText() }) }
+    private val fixture by lazy { JSONObject(instrumentation.context.assets.open("full-webdav-sync.json").bufferedReader().use { it.readText() }) }
     private fun source(platform: String) = fixture.getJSONArray("sources").let { rows ->
         (0 until rows.length()).map { rows.getJSONObject(it) }.single { it.getString("platform") == platform }
     }

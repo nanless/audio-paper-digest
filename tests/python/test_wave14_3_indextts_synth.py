@@ -32,7 +32,7 @@ import indextts_synth as synth  # noqa: E402
 
 def make_sample_script() -> dict:
     return {
-        'contract': 'daily-podcast-script-v1',
+        'contract': 'daily-podcast-script',
         'date': '2026-11-24',
         'title': '语音/音频论文速递播客 2026-11-24',
         'scriptSha256': 'c' * 64,
@@ -259,7 +259,7 @@ class Wave143IndexTTSSynthTest(unittest.TestCase):
             m1 = synth.synthesize_podcast_script(
                 script, backend=backend, output_path=out_mp3, cache_dir=cache_dir, audio_format='mp3'
             )
-            self.assertEqual(m1['contract'], 'daily-podcast-audio-v1')
+            self.assertEqual(m1['contract'], 'daily-podcast-audio')
             self.assertEqual(m1['cacheStats'], {'hits': 0, 'misses': 4, 'totalChunks': 4})
             self.assertEqual(m1['chapters'][0]['startSec'], 0.0)
             self.assertAlmostEqual(m1['chapters'][-1]['endSec'], m1['durationSeconds'], places=3)
@@ -448,7 +448,7 @@ class Wave143IndexTTSSynthTest(unittest.TestCase):
 
             # v1 fallback with **generation_kwargs: MUST NOT pass spk_audio_prompt alongside audio_prompt!
             mini = {
-                'contract': 'daily-podcast-script-v1',
+                'contract': 'daily-podcast-script',
                 'date': '2026-11-24',
                 'title': 't',
                 'scriptSha256': 'd' * 64,

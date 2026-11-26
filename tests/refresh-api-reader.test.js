@@ -11,7 +11,7 @@ const {
     parseRefreshCliArgs,
     resolveBatchRefreshIds,
     resolveSavedAnalysisBatchDate,
-    hasCurrentReaderV3,
+    hasCurrentReader,
     canRepairScoringBinding,
     getDailyOperatorOrRetainedCandidateRefreshBlockReason,
     MAX_REFRESH_CONCURRENCY
@@ -137,10 +137,10 @@ describe('refresh-api-reader 批量命令行', () => {
                 ...options,
                 isCurrentReaderFn: paper => paper.apiReaderPlan?.version === 3
             }), ['2608.00002']);
-            assert.strictEqual(hasCurrentReaderV3(JSON.parse(
+            assert.strictEqual(hasCurrentReader(JSON.parse(
                 fs.readFileSync(file, 'utf8')
             ).papers[0]), false);
-            assert.strictEqual(hasCurrentReaderV3({ arxivId: 'missing-plan' }), false);
+            assert.strictEqual(hasCurrentReader({ arxivId: 'missing-plan' }), false);
             assert.throws(
                 () => resolveBatchRefreshIds({ ...options, date: '2026-08-31' }),
                 /不能按 2026-08-31 全量刷新/
@@ -944,9 +944,9 @@ describe('日更人工作业记录与保留序号补丁候选的刷新前置守�
         const f = await setupDailyGuardFixture(t);
 
         // Give retainedPaper a valid stage.factReview + archived ordinary completion is NOT present here,
-        // so check hasCurrentReaderV3 on each paper first:
-        // Note: operatorPaper without full manifest/correction files has cold hasCurrentReaderV3 === false,
-        // while ordinaryPaper with stage.factReview has cold hasCurrentReaderV3 === true!
+        // so check hasCurrentReader on each paper first:
+        // Note: operatorPaper without full manifest/correction files has cold hasCurrentReader === false,
+        // while ordinaryPaper with stage.factReview has cold hasCurrentReader === true!
         const factProtectedId = '2611.24249';
         const payload = f.readCanonicalJson();
         const factPaper = structuredClone(f.ordinaryPaper);
@@ -965,7 +965,7 @@ describe('日更人工作业记录与保留序号补丁候选的刷新前置守�
                 factReview: { contract: 'daily-fact-review-v1', feedbackSha256: '9'.repeat(64) }
             }
         );
-        assert.equal(hasCurrentReaderV3(factPaper), true);
+        assert.equal(hasCurrentReader(factPaper), true);
 
         // 1. Explicit multi-target refresh WITHOUT --feedback / --feedback-file fails fast up front (0 calls even on ordinaryId)
         const beforeExplicitBytes = f.readCanonicalBytes();
@@ -1007,7 +1007,7 @@ describe('日更人工作业记录与保留序号补丁候选的刷新前置守�
         const selectedForSurface = resolveBatchRefreshIds(surfaceAllOptions);
         assert.deepEqual(selectedForSurface, [f.ordinaryId], '--all --surface-bindings-only 自动跳过已合格的受保护记录');
 
-        // 3. --all --date when a protected paper is FAILED (!hasCurrentReaderV3):
+        // 3. --all --date when a protected paper is FAILED (!hasCurrentReader):
         // resolveBatchRefreshIds does NOT hide the failure, and refreshApiReaders rejects the batch pre-flight with 0 calls!
         const failedProtected = structuredClone(factPaper);
         failedProtected.latestAnalysisAttemptError = '受保护记录存在未完成失败';

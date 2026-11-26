@@ -697,7 +697,10 @@ def _extract_booktabs_table_from_rules(
 
     # 2. Estimate normal inter-word space vs inter-column gap from line word gaps
     # Typical academic table font (7-10pt) has inter-word space ~1.5-3.6pt and column gap >=5.5pt.
-    median_h = sorted((w[3] - w[1]) for ln in lines for w in ln)[len(words_sorted) // 2]
+    heights = sorted((w[3] - w[1]) for ln in lines for w in ln)
+    if not heights:
+        return None
+    median_h = heights[len(heights) // 2]
     phrase_gap = max(4.2, min(7.0, median_h * 0.56))
 
     # Build phrase spans per line: consecutive words separated by <= phrase_gap stay together!

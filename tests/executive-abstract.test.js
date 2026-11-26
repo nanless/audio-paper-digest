@@ -16,7 +16,8 @@ const protocols = require('../scripts/lib/protocol-codec.js');
 const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture.js');
 
 const OLD_SUMMARY_FP = '0492b17abed5cb34bcd340790cb9bd803e79c59b2e7bbb08a13de750e0f66ba6';
-const NEW_SUMMARY_FP = 'f4354643c215dba4717d9769a310db87adafec301da7ec30434c8f43c1ef8f99';
+const V4_SUMMARY_FP = 'f4354643c215dba4717d9769a310db87adafec301da7ec30434c8f43c1ef8f99';
+const NEW_SUMMARY_FP = 'b6ccc6ae8a62b3a5ac240ee930a303847ee1cb613f68bfcaf45424d353d78762';
 const REPLAY_CLI = path.resolve(__dirname, '../scripts/lib/core-summary-semantic-replay-cli.js');
 
 const sha256 = value => crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -118,20 +119,23 @@ function runReplayCli(payload) {
     }
 }
 
-test('summary.json 双指纹演进：保留 v3 与旧 schemaFingerprint 历史兼容，生成新 executive-abstract-v4 指纹', () => {
+test('summary.json 多指纹演进：保留 v3、旧 schemaFingerprint 与归档 executive-abstract-v4 兼容，生成新 executive-abstract 指纹', () => {
     const current = coreSummaryFormat.currentHeader();
     assert.deepEqual(current, {
         contract: 'core-summary',
         schemaFingerprint: NEW_SUMMARY_FP
     });
     assert.equal(coreSummaryFormat.legacySchemaFingerprint, OLD_SUMMARY_FP);
+    assert.equal(coreSummaryFormat.v4SchemaFingerprint, V4_SUMMARY_FP);
     assert.equal(coreSummaryFormat.originalTag, 'core-summary-detailed-v3');
     assert.equal(protocols.isContract('core-summary-detailed-v3', 'core-summary'), true);
     assert.equal(protocols.hasValidHeader({ contract: 'core-summary', schemaFingerprint: OLD_SUMMARY_FP }, 'core-summary'), true);
+    assert.equal(protocols.hasValidHeader({ contract: 'core-summary', schemaFingerprint: V4_SUMMARY_FP }, 'core-summary'), true);
     assert.equal(protocols.hasValidHeader({ contract: 'core-summary', schemaFingerprint: NEW_SUMMARY_FP }, 'core-summary'), true);
     assert.equal(protocols.hasValidHeader({ contract: 'core-summary', schemaFingerprint: 'f'.repeat(64) }, 'core-summary'), false);
 
     assert.equal(coreSummaryFormat.isExecutiveAbstractHeader(current), true);
+    assert.equal(coreSummaryFormat.isExecutiveAbstractHeader({ contract: 'core-summary', schemaFingerprint: V4_SUMMARY_FP }), true);
     assert.equal(coreSummaryFormat.isExecutiveAbstractHeader({ contract: 'core-summary', schemaFingerprint: OLD_SUMMARY_FP }), false);
     assert.equal(coreSummaryFormat.isExecutiveAbstractHeader('core-summary-detailed-v3'), false);
     assert.equal(coreSummaryFormat.isExecutiveAbstractHeader({ contract: 'core-summary-detailed-v3' }), false);

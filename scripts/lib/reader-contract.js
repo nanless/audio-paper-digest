@@ -28,7 +28,7 @@ const LEGACY_READER_LIMITS = Object.freeze({
 function limitsForDraftFormat(input = null) {
     const format = require('./reader-record-format');
     let profile = format.INTEGRATED;
-    let editorialProfile = format.STRUCTURED_V5;
+    let editorialProfile = format.STRUCTURED_EDITORIAL;
     let sourceTextChars = null;
     if (input && typeof input === 'object' && !Array.isArray(input)) {
         if (Number.isInteger(input.sourceTextChars) && input.sourceTextChars > 0) {
@@ -66,11 +66,11 @@ function limitsForDraftFormat(input = null) {
             editorialProfile: format.LEGACY_INTEGRATED
         };
     }
-    if (editorialProfile === format.COHESIVE_V4) {
+    if (editorialProfile === format.COHESIVE_EDITORIAL) {
         return {
             ...READER_LIMITS,
             requiresFocusBlockquote: false,
-            editorialProfile: format.COHESIVE_V4
+            editorialProfile: format.COHESIVE_EDITORIAL
         };
     }
     const isVeryShortSource = Number.isInteger(sourceTextChars) && sourceTextChars >= 2500 && sourceTextChars < 18000;
@@ -83,7 +83,9 @@ function limitsForDraftFormat(input = null) {
                 ? { minimumChineseChars: 3800, minimumProseChineseChars: 3400 }
                 : {}),
         requiresFocusBlockquote: false,
-        editorialProfile: format.STRUCTURED_V5
+        editorialProfile: format.isStructuredEditorial(editorialProfile)
+            ? editorialProfile
+            : format.STRUCTURED_EDITORIAL
     };
 }
 
@@ -105,7 +107,7 @@ function readerRequirements(options = {}) {
         : (options.editorialProfile
             || (options.format ? limitsForDraftFormat(options.format).editorialProfile
                 : (options.version !== undefined && options.version !== null
-                    ? format.LEGACY_INTEGRATED : format.STRUCTURED_V5)));
+                    ? format.LEGACY_INTEGRATED : format.STRUCTURED_EDITORIAL)));
     const sourceTextChars = Number.isInteger(options.sourceTextChars)
         ? options.sourceTextChars
         : (typeof options.sourceText === 'string' && options.sourceText.trim().length >= 2500
@@ -120,34 +122,25 @@ function readerRequirements(options = {}) {
 function buildReaderContractNotice(options = {}) {
     const format = require('./reader-record-format');
     const rules = readerRequirements(options);
-    const isV5 = rules.editorialProfile === format.STRUCTURED_V5;
-    const sectionAndBridgeRule = isV5
-        ? `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个职责清晰的小节（推荐 5–7 节），每节标题直接承载论文具体机制、模块名或实验结论（严禁连续 3 节套用“问题本质：/方法全景：/核心机制：/主实验验证：”等模板化前缀，严禁在标题与子标题中写图/表编号）；正文中文字数 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 字，单段 120–320 汉字（硬上限 420），散文超过 950 汉字的小节必须使用 #### 子标题或结构化列表组织层次；conceptBridges 允许 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组（默认 []，把术语关系自然融入正文）。`
-        : rules.minimumConceptBridges === 0
-            ? `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个职责清晰的小节（推荐 5–7 节，每节标题用“功能定位词：论文具体问题或机制判断”，严禁在标题中写图/表编号），正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 允许 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组（默认输出空数组 []，将相关概念分工直接自然写进正文段落，不堆砌独立词典卡）。`
-            : `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个小节，正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 应解释 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组相关术语的分工和组合意义。`;
-    const figureRule = isV5
-        ? `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号；没有收到像素时 figurePlacements 必须为空。每条 figurePlacement 须附带自然中文图注 chineseCaption（12–120 字，不含“图 1/Figure 1”前缀），并遵守语义就位（架构/流程图放 method_overview/component/training，定量曲线/消融图放 result/ablation）。图前导读至少 ${rules.figureLeadChars} 字，图后解释至少 ${rules.figureExplanationChars} 字（禁止“这张图确实可见”“从像素可见”等套话；不生成看图路径框；focusPoints 可填 [] 或 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察要点）。`
-        : rules.requiresFocusBlockquote === false
-            ? `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符（禁止写“这张图确实可见”“从像素可见”等套话；代码直接渲染原图与图注，不生成看图路径框；focusPoints 可填 [] 或 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察要点）。`
-            : `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符；focusPoints 应提供 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察提示。`;
-    return [
-        `本次文章检查要求（${READER_MECHANICAL_CONTRACT}）：`,
-        `散文汉字（不含表格、图注、看图路径与术语组合块）建议不少于 ${Math.min(rules.minimumProseChineseChars, Math.round(rules.minimumChineseChars * 0.9))} 个；`
-            + '靠术语卡和表格单元格凑满总字数不算实质讲解。',
-        sectionAndBridgeRule,
+    const isStructured = format.isStructuredEditorial(rules.editorialProfile);
+    const proseFloor = Math.min(rules.minimumProseChineseChars, Math.round(rules.minimumChineseChars * 0.9));
+    const sectionRule = rules.minimumConceptBridges === 0
+        ? `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个职责清晰的小节，正文总汉字 ${rules.minimumChineseChars}–${rules.maximumChineseChars}；conceptBridges 允许 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组（默认 []）。`
+        : `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个小节，正文总汉字 ${rules.minimumChineseChars}–${rules.maximumChineseChars}；conceptBridges 应解释 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组。`;
+    const figureRule = `图片：最多 ${rules.maximumFigures} 张（没有收到像素时，figurePlacements 必须为空）；图前导读至少 ${rules.figureLeadChars} 字，图后解释至少 ${rules.figureExplanationChars} 字；focusPoints ${rules.requiresFocusBlockquote ? `应提供 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项` : `可填 [] 或 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察要点`}${isStructured ? '；每项附 chineseCaption，顶层输出 implementationSpecs' : ''}。`;
+    const lines = [
+        `本次文章动态门槛（${READER_MECHANICAL_CONTRACT}）：`,
+        `散文汉字（不含表格、图注与术语块）建议不少于 ${proseFloor} 个。`,
+        sectionRule,
         rules.minimumTables > 0
-            ? `文章至少应包含 ${rules.minimumTables} 张表。表格列数遵循真实原表和比较问题，不设置固定宽表数量或五列门槛，不为凑列添加无来源的解释列、占位值或参考文献数字。每张表都要自然交代比较条件并解释主要收益、代价与限制（禁止写“比较问题是：”“这张表支撑的判断是”“本表数值与单位依据论文 PDF”等套话）；原始条件、结果数字和单位必须保留并通过正常来源绑定。`
-            : '本次来源证据里没有可核验的原表，因此不要求配表；不要用引文数字、参考文献年份或页码拼占位结果表。若正文确实呈现了原表，仍须满足表前说明段与表后解释段的要求。',
+            ? `表格：至少应包含 ${rules.minimumTables} 张表（列数遵循真实原表，不为凑列添加无来源列、占位值或参考文献数字）；表前说明段至少 ${rules.tableLeadChineseChars} 汉字，表后解释段至少 ${rules.tableExplanationChineseChars} 汉字。`
+            : `表格：本次来源无可用原表，不要求配表（不拼占位表）；若呈现原表，表前说明段至少 ${rules.tableLeadChineseChars} 汉字，表后解释段至少 ${rules.tableExplanationChineseChars} 汉字。`,
         ...(options.minimumResultTables > 0 ? [
-            `原文包含定量结果表，result 或 ablation 小节须呈现至少 ${options.minimumResultTables} 张带数字的结果表，并保留必要的基线和实际可运行策略。仅展示数据集表或配置表不满足要求。`
+            `定量结果表：原文包含定量结果表，result 或 ablation 小节须呈现至少 ${options.minimumResultTables} 张带数字的结果表，并保留必要基线与实际可运行策略（仅展示数据集/配置表不满足要求）。`
         ] : []),
-        `表前的独立说明段至少包含 ${rules.tableLeadChineseChars} 个汉字，表后的独立解释段至少包含 ${rules.tableExplanationChineseChars} 个汉字；说明和解释都应紧邻表格。`,
-        figureRule,
-        ...(isV5 ? [
-            '顶层请输出 implementationSpecs 对象，必含 trainingData、computeHardware、keyHyperparams、inferenceCost、openSourceArtifacts、appendixHighlights 六项来源核实摘要，音频/语音/音乐论文建议额外补充可选字段 audioSignalSpecs（采样率、帧率/步长、码率、因果前瞻延迟与 RTF）；原文未提及的项如实写“原文未披露”，不得编造。'
-        ] : [])
-    ].join('\n');
+        figureRule
+    ];
+    return lines.join('\n');
 }
 
 // 同一篇里同一个结果数值在过多小节反复出现，是读者最直观的「啰嗦感」来源：
@@ -191,7 +184,7 @@ function findReaderCrossSectionMetricReuse(article, sections = []) {
 // 仅数字相近永远不算重复发现。
 function findReaderSectionNearDuplicates(article, sections = [], options = {}) {
     const format = require('./reader-record-format');
-    const checkIntraSection = format.isStructuredV5(options?.editorialProfile);
+    const checkIntraSection = format.isStructuredEditorial(options?.editorialProfile);
     const headings = [...String(article || '').matchAll(/^###\s+([^\n]+)\n/gm)];
     const paragraphs = [];
     for (let index = 0; index < headings.length; index++) {

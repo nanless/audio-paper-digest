@@ -18,7 +18,7 @@ import Foundation
         func text(_ plan: PersonalWebDavSync.Plan) -> String? {
             (plan.personal["notes"] as? [String:[String:Any]])?[a]?["text"] as? String
         }
-        let fixture = try Data(contentsOf: URL(fileURLWithPath: "tests/fixtures/workbench/personal-webdav-sync-v1.json"))
+        let fixture = try Data(contentsOf: URL(fileURLWithPath: "tests/fixtures/workbench/personal-webdav-sync.json"))
         let wire = try JSONSerialization.jsonObject(with: fixture) as! [String:[String:Any]]
         let peerBytes = try wire.mapValues { try JSONSerialization.data(withJSONObject: $0) }
         let imported = try PersonalWebDavSync.plan(local: local(), device: "00000000-0000-4000-8000-000000000003", remote: peerBytes)

@@ -71,9 +71,14 @@ test('G1: historical-outdated-audit 识别过时单篇与旧汇总页、支持�
     t.after(() => fs.rmSync(blogRepo, { recursive: true, force: true }));
     const standards = audit.currentStandards();
 
-    // 1. 2026-11-20：完全符合当前规范的完整日批次（不应被标记过时）
+    // 1. 2026-11-20：完全符合当前规范的完整日批次（含当前版本与已归档 v5/type-aware-v2 兼容页，均不应被标记过时）
     writePost(blogRepo, '2026-11-20.md', modernSummaryMarkdown(standards, { date: '2026-11-20' }));
     writePost(blogRepo, '2026-11-20-modern-paper.md', modernPaperMarkdown(standards, { date: '2026-11-20', arxivId: '2611.00001' }));
+    writePost(blogRepo, '2026-11-20-archived-v5-paper.md', modernPaperMarkdown({
+        ...standards,
+        readerSchemaFingerprint: require('../scripts/lib/reader-record-format.js').V5_PLAN_FP,
+        scoringRubricVersion: 'type-aware-v2'
+    }, { date: '2026-11-20', arxivId: '2611.00002', title: 'Archived V5 Paper' }));
 
     // 2. 2026-03-10：过时的完整日批次（单篇缺 v5/type-aware-v2/reader_sections/旧词表 + 旧短汇总）
     writePost(blogRepo, '2026-03-10.md', [
@@ -136,14 +141,14 @@ test('G1: historical-outdated-audit 识别过时单篇与旧汇总页、支持�
     ].join('\n'));
 
     const all = audit.auditBlogPosts({ blogRepo, standards });
-    assert.equal(all.scannedCount, 6);
-    assert.equal(all.upToDateCount, 2);
+    assert.equal(all.scannedCount, 7);
+    assert.equal(all.upToDateCount, 3);
     assert.equal(all.outdatedCount, 4);
 
     const oldPaper = all.outdatedPages.find(p => p.path === 'content/posts/2026-03-10-old-paper.md');
     assert.ok(oldPaper);
-    assert.ok(oldPaper.reasons.includes('missing-structured-pipeline-v5'));
-    assert.ok(oldPaper.reasons.includes('missing-type-aware-v2'));
+    assert.ok(oldPaper.reasons.includes('missing-structured-pipeline-reader'));
+    assert.ok(oldPaper.reasons.includes('missing-type-aware-rubric'));
     assert.ok(oldPaper.reasons.includes('outdated-tag-registry'));
     assert.ok(oldPaper.reasons.includes('missing-reader-sections'));
 

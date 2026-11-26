@@ -32,7 +32,7 @@ The current published release for both Mac and Android is **1.5.1 (build 25)** (
 
 | Release (Build) | Date | Summary | Record |
 |---|---|---|---|
-| 1.5.0 / 24 | 2026-11-26 | Native daily audio podcast player on both platforms, Wave 12 / Track 13.3 cards, offline multi-word search, and brand/portal path migration | [1.5.0 record](workbench-1.5.0-review.md) |
+| 1.5.0 / 24 | 2026-11-26 | Native daily audio podcast player on both platforms, audio-spec & score-audit cards, offline multi-word search, and brand/portal path migration | [1.5.0 record](workbench-1.5.0-review.md) |
 | 1.4.7 (23) | 2026-11-23 | Fixed newer paper blog pages that failed to open; hardened HTML5/SVG/MathML sanitization, networking, WebDAV, and Zotero | [1.4.7 record](workbench-1.4.7-review.md) |
 | 1.4.6 (22) | 2026-11-20 | Switched default reads to `client/details/*` snapshots; added lossless note conflict merge and portable backup desktop-detail replay | [1.4.6 record](workbench-1.4.6-review.md) |
 | 1.4.5 (21) | 2026-11-12 | Fixed repeated Android foreground full sync, macOS corrupt-catalog startup crash, and early exit in `apps/macos/test.sh` | [1.4.5 record](workbench-1.4.5-review.md) |
@@ -55,7 +55,7 @@ Use the [workbench review and release playbook](workbench-review-playbook.md) fo
 | Mac website data and personal model records | [Data and recovery](mac-app-data.md) |
 | Mac Zotero connection, archiving, and resumption | [Zotero integration](mac-app-zotero.md) |
 | Mac cloud backup versions and restoration | [Cloud data and backups](mac-app-cloud.md) |
-| Mac testing and acceptance status | [Validation](mac-app-validation.md), [acceptance matrix](mac-app-acceptance.md), [current status](mac-app-acceptance-status.md), [review procedure](mac-app-review-log.md) |
+| Mac testing and acceptance status | [Validation and review](mac-app-validation.md), [acceptance matrix](mac-app-acceptance.md), [current status](mac-app-acceptance-status.md) |
 | Mac release packages and icons | [Release preparation](mac-app-release.md), [icon design](mac-app-icon-design.md), [source assets](../apps/macos/Assets/README.en.md) |
 | Android product and implementation scope | [Application design](android-app-plan.md) |
 | Android Zotero and full backups | [Zotero integration](android-zotero-research.md), [backup contract](android-cloud-contract.md) |
@@ -69,7 +69,7 @@ Use the [workbench review and release playbook](workbench-review-playbook.md) fo
 
 ## Run a production task
 
-First prepare the environment using [setup](setup.md), then follow the [operating manual](../SKILL.md). The [shared workflow guide](three-workflows.md) explains common code and distinct sources. [Workflow maintenance](workflow-sharing-plan.md) explains responsibilities and design decisions.
+First prepare the environment using [setup](setup.md), then follow the [operating manual](../SKILL.md). The [shared workflow guide](three-workflows.md) explains common code, distinct sources, and design decisions.
 
 | Task | Instructions |
 |---|---|
@@ -115,7 +115,6 @@ Standing paid authorization permits necessary subsequent windows, with original 
 | Classification-vocabulary design | [Tag design](tag-system-design.md) |
 | Timing measurements and optimization scope | [Performance](daily-performance.md) |
 | Publishing-stage timing baselines and fixed constraints | [Publishing performance](publishing-performance.md) |
-| Compatibility retention and documentation maintenance | [Maintenance principles](repository-maintenance-review.md) |
 | Retire entry points, migrate formats, and recover production batches | [Maintaining resumable production workflows](../skills/stateful-workflow-maintenance/SKILL.md) |
 
 ## Read historical review records
@@ -125,9 +124,8 @@ These records explain the problems, changes, and actual verification at the time
 - Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md), [1.4.4](workbench-1.4.4-review.md), [1.4.5](workbench-1.4.5-review.md), [1.4.6](workbench-1.4.6-review.md), [1.4.7](workbench-1.4.7-review.md), [1.5.0](workbench-1.5.0-review.md), [1.5.1](workbench-1.5.1-review.md).
 - Android fixes: [1.3.1](android-1.3.1-review.md), [1.3.2](android-1.3.2-review.md), [1.3.3](android-1.3.3-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
-- Shared workflows and maintenance: [workflow review](shared-workflow-review.md), [repository maintenance](repository-maintenance-review.md).
 
-For current writing and documentation maintenance, use the [project writing guide](writing-guide.md), [technical writing methods](../skills/clear-technical-writing/SKILL.md), and [maintenance principles](repository-maintenance-review.md). Completed file-by-file editing reports remain in Git history so their old paths, line numbers, and test counts do not become current instructions.
+For current writing and documentation maintenance, use the [project writing guide](writing-guide.md), [technical writing methods](../skills/clear-technical-writing/SKILL.md), and [maintenance guide](maintenance.md). Completed file-by-file editing reports remain in Git history so their old paths, line numbers, and test counts do not become current instructions.
 
 ## Establish completion
 

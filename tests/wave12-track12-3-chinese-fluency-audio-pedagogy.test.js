@@ -31,7 +31,7 @@ describe('Wave 12 Track 12.3: Chinese fluency & quantitative_chinese_numeral on 
 
         for (const text of naturalSentences) {
             const v5Findings = editorial.findQuantitativeChineseNumerals(text, {
-                editorialProfile: format.STRUCTURED_V5
+                editorialProfile: format.STRUCTURED_EDITORIAL
             });
             assert.deepEqual(v5Findings, [], `STRUCTURED_V5 should allow natural Chinese: ${text}`);
         }
@@ -39,7 +39,7 @@ describe('Wave 12 Track 12.3: Chinese fluency & quantitative_chinese_numeral on 
         // Legacy & cohesive-functional-v4 MUST retain original behavior (zero cold-replay drift)
         const v4Probe = '实验采用留一会话交叉验证，这一对比说明另一位说话人表现稳定。';
         const v4Findings = editorial.findQuantitativeChineseNumerals(v4Probe, {
-            editorialProfile: format.COHESIVE_V4
+            editorialProfile: format.COHESIVE_EDITORIAL
         });
         assert.ok(v4Findings.length >= 2, `cohesive-functional-v4 should keep historical checks intact: ${JSON.stringify(v4Findings)}`);
     });
@@ -64,7 +64,7 @@ describe('Wave 12 Track 12.3: Chinese fluency & quantitative_chinese_numeral on 
 
         for (const [text, expectedList] of mustCatchExact) {
             const findings = editorial.findQuantitativeChineseNumerals(text, {
-                editorialProfile: format.STRUCTURED_V5
+                editorialProfile: format.STRUCTURED_EDITORIAL
             });
             const matches = findings.map(f => f.match);
             for (const expected of expectedList) {
@@ -90,7 +90,7 @@ describe('Wave 12 Track 12.3: Chinese fluency & quantitative_chinese_numeral on 
             { code: 'quantitative_chinese_numeral', match: '一套' }
         ];
         const formatted = deep.normalizeReaderProseFormatting(input, fakeStaleIssues, {
-            editorialProfile: format.STRUCTURED_V5
+            editorialProfile: format.STRUCTURED_EDITORIAL
         });
         assert.ok(formatted.includes('留一会话'));
         assert.ok(formatted.includes('这一对比'));
@@ -106,24 +106,24 @@ describe('Wave 12 Track 12.3: Chinese fluency & quantitative_chinese_numeral on 
         // Round 1 P0-2 regression: co-occurring exact-total singular 一 + natural Chinese in same section
         const mixed = '模型训练总计一次测试。最后一次更新后可以一次看清结果，总计一位测试者，另一位说话人表现稳定。';
         const v5NumIssues = editorial.findQuantitativeChineseNumerals(mixed, {
-            editorialProfile: format.STRUCTURED_V5
+            editorialProfile: format.STRUCTURED_EDITORIAL
         }).map(f => ({ ...f, code: 'quantitative_chinese_numeral' }));
         assert.deepEqual(v5NumIssues.map(i => i.match), ['一次', '一位']);
         const normalizedMixed = editorial.normalizeIssueBoundReaderQuantitativeNumerals(
             mixed,
             v5NumIssues,
-            { editorialProfile: format.STRUCTURED_V5 }
+            { editorialProfile: format.STRUCTURED_EDITORIAL }
         );
         assert.equal(
             normalizedMixed,
             '模型训练总计 1 次测试。最后一次更新后可以一次看清结果，总计 1 位测试者，另一位说话人表现稳定。'
         );
         assert.deepEqual(
-            editorial.findReaderLanguageIssues(normalizedMixed, { editorialProfile: format.STRUCTURED_V5 }),
+            editorial.findReaderLanguageIssues(normalizedMixed, { editorialProfile: format.STRUCTURED_EDITORIAL }),
             []
         );
         assert.deepEqual(
-            editorial.findQuantitativeChineseNumerals(normalizedMixed, { editorialProfile: format.STRUCTURED_V5 }),
+            editorial.findQuantitativeChineseNumerals(normalizedMixed, { editorialProfile: format.STRUCTURED_EDITORIAL }),
             []
         );
     });
@@ -138,7 +138,7 @@ describe('Wave 12 Track 12.3: Audio/hardware mistranslation, mechanical 1 & AI c
         ].join('\n\n');
 
         const v5Issues = editorial.findReaderLanguageIssues(badText, {
-            editorialProfile: format.STRUCTURED_V5
+            editorialProfile: format.STRUCTURED_EDITORIAL
         });
         const matched = v5Issues.map(i => i.match);
         for (const expected of [
@@ -168,7 +168,7 @@ describe('Wave 12 Track 12.3: Audio/hardware mistranslation, mechanical 1 & AI c
 
         // Zero drift on cohesive-functional-v4
         const v4Issues = editorial.findReaderLanguageIssues(badText, {
-            editorialProfile: format.COHESIVE_V4
+            editorialProfile: format.COHESIVE_EDITORIAL
         });
         assert.equal(v4Issues.length, 0, `cohesive-functional-v4 must not fail on new STRUCTURED_V5 rules, got: ${JSON.stringify(v4Issues)}`);
     });
@@ -188,7 +188,7 @@ describe('Wave 12 Track 12.3: Audio/hardware mistranslation, mechanical 1 & AI c
             '值得注意的是仅重建版本的谱误差下降，但听感仍略低于参考系统。'
         ].join('\n\n');
         const issues = editorial.findReaderLanguageIssues(safeText, {
-            editorialProfile: format.STRUCTURED_V5
+            editorialProfile: format.STRUCTURED_EDITORIAL
         });
         assert.deepEqual(issues, []);
     });
@@ -209,7 +209,7 @@ describe('Wave 12 Track 12.3: Expanded audio metric whitelist on STRUCTURED_V5',
             summary: 'Vocoder 在 16 kHz 下处理 20 ms 帧。',
             method: 'Decoder 在 16 kHz 下处理 20 ms 帧。',
             results: 'Encoder 在 16 kHz 下输出 20 ms 帧。'
-        }, { editorialProfile: format.STRUCTURED_V5 });
+        }, { editorialProfile: format.STRUCTURED_EDITORIAL });
         assert.equal(reuse.length, 1);
         assert.equal(reuse[0].signature, '16khz|20ms::');
     });
@@ -229,30 +229,30 @@ describe('Wave 12 Track 12.3: Expanded audio metric whitelist on STRUCTURED_V5',
         ];
         for (const s of validAudioSentences) {
             const issues = editorial.findMissingComparisonUnits(s, {
-                editorialProfile: format.STRUCTURED_V5
+                editorialProfile: format.STRUCTURED_EDITORIAL
             });
             assert.deepEqual(issues, [], `Should not flag valid audio metrics on STRUCTURED_V5: ${s}`);
         }
 
         // Must still catch genuine bare percentage WER/EER & negated ViSQOL/CIDEr transfer
         assert.equal(
-            editorial.findMissingComparisonUnits('虽然 ViSQOL 从 3.40 提升到 4.12，但 WER 从 8.5 降至 4.2。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            editorial.findMissingComparisonUnits('虽然 ViSQOL 从 3.40 提升到 4.12，但 WER 从 8.5 降至 4.2。', { editorialProfile: format.STRUCTURED_EDITORIAL }).length,
             1
         );
         assert.equal(
-            editorial.findMissingComparisonUnits('验证集上 BERTScore 召回率从 93.66 升至 93.76 而 CIDEr 从 64.0 降至 62.0。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            editorial.findMissingComparisonUnits('验证集上 BERTScore 召回率从 93.66 升至 93.76 而 CIDEr 从 64.0 降至 62.0。', { editorialProfile: format.STRUCTURED_EDITORIAL }).length,
             1
         );
         assert.equal(
-            editorial.findMissingComparisonUnits('这里变化不是 CIDEr 从 64.0 降至 62.0，而是召回率从 64.0 降至 62.0。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            editorial.findMissingComparisonUnits('这里变化不是 CIDEr 从 64.0 降至 62.0，而是召回率从 64.0 降至 62.0。', { editorialProfile: format.STRUCTURED_EDITORIAL }).length,
             1
         );
         assert.equal(
-            editorial.findMissingComparisonUnits('说话人验证 EER 从 5.8 降至 2.3。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            editorial.findMissingComparisonUnits('说话人验证 EER 从 5.8 降至 2.3。', { editorialProfile: format.STRUCTURED_EDITORIAL }).length,
             1
         );
         assert.equal(
-            editorial.findMissingComparisonUnits('这里变化不是 ViSQOL 升至 4.12，而是 WER 降至 4.2。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            editorial.findMissingComparisonUnits('这里变化不是 ViSQOL 升至 4.12，而是 WER 降至 4.2。', { editorialProfile: format.STRUCTURED_EDITORIAL }).length,
             1
         );
 
@@ -260,7 +260,7 @@ describe('Wave 12 Track 12.3: Expanded audio metric whitelist on STRUCTURED_V5',
         assert.equal(editorial.findMissingComparisonUnits('说话人验证 EER 从 5.8 降至 2.3。').length, 0);
         assert.equal(editorial.findMissingComparisonUnits('该鼻音滤波器引入一对零点以降低 EER。').length, 0);
         assert.equal(
-            editorial.findMissingComparisonUnits('该鼻音滤波器引入一对零点以降低 EER。', { editorialProfile: format.COHESIVE_V4 }).length,
+            editorial.findMissingComparisonUnits('该鼻音滤波器引入一对零点以降低 EER。', { editorialProfile: format.COHESIVE_EDITORIAL }).length,
             0
         );
     });
@@ -319,18 +319,18 @@ describe('PC-P1-5 + PC-P2-1: Typography masking, SMOS/CMOS/DMOS, extended v5 uni
         ];
         for (const s of validV5) {
             assert.deepEqual(
-                editorial.findMissingComparisonUnits(s, { editorialProfile: format.STRUCTURED_V5 }),
+                editorial.findMissingComparisonUnits(s, { editorialProfile: format.STRUCTURED_EDITORIAL }),
                 [],
                 `Should pass on STRUCTURED_V5: ${s}`
             );
         }
         // Negative: negated SMOS/CMOS attribution or bare WER alongside SMOS MUST still fail
         assert.equal(
-            editorial.findMissingComparisonUnits('这里变化不是 SMOS 提升到 4.18，而是 WER 降至 4.2。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            editorial.findMissingComparisonUnits('这里变化不是 SMOS 提升到 4.18，而是 WER 降至 4.2。', { editorialProfile: format.STRUCTURED_EDITORIAL }).length,
             1
         );
         assert.equal(
-            editorial.findMissingComparisonUnits('尽管 CMOS 提升到 +0.42，但 WER 从 12.4 降至 8.3。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            editorial.findMissingComparisonUnits('尽管 CMOS 提升到 +0.42，但 WER 从 12.4 降至 8.3。', { editorialProfile: format.STRUCTURED_EDITORIAL }).length,
             1
         );
     });
@@ -344,7 +344,7 @@ describe('PC-P1-5 + PC-P2-1: Typography masking, SMOS/CMOS/DMOS, extended v5 uni
         ];
         for (const s of mustCatchBoth) {
             assert.equal(
-                editorial.findMissingComparisonUnits(s, { editorialProfile: format.STRUCTURED_V5 }).length,
+                editorial.findMissingComparisonUnits(s, { editorialProfile: format.STRUCTURED_EDITORIAL }).length,
                 1,
                 `Expected v5 to catch bare delta despite unrelated %: ${s}`
             );
@@ -355,7 +355,7 @@ describe('PC-P1-5 + PC-P2-1: Typography masking, SMOS/CMOS/DMOS, extended v5 uni
             );
         }
         assert.equal(
-            editorial.findMissingComparisonUnits('在 100% 干净语音条件下，WER 降至 8.3。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            editorial.findMissingComparisonUnits('在 100% 干净语音条件下，WER 降至 8.3。', { editorialProfile: format.STRUCTURED_EDITORIAL }).length,
             1
         );
 
@@ -368,7 +368,7 @@ describe('PC-P1-5 + PC-P2-1: Typography masking, SMOS/CMOS/DMOS, extended v5 uni
         ];
         for (const s of mustPass) {
             assert.deepEqual(
-                editorial.findMissingComparisonUnits(s, { editorialProfile: format.STRUCTURED_V5 }),
+                editorial.findMissingComparisonUnits(s, { editorialProfile: format.STRUCTURED_EDITORIAL }),
                 [],
                 `Should pass with unit-bound or ratio-scale delta: ${s}`
             );

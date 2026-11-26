@@ -701,7 +701,7 @@ test('B-M1: 围栏代码块内 ### 标题（LF/CRLF 与制表符缩进）不影�
     const planHeader = readerFormat.compiledPlanHeader({
         current: true,
         profile: readerFormat.INTEGRATED,
-        editorialProfile: readerFormat.COHESIVE_V4
+        editorialProfile: readerFormat.COHESIVE_EDITORIAL
     });
     const bodyWithFence = '正文示例：\n\n```markdown\n### 围栏内伪标题\n\n伪正文\n```\n\n正文结束。';
     const article = `### 真实小节一\n\n${bodyWithFence}\n\n### 真实小节二\n\n第二节正文。`;

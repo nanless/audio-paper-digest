@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { schemaFingerprint } = require('./protocol-codec');
 
-const PODCAST_EPISODE_METADATA_CONTRACT = 'daily-podcast-episode-v1';
+const PODCAST_EPISODE_METADATA_CONTRACT = 'daily-podcast-episode';
 const CLIENT_PODCAST_FEED_CONTRACT = 'paper-daily-podcast-feed';
 const CLIENT_PODCAST_FEED_SCHEMA_FINGERPRINT = schemaFingerprint(CLIENT_PODCAST_FEED_CONTRACT);
 const CLIENT_PODCAST_FEED_MAX_EPISODES = 120;
@@ -598,7 +598,7 @@ function validateTimestamp(rawTimestamp, fieldName = 'publishedAt') {
 }
 
 /**
- * Build slim per-episode JSON metadata conforming to `daily-podcast-episode-v1`.
+ * Build slim per-episode JSON metadata conforming to `daily-podcast-episode`.
  */
 function buildPodcastEpisodeMetadata(input = {}) {
     const date = validateIsoDate(input.date);

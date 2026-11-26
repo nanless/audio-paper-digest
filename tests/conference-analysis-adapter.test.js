@@ -1135,8 +1135,8 @@ test('v2 会议抽取来源把已核验表格传入 structuredArtifacts.tables �
         text,
         sourceBinding: { pdfSha256: 'a'.repeat(64) },
         structuredArtifacts: {
-            contract: extraction.ARTIFACT_V2_CONTRACT,
-            profile: extraction.ARTIFACT_V2_PROFILE,
+            contract: extraction.ARTIFACT_ENHANCED_CONTRACT,
+            profile: extraction.ARTIFACT_ENHANCED_PROFILE,
             tables: [{
                 ordinal: 1,
                 page: 1,

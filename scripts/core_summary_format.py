@@ -3,6 +3,8 @@ import protocol_codec as protocols
 
 NAME = 'core-summary'
 LEGACY_SCHEMA_FINGERPRINT = '0492b17abed5cb34bcd340790cb9bd803e79c59b2e7bbb08a13de750e0f66ba6'
+V4_SCHEMA_FINGERPRINT = 'f4354643c215dba4717d9769a310db87adafec301da7ec30434c8f43c1ef8f99'
+EXECUTIVE_ABSTRACT_PROFILES = frozenset({'executive-abstract', 'executive-abstract-v4'})
 ORIGINAL_TAG = protocols.historical_header(NAME, 'source-bound-detailed-summary', None)['contract']
 
 
@@ -12,6 +14,10 @@ def current_header():
 
 def legacy_header():
     return protocols.historical_header(NAME, 'source-bound-detailed-summary', LEGACY_SCHEMA_FINGERPRINT)
+
+
+def v4_header():
+    return protocols.historical_header(NAME, 'source-bound-detailed-summary', V4_SCHEMA_FINGERPRINT)
 
 
 def read_declaration(value):
@@ -25,7 +31,12 @@ def read_declaration(value):
 
 def is_executive_abstract_header(header):
     resolved = read_declaration(header) if isinstance(header, str) else header
-    return bool(isinstance(resolved, dict) and protocols.is_current_header(resolved, NAME))
+    if not (isinstance(resolved, dict)
+            and protocols.has_valid_header(resolved, NAME)
+            and 'schemaFingerprint' in resolved):
+        return False
+    schema = protocols.declared_schema(resolved['contract'], NAME, resolved['schemaFingerprint'])
+    return schema.get('summaryProfile') in EXECUTIVE_ABSTRACT_PROFILES
 
 
 isExecutiveAbstractHeader = is_executive_abstract_header

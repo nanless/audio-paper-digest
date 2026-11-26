@@ -28,10 +28,6 @@ function markdownFiles() {
     ], { cwd: ROOT, encoding: 'utf8' });
     return [...new Set(output.trim().split('\n'))]
         .filter(Boolean)
-        // These two immutable protocol artifacts are hashed by the legacy
-        // record verifier. Their historical links are provenance, not current
-        // operation instructions; editing them would invalidate saved records.
-        .filter(relative => !/^manual\/docs\/editorial-reference-contract(?:-v2)?\.md$/.test(relative))
         .filter(relative => fs.existsSync(path.join(ROOT, relative)));
 }
 

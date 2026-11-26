@@ -45,7 +45,7 @@ private actor FiltersFixtureTransport {
     }
 }
 
-@main struct LibraryFiltersV15Tests {
+@main struct LibraryFiltersTests {
     static let base = URL(string: "https://fixture.example/blog/")!
 
     static func check(_ condition: Bool, _ message: String) throws {
@@ -564,6 +564,6 @@ private actor FiltersFixtureTransport {
         try check(desktopDemoScan.contains("conference:interspeech:2026:asr-42"), "desktop-details demo scan resolves articleDescriptor.sha256 even when primaryArticleRevisionId differs")
         await reloaded.invalidateSession()
 
-        print("LibraryFiltersV15Tests: ALL CHECKS PASSED")
+        print("LibraryFiltersTests: ALL CHECKS PASSED")
     }
 }

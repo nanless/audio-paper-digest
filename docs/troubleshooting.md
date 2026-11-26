@@ -39,6 +39,8 @@ Node CONNECT 与 TLS 握手合计最多等待 60 秒有效时间。与模型整�
 
 生产停稳后，认证排查可以在独立诊断中逐个测试全部已配置凭据，不能仅凭当前账号 401 就判定没有可用账号。每个账号每条实际路由只发一次最小请求，仍使用正常模型、代理及公共请求封装，保存真实用量并按账号序号报告认证、额度、传输或成功结果；不输出密钥、认证头或稳定凭据指纹。主副路由和凭据相同时去重测试。HTTP 200 的截断响应只能证明请求被接受；选定成功账号后确认完整响应，备份原配置并同步主副配置，保留原池及冷却记录，再恢复任务。持续授权已覆盖这项诊断，不需要重新索要费用确认；仅完整排查后确实缺少可用凭据时，才请用户更新配置。
 
+资源扫描收到 OpenAI Responses 明确的结构化拒答时，记录为单篇 `MODEL_REFUSAL`，不重复请求；仅开源链接扫描复用正常的封存原文 URL 提取后备，仍须核验资源归属、可达状态及整篇资格。其他分析阶段继续保留拒答失败。未知空输出、网络、认证、配额、截断或异常终态不能冒充拒答，也不能由此放行。
+
 ### 费用记录保存失败
 
 Node 与 Python 均在真实请求发送前保存 `request_started`，终态沿用同一 `eventId`。发送前保存失败不调用传输层；终态或 Reader 采用记录保存失败报告 `LLM_USAGE_NOT_PERSISTED`，停止新派发，不能将已返回内容当作无消费再请求。普通传输只在原单阶段尝试内重试，用尽后按运行级故障停止；事件循环长停顿可以从有效时间中扣除，但不能返还实际请求次数。
@@ -47,9 +49,7 @@ Node 与 Python 均在真实请求发送前保存 `request_started`，终态沿�
 
 ## 3. MiMo 403
 
-兼容的 `mimo-v2.6-flash` 请求默认设置 `agent:false`，直接连接。若 curl 直连正常而脚本返回 403，检查调用方是否绕过 `requestLlmJson()`，或自行传入代理连接对象。不要把 Muse 的强制代理规则用于其他直连模型。
-
-资源扫描收到 OpenAI Responses 明确的结构化拒答时，记录为单篇 `MODEL_REFUSAL`，不重复请求；仅开源链接扫描复用正常的封存原文 URL 提取后备，仍须核验资源归属、可达状态及整篇资格。其他分析阶段继续保留拒答失败。未知空输出、网络、认证、配额、截断或异常终态不能冒充拒答，也不能由此放行。
+兼容的 `mimo-v2.6-flash` 默认 `agent:false` 直连；若 curl 正常而脚本 403，检查调用方是否绕过 `requestLlmJson()` 或误用了 Muse 的强制代理连接对象。
 
 ## 4. arXiv/HuggingFace 抓取失败
 
@@ -96,6 +96,10 @@ npm run batch -- --refresh-reader-diagnostics
 # 仅在原候选额度已耗尽、重试清单已核验且有明确授权时，开启有界付费轮
 npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/reader-rounds.json
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
+
+# 仅重分析当前批次的指定论文（保留其余成功项，只读同一组封存四文件，不重抓来源；
+# 支持 --fact-feedback-file / --reader-fact-feedback-file / --core-summary-fact-feedback-file 与 --natural-resource-prose）
+npm run reanalyze:selected -- <arxivId1> [arxivId2 ...]
 ```
 
 Reader 刷新可以用 `--rounds N`（1–10）覆写本次总轮数，未传时使用 `PD_ANALYSIS_BATCH_MAX_ROUNDS`（默认3）。它只续明确 `retryable=true` 的失败项；未知或不可重试错误不自动重跑，来源计划、运行级和存储故障停止补派。诊断保存在 `data/runtime/analysis-batch-reports/`，错误携带本次报告路径；诊断不能授予请求或发布资格。
@@ -158,7 +162,7 @@ Reader 刷新可以用 `--rounds N`（1–10）覆写本次总轮数，未传时
 
 ## 8. blog:generate 失败
 
-检查正式分析结果是否满足当前发布要求，包括批次日期、八维评分、`beginner-researcher` 解读长文（现行契约 `structured-pipeline-v5`；旧 `-v3` 仅作历史兼容只读核验）、作者机构及安全的图片地址，再检查目标博客工作区。生成命令会拒绝覆盖目标日期已有的人工 Git 修改。指定单篇或排除项却未命中时也会停止，这是发布范围检查，不能忽略。
+检查正式分析结果是否满足当前发布要求，包括批次日期、八维评分、`beginner-researcher` 解读长文（现行契约 `structured-pipeline`；旧 `structured-pipeline-v5` 与 `-v3` 仅作历史兼容只读核验）、作者机构及安全的图片地址，再检查目标博客工作区。生成命令会拒绝覆盖目标日期已有的人工 Git 修改。指定单篇或排除项却未命中时也会停止，这是发布范围检查，不能忽略。
 
 ## 9. blog:review 失败
 

@@ -2,7 +2,7 @@
 
 覆盖原先缺少直接跨语言断言的五个双实现领域：
 1. `.env` 文件解析（`scripts/env-loader.js` vs `scripts/project_env.py`）
-2. 评分体系 `type-aware-v2`（`scripts/lib/scoring-rubric-v2.js` vs `scripts/scoring_rubric_v2.py`）
+2. 评分体系 `type-aware-v2`（`scripts/lib/scoring-rubric.js` vs `scripts/scoring_rubric.py`）
 3. 工作区角色契约与命令路由（`config/workspace-roles.json` + `scripts/workspace-role.js` / `env-loader.js` vs `scripts/runtime_guard.py`）
 4. 单元格公式与双写折叠（`scripts/lib/reader-source-display.js` vs `scripts/blog_formula_tex_display.py`，含 `\\overline{x} ...; d_{z}` 顺序回归）
 5. 日志/密钥脱敏与工作流泄露模式（`scripts/log-setup.js` vs `scripts/log_setup.py` + `config/workflow-leak-patterns.json`）
@@ -25,7 +25,7 @@ import blog_formula_tex_display as py_tex  # noqa: E402
 import log_setup as py_log  # noqa: E402
 import project_env as py_env  # noqa: E402
 import runtime_guard as py_guard  # noqa: E402
-import scoring_rubric_v2 as py_scoring  # noqa: E402
+import scoring_rubric as py_scoring  # noqa: E402
 
 
 def _run_node_json(js_code, payload=None):
@@ -89,21 +89,21 @@ class CrossLanguageParityWave15Tests(unittest.TestCase):
         cases = [[doc_type, score_sets[idx % len(score_sets)]] for idx, doc_type in enumerate(doc_types)]
         js_results = _run_node_json(
             "const fs=require('node:fs');"
-            "const s=require('./scripts/lib/scoring-rubric-v2.js');"
+            "const s=require('./scripts/lib/scoring-rubric.js');"
             "const cases=JSON.parse(fs.readFileSync(0,'utf8'));"
             "const out=cases.map(([docType, dims]) => ({"
             "  weights: s.formatDocumentTypeWeightsSummary(docType),"
-            "  result: s.calculateV2WeightedTotal(docType, dims),"
-            "  anchors: Object.fromEntries([0,1.5,3,6,8,10,5.5].map(v => [String(v), s.isV2OpenSourceAnchor(v)]))"
+            "  result: s.calculateWeightedTotal(docType, dims),"
+            "  anchors: Object.fromEntries([0,1.5,3,6,8,10,5.5].map(v => [String(v), s.isOpenSourceAnchor(v)]))"
             "}));"
             "process.stdout.write(JSON.stringify(out));",
             cases,
         )
         for (doc_type, dims), js_item in zip(cases, js_results):
             self.assertEqual(py_scoring.format_document_type_weights_summary(doc_type), js_item['weights'])
-            self.assertEqual(py_scoring.calculate_v2_weighted_total(doc_type, dims), js_item['result'])
+            self.assertEqual(py_scoring.calculate_weighted_total(doc_type, dims), js_item['result'])
             for v_str, js_anchor in js_item['anchors'].items():
-                self.assertEqual(py_scoring.is_v2_open_source_anchor(float(v_str)), js_anchor)
+                self.assertEqual(py_scoring.is_open_source_anchor(float(v_str)), js_anchor)
 
     def test_workspace_role_contract_single_source_parity(self):
         spec = json.loads((ROOT / 'config' / 'workspace-roles.json').read_text(encoding='utf-8'))

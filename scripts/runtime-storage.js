@@ -819,15 +819,33 @@ function scanPdfDeclarations(layout, declarations, blockers, runtimeReal = null)
         const value = readJsonObject(entryPath, blockers);
         if (!value || typeof value !== 'object' || Array.isArray(value)) return;
 
-        if (inOfficialReceipts && value.pdf) {
+        if (inOfficialReceipts) {
             const providerRoot = path.resolve(entryPath, '..', '..');
-            const relPath = typeof value.pdf.relativePath === 'string' ? value.pdf.relativePath.trim() : '';
-            if (!relPath) {
-                blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'official PDF receipt 缺少合法的 relativePath' });
-            } else {
-                addPdfDeclaration(declarations, blockers,
-                    path.join(providerRoot, relPath),
-                    value.pdf.sha256, entryPath, 'official-pdf-receipt', layout.runtime, runtimeReal);
+            const isExtendedOfficialReceipt = value.contract === 'official-conference-pdf-receipt-v2'
+                || value.contract === 'official-conference-pdf-receipt-extended';
+            if (value.pdf) {
+                const relPath = typeof value.pdf.relativePath === 'string' ? value.pdf.relativePath.trim() : '';
+                if (!relPath) {
+                    blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'official PDF receipt 缺少合法的 relativePath' });
+                } else {
+                    addPdfDeclaration(declarations, blockers,
+                        path.join(providerRoot, relPath),
+                        value.pdf.sha256, entryPath, 'official-pdf-receipt', layout.runtime, runtimeReal);
+                }
+            } else if (isExtendedOfficialReceipt) {
+                const rawPdfFile = typeof value.pdfFile === 'string' ? value.pdfFile : '';
+                const relPath = rawPdfFile.trim();
+                const candidatePdf = relPath ? path.resolve(providerRoot, relPath) : '';
+                if (!relPath || !isValidConferenceRelativePdfPath(rawPdfFile)
+                    || !isInside(candidatePdf, providerRoot) || candidatePdf === providerRoot) {
+                    blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'official PDF receipt 缺少合法的 pdfFile 或路径越界' });
+                } else if (!declaredPdfHash(value.pdfSha256)) {
+                    blockers.push({ type: 'invalid_receipt', path: entryPath, message: 'official PDF receipt 缺少合法的 pdfSha256' });
+                } else {
+                    addPdfDeclaration(declarations, blockers,
+                        candidatePdf,
+                        value.pdfSha256, entryPath, 'official-pdf-receipt', layout.runtime, runtimeReal);
+                }
             }
         }
         if (isEvidenceReceipt && value.discovery) {

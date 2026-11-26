@@ -96,6 +96,8 @@ async function reanalyzeSelected(ids, options = {}) {
         throw new Error('naturalResourceProse 必须为布尔值');
     if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean')
         throw new Error('refreshReaderDiagnostics 必须为布尔值');
+    if (options.analyzeBatch !== undefined && typeof options.analyzeBatch !== 'function')
+        throw new Error('analyzeBatch 必须是函数');
     if (options.coreSummaryDiagnosticIds !== undefined) {
         const invalidDiagnostics = !options.coreSummaryDiagnosticIds || typeof options.coreSummaryDiagnosticIds !== 'object'
             || Array.isArray(options.coreSummaryDiagnosticIds)
@@ -351,7 +353,8 @@ async function reanalyzeSelected(ids, options = {}) {
     const analyzedResults = [];
     const preparedIds = new Set();
     let digestStatusUpdated = 0;
-    const runAnalysisFromDailySources = () => analyzeBatch(toReanalyze, {
+    const runAnalyzeBatch = options.analyzeBatch || analyzeBatch;
+    const runAnalysisFromDailySources = () => runAnalyzeBatch(toReanalyze, {
         checkpointFilePath: RESULT_FILE,
         preparePaperLocked: async paper => {
             const current = readJsonFileStrict(RESULT_FILE);

@@ -14,11 +14,22 @@ from conference_extractor import (
     run_extraction,
     verify_extraction,
 )
-from conference_extractor_v2 import (
-    RECEIPT_V2_CONTRACT,
-    run_extraction_v2,
-    verify_extraction_v2,
+from conference_layout_extractor import (
+    RECEIPT_ENHANCED_CONTRACT,
+    run_extraction_enhanced,
+    verify_extraction_enhanced,
 )
+
+
+def _normalize_extractor_profile(raw_value, source_label):
+    normalized = str(raw_value or "").strip().lower()
+    if normalized in ("enhanced", "v2"):
+        return "enhanced"
+    if normalized in ("legacy", "v1"):
+        return "legacy"
+    raise ConferenceExtractionError(
+        f"unsupported {source_label}: {raw_value!r} (expected enhanced or legacy)"
+    )
 
 
 def _split_wrapper_flags(argv):
@@ -31,12 +42,12 @@ def _split_wrapper_flags(argv):
         arg = argv[index]
         if arg == "--extractor":
             if index + 1 >= len(argv):
-                raise ConferenceExtractionError("missing value for --extractor (expected v1 or v2)")
-            extractor = argv[index + 1].strip().lower()
+                raise ConferenceExtractionError("missing value for --extractor (expected enhanced or legacy)")
+            extractor = _normalize_extractor_profile(argv[index + 1], "--extractor value")
             index += 2
             continue
         if arg.startswith("--extractor="):
-            extractor = arg.split("=", 1)[1].strip().lower()
+            extractor = _normalize_extractor_profile(arg.split("=", 1)[1], "--extractor value")
             index += 1
             continue
         if not is_verify and arg == "--source-root":
@@ -50,8 +61,6 @@ def _split_wrapper_flags(argv):
             continue
         remaining.append(arg)
         index += 1
-    if extractor is not None and extractor not in ("v1", "v2"):
-        raise ConferenceExtractionError(f"unsupported --extractor value: {extractor!r} (expected v1 or v2)")
     return extractor, explicit_source_root, remaining
 
 
@@ -62,31 +71,34 @@ def _detect_existing_receipt_extractor(manifest_name, source_root):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         receipt_name = (manifest.get("outputs") or {}).get("receiptFile")
         if not isinstance(receipt_name, str) or not receipt_name:
-            return "v1"
+            return "legacy"
         receipt_path = root / receipt_name
         if not receipt_path.is_file():
-            return "v1"
+            return "legacy"
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        if isinstance(receipt, dict) and receipt.get("contract") == RECEIPT_V2_CONTRACT:
-            return "v2"
+        if isinstance(receipt, dict) and receipt.get("contract") == RECEIPT_ENHANCED_CONTRACT:
+            return "enhanced"
     except Exception:
-        return "v1"
-    return "v1"
+        return "legacy"
+    return "legacy"
 
 
-def _resolve_extractor_version(explicit_extractor, mode, manifest_name, source_root):
+def _resolve_extractor_profile(explicit_extractor, mode, manifest_name, source_root):
     if explicit_extractor is not None:
         return explicit_extractor
     if mode == "verify":
         return _detect_existing_receipt_extractor(manifest_name, source_root)
-    env_value = os.environ.get("PD_CONFERENCE_EXTRACTOR_VERSION", "").strip().lower()
-    if env_value:
-        if env_value not in ("v1", "v2"):
+    profile_env = os.environ.get("PD_CONFERENCE_EXTRACTOR_PROFILE", "").strip().lower()
+    if profile_env:
+        if profile_env not in ("enhanced", "legacy"):
             raise ConferenceExtractionError(
-                f"unsupported PD_CONFERENCE_EXTRACTOR_VERSION: {env_value!r} (expected v1 or v2)"
+                f"unsupported PD_CONFERENCE_EXTRACTOR_PROFILE: {profile_env!r} (expected enhanced or legacy)"
             )
-        return env_value
-    return "v2"
+        return profile_env
+    legacy_env = os.environ.get("PD_CONFERENCE_EXTRACTOR_VERSION", "").strip().lower()
+    if legacy_env:
+        return _normalize_extractor_profile(legacy_env, "PD_CONFERENCE_EXTRACTOR_VERSION")
+    return "enhanced"
 
 
 def main(argv=None):
@@ -103,11 +115,11 @@ def main(argv=None):
     require_external_runtime(
         "conference-extract.py" if mode != "verify" else "conference-extraction-replay"
     )
-    extractor_version = _resolve_extractor_version(explicit_extractor, mode, manifest_name, source_root)
-    if extractor_version == "v2":
-        result = (verify_extraction_v2(manifest_name, source_root=source_root)
+    extractor_profile = _resolve_extractor_profile(explicit_extractor, mode, manifest_name, source_root)
+    if extractor_profile == "enhanced":
+        result = (verify_extraction_enhanced(manifest_name, source_root=source_root)
                   if mode == "verify"
-                  else run_extraction_v2(manifest_name, apply=mode == "apply", source_root=source_root))
+                  else run_extraction_enhanced(manifest_name, apply=mode == "apply", source_root=source_root))
     else:
         result = (verify_extraction(manifest_name, source_root=source_root)
                   if mode == "verify"

@@ -393,3 +393,112 @@ test('工作区盘点接受合法的 readerRevision 与 sourceUpgradePromotion �
     assert.equal(tamperedReport.counts.invalid, 1);
     assert.equal(tamperedReport.processes[0].reason, 'invalid_state_schema');
 });
+
+test('工作区盘点对称接受 sourceResourceCorrectionAdoption 与链式 textMaintenanceAdoption 并拒绝伪造绑定', t => {
+    const root = tempRoot();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const processRoot = path.join(root, 'conference-processes');
+    const processId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const processDir = path.join(processRoot, processId);
+    fs.mkdirSync(processDir, { recursive: true });
+
+    const adapter = require('../scripts/lib/conference-analysis-adapter.js');
+    const codec = require('../scripts/lib/protocol-codec');
+    const crypto = require('node:crypto');
+    const canonical = v => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object'
+        ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v;
+    const sha = v => crypto.createHash('sha256').update(JSON.stringify(canonical(v))).digest('hex');
+
+    const paperSource = 'conference:icassp:2026:icassp-arnumber:201';
+    const paperChained = 'conference:icassp:2026:icassp-arnumber:202';
+    const sourceChildId = '11111111-aaaa-4bbb-8ccc-111111111111';
+    const selectedMainId = '22222222-aaaa-4bbb-8ccc-222222222222';
+    const readerParentId = '33333333-aaaa-4bbb-8ccc-333333333333';
+    const chainedParentId = '44444444-aaaa-4bbb-8ccc-444444444444';
+    const batchId = '55555555-aaaa-4bbb-8ccc-555555555555';
+    const maintenanceManifestSha = sha('workspace-maintenance-manifest');
+    const revHeader = codec.recordHeader('conference-reader-source-revision', 'conference-reader-source-revision');
+    const parentSha = sha('chained-parent-analysis');
+    const revBody = {
+        ...revHeader,
+        paperId: paperChained,
+        parentExecutionId: chainedParentId,
+        parentAnalysisFileSha256: parentSha,
+        readerReviewMaintenance: { batchId, manifestSha256: maintenanceManifestSha },
+        executionId: adapter.readerRevisionExecutionId(chainedParentId, parentSha, revHeader)
+    };
+    const chainedRevision = { ...revBody, revisionSha256: sha(revBody) };
+
+    const stateBody = {
+        ...codec.recordHeader('conference-process', 'conference-process'),
+        processId,
+        status: 'running',
+        authority: {
+            conferenceId: 'icassp-2026',
+            implementationSha256: sha('impl'),
+            tagCatalogVersion: 'paper-tag-catalog-v2',
+            tagCatalogSha256: sha('catalog')
+        },
+        items: {
+            [paperSource]: {
+                paperId: paperSource,
+                status: 'complete',
+                analysisRunId: sourceChildId,
+                attempts: 1,
+                sourceProof: { textSha256: sha('src1') },
+                analysisProof: { analysisSha256: sha('ana1') },
+                pageProof: { contentSha256: sha('page1') },
+                sourceResourceCorrectionAdoption: {
+                    manifestFile: '/tmp/source-manifest.json',
+                    manifestSha256: sha('src-manifest'),
+                    previousStateSha256: sha('prev-state'),
+                    previousItemSha256: sha('prev-item'),
+                    previousAttempts: 1,
+                    previousFailure: null,
+                    selectedMainExecutionId: selectedMainId,
+                    readerParentExecutionId: readerParentId,
+                    newApiRequests: 0
+                }
+            },
+            [paperChained]: {
+                paperId: paperChained,
+                status: 'complete',
+                analysisRunId: chainedRevision.executionId,
+                readerRevision: chainedRevision,
+                textMaintenanceAdoption: {
+                    batchId,
+                    manifestSha256: maintenanceManifestSha,
+                    previousExecutionId: chainedParentId
+                },
+                attempts: 2,
+                sourceProof: { textSha256: sha('src2') },
+                analysisProof: { analysisSha256: sha('ana2') },
+                pageProof: { contentSha256: sha('page2') }
+            }
+        },
+        aggregate: null,
+        completionReceiptSha256: null
+    };
+    const writeAndInspect = body => {
+        fs.writeFileSync(path.join(processDir, 'state.json'), JSON.stringify({ ...body, stateSha256: sha(body) }));
+        return workspace.inspectProcessStates({ processRoot });
+    };
+
+    const ok = writeAndInspect(stateBody);
+    assert.equal(ok.counts.invalid, 0);
+    assert.equal(ok.processes[0].stateStatus, 'running');
+
+    for (const mutate of [
+        body => { delete body.items[paperSource].sourceResourceCorrectionAdoption; },
+        body => { body.items[paperSource].sourceResourceCorrectionAdoption.newApiRequests = 2; },
+        body => { delete body.items[paperChained].textMaintenanceAdoption; },
+        body => { body.items[paperChained].textMaintenanceAdoption.previousExecutionId = '66666666-aaaa-4bbb-8ccc-666666666666'; },
+        body => { body.items[paperChained].textMaintenanceAdoption.manifestSha256 = '0'.repeat(64); }
+    ]) {
+        const bad = structuredClone(stateBody);
+        mutate(bad);
+        const report = writeAndInspect(bad);
+        assert.equal(report.counts.invalid, 1);
+        assert.equal(report.processes[0].reason, 'invalid_state_schema');
+    }
+});

@@ -86,7 +86,7 @@ async function renderOfficialInlineSvg(resource, _deps = {}) {
         const args = [path.join(projectRoot, 'scripts/python-runtime.sh'),
             path.join(projectRoot, 'scripts/reader_inline_svg.py')];
         if (deps.hidpi !== false) args.push('--hidpi');
-        if (deps.deterministicV2 !== false) args.push('--v2');
+        if (deps.deterministicHidpi !== false && deps.deterministicV2 !== false) args.push('--deterministic-hidpi');
         const { buildChildProcessEnv } = require('../env-loader.js');
         const child = spawnFn('bash', args, {
             cwd: projectRoot,

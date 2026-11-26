@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="464" viewBox="0 0 960 464" role="img" aria-labelledby="title desc">
   <title id="title">Mac and Android Workbench Reading, Podcast, and Sync Boundaries</title>
-  <desc id="desc">Studio Monograph client boundary diagram: public portal snapshots and v1.5.0 daily podcasts flow read-only into Mac and Android Workbench apps; four isolated user channels handle opt-in personal LLM study, per-device Zotero archiving, one-click bidirectional WebDAV sync with lossless note conflict merge, and versioned full-space backup snapshots with confirmed restore.</desc>
+  <desc id="desc">Studio Monograph client boundary diagram: public portal snapshots and 1.5.x daily podcasts flow read-only into Mac and Android Workbench apps; four isolated user channels handle opt-in personal LLM study, per-device Zotero archiving, one-click bidirectional WebDAV sync with lossless note conflict merge, and versioned full-space backup snapshots with confirmed restore.</desc>
   <defs>
     <style>
       text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #182120; }
@@ -29,7 +29,7 @@
 
   <rect width="960" height="464" rx="16" fill="#f7f5f0" stroke="#d6cfc3" stroke-width="1.5"/>
 
-  <text x="32" y="42" class="t-main">Mac &amp; Android Workbench (v1.5.0) · Public Feed vs. Personal Sync</text>
+  <text x="32" y="42" class="t-main">Mac &amp; Android Workbench (1.5.x) · Public Feed vs. Personal Sync</text>
   <text x="32" y="64" class="t-sub">One-way solid: read-only / explicit save  ·  Two-way solid: one-click WebDAV sync  ·  Dashed: confirmed snapshot restore</text>
 
   <!-- Left -->
@@ -40,7 +40,7 @@
   <text x="48" y="202" class="t-small">Read-only · never re-analyzes</text>
 
   <rect x="32" y="242" width="218" height="140" rx="12" fill="#fdf6f1" stroke="#e4bfa8" stroke-width="1.5"/>
-  <text x="48" y="270" class="t-card" fill="#a64d2a">Daily Podcast (v1.5.0)</text>
+  <text x="48" y="270" class="t-card" fill="#a64d2a">Daily Podcast (1.5.x)</text>
   <text x="48" y="296" class="t-body">Allowlisted Release HTTPS</text>
   <text x="48" y="318" class="t-body">SHA-256 + MP3 verification</text>
   <text x="48" y="356" class="t-small">150 MiB / 5-ep LRU · no backup</text>
@@ -52,7 +52,7 @@
   <rect x="300" y="92" width="276" height="290" rx="14" fill="#ffffff" stroke="#b9cfc9" stroke-width="1.8"/>
   <rect x="300" y="92" width="276" height="44" rx="14" fill="#182120"/>
   <rect x="300" y="122" width="276" height="14" fill="#182120"/>
-  <text x="318" y="120" class="t-head">Workbench Apps (v1.5.0)</text>
+  <text x="318" y="120" class="t-head">Workbench Apps (1.5.x)</text>
 
   <text x="318" y="160" class="t-badge" fill="#0f5c58">Mac (Apple Silicon) · Android (4 ABIs)</text>
   <text x="318" y="188" class="t-body">• 400-concept &amp; multi-word search</text>
@@ -94,5 +94,5 @@
   <!-- Footer -->
   <rect x="32" y="402" width="896" height="44" rx="8" fill="#ece8de"/>
   <text x="48" y="421" class="t-small">Isolation: WebDAV sync/backup folders stay separate from Zotero attachments; restoring keeps history without re-sending LLM calls.</text>
-  <text x="48" y="438" class="t-small">Upgrades: v1.5.0 reads 1.4.x backups and legacy portal paths; macOS requires 15+ (Apple silicon), Android 1.4.4+ upgrades in place.</text>
+  <text x="48" y="438" class="t-small">Upgrades: 1.5.x reads 1.4.x backups and legacy portal paths; macOS requires 15+ (Apple silicon), Android 1.4.4+ upgrades in place.</text>
 </svg>

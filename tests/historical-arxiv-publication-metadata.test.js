@@ -375,7 +375,7 @@ test('出版元数据批次保留瞬时失败、保存并核验同伴、以部�
 
 test('旧解析器封存的实体和空白按 v1 原字节读取，默认新抓取仍解码', async t => {
     // 这份测试数据由严格解析改造前的正式解析器生成，不能用当前解析结果重算预期 SHA-256。
-    const saved = require('./fixtures/legacy-official-atom-v1.json');
+    const saved = require('./fixtures/legacy-official-atom.json');
     const officialResult = { metadata: saved.metadata, proof: saved.proof,
         rawBytes: Buffer.from(saved.raw, 'utf8') };
     const f = await fixture(t, 'legacy-entities');
@@ -413,7 +413,7 @@ test('旧解析器封存的实体和空白按 v1 原字节读取，默认新抓�
 });
 
 test('v1 字段读取规则先核 XML 结构，并明确拒绝不能按旧字节规则提取的合法新写法', () => {
-    const raw = require('./fixtures/legacy-official-atom-v1.json').raw;
+    const raw = require('./fixtures/legacy-official-atom.json').raw;
     const parse = source => metadataApi.parseOfficialArxivMetadataResponse(ID, source);
     assert.throws(() => parse(raw.slice(0, -7)), /Atom XML 解析失败/);
     for (const changed of [

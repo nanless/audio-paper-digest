@@ -8,7 +8,7 @@
         "stageHeader": ["contractVersion", "contractSchemaFingerprint"],
         "boundFields": ["inputAnalysisSha256", "outputAnalysisSha256", "inputSummarySha256", "summarySha256", "inputStructureProjectionSha256", "outputStructureProjectionSha256"],
         "authority": "original-source-semantics-and-unchanged-exterior",
-        "summaryProfile": "executive-abstract-v4"
+        "summaryProfile": "executive-abstract"
       },
       "historical": [
         {"tag": "core-summary-detailed-v3", "variant": "source-bound-detailed-summary"},
@@ -24,6 +24,21 @@
             "stageHeader": ["contractVersion", "contractSchemaFingerprint"],
             "boundFields": ["inputAnalysisSha256", "outputAnalysisSha256", "inputSummarySha256", "summarySha256", "inputStructureProjectionSha256", "outputStructureProjectionSha256"],
             "authority": "original-source-semantics-and-unchanged-exterior"
+          }
+        },
+        {
+          "tag": "core-summary",
+          "variant": "source-bound-detailed-summary",
+          "header": {
+            "contract": "core-summary",
+            "schemaFingerprint": "f4354643c215dba4717d9769a310db87adafec301da7ec30434c8f43c1ef8f99"
+          },
+          "schema": {
+            "declaration": "analysisManifest.contracts.coreSummary",
+            "stageHeader": ["contractVersion", "contractSchemaFingerprint"],
+            "boundFields": ["inputAnalysisSha256", "outputAnalysisSha256", "inputSummarySha256", "summarySha256", "inputStructureProjectionSha256", "outputStructureProjectionSha256"],
+            "authority": "original-source-semantics-and-unchanged-exterior",
+            "summaryProfile": "executive-abstract-v4"
           }
         }
       ]

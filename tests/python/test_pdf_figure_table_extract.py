@@ -381,6 +381,47 @@ class PdfFigureTableExtractTests(unittest.TestCase):
                 self.assertEqual(desc["url"], img["url"])
                 self.assertEqual(desc["pdfCropSourceSha256"], img["cropSha256"])
 
+    def test_booktabs_whitespace_only_word_tokens_do_not_trigger_index_error(self):
+        class _FakePage:
+            def __init__(self, words):
+                self._words = words
+
+            def get_text(self, mode, clip=None):
+                assert mode == "words"
+                return list(self._words)
+
+        cap = {"bbox": (100.0, 80.0, 420.0, 95.0)}
+        rule_stacks = [{"bbox": (100.0, 100.0, 420.0, 180.0), "ys": [100.0, 122.0, 180.0]}]
+
+        # Over half of get_text("words") tokens are non-breaking spaces (\u00a0) -> previously IndexError!
+        nbsp_tokens = [
+            (105.0 + i * 5.0, 106.0, 108.0 + i * 5.0, 115.0, "\u00a0", 0, 0, i)
+            for i in range(20)
+        ]
+        real_words = [
+            (110.0, 106.0, 145.0, 115.0, "Model", 0, 1, 0),
+            (250.0, 106.0, 280.0, 115.0, "WER", 0, 1, 1),
+            (110.0, 132.0, 155.0, 141.0, "Base", 0, 2, 0),
+            (250.0, 132.0, 280.0, 141.0, "5.10", 0, 2, 1),
+            (110.0, 152.0, 155.0, 161.0, "Ours", 0, 3, 0),
+            (250.0, 152.0, 280.0, 161.0, "3.40", 0, 3, 1),
+        ]
+        extracted = ext._extract_booktabs_table_from_rules(
+            _FakePage(nbsp_tokens + real_words),
+            cap,
+            rule_stacks,
+            set(),
+        )
+        self.assertIsNotNone(extracted)
+        matrix, hdr_rows, _bbox, _stack_idx = extracted
+        self.assertEqual(hdr_rows, [0])
+        self.assertEqual(matrix, [["Model", "WER"], ["Base", "5.10"], ["Ours", "3.40"]])
+
+        # All-whitespace tokens cleanly return None instead of crashing
+        self.assertIsNone(
+            ext._extract_booktabs_table_from_rules(_FakePage(nbsp_tokens), cap, rule_stacks, set())
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

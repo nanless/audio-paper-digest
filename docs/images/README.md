@@ -14,12 +14,10 @@
 | `workbench-architecture.en.svg` | 上一张的英文版，内容与结构相同。 | `README.en.md` |
 | `daily-digest-flow.zh.svg` | Studio Monograph 暖纸六阶段日更流程图：从 arXiv / HuggingFace 边界补抓与去重、预筛与模型筛选、四文件来源封存，到深度分析与 Reader 长文、生成与三层审查、推送部署与逐页核验。 | `README.md` |
 | `daily-digest-flow.en.svg` | 上一张的英文版，内容与结构相同。 | `README.en.md` |
-| `client-experience.zh.svg` | Mac 与 Android 1.5.0 工作台数据边界图：左侧门户快照与每日音频播客只读流入，右侧四条隔离通道分别处理个人研究模型、Zotero 文献归档、一键双向同步 WebDAV（含笔记冲突无损合并）及完整研究空间快照备份。 | `README.md` |
+| `client-experience.zh.svg` | Mac 与 Android 1.5.x 工作台数据边界图：左侧门户快照与每日音频播客只读流入，右侧四条隔离通道分别处理个人研究模型、Zotero 文献归档、一键双向同步 WebDAV（含笔记冲突无损合并）及完整研究空间快照备份。 | `README.md` |
 | `client-experience.en.svg` | 上一张的英文版，内容与结构相同。 | `README.en.md` |
 | `pipeline-overview.zh.svg` | 三条生产流程（当天日更、官方会议整理、历史博客更新）分别取得真实来源，共用分析与写作，独立审查并推送核验的竖版概览。 | [项目导读](../project-guide.md) |
-| `pipeline-overview.en.svg` | 上一张的英文版，内容相同。 | 英文项目概览备份 |
-| `client-data-flow.svg` | 音频研究门户公开快照、1.5.0 每日音频播客与客户端个人研究、Zotero、一键双向同步 WebDAV 及完整研究空间快照备份的竖版数据流图。 | [项目导读](../project-guide.md) |
-| `client-data-flow.en.svg` | 上一张的英文版，内容相同。 | 英文客户端数据流备份 |
+| `client-data-flow.svg` | 音频研究门户公开快照、1.5.x 每日音频播客与客户端个人研究、Zotero、一键双向同步 WebDAV 及完整研究空间快照备份的竖版数据流图。 | [项目导读](../project-guide.md) |
 
 图的文字依据：三条流程见[项目导读](../project-guide.md)与[三条流程](../three-workflows.md)；客户端数据流与双端同步见[项目导读](../project-guide.md)、[同步与冲突处理](../workbench-full-webdav-sync.md)、[Mac 云端备份](../mac-app-cloud.md)与 [Android 备份合同](../android-cloud-contract.md)。
 
@@ -31,7 +29,7 @@
 - 同一张图有中英两版时，两版都带语言后缀：`<主题>.zh.svg`、`<主题>.en.svg`。
 - 只有一种语言的图用 `<主题>.svg`；语言后缀用小写两位语言代码。
 
-旧有四个文件（`pipeline-overview.{zh,en}.svg`、`client-data-flow{.en,}.svg`）为保留既有链接保持原名，新增图均遵循 `<主题>.<语言>.svg`。
+旧有两个文件（`pipeline-overview.zh.svg`、`client-data-flow.svg`）为保留既有链接保持原名，新增图均遵循 `<主题>.<语言>.svg`。
 
 ## 改图要一起改什么
 

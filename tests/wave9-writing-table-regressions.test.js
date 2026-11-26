@@ -41,7 +41,7 @@ function makeTableArtifact({ ordinal = 1, matrix, headerRows = [0], bodyRows = n
 
 test('Wave 9: fresh Reader mechanicalContract resolves STRUCTURED_V5 (5–9 节, conceptBridges 0–4) while historical v4/legacy replays stay exact', () => {
     const fresh = deep.buildApiReaderMechanicalContract({ availableTableCount: 3 });
-    assert.equal(fresh.editorialProfile, readerFormat.STRUCTURED_V5);
+    assert.equal(fresh.editorialProfile, readerFormat.STRUCTURED_EDITORIAL);
     assert.equal(fresh.minimumIntegratedTables, 3);
     assert.match(fresh.mechanicalContract, /sections 应包含 5–9 个职责清晰的小节/);
     assert.match(fresh.mechanicalContract, /conceptBridges 允许 0–4 组（默认 \[\]/);
@@ -73,7 +73,7 @@ test('Wave 9: fresh Reader mechanicalContract resolves STRUCTURED_V5 (5–9 节,
         },
         availableTableCount: 2
     });
-    assert.equal(v4Replay.editorialProfile, readerFormat.COHESIVE_V4);
+    assert.equal(v4Replay.editorialProfile, readerFormat.COHESIVE_EDITORIAL);
     assert.match(v4Replay.mechanicalContract, /sections 应包含 5–9 个职责清晰的小节/);
 
     // Signed recovery draft respects draft's own editorialProfile
@@ -85,7 +85,7 @@ test('Wave 9: fresh Reader mechanicalContract resolves STRUCTURED_V5 (5–9 节,
     );
     assert.equal(
         deep.resolveApiReaderTargetEditorialProfile({ signedRecoveryDraft: currentHeader }),
-        readerFormat.STRUCTURED_V5
+        readerFormat.STRUCTURED_EDITORIAL
     );
 
     // Repair candidate draft profile overrides default during local repair

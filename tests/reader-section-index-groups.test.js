@@ -131,7 +131,6 @@ test('公开请求记录绑定索引协议与实现SHA，只用原两次额度�
             '../scripts/lib/reader-repair.js',
             '../scripts/lib/reader-target-ordinal-patch.js',
             '../prompts/current/api-reader-concept-terms.md',
-            '../prompts/api-reader-repair-v11.md',
             '../scripts/lib/reader-request-diagnostics.js',
             ...['reader-record-format.js', 'reader-stage-protocols.js', 'reader-candidate-format.js',
             'reader-diagnostic-format.js', 'reader-ordinal-format.js', 'reader-section-format.js', 'reader-identity-format.js',

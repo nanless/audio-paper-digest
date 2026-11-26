@@ -12,7 +12,7 @@ import java.nio.file.Files
 class FavoriteCollectionsSharedFixtureTest {
     private fun fixture():JSONObject {
         val file=generateSequence(File(System.getProperty("user.dir")).absoluteFile){it.parentFile}
-            .map { File(it,"tests/fixtures/workbench-favorite-collections-v1.json") }.firstOrNull { it.isFile }
+            .map { File(it,"tests/fixtures/workbench-favorite-collections.json") }.firstOrNull { it.isFile }
             ?:error("Shared favorite contract fixture is missing")
         return JSONObject(file.readText())
     }

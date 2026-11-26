@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * arXiv /e-print/<id> TeX Source Channel Fetcher & Sidecar Manager (Wave 14.1)
+ * arXiv /e-print/<id> TeX Source Channel Fetcher & Sidecar Manager.
  *
- * Contract: arxiv-tex-ast-v1
+ * Contract: arxiv-tex-ast
  *
  * - Strictly enforces project HTTP CONNECT proxy via HTTPS_PROXY/HTTP_PROXY
  *   using scripts/utils.js (never silently degrades to direct connection).
@@ -28,7 +28,7 @@ const {
 
 const execFileAsync = promisify(execFile);
 
-const ARXIV_TEX_AST_CONTRACT = 'arxiv-tex-ast-v1';
+const ARXIV_TEX_AST_CONTRACT = 'arxiv-tex-ast';
 const DEFAULT_MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
 const DEFAULT_MAX_SIDECAR_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_EXPANDED_CHARS = 2 * 1024 * 1024;

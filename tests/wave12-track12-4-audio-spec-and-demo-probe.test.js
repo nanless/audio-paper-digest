@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const {
     IMPLEMENTATION_SPEC_KEYS,
     OPTIONAL_IMPLEMENTATION_SPEC_KEYS,
-    STRUCTURED_V5
+    STRUCTURED_EDITORIAL
 } = require('../scripts/lib/reader-record-format');
 const publicResourceProbe = require('../scripts/lib/public-resource-probe');
 const deepAnalyzer = require('../scripts/deep-analyzer');
@@ -41,7 +41,9 @@ test('Track 12.4: OPTIONAL_IMPLEMENTATION_SPEC_KEYS adds audioSignalSpecs withou
         'appendixHighlights'
     ]);
     assert.deepEqual(OPTIONAL_IMPLEMENTATION_SPEC_KEYS, ['audioSignalSpecs']);
-    assert.equal(STRUCTURED_V5, 'structured-pipeline-v5');
+    assert.equal(STRUCTURED_EDITORIAL, 'structured-pipeline');
+    assert.equal(require('../scripts/lib/reader-record-format.js').isStructuredEditorial('structured-pipeline'), true);
+    assert.equal(require('../scripts/lib/reader-record-format.js').isStructuredEditorial('structured-pipeline-v5'), true);
 });
 
 test('Track 12.4: analyzeDemoPageAudioCapabilities extracts audio samples, comparison systems, and HF Spaces while stripping scripts/comments', () => {

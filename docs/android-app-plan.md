@@ -2,7 +2,7 @@
 
 “音频研究工作台”提供 Mac 与 Android 两个原生客户端，用于阅读音频研究门户已发布的论文解读、核对原始 PDF、保存个人研究，以及连接 Zotero 和坚果云。主项目称为“音频研究工作台”（Audio Research Workbench），网站称为“音频研究门户”（Audio Research Portal），日更、会议和历史文章继续由工作流生产。客户端安装、同步、阅读或换设备均不自动重新分析论文。
 
-当前 Mac 与 Android 公开发行版本统一为 **1.5.1（构建号 25）**（2026-11-27 发布，来源提交 `7622f2ec`，改动与验证范围见 [1.5.1 记录](workbench-1.5.1-review.md)，公开安装包以[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)为准）；上一版为 `1.5.0 / 构建号 24`（2026-11-26 发布，来源提交 `5b5a8e79`，改动与验证范围见 [1.5.0 记录](workbench-1.5.0-review.md)），再上一版为 1.4.7 / 构建号 23（2026-11-23 发布，来源提交 `520e93c3`），1.4.6 于 2026-11-20 发布，1.4.5 于 2026-11-12 发布，1.4.4 于 2026-11-05 发布，1.4.3 同日发布，原记录保留。1.4.4 换了 Android 签名证书，已安装 1.4.3 的用户不能覆盖升级，需要先导出备份、卸载旧版再安装；1.4.5 至 1.5.1 沿用 1.4.4 的签名库，已安装 1.4.4–1.5.0 的用户可直接覆盖升级。1.3.0 时的全站分类、两端界面及正式发行验收见 [1.3.0 审改记录](workbench-1.3.0-review.md)；1.4.7 的改动与验证范围见 [1.4.7 记录](workbench-1.4.7-review.md)，1.4.6 见 [1.4.6 记录](workbench-1.4.6-review.md)，1.4.5 见 [1.4.5 记录](workbench-1.4.5-review.md)，1.4.4 见 [1.4.4 记录](workbench-1.4.4-review.md)，1.4.3 的改动、自动测试与未重做的人工验收见 [1.4.3 记录](workbench-1.4.3-review.md#发行状态)。Android 支持 API 28 及以上系统；Mac 支持 macOS 15 及以上的 ARM64 设备，使用本地签名、未经 Apple 公证。下载安装与版本状态见[Android 验证说明](<android-validation.md>)和 [Mac 发行说明](<mac-app-release.md>)；性能与发行核验见[客户端性能](client-performance.md)和[客户端发行核验](client-release-verification.md)。
+两端当前公开发行版本、升级签名边界及逐版验证记录见[客户端发行核验](client-release-verification.md)与[版本总览](README.md#阅读论文与使用工作台)；Android 支持 API 28 及以上系统，Mac 支持 macOS 15 及以上的 ARM64 设备（本地 ad-hoc 签名、未经 Apple 公证），安装、验证与性能见[Android 验证说明](<android-validation.md>)、[Mac 发行说明](<mac-app-release.md>)与[客户端性能](client-performance.md)。
 
 ## 两个原生界面，共用研究资料
 

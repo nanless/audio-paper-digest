@@ -468,7 +468,7 @@ test('Wave 14.1: sidecar write/read verification and deterministic drift/tamper 
 
         // 8. Duplicate JSON keys on disk rejected
         const dupPath = path.join(tmpDir, 'dup.json');
-        fs.writeFileSync(dupPath, '{"contract":"arxiv-tex-ast-v1","contract":"arxiv-tex-ast-v1"}');
+        fs.writeFileSync(dupPath, '{"contract":"arxiv-tex-ast","contract":"arxiv-tex-ast"}');
         assert.throws(
             () => texSource.verifyArxivTexSidecar(dupPath),
             (err) => err instanceof texSource.ArxivTexSidecarError && /重复键/.test(err.message)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wave 14.3: Pluggable IndexTTS latest (IndexTTS-2.5 / 2.0 / v1) podcast synthesizer.
+"""Pluggable IndexTTS (IndexTTS-2.5 / 2.0 / v1) podcast synthesizer.
 
 Backends:
   - indextts2-python : Local inference via indextts.infer_v2_5.IndexTTS2 (first),
@@ -39,7 +39,7 @@ import wave
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-PODCAST_AUDIO_MANIFEST_CONTRACT = 'daily-podcast-audio-v1'
+PODCAST_AUDIO_MANIFEST_CONTRACT = 'daily-podcast-audio'
 DEFAULT_SAMPLE_RATE = 44100
 MIN_SAMPLE_RATE = 8000
 MAX_SAMPLE_RATE = 192000
@@ -1572,9 +1572,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description='Synthesize a Chinese daily audio podcast with IndexTTS latest (2.5 / 2.0 / HTTP / silent-mock).'
     )
     parser.add_argument('--check-env', action='store_true', help='Inspect Python, PyTorch device, IndexTTS, and ffmpeg.')
-    parser.add_argument('--script', help='Path to daily-podcast-script-v1 JSON file.')
+    parser.add_argument('--script', help='Path to daily-podcast-script JSON file.')
     parser.add_argument('--output', help='Output audio file path (e.g. podcast-2026-11-24.mp3).')
-    parser.add_argument('--manifest-out', help='Optional path to write daily-podcast-audio-v1 manifest JSON.')
+    parser.add_argument('--manifest-out', help='Optional path to write daily-podcast-audio manifest JSON.')
     parser.add_argument('--cache-dir', help='Deterministic per-chunk WAV cache directory.')
     parser.add_argument(
         '--backend',

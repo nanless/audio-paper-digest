@@ -22,7 +22,7 @@ class PersonalWebDavSyncTest {
     }
 
     @Test fun sharedWireFixtureReadsAcrossBothPlatforms() {
-        val fixture = JSONObject(File("../../../tests/fixtures/workbench/personal-webdav-sync-v1.json").readText())
+        val fixture = JSONObject(File("../../../tests/fixtures/workbench/personal-webdav-sync.json").readText())
         val remote = fixture.keys().asSequence().associateWith { fixture.getJSONObject(it).toString().toByteArray() }
         val result = PersonalWebDavSync.plan(local(), "00000000-0000-4000-8000-000000000003", remote)
         assertNull(result.upload)

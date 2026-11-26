@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="680" height="1272" viewBox="0 0 680 1272" role="img" aria-labelledby="title desc">
   <title id="title">公开阅读、每日播客与个人研究资料流向</title>
-  <desc id="desc">音频研究门户快照与 1.5.0 每日音频播客只读进入 Mac 与 Android 工作台；工作台分别连接用户自配模型、两端独立授权的 Zotero、一键双向同步 WebDAV（含笔记冲突无损合并）以及完整研究空间快照备份（虚线表示用户确认后恢复，不迁移凭据或本机校验密钥）。</desc>
+  <desc id="desc">音频研究门户快照与 1.5.x 每日音频播客只读进入 Mac 与 Android 工作台；工作台分别连接用户自配模型、两端独立授权的 Zotero、一键双向同步 WebDAV（含笔记冲突无损合并）以及完整研究空间快照备份（虚线表示用户确认后恢复，不迁移凭据或本机校验密钥）。</desc>
   <defs>
     <style>
       text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif; fill: #182120; }
@@ -31,7 +31,7 @@
   <text x="56" y="196" class="note">只读打开，不触发生产重算</text>
 
   <rect x="380" y="102" width="264" height="120" rx="14" fill="#fdf6f1" stroke="#e4bfa8" stroke-width="1.5"/>
-  <text x="400" y="136" class="head" fill="#a64d2a">每日音频播客（1.5.0）</text>
+  <text x="400" y="136" class="head" fill="#a64d2a">每日音频播客（1.5.x）</text>
   <text x="400" y="168" class="body">受控 Release SHA 校验</text>
   <text x="400" y="196" class="note">150 MiB / 5 期缓存不进备份</text>
 
@@ -44,7 +44,7 @@
   <rect x="36" y="280" width="608" height="132" rx="14" fill="#ffffff" stroke="#b9cfc9" stroke-width="1.8"/>
   <rect x="36" y="280" width="608" height="44" rx="14" fill="#182120"/>
   <rect x="36" y="310" width="608" height="14" fill="#182120"/>
-  <text x="56" y="309" class="head-inv">Mac 与 Android 音频研究工作台（v1.5.0）</text>
+  <text x="56" y="309" class="head-inv">Mac 与 Android 音频研究工作台（1.5.x）</text>
   <text x="56" y="356" class="body">图文精读、PDF 对照、收藏、笔记、每日播客与个人研究</text>
   <text x="56" y="388" class="note">个人资料、模型设置与网站生产系统完全隔离</text>
 

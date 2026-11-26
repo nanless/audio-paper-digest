@@ -16,7 +16,7 @@ const dailyBoundary = require('../scripts/lib/daily-fetch-boundary.js');
 const digestRunReport = require('../scripts/digest-run-report.js');
 const analysisEngine = require('../scripts/analysis-engine.js');
 const publicProbe = require('../scripts/lib/public-resource-probe.js');
-const acqV2 = require('../scripts/lib/official-conference-acquisition-v2.js');
+const acqV2 = require('../scripts/lib/official-conference-acquisition-extended.js');
 const acqCli = require('../scripts/official-conference-acquire.js');
 const discovery = require('../scripts/lib/conference-discovery.js');
 const paperIdentity = require('../scripts/lib/paper-identity.js');
@@ -428,7 +428,7 @@ test('Track 13.1A: comment resource extraction (SSRF/host-safe), multi-link meta
     assert.equal(mergedList[0].authorAffiliations.length, 1);
 });
 
-test('Track 13.1A: official-conference-acquisition-v2 handles >8 MiB PDFs, retries/limit, NeurIPS queryless URLs, IEEE local PDF sealing, and rejects receipt tampering', async t => {
+test('Track 13.1A: official-conference-acquisition-extended handles >8 MiB PDFs, retries/limit, NeurIPS queryless URLs, IEEE local PDF sealing, and rejects receipt tampering', async t => {
     const tmpRoot = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'wave13-conf-v2-'));
     t.after(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
 

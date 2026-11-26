@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const scoringV2 = require('../scripts/lib/scoring-rubric-v2.js');
+const scoring = require('../scripts/lib/scoring-rubric.js');
 const scoringContract = require('../scripts/lib/scoring-audit-contract.js');
 const scoringFormat = require('../scripts/lib/scoring-record-format.js');
 const publicResourceProbe = require('../scripts/lib/public-resource-probe.js');
@@ -54,7 +54,8 @@ describe('Wave 13 Track 13.3: Scoring v2.1 prompt, rubric metadata, and reason-b
         // Mandatory invariants preserved
         assert.ok(template.includes('"contract": "scoring-evidence-profile"'));
         assert.ok(template.includes('"schemaFingerprint": "9a6f0895718cc429cfe3841201460d8384a0cce9e9a0463dc5e5800db408d4e6"'));
-        assert.match(template, /type-aware-v2/);
+        assert.match(template, /type-aware/);
+        assert.doesNotMatch(template, /type-aware-v2|audio-rubric-v2/);
         assert.match(template, /0\.0–10\.0 统一量表/);
         assert.ok(template.includes('"primaryStrengths"'));
         assert.ok(template.includes('"primaryDefects"'));
@@ -157,43 +158,43 @@ describe('Wave 13 Track 13.3: Scoring v2.1 prompt, rubric metadata, and reason-b
             }
         };
         const parsed = scoringContract.parseScoringAuditResult(JSON.stringify(payload), allowed);
-        assert.equal(parsed.rubricVersion, 'type-aware-v2');
+        assert.equal(parsed.rubricVersion, 'type-aware');
         assert.equal(parsed.dimensions.openSource.score, 6.0);
         assert.equal(parsed.dimensions.engineering.score, 6.8);
     });
 
-    it('exports additive v2.1 metadata and matches Python format_document_type_weights_summary bit-for-bit', () => {
-        assert.equal(scoringV2.SCORING_RUBRIC_V2, 'type-aware-v2');
-        assert.equal(scoringV2.CALIBRATION_PROFILE, 'audio-rubric-v2.1');
-        assert.deepEqual(scoringV2.CALIBRATION_ANCHORS.map(a => a.score), [5.2, 6.5, 7.5, 8.5, 9.2]);
-        assert.equal(scoringV2.DOMAIN_RED_LINES.length, 4);
+    it('exports additive calibration metadata and matches Python format_document_type_weights_summary bit-for-bit', () => {
+        assert.equal(scoring.CURRENT_SCORING_RUBRIC, 'type-aware');
+        assert.equal(scoring.CALIBRATION_PROFILE, 'audio-rubric-calibration');
+        assert.deepEqual(scoring.CALIBRATION_ANCHORS.map(a => a.score), [5.2, 6.5, 7.5, 8.5, 9.2]);
+        assert.equal(scoring.DOMAIN_RED_LINES.length, 4);
         assert.equal(
-            scoringV2.formatDocumentTypeWeightsSummary('方法研究'),
+            scoring.formatDocumentTypeWeightsSummary('方法研究'),
             '创新 24% · 严谨 18% · 实验 22% · 清晰 8% · 影响 14% · 复现 7% · 工程 7%（开源上限加分 +0.5）'
         );
-        assert.equal(scoringV2.formatDocumentTypeWeightsSummary('未知类型'), '');
-        assert.equal(scoringV2.formatDocumentTypeWeightsSummary(''), '');
+        assert.equal(scoring.formatDocumentTypeWeightsSummary('未知类型'), '');
+        assert.equal(scoring.formatDocumentTypeWeightsSummary(''), '');
 
-        const docTypes = [...Object.keys(scoringV2.SPEC.documentTypes), '未知类型', ''];
+        const docTypes = [...Object.keys(scoring.SPEC.documentTypes), '未知类型', ''];
         const pyOut = execFileSync('bash', [
             path.join(ROOT, 'scripts/python-runtime.sh'), '-c',
-            `import json, sys; sys.path.insert(0, 'scripts'); import scoring_rubric_v2 as v2
+            `import json, sys; sys.path.insert(0, 'scripts'); import scoring_rubric as sr
 types = json.loads(sys.stdin.read())
 print(json.dumps({
-    'profile': v2.CALIBRATION_PROFILE,
-    'anchorScores': [a['score'] for a in v2.CALIBRATION_ANCHORS],
-    'redLineIds': [r['id'] for r in v2.DOMAIN_RED_LINES],
-    'summaries': {dt: v2.format_document_type_weights_summary(dt) for dt in types}
+    'profile': sr.CALIBRATION_PROFILE,
+    'anchorScores': [a['score'] for a in sr.CALIBRATION_ANCHORS],
+    'redLineIds': [r['id'] for r in sr.DOMAIN_RED_LINES],
+    'summaries': {dt: sr.format_document_type_weights_summary(dt) for dt in types}
 }, ensure_ascii=False))`
         ], { cwd: ROOT, input: JSON.stringify(docTypes), encoding: 'utf8' });
         const pyData = JSON.parse(pyOut);
-        assert.equal(pyData.profile, scoringV2.CALIBRATION_PROFILE);
-        assert.deepEqual(pyData.anchorScores, scoringV2.CALIBRATION_ANCHORS.map(a => a.score));
-        assert.deepEqual(pyData.redLineIds, scoringV2.DOMAIN_RED_LINES.map(r => r.id));
+        assert.equal(pyData.profile, scoring.CALIBRATION_PROFILE);
+        assert.deepEqual(pyData.anchorScores, scoring.CALIBRATION_ANCHORS.map(a => a.score));
+        assert.deepEqual(pyData.redLineIds, scoring.DOMAIN_RED_LINES.map(r => r.id));
         for (const dt of docTypes) {
             assert.equal(
                 pyData.summaries[dt],
-                scoringV2.formatDocumentTypeWeightsSummary(dt),
+                scoring.formatDocumentTypeWeightsSummary(dt),
                 `Python/JS weights summary mismatch for ${dt}`
             );
         }
@@ -935,10 +936,10 @@ describe('Wave 13 Track 13.3 Round 1 Adversarial Review Fixes (Findings #2-#10, 
         const header = scoringFormat.currentEvidenceProfileHeader();
 
         // #9: prototype property safety
-        assert.equal(scoringV2.formatDocumentTypeWeightsSummary('toString'), '');
-        assert.equal(scoringV2.formatDocumentTypeWeightsSummary('constructor'), '');
-        assert.equal(scoringV2.formatDocumentTypeWeightsSummary('__proto__'), '');
-        assert.throws(() => scoringV2.getDocumentTypePolicy('toString'), /不支持的文档类型/);
+        assert.equal(scoring.formatDocumentTypeWeightsSummary('toString'), '');
+        assert.equal(scoring.formatDocumentTypeWeightsSummary('constructor'), '');
+        assert.equal(scoring.formatDocumentTypeWeightsSummary('__proto__'), '');
+        assert.throws(() => scoring.getDocumentTypePolicy('toString'), /不支持的文档类型/);
 
         // #10 + Round 2 #4: indented `- 代码：` under `- 第三方资源：` and `- 代码：` under `### 第三方资源` stay excluded
         const analysisWithMultiLineThirdParty = [

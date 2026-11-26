@@ -426,6 +426,6 @@ describe('Wave 12 Track 12.2: Prompt alignment, slimming & pre-edit blob registr
         const gapFill = fs.readFileSync(path.join(promptDir, 'gap-fill.md'), 'utf8');
         assert.match(gapFill, /五档标尺锚点与反通胀红线/);
         const structRepair = fs.readFileSync(path.join(promptDir, 'structure-repair.md'), 'utf8');
-        assert.match(structRepair, /type-aware-v2.*18 个键/);
+        assert.match(structRepair, /type-aware.*18 个键/);
     });
 });

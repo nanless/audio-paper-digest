@@ -86,4 +86,4 @@
 
 完整备份、WebDAV 保存和跨端恢复继续按原合同封存 `personal.json` 字节；收藏分类、时间及未知字段随所选快照保留，不自动合并两台设备。恢复仍保留原始个人资料回执，不重签模型材料、不更改来源、费用或本机凭据政策。旧端未被新端观察到的“取消后再收藏”无法可靠推断时间，不能承诺补回历史。
 
-个人资料兼容样例见[跨端夹具](../tests/fixtures/workbench-favorite-collections-v1.json)，网站分类对照样例见[分类夹具](../tests/fixtures/workbench-website-taxonomy-golden.json)。1.2.0 的历史检查保留在[体验审改记录](workbench-usability-review-20261101.md)，本次纠正另记在[1.2.1 审改记录](workbench-1.2.1-review.md)。
+个人资料兼容样例见[跨端夹具](../tests/fixtures/workbench-favorite-collections.json)，网站分类对照样例见[分类夹具](../tests/fixtures/workbench-website-taxonomy-golden.json)。1.2.0 的历史检查保留在[体验审改记录](workbench-usability-review-20261101.md)，本次纠正另记在[1.2.1 审改记录](workbench-1.2.1-review.md)。

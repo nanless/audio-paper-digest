@@ -633,7 +633,7 @@ describe('F4 P3 Polish: prompt keys, strictJson key errors, cross-stage delta ve
         ];
         assert.throws(
             () => readerTables.compileReaderTableSelections(sections, tableBindings, artifacts, {
-                editorialProfile: readerFormat.STRUCTURED_V5
+                editorialProfile: readerFormat.STRUCTURED_EDITORIAL
             }),
             /重叠|重复|sourceTableOrdinal/
         );

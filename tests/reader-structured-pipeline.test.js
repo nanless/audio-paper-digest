@@ -134,68 +134,68 @@ test('Track C v5: proseParagraphs evaluates consecutive bullet/numbered items in
     const bulletBlock = Array.from({ length: 7 }, (_, i) =>
         `- 第${i + 1}条核心配置：固定十六千赫采样率并保留双路缓存状态，确保帧级相位连续且延迟受控，避免跨块边界出现明显能量跳变与失真。`
     ).join('\n');
-    const v5Issues = editorial.findLongParagraphs(bulletBlock, { editorialProfile: format.STRUCTURED_V5 });
+    const v5Issues = editorial.findLongParagraphs(bulletBlock, { editorialProfile: format.STRUCTURED_EDITORIAL });
     assert.equal(v5Issues.length, 0);
 
     const wall = '流式音频编码器在极低比特预算下需要同时平衡内容语义保真与说话人音色稳定。'.repeat(13);
-    const v5Wall = editorial.findLongParagraphs(wall, { editorialProfile: format.STRUCTURED_V5 });
+    const v5Wall = editorial.findLongParagraphs(wall, { editorialProfile: format.STRUCTURED_EDITORIAL });
     assert.equal(v5Wall.length, 1);
     assert.equal(v5Wall[0].severity, 'error');
 
     // v4 retains its 480-char hard limit, while v5 tightens error threshold to 420 chars
     const midWall = '流式音频编码器在极低比特预算下需要同时平衡语义与音色并保持稳定收敛，'.repeat(13) + '最终输出帧级结果。'; // ~440 Han chars, 1 sentence
-    const v5Mid = editorial.findLongParagraphs(midWall, { editorialProfile: format.STRUCTURED_V5 });
-    const v4Mid = editorial.findLongParagraphs(midWall, { editorialProfile: format.COHESIVE_V4 });
+    const v5Mid = editorial.findLongParagraphs(midWall, { editorialProfile: format.STRUCTURED_EDITORIAL });
+    const v4Mid = editorial.findLongParagraphs(midWall, { editorialProfile: format.COHESIVE_EDITORIAL });
     assert.equal(v5Mid[0].severity, 'error');
     assert.equal(v4Mid[0].severity, 'warning');
 });
 
-test('Track C v5: findStructuredV5SectionIssues enforces anti-clone headings and >950-char section hierarchy', () => {
+test('Track C v5: findStructuredSectionIssues enforces anti-clone headings and >950-char section hierarchy', () => {
     const clonedSections = [
         { kind: 'problem', heading: '问题本质：流式延迟为何限制上下文利用', body: '短段说明。'.repeat(40) },
         { kind: 'method_overview', heading: '方法全景：双路编码器的完整数据流', body: '短段说明。'.repeat(40) },
         { kind: 'result', heading: '主实验验证：统一协议下的指标提升', body: '短段说明。'.repeat(40) }
     ];
-    const clonedRes = editorial.findStructuredV5SectionIssues(clonedSections);
+    const clonedRes = editorial.findStructuredSectionIssues(clonedSections);
     assert.ok(clonedRes.issues.some(i => i.code === 'reader_cloned_section_prefix'));
 
     const longBody = Array.from({ length: 7 }, (_, i) =>
         `第${i + 1}阶段围绕短窗频谱特征与跨帧残差状态展开分析，系统对比双路门控在不同噪声信噪比下的能量衰减规律与相位偏移轨迹，完整交代输入输出维度约束、缓存刷新步长、量化误差累积机制与解码端延迟上限之间的直接因果联系，并在受控条件下验证各中间张量在帧边界处的连续性表现，说明这一机制如何避免长句推演中的音色漂移和爆音伪影问题。`
     ).join('\n\n');
     const flatLong = [{ kind: 'method_overview', heading: '双路编码器从短窗波形到帧级决策的完整数据流', body: longBody }];
-    const flatRes = editorial.findStructuredV5SectionIssues(flatLong);
+    const flatRes = editorial.findStructuredSectionIssues(flatLong);
     assert.ok(flatRes.issues.some(i => i.code === 'reader_long_section_needs_hierarchy'));
 
     const structuredLong = [{ kind: 'method_overview', heading: '双路编码器从短窗波形到帧级决策的完整数据流', body: `#### 双路特征提取\n\n${longBody}` }];
-    const okRes = editorial.findStructuredV5SectionIssues(structuredLong);
+    const okRes = editorial.findStructuredSectionIssues(structuredLong);
     assert.equal(okRes.issues.length, 0);
 
     const dangling = [{ kind: 'result', heading: '跨数据集评测下的性能与代价', body: '主要指标对比如下表所示。\n\n这里直接跳去讲另一个话题而没有贴表。\n\n第三段同样没有表。' }];
-    const danglingRes = editorial.findStructuredV5SectionIssues(dangling);
+    const danglingRes = editorial.findStructuredSectionIssues(dangling);
     assert.ok(danglingRes.warnings.some(w => w.code === 'reader_dangling_table_reference'));
 });
 
 test('Track C v5: adaptive short-paper floor and intra-section near-duplicate detection work only on STRUCTURED_V5', () => {
-    const shortV5 = contract.readerRequirements({ editorialProfile: format.STRUCTURED_V5, sourceTextChars: 12000 });
+    const shortV5 = contract.readerRequirements({ editorialProfile: format.STRUCTURED_EDITORIAL, sourceTextChars: 12000 });
     assert.equal(shortV5.minimumChineseChars, 3200);
     assert.equal(shortV5.minimumProseChineseChars, 2800);
 
-    const compactV5 = contract.readerRequirements({ editorialProfile: format.STRUCTURED_V5, sourceTextChars: 24000 });
+    const compactV5 = contract.readerRequirements({ editorialProfile: format.STRUCTURED_EDITORIAL, sourceTextChars: 24000 });
     assert.equal(compactV5.minimumChineseChars, 3800);
     assert.equal(compactV5.minimumProseChineseChars, 3400);
 
-    const normalV5 = contract.readerRequirements({ editorialProfile: format.STRUCTURED_V5, sourceTextChars: 60000 });
+    const normalV5 = contract.readerRequirements({ editorialProfile: format.STRUCTURED_EDITORIAL, sourceTextChars: 60000 });
     assert.equal(normalV5.minimumChineseChars, 5000);
     assert.equal(normalV5.minimumProseChineseChars, 4500);
 
-    const shortV4 = contract.readerRequirements({ editorialProfile: format.COHESIVE_V4, sourceTextChars: 12000 });
+    const shortV4 = contract.readerRequirements({ editorialProfile: format.COHESIVE_EDITORIAL, sourceTextChars: 12000 });
     assert.equal(shortV4.minimumChineseChars, 5000);
 
     const p1 = '流式双分支声学编码器先用短窗提取局部时频包络特征，再通过语义门控过滤静音段并把候选特征送入声学细化模块以校准帧边界，从而在实时延迟预算内保持跨帧相位连续。';
     const p2 = '流式双分支声学编码器先用短窗提取局部时频包络特征，再通过语义门控过滤静音段并把候选特征送入声学细化模块以稳定帧边界，从而在实时延迟预算内保持跨帧相位连续。';
     const article = `### 双分支流式编码机制\n\n${p1}\n\n${p2}`;
-    const v5Dupes = contract.findReaderSectionNearDuplicates(article, [{ kind: 'method_overview' }], { editorialProfile: format.STRUCTURED_V5 });
-    const v4Dupes = contract.findReaderSectionNearDuplicates(article, [{ kind: 'method_overview' }], { editorialProfile: format.COHESIVE_V4 });
+    const v5Dupes = contract.findReaderSectionNearDuplicates(article, [{ kind: 'method_overview' }], { editorialProfile: format.STRUCTURED_EDITORIAL });
+    const v4Dupes = contract.findReaderSectionNearDuplicates(article, [{ kind: 'method_overview' }], { editorialProfile: format.COHESIVE_EDITORIAL });
     assert.equal(v5Dupes.length, 1);
     assert.equal(v5Dupes[0].code, 'reader_intra_section_near_duplicate');
     assert.equal(v4Dupes.length, 0);
@@ -204,7 +204,7 @@ test('Track C v5: adaptive short-paper floor and intra-section near-duplicate de
 test('Track C v5: compiles chineseCaption + implementationSpecs, renders Chinese caption, roundtrips signed surface, and validates semantic placement', () => {
     const { base, draft, artifacts, options } = buildStructuredV5DraftFixture();
     const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draft), options);
-    assert.equal(format.planEditorialProfile(parsed.plan), format.STRUCTURED_V5);
+    assert.equal(format.planEditorialProfile(parsed.plan), format.STRUCTURED_EDITORIAL);
     assert.equal(parsed.plan.figurePlacements[0].chineseCaption, '双分支流式声学编码器整体架构与帧级汇聚路径示意');
     assert.equal(parsed.plan.implementationSpecs.computeHardware, '原文未披露具体训练卡型与总 GPU 小时数。');
 
@@ -364,7 +364,7 @@ test('Track C v5: compiles chineseCaption + implementationSpecs, renders Chinese
 
     // Round 2 & 3 regressions: idiomatic numerals, 两段式 + 两段 protection (H4), critic/ViSQOL/bare-English/template-echo
     const stageText = '模型采用两阶段训练与两段式解码架构，并把输入切为两段，在哪一帧或任何一级都不丢信息，两者分工清晰。';
-    const stageIssues = editorial.findQuantitativeChineseNumerals(stageText, { editorialProfile: format.STRUCTURED_V5 });
+    const stageIssues = editorial.findQuantitativeChineseNumerals(stageText, { editorialProfile: format.STRUCTURED_EDITORIAL });
     assert.deepEqual(stageIssues.map(i => i.match), ['两段']);
     const normalizedStage = editorial.normalizeIssueBoundReaderQuantitativeNumerals(
         stageText,
@@ -375,13 +375,13 @@ test('Track C v5: compiles chineseCaption + implementationSpecs, renders Chinese
     assert.ok(!normalizedStage.includes('哪 1 帧'));
     assert.ok(!normalizedStage.includes('2 者'));
 
-    const badVisqol = editorial.findReaderLanguageIssues('该模型在测试集上的虚拟语音质量客观听众达到 3.80。', { editorialProfile: format.STRUCTURED_V5 });
+    const badVisqol = editorial.findReaderLanguageIssues('该模型在测试集上的虚拟语音质量客观听众达到 3.80。', { editorialProfile: format.STRUCTURED_EDITORIAL });
     assert.ok(badVisqol.some(i => i.code === 'reader_awkward_translation'));
-    const badBareEn = editorial.findReaderLanguageIssues('这里讨论主动 grounding 仍是短板，且对 pending 问题的回答依赖 backchannel 的节奏。', { editorialProfile: format.STRUCTURED_V5 });
+    const badBareEn = editorial.findReaderLanguageIssues('这里讨论主动 grounding 仍是短板，且对 pending 问题的回答依赖 backchannel 的节奏。', { editorialProfile: format.STRUCTURED_EDITORIAL });
     assert.ok(badBareEn.filter(i => i.code === 'reader_awkward_translation').length >= 3);
-    const badCritic = editorial.findReaderLanguageIssues('第二阶段用 5417 次评论更新推进 DMD 蒸馏，评论与学生更新比为 5 比 1。', { editorialProfile: format.STRUCTURED_V5 });
+    const badCritic = editorial.findReaderLanguageIssues('第二阶段用 5417 次评论更新推进 DMD 蒸馏，评论与学生更新比为 5 比 1。', { editorialProfile: format.STRUCTURED_EDITORIAL });
     assert.ok(badCritic.some(i => i.code === 'reader_awkward_translation'));
-    const badEcho = editorial.findReaderLanguageIssues('该式的三层含义是：前一步如何进入，怎样进入下一步，本次核验返回 200 可写作者演示资源当前可用。', { editorialProfile: format.STRUCTURED_V5 });
+    const badEcho = editorial.findReaderLanguageIssues('该式的三层含义是：前一步如何进入，怎样进入下一步，本次核验返回 200 可写作者演示资源当前可用。', { editorialProfile: format.STRUCTURED_EDITORIAL });
     assert.ok(badEcho.filter(i => i.code === 'reader_workflow_leakage').length >= 3);
 });
 
@@ -454,7 +454,7 @@ test('Track C Round 3 regressions: pipe-escaped completeTable, overlapping table
     ];
     assert.throws(
         () => readerTables.compileReaderTableSelections(dupSections, dupBindings, arts, {
-            checkDuplicates: true, editorialProfile: format.STRUCTURED_V5
+            checkDuplicates: true, editorialProfile: format.STRUCTURED_EDITORIAL
         }),
         err => err.code === 'READER_DUPLICATE_TABLE'
     );
@@ -466,7 +466,7 @@ test('Track C Round 3 regressions: pipe-escaped completeTable, overlapping table
     const misBindings = [{ tableIndex: 1, completeTable: { sourceTableOrdinal: 2 } }];
     assert.throws(
         () => readerTables.compileReaderTableSelections(misSections, misBindings, arts, {
-            checkDuplicates: true, editorialProfile: format.STRUCTURED_V5
+            checkDuplicates: true, editorialProfile: format.STRUCTURED_EDITORIAL
         }),
         err => err.code === 'READER_RESULT_ABLATION_MISPLACEMENT'
     );
@@ -575,7 +575,7 @@ test('R2 fixes: figure placement split, multi-result ablation guard, double-back
             { tableIndex: 2, completeTable: { sourceTableOrdinal: 2 } }
         ],
         { tables: [mainTbl, ablTbl], figures: [], formulas: [] },
-        { checkDuplicates: true, editorialProfile: format.STRUCTURED_V5 }
+        { checkDuplicates: true, editorialProfile: format.STRUCTURED_EDITORIAL }
     );
     assert.equal(multiRes.tableBindings.length, 2);
     // Dataset statistics table + ablation table in result MUST NOT false-positive
@@ -583,7 +583,7 @@ test('R2 fixes: figure placement split, multi-result ablation guard, double-back
         [{ kind: 'result', heading: '消融实验结果', body: '说明。\n\n[[TABLE_1]]\n\n解读。' }],
         [{ tableIndex: 1, completeTable: { sourceTableOrdinal: 2 } }],
         { tables: [dsTbl, ablTbl], figures: [], formulas: [] },
-        { checkDuplicates: true, editorialProfile: format.STRUCTURED_V5 }
+        { checkDuplicates: true, editorialProfile: format.STRUCTURED_EDITORIAL }
     );
     assert.equal(dsRes.tableBindings.length, 1);
     // Unsorted tableBindings reports original unsorted index (index 1, not sorted index 0)
@@ -598,16 +598,16 @@ test('R2 fixes: figure placement split, multi-result ablation guard, double-back
                 { tableIndex: 1, completeTable: { sourceTableOrdinal: 2 } }
             ],
             { tables: [mainTbl, ablTbl], figures: [], formulas: [] },
-            { checkDuplicates: true, editorialProfile: format.STRUCTURED_V5 }
+            { checkDuplicates: true, editorialProfile: format.STRUCTURED_EDITORIAL }
         ),
         err => err.code === 'READER_RESULT_ABLATION_MISPLACEMENT' && err.readerIssues?.[0]?.path === '/tableBindings/1'
     );
 
     // R2-M2: critic phrase isolated to STRUCTURED_V5 (v4 cold replay unchanged)
     const criticText = '在 DMD 扩散蒸馏中，评论更新用于估计学生分布的分数梯度。';
-    assert.ok(!editorial.findReaderLanguageIssues(criticText, { editorialProfile: format.COHESIVE_V4 })
+    assert.ok(!editorial.findReaderLanguageIssues(criticText, { editorialProfile: format.COHESIVE_EDITORIAL })
         .some(i => i.code === 'reader_awkward_translation'));
-    assert.ok(editorial.findReaderLanguageIssues(criticText, { editorialProfile: format.STRUCTURED_V5 })
+    assert.ok(editorial.findReaderLanguageIssues(criticText, { editorialProfile: format.STRUCTURED_EDITORIAL })
         .some(i => i.code === 'reader_awkward_translation'));
 
     // R2-L1: 3 natural mid-sentence 前一步 pass; 3 template-echo OR 4 bare 前一步 fail
@@ -616,13 +616,13 @@ test('R2 fixes: figure placement split, multi-result ablation guard, double-back
         heading: '系统级多步自回归解码流程机制',
         body: '编码器在每个时间步都会结合比前一步更长的历史上下文来预测声学帧。解码器在对齐声学目标时也会参照与前一步一致的相位约束。推理阶段则通过状态缓存避免重复计算与前一步相同的键和值。'
     }];
-    assert.ok(!editorial.findStructuredV5SectionIssues(okStepSections).issues.some(i => i.code === 'reader_repetitive_template_echo'));
+    assert.ok(!editorial.findStructuredSectionIssues(okStepSections).issues.some(i => i.code === 'reader_repetitive_template_echo'));
     const badStepSections = [{
         kind: 'method_overview',
         heading: '系统级多步自回归解码流程机制',
         body: '前一步输出进入编码器。前一步产生隐变量。前一步得到最终预测。'
     }];
-    assert.ok(editorial.findStructuredV5SectionIssues(badStepSections).issues.some(i => i.code === 'reader_repetitive_template_echo'));
+    assert.ok(editorial.findStructuredSectionIssues(badStepSections).issues.some(i => i.code === 'reader_repetitive_template_echo'));
 
     // LaTeXML <span class="ltx_tabular"> with ltx_rowspan_N & ltx_colspan_N (modeled on 2611.25569 Table 1)
     const latexmlHtml = `

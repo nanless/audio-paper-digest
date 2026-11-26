@@ -77,7 +77,7 @@ test('旧摘要修正使用真实归档字节通过原 SHA 门槛，只迁移到
     const names = {primaryAnalysis:'deep-analysis',openSourceScan:'opensource-scan',revision:'gap-fill',
         tableRepair:'table-fill',methodRepair:'method-fill',coreSummaryRepair:'core-summary-repair',structureRepair:'structure-repair'};
     const archived = new Map();
-    for (const [stage, expected] of Object.entries(deep.CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256)) {
+    for (const [stage, expected] of Object.entries(deep.LEGACY_CORE_SUMMARY_RUNTIME_PROMPT_SHA256)) {
         const contract = ['primaryAnalysis','coreSummaryRepair'].includes(stage) ? 'core-summary-detailed-v3' : '';
         const bytes = history.historicalPromptTemplateBytesForSha256(expected, contract);
         assert.ok(bytes, `原许可的提示词 ${stage} 必须存在真实归档字节`);

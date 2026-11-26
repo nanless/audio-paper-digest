@@ -376,7 +376,7 @@ test('会议抽取器版本、队列并发与 Pages 部署轮询/超时变量在
     };
     const valid = schema.validateEntries({
         ...base,
-        PD_CONFERENCE_EXTRACTOR_VERSION: 'v2',
+        PD_CONFERENCE_EXTRACTOR_PROFILE: 'enhanced',
         PD_CONFERENCE_QUEUE_CONCURRENCY: '3',
         PD_PAGES_DEPLOY_POLL_SECONDS: '10',
         PD_PAGES_DEPLOY_TIMEOUT_SECONDS: '600'
@@ -384,17 +384,19 @@ test('会议抽取器版本、队列并发与 Pages 部署轮询/超时变量在
     assert.strictEqual(valid.unknown.length, 0);
     assert.strictEqual(valid.items.some(item => item.ok === 'fail'), false);
 
-    const v1Valid = schema.validateEntries({
+    const legacyValid = schema.validateEntries({
         ...base,
+        PD_CONFERENCE_EXTRACTOR_PROFILE: 'legacy',
         PD_CONFERENCE_EXTRACTOR_VERSION: 'v1',
         PD_CONFERENCE_QUEUE_CONCURRENCY: '32',
         PD_PAGES_DEPLOY_POLL_SECONDS: '120',
         PD_PAGES_DEPLOY_TIMEOUT_SECONDS: '1800'
     });
-    assert.strictEqual(v1Valid.items.some(item => item.ok === 'fail'), false);
+    assert.strictEqual(legacyValid.items.some(item => item.ok === 'fail'), false);
 
     const invalid = schema.validateEntries({
         ...base,
+        PD_CONFERENCE_EXTRACTOR_PROFILE: 'unknown-profile',
         PD_CONFERENCE_EXTRACTOR_VERSION: 'v3',
         PD_CONFERENCE_QUEUE_CONCURRENCY: '33',
         PD_PAGES_DEPLOY_POLL_SECONDS: '121',
@@ -402,6 +404,7 @@ test('会议抽取器版本、队列并发与 Pages 部署轮询/超时变量在
     });
     const failed = invalid.items.filter(item => item.ok === 'fail').map(item => item.name);
     for (const name of [
+        'PD_CONFERENCE_EXTRACTOR_PROFILE',
         'PD_CONFERENCE_EXTRACTOR_VERSION',
         'PD_CONFERENCE_QUEUE_CONCURRENCY',
         'PD_PAGES_DEPLOY_POLL_SECONDS',

@@ -8,13 +8,17 @@ ROOT = Path(__file__).resolve().parent.parent
 LEGACY = json.loads(read_regular_bytes(ROOT / 'scripts/lib/reader-legacy-records.json'))
 INTEGRATED = 'integrated-article'
 COMPACT = 'compact-article'
-STRUCTURED_V5 = 'structured-pipeline-v5'
-COHESIVE_V4 = 'cohesive-functional-v4'
+STRUCTURED_EDITORIAL = 'structured-pipeline'
+STRUCTURED_V5_EDITORIAL = 'structured-pipeline-v5'
+HISTORICAL_STRUCTURED_EDITORIALS = frozenset({STRUCTURED_V5_EDITORIAL})
+COHESIVE_EDITORIAL = 'cohesive-functional-v4'
 LEGACY_INTEGRATED = 'legacy-integrated'
 OLD_DRAFT_FP = 'beea25256472a7b9cb4550dafd753db7d1231632a85d6dbb7f9c2e620a0628f9'
 OLD_PLAN_FP = 'cd8baf5b8bda3a49eec64f6005931af63de4e9a13148cba5f354c661ca6e9df2'
 V4_DRAFT_FP = '70509d972ac881cc32bdc6cd182ec830ac3676b01fb0c81375849cd3ff429733'
 V4_PLAN_FP = '7c0300b9342334b864b6a304dcf02a96fb8dbbe8f4061b6dbc0ddfdd249ceceb'
+V5_DRAFT_FP = 'c885be94603c4da688140a9b370c93a71ce5674acb2b0ded5011d3a4053ac5c4'
+V5_PLAN_FP = '502f149770c20bc8f28660fa7f98bbeaaaecaff2b5f8c6236663e323d34a595c'
 IMPLEMENTATION_SPEC_KEYS = (
     'trainingData', 'computeHardware', 'keyHyperparams',
     'inferenceCost', 'openSourceArtifacts', 'appendixHighlights',
@@ -24,12 +28,16 @@ OPTIONAL_IMPLEMENTATION_SPEC_KEYS = (
 )
 
 
-def is_structured_v5(profile):
-    return profile == STRUCTURED_V5
+def is_structured_editorial(profile):
+    return profile == STRUCTURED_EDITORIAL or profile in HISTORICAL_STRUCTURED_EDITORIALS
+
+
+def is_cohesive_editorial(profile):
+    return profile == COHESIVE_EDITORIAL
 
 
 def is_modern_editorial_profile(profile):
-    return profile in {COHESIVE_V4, STRUCTURED_V5}
+    return profile == COHESIVE_EDITORIAL or is_structured_editorial(profile)
 
 
 def _selector_args(raw):
@@ -81,10 +89,12 @@ def plan_editorial_profile(plan):
         return profile
     if 'schemaFingerprint' in header:
         schema = codec.declared_schema(header['contract'], 'beginner-researcher', header['schemaFingerprint'])
-        if schema.get('editorialProfile') == STRUCTURED_V5:
-            return STRUCTURED_V5
-        if schema.get('editorialProfile') == COHESIVE_V4:
-            return COHESIVE_V4
+        if schema.get('editorialProfile') == STRUCTURED_EDITORIAL:
+            return STRUCTURED_EDITORIAL
+        if schema.get('editorialProfile') == STRUCTURED_V5_EDITORIAL:
+            return STRUCTURED_V5_EDITORIAL
+        if schema.get('editorialProfile') == COHESIVE_EDITORIAL:
+            return COHESIVE_EDITORIAL
     return LEGACY_INTEGRATED
 
 

@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const scoringV2 = require('../scripts/lib/scoring-rubric-v2.js');
+const scoring = require('../scripts/lib/scoring-rubric.js');
 const scoringContract = require('../scripts/lib/scoring-audit-contract.js');
 const scoringFormat = require('../scripts/lib/scoring-record-format.js');
 const readerIdentityFormat = require('../scripts/lib/reader-identity-format.js');
@@ -67,7 +67,7 @@ function makeResourceIdentity(sourceText, resources) {
 }
 
 test('type-aware-v2 权重和为 100%、精确整数千分位总分与 Python 逐位一致', () => {
-    for (const [docType, policy] of Object.entries(scoringV2.SPEC.documentTypes)) {
+    for (const [docType, policy] of Object.entries(scoring.SPEC.documentTypes)) {
         const sum = Object.values(policy.coreWeightPct).reduce((a, b) => a + b, 0);
         assert.equal(sum, 100, `${docType} 核心权重和必须精确等于 100%`);
         assert.ok(policy.openSourceMaxBonusTenths >= 2 && policy.openSourceMaxBonusTenths <= 8);
@@ -80,21 +80,21 @@ test('type-aware-v2 权重和为 100%、精确整数千分位总分与 Python �
         ['方法研究', { innovation: 6.0, technicalRigor: 6.2, experimentalSufficiency: 5.8, clarity: 6.0, impact: 5.5, reproducibility: 5.5, engineering: 5.5, openSource: 0.0 }, 5.9, '后50%']
     ];
     for (const [docType, scores, expectedTotal, expectedBucket] of vectors) {
-        const jsRes = scoringV2.calculateV2WeightedTotal(docType, scores);
+        const jsRes = scoring.calculateWeightedTotal(docType, scores);
         assert.equal(jsRes.total, expectedTotal);
         assert.equal(jsRes.rankBucket, expectedBucket);
     }
     // Cross-language Python exact parity on all 5 vectors
     const pyOut = execFileSync('bash', [
         path.join(ROOT, 'scripts/python-runtime.sh'), '-c',
-        `import json, sys; sys.path.insert(0, 'scripts'); import scoring_rubric_v2 as v2
+        `import json, sys; sys.path.insert(0, 'scripts'); import scoring_rubric as sr
 vectors = json.loads(sys.stdin.read())
-out = [v2.calculate_v2_weighted_total(dt, sc) for dt, sc in vectors]
+out = [sr.calculate_weighted_total(dt, sc) for dt, sc in vectors]
 print(json.dumps(out, ensure_ascii=False))`
     ], { cwd: ROOT, input: JSON.stringify(vectors.map(([dt, sc]) => [dt, sc])), encoding: 'utf8' });
     const pyResults = JSON.parse(pyOut);
     vectors.forEach(([docType, scores], i) => {
-        const jsRes = scoringV2.calculateV2WeightedTotal(docType, scores);
+        const jsRes = scoring.calculateWeightedTotal(docType, scores);
         assert.deepEqual(pyResults[i], jsRes, `Python/JS 计算在向量 ${i} (${docType}) 必须逐位一致`);
     });
 });
@@ -250,10 +250,21 @@ test('v2 开源资源核验：数据集类按 dataset 给高分、理论研究�
     ].join('\n');
     const applied = scoringContract.applyScoringAuditResult(baseAnalysis, dsNorm);
     const jsParsed = utils.parseAnalysis(applied);
-    assert.equal(jsParsed.scoringRubricVersion, 'type-aware-v2');
+    assert.equal(jsParsed.scoringRubricVersion, 'type-aware');
     assert.equal(jsParsed.scoreValidation.valid, true);
     assert.equal(analysisContract.validateMachineSummaryContract(applied, jsParsed), null);
     assert.equal(Number(jsParsed.score), dsNorm.total);
+
+    // Archived historical type-aware-v2 analysis stays 100% parseable & valid
+    const v2Archived = applied.replace('rubric_version: type-aware', 'rubric_version: type-aware-v2');
+    const jsParsedV2 = utils.parseAnalysis(v2Archived);
+    assert.equal(jsParsedV2.scoringRubricVersion, 'type-aware-v2');
+    assert.equal(jsParsedV2.scoreValidation.valid, true);
+    assert.equal(analysisContract.validateMachineSummaryContract(v2Archived, jsParsedV2), null);
+    assert.equal(Number(jsParsedV2.score), dsNorm.total);
+    assert.equal(scoring.isUnifiedRubric('type-aware'), true);
+    assert.equal(scoring.isUnifiedRubric('type-aware-v2'), true);
+    assert.equal(scoring.isLegacyRubric('type-aware-v1'), true);
 
     const pyCheck = execFileSync('bash', [
         path.join(ROOT, 'scripts/python-runtime.sh'), '-c',
@@ -269,27 +280,27 @@ print(json.dumps({'score': validated['score'], 'rankBucket': validated['rankBuck
     const pyParsed = JSON.parse(pyCheck);
     assert.equal(pyParsed.score, jsParsed.score);
     assert.equal(pyParsed.rankBucket, jsParsed.rankBucket);
-    assert.equal(pyParsed.rubric, 'type-aware-v2');
+    assert.equal(pyParsed.rubric, 'type-aware');
     assert.match(pyParsed.line, /创新 8\.5\/10/);
 });
 
-test('Track B R2 加固：gap-fill v2 同步、闭环指纹、三类盲审防漏、上界开源封顶、输入拒空与 P2/P3 分型上限', () => {
+test('Track B R2 加固：gap-fill type-aware 同步、闭环指纹、三类盲审防漏、上界开源封顶、输入拒空与 P2/P3 分型上限', () => {
     const fs = require('node:fs');
     const { collectWorkflowImplementationFiles } = require('../scripts/lib/workflow-implementation-files.js');
 
     // C1 & H2: prompt alignment
     const gapFill = fs.readFileSync(path.join(ROOT, 'prompts/current/gap-fill.md'), 'utf8');
-    assert.match(gapFill, /rubric_version:\s*type-aware-v2/);
+    assert.match(gapFill, /rubric_version:\s*type-aware\b/);
     assert.doesNotMatch(gapFill, /机器摘要的 17 个键/);
     assert.doesNotMatch(gapFill, /满分依次为 2、1\.5/);
     const auditPrompt = fs.readFileSync(path.join(ROOT, 'prompts/current/scoring-audit.md'), 'utf8');
     assert.doesNotMatch(auditPrompt, /\[A_LIMIT\](?!S)/);
     assert.match(auditPrompt, /\[A_LIMITS\]/);
 
-    // H1: config/scoring-rubric-v2.json inside workflow implementation closure for JS & Python
+    // H1: config/scoring-rubric.json inside workflow implementation closure for JS & Python
     for (const entry of ['scripts/deep-analyzer.js', 'scripts/publish-to-blog.py']) {
         const files = collectWorkflowImplementationFiles({ root: ROOT, entryFiles: [entry] });
-        assert.ok(files.includes('config/scoring-rubric-v2.json'), `${entry} 闭包必须包含 config/scoring-rubric-v2.json`);
+        assert.ok(files.includes('config/scoring-rubric.json'), `${entry} 闭包必须包含 config/scoring-rubric.json`);
     }
 
     // H3 & H6: blind stripping closes ### subheading leak, backtick/Chinese alias leak, and ## 论文评价, while preserving legacyReasonOnly
@@ -338,12 +349,12 @@ test('Track B R2 加固：gap-fill v2 同步、闭环指纹、三类盲审防漏
     assert.equal(theoryNullNorm.dimensions.openSource.score, 3.0, '理论研究在 null 资源身份且无产物时也必须受 3.0 上限约束');
 
     // H5: normalizeTenths rejects null/empty/bool and matches Python Decimal on 8.449999999999999
-    assert.ok(Number.isNaN(scoringV2.normalizeTenths(null)));
-    assert.ok(Number.isNaN(scoringV2.normalizeTenths('')));
-    assert.ok(Number.isNaN(scoringV2.normalizeTenths(false)));
-    assert.ok(Number.isNaN(scoringV2.normalizeTenths(true)));
-    assert.equal(scoringV2.normalizeTenths('8.449999999999999'), 84);
-    assert.equal(scoringV2.normalizeTenths('0.14999999999999999'), 1);
+    assert.ok(Number.isNaN(scoring.normalizeTenths(null)));
+    assert.ok(Number.isNaN(scoring.normalizeTenths('')));
+    assert.ok(Number.isNaN(scoring.normalizeTenths(false)));
+    assert.ok(Number.isNaN(scoring.normalizeTenths(true)));
+    assert.equal(scoring.normalizeTenths('8.449999999999999'), 84);
+    assert.equal(scoring.normalizeTenths('0.14999999999999999'), 1);
 
     // P2 & P3: system report internal unmeasured cap (engineering <= 5.5) and flagship model report publicGen no-ablation cap (exp <= 7.5)
     const sysUnmeasured = scoringContract.parseScoringAuditResult(JSON.stringify(makeV2Audit({

@@ -9,10 +9,10 @@ const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
 const paperIdentity = require('./paper-identity.js');
 const officialAcquisition = require('./official-conference-acquisition.js');
-const officialAcquisitionV2 = require('./official-conference-acquisition-v2.js');
+const officialAcquisitionExtended = require('./official-conference-acquisition-extended.js');
 
 function resolveOfficialAcquisition(providerId) {
-    return officialAcquisitionV2.hasProvider(providerId) ? officialAcquisitionV2 : officialAcquisition;
+    return officialAcquisitionExtended.hasProvider(providerId) ? officialAcquisitionExtended : officialAcquisition;
 }
 const codec = require('./protocol-codec');
 const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');

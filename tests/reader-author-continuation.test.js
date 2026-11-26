@@ -7,7 +7,7 @@ const source='Dai Gao1, Chen Jiang2, Sizhe Liu3, Peng Zhang4\n1 School of Future
 const prefix='Shandong Computer Science Center (National Supercomputer Center in Jinan), Qilu University of';
 const complete=prefix+' Technology (Shandong Academy of Sciences), China';
 test('v1 author evidence stays unchanged while explicit v2 binds actual adjacent institution continuation',()=>{
- const old=authors.parseConferencePdfAuthors(source),updated=authors.parseConferencePdfAuthorsV2(source);
+ const old=authors.parseConferencePdfAuthors(source),updated=authors.parseConferencePdfAuthorsFromLines(source);
  assert.equal(old.authors.find(a=>a.name==='Peng Zhang').affiliations[0],prefix);
  assert.equal(updated.authors.find(a=>a.name==='Peng Zhang').affiliations[0],complete);
  assert.equal(updated.sourceTextSha256,sha(source));assert.equal(updated.sourceEvidence,old.sourceEvidence);assert.equal(updated.sourceDomSha256,old.sourceDomSha256);
@@ -22,6 +22,6 @@ test('saved unversioned identity uses legacy publication replay and only explici
 });
 test('continuation cannot absorb email names abstract ordinary prose or next marked institution',()=>{
  for(const tail of ['Technology Contact mail@example.org','2 University of Another Institution','Abstract','A Person, Another Person','ordinary experiment prose']){
-  const parsed=authors.parseConferencePdfAuthorsV2('A Name1\n1 Example University of\n    '+tail+'\n\nAbstract\nPaper.');assert.equal(parsed.authors[0].affiliations[0],'Example University of');
+  const parsed=authors.parseConferencePdfAuthorsFromLines('A Name1\n1 Example University of\n    '+tail+'\n\nAbstract\nPaper.');assert.equal(parsed.authors[0].affiliations[0],'Example University of');
  }
 });

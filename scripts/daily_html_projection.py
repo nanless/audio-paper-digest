@@ -15,7 +15,7 @@ if __name__ == '__main__':
     raise SystemExit('此模块只供日更静态观察内部调用。')
 
 PROFILE = 'daily-static-html-projection-v1'
-PROFILE_V2 = 'daily-static-html-projection-v2'
+HISTORICAL_SPACED_PROFILE = 'daily-static-html-projection-v2'
 CURRENT_PROFILE = 'daily-static-html-projection'
 CURRENT_PROFILE_FINGERPRINT = 'ae53f55be53d088ec169f39fe03caed4e5376acfb0cb1a4e1b827da65b274fe3'
 _WS = '\t\n\f\r '
@@ -731,9 +731,9 @@ def project_daily_html(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS)
     return _project_daily_html(html_bytes, expected_canonical, limits, {'contract': PROFILE, 'version': 1}, False)
 
 
-def project_daily_html_v2(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS):
-    """Fixed v2 exact literals with isolated internal spaces, never TeX normalization."""
-    return _project_daily_html(html_bytes, expected_canonical, limits, {'contract': PROFILE_V2, 'version': 2}, True)
+def project_historical_spaced_daily_html(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS):
+    """Fixed historical exact literals with isolated internal spaces, never TeX normalization."""
+    return _project_daily_html(html_bytes, expected_canonical, limits, {'contract': HISTORICAL_SPACED_PROFILE, 'version': 2}, True)
 
 
 def project_current_daily_html(html_bytes, *, expected_canonical, limits=DEFAULT_LIMITS):

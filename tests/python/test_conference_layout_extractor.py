@@ -16,8 +16,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import conference_extractor as v1  # noqa: E402
-import conference_extractor_v2 as v2  # noqa: E402
+import conference_extractor as legacy  # noqa: E402
+import conference_layout_extractor as enhanced  # noqa: E402
 import protocol_codec as protocols  # noqa: E402
 from project_env_isolation import isolate_module_environment  # noqa: E402
 
@@ -150,49 +150,49 @@ def _write_request_fixture(root: Path, *, paper_num: str = "701") -> tuple[str, 
     return manifest_name, request
 
 
-class ConferenceExtractorV2RoutingTest(unittest.TestCase):
-    def test_v1_extractor_remains_byte_frozen(self):
-        v1_bytes = (ROOT / "scripts" / "conference_extractor.py").read_bytes()
+class ConferenceLayoutExtractorRoutingTest(unittest.TestCase):
+    def test_legacy_extractor_remains_byte_frozen(self):
+        legacy_bytes = (ROOT / "scripts" / "conference_extractor.py").read_bytes()
         self.assertEqual(
-            hashlib.sha256(v1_bytes).hexdigest(),
+            hashlib.sha256(legacy_bytes).hexdigest(),
             "36254b211c07e4070c6b1ed805764ce04b2b63572907ab581d9b21b75f03406b",
         )
 
-    def test_cli_routes_v2_and_auto_detects_v1_and_v2_on_verify(self):
-        with tempfile.TemporaryDirectory(prefix="conf-extract-v2-cli-") as tmp:
-            root_v2 = Path(tmp).resolve() / "v2"
-            root_v1 = Path(tmp).resolve() / "v1"
-            root_v2.mkdir(mode=0o700)
-            root_v1.mkdir(mode=0o700)
+    def test_cli_routes_enhanced_and_auto_detects_legacy_and_enhanced_on_verify(self):
+        with tempfile.TemporaryDirectory(prefix="conf-extract-enhanced-cli-") as tmp:
+            root_enhanced = Path(tmp).resolve() / "enhanced"
+            root_legacy = Path(tmp).resolve() / "legacy"
+            root_enhanced.mkdir(mode=0o700)
+            root_legacy.mkdir(mode=0o700)
 
-            manifest_v2, req_v2 = _write_request_fixture(root_v2, paper_num="701")
-            out_v2 = CLI.main(["--apply", "--extractor", "v2", "--manifest", manifest_v2, "--source-root", str(root_v2)])
-            self.assertEqual(out_v2["contract"], v2.EXTRACTOR_V2_CONTRACT)
-            self.assertEqual(out_v2["status"], "ready")
-            receipt_v2 = json.loads((root_v2 / req_v2["outputs"]["receiptFile"]).read_text(encoding="utf-8"))
-            self.assertEqual(receipt_v2["contract"], v2.RECEIPT_V2_CONTRACT)
-            artifact_v2 = json.loads((root_v2 / req_v2["outputs"]["artifactsFile"]).read_text(encoding="utf-8"))
-            self.assertEqual(artifact_v2["contract"], v2.ARTIFACT_V2_CONTRACT)
-            self.assertEqual(artifact_v2["profile"], v2.ARTIFACT_V2_PROFILE)
-            self.assertGreaterEqual(len(artifact_v2["tables"]), 1)
+            manifest_enh, req_enh = _write_request_fixture(root_enhanced, paper_num="701")
+            out_enh = CLI.main(["--apply", "--extractor", "enhanced", "--manifest", manifest_enh, "--source-root", str(root_enhanced)])
+            self.assertEqual(out_enh["contract"], enhanced.EXTRACTOR_ENHANCED_CONTRACT)
+            self.assertEqual(out_enh["status"], "ready")
+            receipt_enh = json.loads((root_enhanced / req_enh["outputs"]["receiptFile"]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt_enh["contract"], enhanced.RECEIPT_ENHANCED_CONTRACT)
+            artifact_enh = json.loads((root_enhanced / req_enh["outputs"]["artifactsFile"]).read_text(encoding="utf-8"))
+            self.assertEqual(artifact_enh["contract"], enhanced.ARTIFACT_ENHANCED_CONTRACT)
+            self.assertEqual(artifact_enh["profile"], enhanced.ARTIFACT_ENHANCED_PROFILE)
+            self.assertGreaterEqual(len(artifact_enh["tables"]), 1)
 
-            # --verify without --extractor auto-detects v2 from the receipt!
-            verified_v2 = CLI.main(["--verify", "--manifest", manifest_v2, "--source-root", str(root_v2)])
-            self.assertEqual(verified_v2["contract"], v2.VERIFICATION_V2_CONTRACT)
-            self.assertEqual(verified_v2["status"], "verified")
+            # --verify without --extractor auto-detects enhanced from the receipt!
+            verified_enh = CLI.main(["--verify", "--manifest", manifest_enh, "--source-root", str(root_enhanced)])
+            self.assertEqual(verified_enh["contract"], enhanced.VERIFICATION_ENHANCED_CONTRACT)
+            self.assertEqual(verified_enh["status"], "verified")
 
-            # Explicit --extractor v1 produces v1 receipt and --verify auto-detects v1!
-            manifest_v1, req_v1 = _write_request_fixture(root_v1, paper_num="702")
-            out_v1 = CLI.main(["--apply", "--extractor", "v1", "--manifest", manifest_v1, "--source-root", str(root_v1)])
-            self.assertEqual(out_v1["status"], "ready")
-            receipt_v1 = json.loads((root_v1 / req_v1["outputs"]["receiptFile"]).read_text(encoding="utf-8"))
-            self.assertNotEqual(receipt_v1["contract"], v2.RECEIPT_V2_CONTRACT)
-            verified_v1 = CLI.main(["--verify", "--manifest", manifest_v1, "--source-root", str(root_v1)])
-            self.assertEqual(verified_v1["status"], "verified")
-            self.assertNotEqual(verified_v1["contract"], v2.VERIFICATION_V2_CONTRACT)
+            # Explicit --extractor legacy (and v1 compat alias) produces legacy receipt and --verify auto-detects legacy!
+            manifest_leg, req_leg = _write_request_fixture(root_legacy, paper_num="702")
+            out_leg = CLI.main(["--apply", "--extractor", "legacy", "--manifest", manifest_leg, "--source-root", str(root_legacy)])
+            self.assertEqual(out_leg["status"], "ready")
+            receipt_leg = json.loads((root_legacy / req_leg["outputs"]["receiptFile"]).read_text(encoding="utf-8"))
+            self.assertNotEqual(receipt_leg["contract"], enhanced.RECEIPT_ENHANCED_CONTRACT)
+            verified_leg = CLI.main(["--verify", "--manifest", manifest_leg, "--source-root", str(root_legacy)])
+            self.assertEqual(verified_leg["status"], "verified")
+            self.assertNotEqual(verified_leg["contract"], enhanced.VERIFICATION_ENHANCED_CONTRACT)
 
-    def test_v2_receipt_replays_cleanly_through_node_extraction_receipt_loader(self):
-        with tempfile.TemporaryDirectory(prefix="conf-extract-v2-node-") as tmp:
+    def test_enhanced_receipt_replays_cleanly_through_node_extraction_receipt_loader(self):
+        with tempfile.TemporaryDirectory(prefix="conf-extract-enhanced-node-") as tmp:
             root = Path(tmp).resolve()
             manifest_name, req = _write_request_fixture(root, paper_num="703")
             out = CLI.main(["--apply", "--extractor", "v2", "--manifest", manifest_name, "--source-root", str(root)])
@@ -212,13 +212,13 @@ class ConferenceExtractorV2RoutingTest(unittest.TestCase):
                 check=True,
             )
             loaded = json.loads(proc.stdout.strip())
-            self.assertEqual(loaded["contract"], v2.RECEIPT_V2_CONTRACT)
-            self.assertEqual(loaded["profile"], v2.ARTIFACT_V2_PROFILE)
-            self.assertEqual(loaded["extractor"], v2.EXTRACTOR_V2_NAME)
-            self.assertEqual(loaded["verificationContract"], v2.VERIFICATION_V2_CONTRACT)
+            self.assertEqual(loaded["contract"], enhanced.RECEIPT_ENHANCED_CONTRACT)
+            self.assertEqual(loaded["profile"], enhanced.ARTIFACT_ENHANCED_PROFILE)
+            self.assertEqual(loaded["extractor"], enhanced.EXTRACTOR_ENHANCED_NAME)
+            self.assertEqual(loaded["verificationContract"], enhanced.VERIFICATION_ENHANCED_CONTRACT)
 
     def test_invalid_extractor_flag_fails_closed(self):
-        with self.assertRaises(v1.ConferenceExtractionError):
+        with self.assertRaises(legacy.ConferenceExtractionError):
             CLI.main(["--apply", "--extractor", "v99", "--manifest", "paper.request.json"])
 
 

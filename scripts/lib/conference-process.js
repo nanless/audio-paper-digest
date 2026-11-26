@@ -135,7 +135,7 @@ function currentImplementationFiles() {
     files.push('scripts/lib/prompt-rendering-contract.js');
     files.push('scripts/lib/immutable-file.js');
     files.push('scripts/lib/model-text-sanitization.js');
-    files.push('scripts/conference_extractor_v2.py');
+    files.push('scripts/conference_layout_extractor.py');
     files.push(...SOURCE_VERIFICATION_FILES);
     return require('./workflow-implementation-files.js').collectWorkflowImplementationFiles({
         root: path.join(__dirname, '..', '..'), entryFiles: files });
@@ -444,6 +444,45 @@ function assertState(value, expected = null) {
             throw new Error(`Conference process retry state is invalid: ${paperId}`);
         }
         const revision = item.readerRevision;
+        const strictUuidRe = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+        const sourceAdoption = item.sourceResourceCorrectionAdoption;
+        const hasSourceAdoption = sourceAdoption !== undefined && sourceAdoption !== null;
+        const validSourceAdoption = hasSourceAdoption
+            && typeof sourceAdoption === 'object' && !Array.isArray(sourceAdoption)
+            && typeof sourceAdoption.manifestFile === 'string' && Boolean(sourceAdoption.manifestFile.trim())
+            && /^[a-f0-9]{64}$/u.test(sourceAdoption.manifestSha256 || '')
+            && /^[a-f0-9]{64}$/u.test(sourceAdoption.previousStateSha256 || '')
+            && /^[a-f0-9]{64}$/u.test(sourceAdoption.previousItemSha256 || '')
+            && Number.isSafeInteger(sourceAdoption.previousAttempts) && sourceAdoption.previousAttempts >= 0
+            && (sourceAdoption.previousFailure === null
+                || (typeof sourceAdoption.previousFailure === 'object' && !Array.isArray(sourceAdoption.previousFailure)))
+            && strictUuidRe.test(sourceAdoption.selectedMainExecutionId || '')
+            && strictUuidRe.test(sourceAdoption.readerParentExecutionId || '')
+            && sourceAdoption.newApiRequests === 0
+            && strictUuidRe.test(item.analysisRunId || '')
+            && item.analysisRunId !== sourceAdoption.selectedMainExecutionId
+            && item.analysisRunId !== sourceAdoption.readerParentExecutionId;
+        if (hasSourceAdoption && !validSourceAdoption) {
+            throw new Error(`Conference process source correction adoption integrity failed: ${paperId}`);
+        }
+        const maintenanceAdoption = item.textMaintenanceAdoption;
+        const hasMaintenanceAdoption = maintenanceAdoption !== undefined && maintenanceAdoption !== null;
+        const validMaintenanceAdoption = hasMaintenanceAdoption
+            && typeof maintenanceAdoption === 'object' && !Array.isArray(maintenanceAdoption)
+            && Boolean(revision) && typeof revision === 'object' && !Array.isArray(revision)
+            && strictUuidRe.test(maintenanceAdoption.batchId || '')
+            && /^[a-f0-9]{64}$/u.test(maintenanceAdoption.manifestSha256 || '')
+            && strictUuidRe.test(maintenanceAdoption.previousExecutionId || '')
+            && revision.parentExecutionId === maintenanceAdoption.previousExecutionId
+            && maintenanceAdoption.previousExecutionId !== item.analysisRunId
+            && Boolean(revision.readerReviewMaintenance)
+            && typeof revision.readerReviewMaintenance === 'object'
+            && !Array.isArray(revision.readerReviewMaintenance)
+            && revision.readerReviewMaintenance.batchId === maintenanceAdoption.batchId
+            && revision.readerReviewMaintenance.manifestSha256 === maintenanceAdoption.manifestSha256;
+        if (hasMaintenanceAdoption && !validMaintenanceAdoption) {
+            throw new Error(`Conference process text maintenance adoption integrity failed: ${paperId}`);
+        }
         if (revision) {
             const { revisionSha256, ...body } = revision;
             const additional = codec.hasValidHeader(revision, 'conference-reader-recovery-window');
@@ -457,13 +496,16 @@ function assertState(value, expected = null) {
             const validOriginal = !additional && codec.hasValidHeader(revision, 'conference-reader-source-revision')
                 && revision.executionId === require('./conference-analysis-adapter').readerRevisionExecutionId(
                     revision.parentExecutionId, revision.parentAnalysisFileSha256, revision);
+            const allowedParentExecutionId = preservedComplete.has(paperId)
+                || revision.parentExecutionId === deterministicUuid(value.processId, paperId, 'analysis')
+                || validMaintenanceAdoption;
             if (revisionSha256 !== stableHash(body) || (!validOriginal && !validWindow)
                 || revision.paperId !== paperId || revision.executionId !== item.analysisRunId
-                || (!preservedComplete.has(paperId) && revision.parentExecutionId !== deterministicUuid(value.processId, paperId, 'analysis'))) {
+                || !allowedParentExecutionId) {
                 throw new Error(`Conference process Reader revision integrity failed: ${paperId}`);
             }
         }
-        if (item.paperId !== paperId || (!revision && !preservedComplete.has(paperId)
+        if (item.paperId !== paperId || (!revision && !preservedComplete.has(paperId) && !validSourceAdoption
             && item.analysisRunId !== deterministicUuid(value.processId, paperId, 'analysis'))
             || preservedComplete.has(paperId) && (!(item.preservedOriginalComplete || item.preservedPriorUpgradeComplete)
                 || !/^[a-f0-9-]{36}$/i.test(item.analysisRunId || ''))
@@ -707,9 +749,12 @@ function sealOneSource(context, member, deps, createdAt, { replayExisting = true
             // 这样实现迁移就能修掉一个确定性的 PDF 审计缺陷，
             // 既不用删掉失败证据，也不用授权新的分析运行。
             upgradedFrom = names.receipt;
-            const targetExtractorSha = process.env.PD_CONFERENCE_EXTRACTOR_VERSION === 'v1'
+            const rawExtractorProfile = String(
+                process.env.PD_CONFERENCE_EXTRACTOR_PROFILE || process.env.PD_CONFERENCE_EXTRACTOR_VERSION || ''
+            ).trim().toLowerCase();
+            const targetExtractorSha = (rawExtractorProfile === 'legacy' || rawExtractorProfile === 'v1')
                 ? extraction.EXTRACTOR_IMPLEMENTATION_SHA256
-                : extraction.EXTRACTOR_V2_IMPLEMENTATION_SHA256;
+                : extraction.EXTRACTOR_ENHANCED_IMPLEMENTATION_SHA256;
             const generation = stableHash({ source: context.authority.implementationSha256,
                 extractorImplementationSha256: targetExtractorSha, backend: extraction.BACKEND_VERSION,
                 ...codec.recordHeader(extraction.RECEIPT_CONTRACT, 'conference-pdf-extraction-receipt'),

@@ -142,7 +142,6 @@ test('实际准备身份包含窄模板实现SHA，而普通v12模板声明不�
         fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-repair.js'), 'utf8'),
         fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-target-ordinal-patch.js'), 'utf8'),
         require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(repair.CONCEPT_TERMS_PROMPT_PATH).toString('utf8'),
-        require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8'),
         fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-request-diagnostics.js'), 'utf8'),
         ...['reader-record-format.js', 'reader-stage-protocols.js', 'reader-candidate-format.js',
             'reader-diagnostic-format.js', 'reader-ordinal-format.js', 'reader-section-format.js', 'reader-identity-format.js',

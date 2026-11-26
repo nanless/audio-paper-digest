@@ -17,10 +17,10 @@ from tag_catalog import (LABEL_MODE_LEGACY,
                             prune_ancestors, resolve_label_candidates,
                             _validate_tag_catalog_content)
 
-import scoring_rubric_v2 as _scoring_v2
-SCORING_RUBRIC_VERSION = _scoring_v2.SCORING_RUBRIC_V1
-CURRENT_SCORING_RUBRIC_VERSION = _scoring_v2.SCORING_RUBRIC_V2
-SUPPORTED_SCORING_RUBRIC_VERSIONS = _scoring_v2.SUPPORTED_SCORING_RUBRIC_VERSIONS
+import scoring_rubric as _scoring
+SCORING_RUBRIC_VERSION = _scoring.LEGACY_SCORING_RUBRIC
+CURRENT_SCORING_RUBRIC_VERSION = _scoring.CURRENT_SCORING_RUBRIC
+SUPPORTED_SCORING_RUBRIC_VERSIONS = _scoring.SUPPORTED_SCORING_RUBRIC_VERSIONS
 DOCUMENT_TYPES = (
     '方法研究',
     '系统技术报告',
@@ -346,7 +346,7 @@ SCORE_DIMENSIONS = {
 }
 
 OPEN_SOURCE_SCORE_ANCHORS = (0.0, 0.2, 0.5, 1.0, 1.2, 1.5)
-V2_OPEN_SOURCE_SCORE_ANCHORS = _scoring_v2.V2_OPEN_SOURCE_ANCHORS
+UNIFIED_OPEN_SOURCE_SCORE_ANCHORS = _scoring.UNIFIED_OPEN_SOURCE_ANCHORS
 
 
 def normalize_score_to_one_decimal(value):
@@ -354,16 +354,16 @@ def normalize_score_to_one_decimal(value):
 
 
 def is_open_source_score_anchor(value, rubric_version=SCORING_RUBRIC_VERSION):
-    if _scoring_v2.is_v2_rubric(rubric_version):
-        return _scoring_v2.is_v2_open_source_anchor(value)
+    if _scoring.is_unified_rubric(rubric_version):
+        return _scoring.is_open_source_anchor(value)
     normalized = normalize_score_to_one_decimal(value)
     return any(abs(anchor - normalized) < 1e-9 for anchor in OPEN_SOURCE_SCORE_ANCHORS)
 
 
 def parse_scoring_dimensions(scoring_text, rubric_version=SCORING_RUBRIC_VERSION):
-    is_v2 = _scoring_v2.is_v2_rubric(rubric_version)
-    dim_defs = _scoring_v2.V2_SCORE_DIMENSIONS if is_v2 else SCORE_DIMENSIONS
-    open_anchors = V2_OPEN_SOURCE_SCORE_ANCHORS if is_v2 else OPEN_SOURCE_SCORE_ANCHORS
+    is_unified = _scoring.is_unified_rubric(rubric_version)
+    dim_defs = _scoring.UNIFIED_SCORE_DIMENSIONS if is_unified else SCORE_DIMENSIONS
+    open_anchors = UNIFIED_OPEN_SOURCE_SCORE_ANCHORS if is_unified else OPEN_SOURCE_SCORE_ANCHORS
     occurrences = {field: [] for field in dim_defs}
     errors = []
 
@@ -654,13 +654,13 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
             scoring_text = m.group(1).strip()
 
     active_rubric = r['scoringRubricVersion'] or SCORING_RUBRIC_VERSION
-    is_v2 = _scoring_v2.is_v2_rubric(active_rubric)
+    is_unified = _scoring.is_unified_rubric(active_rubric)
     r['scoreValidation'] = parse_scoring_dimensions(scoring_text, active_rubric)
     if r['scoreValidation']['valid']:
             dim_scores = r['scoreValidation']['scores']
-            if is_v2 and r['documentType']:
-                v2_calc = _scoring_v2.calculate_v2_weighted_total(r['documentType'], dim_scores)
-                r['score'] = f"{v2_calc['total']:.1f}"
+            if is_unified and r['documentType']:
+                weighted_calc = _scoring.calculate_weighted_total(r['documentType'], dim_scores)
+                r['score'] = f"{weighted_calc['total']:.1f}"
             else:
                 total = min(10.0, sum(normalize_score_to_one_decimal(value) for value in dim_scores.values()))
                 r['score'] = f'{normalize_score_to_one_decimal(total):.1f}'
@@ -684,16 +684,16 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     has_code_yes = r.get('hasCode') in ('是', 'yes')
     has_model_yes = r.get('hasModel') in ('是', 'yes')
     has_dataset_yes = r.get('hasDataset') in ('是', 'yes')
-    released_open_threshold = _scoring_v2.V2_OPEN_SOURCE_RELEASED_THRESHOLD if is_v2 else 1.0
-    if (r['scoreValidation']['valid'] and (not is_theory_paper or is_v2) and open_score_val >= released_open_threshold
+    released_open_threshold = _scoring.UNIFIED_OPEN_SOURCE_RELEASED_THRESHOLD if is_unified else 1.0
+    if (r['scoreValidation']['valid'] and (not is_theory_paper or is_unified) and open_score_val >= released_open_threshold
             and not has_code_yes and not has_model_yes and not has_dataset_yes):
         r['openSourceScore'] = '0.0'
         if r.get('machineSummary'):
             r['machineSummary']['openSource'] = '0.0'
         r['scoreValidation']['scores']['openSourceScore'] = 0.0
-        if is_v2 and r['documentType']:
-            v2_calc = _scoring_v2.calculate_v2_weighted_total(r['documentType'], r['scoreValidation']['scores'])
-            r['score'] = f"{v2_calc['total']:.1f}"
+        if is_unified and r['documentType']:
+            weighted_calc = _scoring.calculate_weighted_total(r['documentType'], r['scoreValidation']['scores'])
+            r['score'] = f"{weighted_calc['total']:.1f}"
         else:
             total = sum(
                 normalize_score_to_one_decimal(value)
@@ -705,7 +705,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     if r.get('score'):
         try:
             s = float(r['score'])
-            r['rankBucket'] = _scoring_v2.rank_bucket_for_rubric(s, active_rubric)
+            r['rankBucket'] = _scoring.rank_bucket_for_rubric(s, active_rubric)
             # 同步 machineSummary
             if r.get('machineSummary'):
                 r['machineSummary']['rankBucket'] = r['rankBucket']

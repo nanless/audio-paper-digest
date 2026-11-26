@@ -1027,7 +1027,7 @@ function getConferenceReaderRefreshUpstreamReason(paper, { tagRules } = {}) {
 const LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES = Object.freeze(
     REQUIRED_RECOVERY_STAGES.filter(stage => stage !== 'coreSummaryRepair')
 );
-const CORE_SUMMARY_V3_READ_ONLY_COMPATIBILITY_CUTOFF_MS = Date.parse(
+const LEGACY_CORE_SUMMARY_READ_ONLY_COMPATIBILITY_CUTOFF_MS = Date.parse(
     '2026-09-07T00:00:00.000+08:00'
 );
 
@@ -1058,7 +1058,7 @@ function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
             const completedAt = Date.parse(stages[stage]?.updatedAt || '');
             return !isRecoveryStageTerminal(stage, stages[stage]?.status)
                 || !Number.isFinite(completedAt)
-                || completedAt >= CORE_SUMMARY_V3_READ_ONLY_COMPATIBILITY_CUTOFF_MS;
+                || completedAt >= LEGACY_CORE_SUMMARY_READ_ONLY_COMPATIBILITY_CUTOFF_MS;
         })) {
         return false;
     }
@@ -2034,7 +2034,7 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
     if (!authorIdentity || typeof authorIdentity !== 'object' || Array.isArray(authorIdentity)) return false;
     const authorIdentitySha256 = stableSha256(authorIdentity);
     const allowOfficialMetadataAuthorSource = !paper.arxivId
-        && authorIdentity.conferencePdfAuthorParser === 'conference-pdf-author-pdf-page1-v3';
+        && ['conference-pdf-author-pdf-page1', 'conference-pdf-author-pdf-page1-v3'].includes(authorIdentity.conferencePdfAuthorParser);
     const validNameSourceKinds = allowOfficialMetadataAuthorSource
         ? ['html_dom', 'pdf_text', 'official_metadata', 'paper_metadata']
         : ['html_dom', 'pdf_text', 'paper_metadata'];

@@ -231,12 +231,12 @@
         var role = record.primaryResearchRole;
         var selected = new Set(result.concepts.map(function (node) { return node.id; }));
         var roleNode = role && source.byId[role.conceptId];
-        var isV3 = tags.tagClassificationContract === V3_CONTRACT;
+        var isCurrentTaxonomyFormat = tags.tagClassificationContract === V3_CONTRACT;
         var isQualified1028 = tags.tagClassificationContract === QUALIFIED_CONTRACT && record.paperId === 'conference:icassp:2026:icassp-arnumber:11461028' && tags.tagCatalogSha256 === '910a94021b085a190abcd5fd9603af3240160f9417293d5a90158bc4ef900d30' && tags.tagProofSha256 === '03beb37ae2df8f7f48850f935cb274a9b0c75eebde483e9c1d6c51a5cffaeb20' && tags.tagEvidenceContract === QUALIFIED_CONTRACT && tags.tagEvidenceType === 'source-bound-independent-review-qualification';
-        var mechanism = isV3 && record.researchType === 'engineering' && role && role.kind === 'method';
-        var allowedFacets = isV3 && record.researchType === 'engineering' ? ['task', 'method'] : roleFacets[record.researchType];
-        var v2 = (tags.tagClassificationContract === V2_CONTRACT || isV3 || isQualified1028)
-          && (isQualified1028 || (isV3 ? ((tags.tagEvidenceType === 'source-only-taxonomy-v3' && tags.tagEvidenceContract === 'historical-source-taxonomy-supplement-v3') || (tags.tagEvidenceType === 'source-bound-current-page-fullsite-taxonomy-v3' && tags.tagEvidenceContract === 'fullsite-source-taxonomy-audit-supplement-v1')) : ((tags.tagEvidenceType === 'source-only-taxonomy-v2' && tags.tagEvidenceContract === 'historical-source-taxonomy-supplement-v2')
+        var mechanism = isCurrentTaxonomyFormat && record.researchType === 'engineering' && role && role.kind === 'method';
+        var allowedFacets = isCurrentTaxonomyFormat && record.researchType === 'engineering' ? ['task', 'method'] : roleFacets[record.researchType];
+        var v2 = (tags.tagClassificationContract === V2_CONTRACT || isCurrentTaxonomyFormat || isQualified1028)
+          && (isQualified1028 || (isCurrentTaxonomyFormat ? ((tags.tagEvidenceType === 'source-only-taxonomy-v3' && tags.tagEvidenceContract === 'historical-source-taxonomy-supplement-v3') || (tags.tagEvidenceType === 'source-bound-current-page-fullsite-taxonomy-v3' && tags.tagEvidenceContract === 'fullsite-source-taxonomy-audit-supplement-v1')) : ((tags.tagEvidenceType === 'source-only-taxonomy-v2' && tags.tagEvidenceContract === 'historical-source-taxonomy-supplement-v2')
             || (tags.tagEvidenceType === 'controlled-current-page-source-taxonomy-v2' && tags.tagEvidenceContract === 'historical-current-page-source-taxonomy-supplement-v2'))))
           && ['paper-taxonomy-v1', 'paper-taxonomy-v2'].includes(source.registryVersion)
           && own(roleFacets, record.researchType) && own(domainLabels, record.domainScope)

@@ -105,7 +105,7 @@ const {
     validateEditorialQuality,
     findDuplicateLongSentences,
     findQuantitativeChineseNumerals,
-    maskStructuredV5NaturalNumerals,
+    maskStructuredNaturalNumerals,
     normalizeDanglingReaderConnectors,
     normalizeIssueBoundReaderQuantitativeNumerals,
     SCALED_ARABIC_MEASUREMENT_UNITS
@@ -522,7 +522,7 @@ const {
     demoteReaderBodySectionHeadings,
     restoreReaderSectionHeadings,
     GENERIC_READER_HEADING_RE,
-    GENERIC_V4_READER_HEADING_RE,
+    GENERIC_EDITORIAL_READER_HEADING_RE,
     READER_HEADING_FIG_TABLE_RE,
     makeReaderHeadingSpecific,
     ensureApiReaderTableNarratives,
@@ -1638,7 +1638,9 @@ function rewriteApiReaderFigureNarratives(article, figures) {
         const narrative = readerFigureCaptionLine(figure, target,
             v4Caption
                 ? {
-                    editorialProfile: figure.chineseCaption ? 'structured-pipeline-v5' : 'cohesive-functional-v4',
+                    editorialProfile: figure.chineseCaption
+                        ? require('./lib/reader-record-format').STRUCTURED_EDITORIAL
+                        : require('./lib/reader-record-format').COHESIVE_EDITORIAL,
                     ...(figure.chineseCaption ? { chineseCaption: figure.chineseCaption } : {})
                 }
                 : {});
@@ -2006,23 +2008,23 @@ function readParsedReaderFactContext(parsed, draft) {
         paperId: current.context.paperId, sourceSha256: current.context.sourceSha256,
         sourceSnapshotSha256: current.context.sourceSnapshotSha256 };
 }
-const V5_FIG_ARCH_CUES_RE = /(?:\b(?:system\s+architecture|model\s+architecture|network\s+architecture|architecture\s+(?:diagram|overview)|overall\s+(?:architecture|framework|pipeline|workflow|system)|block\s+diagram|schematic\s+(?:diagram|overview|illustration)|workflow\s+(?:diagram|overview)|dataflow\s+(?:diagram|overview)|pipeline\s+(?:diagram|overview)|framework\s+(?:diagram|overview)|model\s+structure|training\s+pipeline|distillation\s+pipeline|inference\s+pipeline)\b|^(?:Figure|Fig\.?)\s*\d+[:.\s]+(?:The\s+)?(?:overall\s+)?(?:architecture|overview|framework|pipeline|workflow|diagram|schematic)\s+of\b(?!\s+(?:the\s+)?(?:experimental|evaluation|benchmark|quantitative|ablation)\s+results?))/i;
+const STRUCTURED_FIG_ARCH_CUES_RE = /(?:\b(?:system\s+architecture|model\s+architecture|network\s+architecture|architecture\s+(?:diagram|overview)|overall\s+(?:architecture|framework|pipeline|workflow|system)|block\s+diagram|schematic\s+(?:diagram|overview|illustration)|workflow\s+(?:diagram|overview)|dataflow\s+(?:diagram|overview)|pipeline\s+(?:diagram|overview)|framework\s+(?:diagram|overview)|model\s+structure|training\s+pipeline|distillation\s+pipeline|inference\s+pipeline)\b|^(?:Figure|Fig\.?)\s*\d+[:.\s]+(?:The\s+)?(?:overall\s+)?(?:architecture|overview|framework|pipeline|workflow|diagram|schematic)\s+of\b(?!\s+(?:the\s+)?(?:experimental|evaluation|benchmark|quantitative|ablation)\s+results?))/i;
 // Broad result/metric context used only to avoid false-positive architecture rejections in result/ablation sections.
-const V5_FIG_RESULT_CONTEXT_RE = /\b(?:ablation(?:\s+(?:study|results?|analysis))?|bar\s+(?:chart|plot)|box\s*plot|scatter\s*plot|confusion\s+matrix|roc\s+curve|precision[- ]recall|pareto|vs\.?\s+(?:bitrate|latency|parameter|epoch|step|snr|noise|size)|learning\s+curve|loss\s+curve|scaling\s+law|trade[- ]?off(?:\s+curve)?|t-?sne|umap|heatmap\s+of\s+(?:error|accuracy|wer|mos)|(?:wer|cer|mos|pesq|stoi|visqol|fid|fvd|f1|accuracy|precision|recall|auc|ap|brier|ece|latency|rtf|throughput|benchmark|evaluation\s+results?|experimental\s+results?|performance\s+comparison|error\s+rate|human\s+preference|elo))\b/i;
+const STRUCTURED_FIG_RESULT_CONTEXT_RE = /\b(?:ablation(?:\s+(?:study|results?|analysis))?|bar\s+(?:chart|plot)|box\s*plot|scatter\s*plot|confusion\s+matrix|roc\s+curve|precision[- ]recall|pareto|vs\.?\s+(?:bitrate|latency|parameter|epoch|step|snr|noise|size)|learning\s+curve|loss\s+curve|scaling\s+law|trade[- ]?off(?:\s+curve)?|t-?sne|umap|heatmap\s+of\s+(?:error|accuracy|wer|mos)|(?:wer|cer|mos|pesq|stoi|visqol|fid|fvd|f1|accuracy|precision|recall|auc|ap|brier|ece|latency|rtf|throughput|benchmark|evaluation\s+results?|experimental\s+results?|performance\s+comparison|error\s+rate|human\s+preference|elo))\b/i;
 // Strict pure quantitative plot/ablation cues used to keep evaluation plots out of method/problem sections
 // without blocking legitimate method/training diagrams (e.g. low-latency architecture, training loss curves).
-const V5_FIG_PURE_QUANT_PLOT_RE = /\b(?:ablation(?:\s+(?:study|results?|analysis))?|bar\s+(?:chart|plot)|box\s*plot|scatter\s*plot|confusion\s+matrix|roc\s+curve|precision[- ]recall\s+curve|pareto\s+(?:front|frontier|curve)|vs\.?\s+(?:bitrate|latency|parameter|epoch|step|snr|noise|size)|scaling\s+law|trade[- ]?off\s+curve|t-?sne|umap|heatmap\s+of\s+(?:error|accuracy|wer|mos)|(?:evaluation|experimental|benchmark|quantitative)\s+results?|performance\s+comparison)\b/i;
-const V5_FIG_QUAL_OR_TEASER_CUES_RE = /\b(?:spectrogram|waveform|mel[- ]spectrogram|attention\s+map|qualitative|visualization|case\s+study|example\s+output|(?:audio|generated|output|qualitative)\s+samples?|teaser|comparison\s+of\s+(?:generated|reconstructed|synthesized))\b/i;
+const STRUCTURED_FIG_PURE_QUANT_PLOT_RE = /\b(?:ablation(?:\s+(?:study|results?|analysis))?|bar\s+(?:chart|plot)|box\s*plot|scatter\s*plot|confusion\s+matrix|roc\s+curve|precision[- ]recall\s+curve|pareto\s+(?:front|frontier|curve)|vs\.?\s+(?:bitrate|latency|parameter|epoch|step|snr|noise|size)|scaling\s+law|trade[- ]?off\s+curve|t-?sne|umap|heatmap\s+of\s+(?:error|accuracy|wer|mos)|(?:evaluation|experimental|benchmark|quantitative)\s+results?|performance\s+comparison)\b/i;
+const STRUCTURED_FIG_QUAL_OR_TEASER_CUES_RE = /\b(?:spectrogram|waveform|mel[- ]spectrogram|attention\s+map|qualitative|visualization|case\s+study|example\s+output|(?:audio|generated|output|qualitative)\s+samples?|teaser|comparison\s+of\s+(?:generated|reconstructed|synthesized))\b/i;
 
-function validateStructuredV5FigurePlacement(placement, index, structuredArtifacts) {
+function validateStructuredFigurePlacement(placement, index, structuredArtifacts) {
     const figures = Array.isArray(structuredArtifacts?.figures) ? structuredArtifacts.figures : [];
     const figure = figures.find(item => Number(item?.ordinal) === placement.figureOrdinal);
     if (!figure) return;
     const caption = String(figure.caption || '').trim();
-    if (!caption || V5_FIG_QUAL_OR_TEASER_CUES_RE.test(caption)) return;
-    const isArch = V5_FIG_ARCH_CUES_RE.test(caption);
-    const isResultContext = V5_FIG_RESULT_CONTEXT_RE.test(caption);
-    const isPureQuant = V5_FIG_PURE_QUANT_PLOT_RE.test(caption);
+    if (!caption || STRUCTURED_FIG_QUAL_OR_TEASER_CUES_RE.test(caption)) return;
+    const isArch = STRUCTURED_FIG_ARCH_CUES_RE.test(caption);
+    const isResultContext = STRUCTURED_FIG_RESULT_CONTEXT_RE.test(caption);
+    const isPureQuant = STRUCTURED_FIG_PURE_QUANT_PLOT_RE.test(caption);
     if (isPureQuant && !isArch && ['problem', 'background', 'related_work', 'method_overview', 'component', 'training'].includes(placement.targetKind)) {
         const message = `读者文章 figurePlacements[${index}]（Figure ${figure.ordinal}）的官方图注对应定量结果/消融曲线图，不宜放在 ${placement.targetKind} 小节；请移至 result 或 ablation 小节，并在原位重写过渡正文。`;
         throw Object.assign(new Error(message), {
@@ -2054,8 +2056,8 @@ function validateStructuredV5FigurePlacement(placement, index, structuredArtifac
 const WORKFLOW_LEAK_SPEC = JSON.parse(
     fs.readFileSync(path.resolve(__dirname, '../config/workflow-leak-patterns.json'), 'utf8')
 );
-const V5_SPEC_FORBIDDEN_HTML_TAGS = new Set(WORKFLOW_LEAK_SPEC.v5SpecForbiddenHtmlTags);
-const V5_SPEC_WORKFLOW_LEAK_RE = new RegExp(WORKFLOW_LEAK_SPEC.v5SpecWorkflowLeakPattern, 'i');
+const STRUCTURED_SPEC_FORBIDDEN_HTML_TAGS = new Set(WORKFLOW_LEAK_SPEC.v5SpecForbiddenHtmlTags);
+const STRUCTURED_SPEC_WORKFLOW_LEAK_RE = new RegExp(WORKFLOW_LEAK_SPEC.v5SpecWorkflowLeakPattern, 'i');
 
 function hasForbiddenSpecHtmlOrMarkdown(text) {
     if (/[\r\n]/.test(text)) return true;
@@ -2067,13 +2069,13 @@ function hasForbiddenSpecHtmlOrMarkdown(text) {
     for (const match of outsideCode.matchAll(/<([!/A-Za-z][^>]*)>/g)) {
         const inner = match[1].trim();
         const isSafeToken = /^[A-Za-z][A-Za-z0-9_.-]{0,24}$/.test(inner)
-            && !V5_SPEC_FORBIDDEN_HTML_TAGS.has(inner.toLowerCase());
+            && !STRUCTURED_SPEC_FORBIDDEN_HTML_TAGS.has(inner.toLowerCase());
         if (!isSafeToken) return true;
     }
     return false;
 }
 
-function validateStructuredV5ImplementationSpecs(rawSpecs, proseFormatOptions) {
+function validateStructuredImplementationSpecs(rawSpecs, proseFormatOptions) {
     const readerFormat = require('./lib/reader-record-format');
     const fail = message => {
         throw Object.assign(new Error(message), {
@@ -2103,7 +2105,7 @@ function validateStructuredV5ImplementationSpecs(rawSpecs, proseFormatOptions) {
         if (hasForbiddenSpecHtmlOrMarkdown(rawValue)) {
             fail(`读者文章 implementationSpecs.${key} 必须为单行纯文本，不得包含换行、Markdown 块结构或原始 HTML 标签`);
         }
-        if (V5_SPEC_WORKFLOW_LEAK_RE.test(rawValue)) {
+        if (STRUCTURED_SPEC_WORKFLOW_LEAK_RE.test(rawValue)) {
             fail(`读者文章 implementationSpecs.${key} 泄漏了内部核验或提示词流程元话语`);
         }
         const formatted = normalizeReaderProseFormatting(rawValue.trim(), [], proseFormatOptions);
@@ -2150,15 +2152,15 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     readerFormat.assertRequiredProfile(format, options);
     const integrated = format.profile === readerFormat.INTEGRATED;
     const editorialProfile = readerFormat.effectiveEditorialProfile(format, options);
-    const isStructuredV5 = readerFormat.isStructuredV5(editorialProfile);
-    const isCohesiveV4 = readerFormat.isModernEditorialProfile(editorialProfile);
+    const isStructuredEditorial = readerFormat.isStructuredEditorial(editorialProfile);
+    const isCohesiveEditorial = readerFormat.isModernEditorialProfile(editorialProfile);
     const modernMetadata = Boolean(format.modern || format.current || options.compileCurrent === true);
     const proseFormatOptions = { editorialProfile };
     const hasSourceBindings = Object.prototype.hasOwnProperty.call(value, 'tableBindings')
         || Object.prototype.hasOwnProperty.call(value, 'formulaBindings');
     const hasImplementationSpecs = Object.prototype.hasOwnProperty.call(value, 'implementationSpecs');
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(options.readerCapabilityPolicy);
-    const requireImplementationSpecs = isStructuredV5 && options.requireImplementationSpecs === true && !readerCapabilityPolicy;
+    const requireImplementationSpecs = isStructuredEditorial && options.requireImplementationSpecs === true && !readerCapabilityPolicy;
     assertExactObjectKeys(
         value,
         [
@@ -2166,12 +2168,12 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             'conceptBridges', 'figurePlacements', 'sections',
             ...(hasSourceBindings || options.requireSourceBindings === true || modernMetadata
                 ? ['tableBindings', 'formulaBindings'] : []),
-            ...(isStructuredV5 && (hasImplementationSpecs || requireImplementationSpecs) ? ['implementationSpecs'] : [])
+            ...(isStructuredEditorial && (hasImplementationSpecs || requireImplementationSpecs) ? ['implementationSpecs'] : [])
         ],
         '读者文章顶层'
     );
-    const implementationSpecs = isStructuredV5 && hasImplementationSpecs
-        ? validateStructuredV5ImplementationSpecs(value.implementationSpecs, proseFormatOptions)
+    const implementationSpecs = isStructuredEditorial && hasImplementationSpecs
+        ? validateStructuredImplementationSpecs(value.implementationSpecs, proseFormatOptions)
         : null;
     if (readerCapabilityPolicy
         && (!Array.isArray(value.tableBindings) || value.tableBindings.length !== 0
@@ -2183,7 +2185,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         || value.readerTitle.trim().length > 80) {
         throw new Error('读者标题必须是 8-80 字符的论文特有标题');
     }
-    if (isCohesiveV4 && READER_HEADING_FIG_TABLE_RE.test(value.readerTitle)) {
+    if (isCohesiveEditorial && READER_HEADING_FIG_TABLE_RE.test(value.readerTitle)) {
         throw new Error('读者标题不得包含图/表编号');
     }
     if (typeof value.oneSentenceThesis !== 'string'
@@ -2266,7 +2268,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     removeOrphanReaderTableMarkers(value);
     const compiledTables = compileReaderTableSelections(
         value.sections, value.tableBindings, options.structuredArtifacts,
-        { checkDuplicates: isCohesiveV4, editorialProfile }
+        { checkDuplicates: isCohesiveEditorial, editorialProfile }
     );
     value.sections = compiledTables.sections;
     value.tableBindings = compiledTables.tableBindings;
@@ -2287,16 +2289,16 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             proseFormatOptions
         );
         section.heading = heading;
-        const genericHeadingRe = isCohesiveV4 ? GENERIC_V4_READER_HEADING_RE : GENERIC_READER_HEADING_RE;
+        const genericHeadingRe = isCohesiveEditorial ? GENERIC_EDITORIAL_READER_HEADING_RE : GENERIC_READER_HEADING_RE;
         if (heading.length < 8 || heading.length > 80
             || genericHeadingRe.test(heading)) {
             throw new Error(`读者文章 sections[${index}].heading 必须是论文特有问题或判断`);
         }
-        if (isCohesiveV4 && READER_HEADING_FIG_TABLE_RE.test(heading)) {
+        if (isCohesiveEditorial && READER_HEADING_FIG_TABLE_RE.test(heading)) {
             throw new Error(`读者文章 sections[${index}].heading 不得包含图/表编号: ${heading}`);
         }
         if (seenHeadings.has(heading)) {
-            if (isCohesiveV4) throw new Error('读者文章小节标题重复');
+            if (isCohesiveEditorial) throw new Error('读者文章小节标题重复');
             const suffix = `（补充判断 ${index + 1}）`;
             heading = normalizeReaderProseFormatting(
                 `${heading.slice(0, Math.max(8, 80 - suffix.length))}${suffix}`,
@@ -2310,7 +2312,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         if (typeof section.body !== 'string' || section.body.trim().length < 120) {
             throw new Error(`读者文章 sections[${index}].body 至少 120 字符`);
         }
-        if (isCohesiveV4) {
+        if (isCohesiveEditorial) {
             for (const subheadingMatch of section.body.matchAll(/^#{1,6}\s+(.+?)\s*$/gmu)) {
                 if (READER_HEADING_FIG_TABLE_RE.test(subheadingMatch[1])) {
                     throw new Error(`读者文章 sections[${index}].body 子标题不得包含图/表编号: ${subheadingMatch[1]}`);
@@ -2323,18 +2325,18 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         heading: normalizeReaderProseFormatting(section.heading.trim(), [], proseFormatOptions),
         body: splitReaderLongParagraphs(demoteReaderBodySectionHeadings(section.body), proseFormatOptions)
     }));
-    const v5SectionDiagnostics = isStructuredV5
-        ? require('./editorial-quality').findStructuredV5SectionIssues(normalizedSections)
+    const structuredSectionDiagnostics = isStructuredEditorial
+        ? require('./editorial-quality').findStructuredSectionIssues(normalizedSections)
         : { issues: [], warnings: [] };
-    if (v5SectionDiagnostics.issues.length > 0) {
-        const message = `读者文章分节或标题结构未通过 structured-pipeline-v5 要求：${v5SectionDiagnostics.issues.map(item => item.message).join('；')}`;
+    if (structuredSectionDiagnostics.issues.length > 0) {
+        const message = `读者文章分节或标题结构未通过结构化编排要求：${structuredSectionDiagnostics.issues.map(item => item.message).join('；')}`;
         throw Object.assign(new Error(message), {
-            code: 'READER_V5_SECTION_STRUCTURE',
-            readerIssues: v5SectionDiagnostics.issues
+            code: 'READER_SECTION_STRUCTURE',
+            readerIssues: structuredSectionDiagnostics.issues
         });
     }
     const kinds = new Set(normalizedSections.map(section => section.kind));
-    const missing = isCohesiveV4
+    const missing = isCohesiveEditorial
         ? [
             ...['problem', 'method_overview', 'result'].filter(kind => !kinds.has(kind)),
             ...(kinds.has('limitation') || kinds.has('synthesis') ? [] : ['limitation'])
@@ -2446,10 +2448,10 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         bridge.marker, bridge.explanation
     ]));
     const figurePlacements = value.figurePlacements.map((placement, index) => {
-        const hasChineseCaption = isStructuredV5 && placement && Object.hasOwn(placement, 'chineseCaption');
+        const hasChineseCaption = isStructuredEditorial && placement && Object.hasOwn(placement, 'chineseCaption');
         const placementKeys = integrated
             ? [
-                ...(isCohesiveV4 && placement && !Object.hasOwn(placement, 'focusPoints')
+                ...(isCohesiveEditorial && placement && !Object.hasOwn(placement, 'focusPoints')
                     ? ['figureOrdinal', 'targetKind', 'marker']
                     : ['figureOrdinal', 'targetKind', 'marker', 'focusPoints']),
                 ...(hasChineseCaption ? ['chineseCaption'] : [])
@@ -2486,8 +2488,8 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             }
             normalizedChineseCaption = candidateCaption;
         }
-        if (isStructuredV5 && options.structuredArtifacts) {
-            validateStructuredV5FigurePlacement(placement, index, options.structuredArtifacts);
+        if (isStructuredEditorial && options.structuredArtifacts) {
+            validateStructuredFigurePlacement(placement, index, options.structuredArtifacts);
         }
         const marker = String(placement.marker || '').trim();
         if (marker !== `[[FIGURE_${placement.figureOrdinal}]]`) {
@@ -2512,9 +2514,9 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         const leadNarrative = conceptNarrativeByMarker.get(leadQuote) || leadQuote;
         const explanationNarrative = conceptNarrativeByMarker.get(explanationQuote) || explanationQuote;
         const focusPoints = integrated
-            ? (isCohesiveV4 && placement.focusPoints === undefined ? [] : placement.focusPoints)
+            ? (isCohesiveEditorial && placement.focusPoints === undefined ? [] : placement.focusPoints)
             : [];
-        const minFocusCount = isCohesiveV4 ? 0 : READER_LIMITS.minimumFocusPoints;
+        const minFocusCount = isCohesiveEditorial ? 0 : READER_LIMITS.minimumFocusPoints;
         if (!candidate || markerIndex <= 0 || markerIndex >= blocks.length - 1
             || leadNarrative.length < API_READER_FIGURE_LEAD_MIN_CHARS
             || explanationNarrative.length < API_READER_FIGURE_EXPLANATION_MIN_CHARS
@@ -2522,7 +2524,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             || (integrated && (focusPoints.length < minFocusCount
                 || focusPoints.length > READER_LIMITS.maximumFocusPoints))
             || focusPoints.some(item => typeof item !== 'string'
-                || item.trim().length < (isCohesiveV4 ? 6 : 12) || item.trim().length > 120)) {
+                || item.trim().length < (isCohesiveEditorial ? 6 : 12) || item.trim().length > 120)) {
             throw new Error(
                 `读者文章 figurePlacements[${index}]（Figure ${placement.figureOrdinal}）`
                 + '图片的插入位置、相邻导读与解释段，或观察点不符合要求'
@@ -2534,7 +2536,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
                 + `, focusCount=${Array.isArray(focusPoints) ? focusPoints.length : 'invalid'}`
                 + (Array.isArray(focusPoints) ? focusPoints.map((item, pointIndex) => {
                     const length = typeof item === 'string' ? item.trim().length : null;
-                    const minLen = isCohesiveV4 ? 6 : 12;
+                    const minLen = isCohesiveEditorial ? 6 : 12;
                     return length === null || length < minLen || length > 120
                         ? `, focusPoints[${pointIndex}]=${length === null ? '非字符串' : `${length}字`}，须为${minLen}–120字` : '';
                 }).join('') : '')
@@ -2773,8 +2775,8 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         )
         : null;
     if (sourceBindingResult) article = sourceBindingResult.article;
-    if (v5SectionDiagnostics.warnings.length > 0) {
-        quality = { ...quality, warnings: [...(quality.warnings || []), ...v5SectionDiagnostics.warnings] };
+    if (structuredSectionDiagnostics.warnings.length > 0) {
+        quality = { ...quality, warnings: [...(quality.warnings || []), ...structuredSectionDiagnostics.warnings] };
     }
     const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityArticle,
         { ...options, editorialProfile, compileCurrent: modernMetadata });
@@ -2817,7 +2819,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
 
     }
     validateApiReaderTableCommentaryAlignment(article);
-    if (isStructuredV5 && options.skipTableExtremaCheck !== true) {
+    if (isStructuredEditorial && options.skipTableExtremaCheck !== true) {
         validateApiReaderTableExtrema(article, normalizedSections);
     }
     // 表格和图归一化之后可能只剩下一段很短的引导，而它前面那段普通正文其实正是同一段插图
@@ -4042,7 +4044,7 @@ function resolveApiReaderTargetEditorialProfile({ paidPromptReplay = null, signe
         if (replayedSha) {
             const currentPromptPath = currentTextStagePromptPath('apiReaderArticle');
             if (replayedSha === promptTemplateSha256(currentPromptPath)) {
-                return readerFormat.STRUCTURED_V5;
+                return readerFormat.STRUCTURED_EDITORIAL;
             }
             try {
                 const bytes = require('./lib/prompt-history').historicalPromptTemplateBytesForSha256(replayedSha);
@@ -4050,12 +4052,15 @@ function resolveApiReaderTargetEditorialProfile({ paidPromptReplay = null, signe
                 const codec = require('./lib/protocol-codec');
                 const currentDraftFp = codec.recordHeader(codec.contract('reader-draft'), 'reader-draft').schemaFingerprint;
                 if (text.includes(currentDraftFp)) {
-                    return readerFormat.STRUCTURED_V5;
+                    return readerFormat.STRUCTURED_EDITORIAL;
+                }
+                if (text.includes(readerFormat.V5_DRAFT_FP)) {
+                    return readerFormat.STRUCTURED_V5_EDITORIAL;
                 }
                 if (text.includes(readerFormat.V4_DRAFT_FP)) {
-                    return readerFormat.COHESIVE_V4;
+                    return readerFormat.COHESIVE_EDITORIAL;
                 }
-            } catch { /* 历史非 v4/v5 模板回退旧版集成契约 */ }
+            } catch { /* 历史模板回退旧版集成契约 */ }
         }
         return readerFormat.LEGACY_INTEGRATED;
     }
@@ -4063,7 +4068,7 @@ function resolveApiReaderTargetEditorialProfile({ paidPromptReplay = null, signe
         try { return readerFormat.draftFormat(signedRecoveryDraft).editorialProfile; }
         catch { return readerFormat.LEGACY_INTEGRATED; }
     }
-    return readerFormat.STRUCTURED_V5;
+    return readerFormat.STRUCTURED_EDITORIAL;
 }
 
 function buildApiReaderMechanicalContract({
@@ -4729,7 +4734,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             + '不能在文章中生成图片链接；可用它辅助理解，但正文涉及坐标、曲线或布局时仍须有可重放的文本/表格证据。' },
             buildImageContent(image.label, image.base64, image.mime)];
     const signedDraftForSpecs = start.signedRecoveryDraft || options.signedRecoveryDraft;
-    const requireImplementationSpecs = require('./lib/reader-record-format').isStructuredV5(editorialProfile)
+    const requireImplementationSpecs = require('./lib/reader-record-format').isStructuredEditorial(editorialProfile)
         && !readerCapabilityPolicy
         && !recovered?.resolvedReaderCandidateReplayProof
         && !(signedDraftForSpecs && !Object.hasOwn(signedDraftForSpecs, 'implementationSpecs'));
@@ -7327,7 +7332,7 @@ function readerPromptTemplateSha256(declaredSha256, stage, promptTextContract) {
 // 这个一次性白名单只收 core-summary-detailed-v3 上线前那一刻产生的检查点。那些提示词
 // 在语义上只有摘要约定不同；其他所有旧提示词字节必须精确复现，否则迁移直接拒绝。绝不要
 // 把这张表放宽成「任何以前的哈希」。
-const CORE_SUMMARY_V3_LEGACY_FULL_PROMPT_SHA256 = Object.freeze({
+const LEGACY_CORE_SUMMARY_FULL_PROMPT_SHA256 = Object.freeze({
     primaryAnalysis: '9b9197cdbb7c76cc6e2147f778eb425ab549262532dde06a01984cc9d2a9b5f5',
     openSourceScan: '1c043d793104a9c4cb5895dc691a1ce8a14685754ec8524e544b8f400bc0cc09',
     revision: '0ba287c48f4121644fef5bd51e462dca944d558e43aa710fa3390a430b4ae58b',
@@ -7336,12 +7341,12 @@ const CORE_SUMMARY_V3_LEGACY_FULL_PROMPT_SHA256 = Object.freeze({
     coreSummaryRepair: '25c569ed7c3d256035f544a341c8ba66fe0b0687ef1fdc24ed21e19138bc99be',
     structureRepair: 'cf2348d480306533078ba4ca80d9b9df6c6106fbd484370609748b66ce8ffcef'
 });
-// 下面这张表记录的是 core-summary-detailed-v3 迁移窗口当时的 7 个 v1 提示词期望值。
-// 它已经不再等于从当前 v1 文件重算的值：常量冻结之后 v1 提示词又被改写过，
+// 下面这张表记录的是 core-summary-detailed-v3 迁移窗口当时的 7 个历史提示词期望值。
+// 它已经不再等于从当前文件重算的值：常量冻结之后提示词又被改写过，
 // currentCoreSummaryV3MigrationPromptsAreExact() 因此始终为 false，整个一次性迁移
-// 窗口本来就是关闭的。这里保留原值不改写，只把它降级为 v1 时代的历史期望值；
+// 窗口本来就是关闭的。这里保留原值不改写，只把它作为历史期望值；
 // tests/deep-analyzer.test.js 里有一条断言逐项记录它与当前重算值不一致。
-const CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256 = Object.freeze({
+const LEGACY_CORE_SUMMARY_RUNTIME_PROMPT_SHA256 = Object.freeze({
     primaryAnalysis: 'b06aeb750592c48ac5ffcbcf422118d693f261449e3be561c2f097dbc84dd8bf',
     openSourceScan: 'b925fc8b00ca3758636b1a571c3f9024c0b0f80e25cd6014ed987b98254f672b',
     revision: '8689694ecfe88420eb4c75de47ac488aeab24f9c1868cba49f8a7cec70b39fe6',
@@ -7362,7 +7367,7 @@ function buildLegacyCoreSummaryV2PrimaryFingerprint(paper, textForAnalysis, arxi
     return stableFingerprint({
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         ...modelFingerprint(DEEP_CONFIG),
-        promptTemplateSha256: CORE_SUMMARY_V3_LEGACY_FULL_PROMPT_SHA256.primaryAnalysis,
+        promptTemplateSha256: LEGACY_CORE_SUMMARY_FULL_PROMPT_SHA256.primaryAnalysis,
         usedTextSha256: crypto.createHash('sha256').update(textForAnalysis).digest('hex'),
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
         fullTextMaxChars: FULL_TEXT_MAX_CHARS,
@@ -7375,7 +7380,7 @@ function buildLegacyCoreSummaryV2PrimaryFingerprint(paper, textForAnalysis, arxi
 
 function buildLegacyCoreSummaryV2TextFingerprint(stage, inputAnalysis, evidenceContext) {
     const config = TEXT_RECOVERY_STAGE_CONFIG[stage];
-    const legacyPromptSha256 = CORE_SUMMARY_V3_LEGACY_FULL_PROMPT_SHA256[stage];
+    const legacyPromptSha256 = LEGACY_CORE_SUMMARY_FULL_PROMPT_SHA256[stage];
     if (!config || !legacyPromptSha256) throw new Error(`没有 ${stage} 的 v2 摘要迁移 allowlist`);
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity();
     return stableFingerprint({
@@ -8657,14 +8662,14 @@ function retainFinalFactReviewInputs(paper, manifest) {
 }
 
 function coreSummaryV3MigrationPromptSetIsAllowed(observed) {
-    return Object.keys(CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256).every(stage => (
-        observed?.[stage] === CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256[stage]
+    return Object.keys(LEGACY_CORE_SUMMARY_RUNTIME_PROMPT_SHA256).every(stage => (
+        observed?.[stage] === LEGACY_CORE_SUMMARY_RUNTIME_PROMPT_SHA256[stage]
     ));
 }
 
-// 这里刻意按 v1 冻结路径算，不跟当前版本走。它回答的是「磁盘上的 v1 正文是否还
-// 等于一次性迁移窗口当时那一套」，比较对象 CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256
-// 记的也是 v1 时代的期望值。换成 v2 路径等于拿新正文比旧期望，比较本身失去意义。
+// 这里刻意按历史冻结路径算，不跟当前版本走。它回答的是「磁盘上的正文是否还
+// 等于一次性迁移窗口当时那一套」，比较对象 LEGACY_CORE_SUMMARY_RUNTIME_PROMPT_SHA256
+// 记的也是历史时代的期望值。
 function currentCoreSummaryV3MigrationPromptsAreExact() {
     const observed = Object.fromEntries([
         ['primaryAnalysis', RECOVERY_PROMPT_FILES.primaryAnalysis, CORE_SUMMARY_CONTRACT_VERSION],
@@ -13213,7 +13218,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         const isPaidCoreReplayMode = options.coreSummaryDiagnosticId !== undefined
             || options.replayLatestCoreSummaryDiagnostic === true;
         // 付费核心诊断重放必须沿用该记录自己的契约：已声明按声明，未声明的旧记录按原契约
-        // （320–600 字）核验；只有全新生成才使用当前 executive-abstract-v4 头。
+        // （320–600 字）核验；只有全新生成才使用当前 executive-abstract 头。
         const activeSummaryHeader = isPaidCoreReplayMode
             ? (analysisManifest?.contracts?.coreSummary !== undefined
                 ? (() => {
@@ -14078,7 +14083,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         markOfficialReaderImageSupplement(analysisManifest, paper.apiReaderFigures,
             imageSupplementWriteFingerprint, imageSupplementWriteContract);
         console.log(
-            `    [deep] ℹ️  已绑定 ${paper.apiReaderFigures.length} 张 v3 官方正文图，跳过旧副模型插图阶段`
+            `    [deep] ℹ️  已绑定 ${paper.apiReaderFigures.length} 张官方正文图，跳过旧副模型插图阶段`
         );
     } else if (isDualModel && downloadedImages.length > 0 && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         try {
@@ -14371,7 +14376,7 @@ function normalizeAnalysisStructure(analysis) {
         '是否SOTA': 'sota_claim', '是否开源代码': 'has_code',
         '是否开源模型': 'has_model', '是否开源数据': 'has_dataset'
     };
-    const scoringRubricV2 = require('./lib/scoring-rubric-v2');
+    const scoringRubric = require('./lib/scoring-rubric');
     const values = {};
     let declaredRubricVersion = '';
     for (const rawLine of originalMachine.split('\n')) {
@@ -14381,7 +14386,7 @@ function normalizeAnalysisStructure(analysis) {
         const key = aliases[rawKey] || rawKey;
         if (key === 'rubric_version' && !declaredRubricVersion) {
             const candidate = match[2].trim();
-            if (scoringRubricV2.SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(candidate)) {
+            if (scoringRubric.SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(candidate)) {
                 declaredRubricVersion = candidate;
             }
             continue;
@@ -14393,10 +14398,10 @@ function normalizeAnalysisStructure(analysis) {
 
     const parsedBefore = parseAnalysis(updated) || {};
     const effectiveRubricVersion = declaredRubricVersion
-        || (scoringRubricV2.isV2Rubric(parsedBefore.scoringRubricVersion || parsedBefore.machineSummary?.rubricVersion)
-            ? scoringRubricV2.SCORING_RUBRIC_V2
-            : scoringRubricV2.SCORING_RUBRIC_V1);
-    const isV2Rubric = scoringRubricV2.isV2Rubric(effectiveRubricVersion);
+        || (scoringRubric.isUnifiedRubric(parsedBefore.scoringRubricVersion || parsedBefore.machineSummary?.rubricVersion)
+            ? scoringRubric.CURRENT_SCORING_RUBRIC
+            : scoringRubric.LEGACY_SCORING_RUBRIC);
+    const isUnifiedRubric = scoringRubric.isUnifiedRubric(effectiveRubricVersion);
     const scoreFallbacks = {
         innovation: parsedBefore.innovationScore,
         technical_rigor: parsedBefore.technicalRigorScore,
@@ -14438,12 +14443,12 @@ function normalizeAnalysisStructure(analysis) {
         ['高', '中', '低'],
         ''
     );
-    const scoreMaxima = isV2Rubric
+    const scoreMaxima = isUnifiedRubric
         ? { innovation: 10, technical_rigor: 10, experimental_sufficiency: 10, clarity: 10,
             impact: 10, open_source: 10, reproducibility: 10, engineering_score: 10 }
         : { innovation: 2, technical_rigor: 1.5, experimental_sufficiency: 1.5, clarity: 1,
             impact: 1.5, open_source: 1.5, reproducibility: 0.5, engineering_score: 1.5 };
-    const openAnchors = isV2Rubric ? scoringRubricV2.V2_OPEN_SOURCE_ANCHORS : [0, 0.2, 0.5, 1, 1.2, 1.5];
+    const openAnchors = isUnifiedRubric ? scoringRubric.UNIFIED_OPEN_SOURCE_ANCHORS : [0, 0.2, 0.5, 1, 1.2, 1.5];
     for (const [key, maximum] of Object.entries(scoreMaxima)) {
         const rawValue = values[key];
         const numeric = Number(rawValue);
@@ -14481,8 +14486,11 @@ function normalizeAnalysisStructure(analysis) {
             '补充标签: #待选择补充标签'
         ].join('\n'));
     }
+    const emittedUnifiedRubric = scoringRubric.isUnifiedRubric(declaredRubricVersion)
+        ? declaredRubricVersion
+        : scoringRubric.CURRENT_SCORING_RUBRIC;
     const machineLines = [
-        ...(isV2Rubric ? [`rubric_version: ${scoringRubricV2.SCORING_RUBRIC_V2}`] : []),
+        ...(isUnifiedRubric ? [`rubric_version: ${emittedUnifiedRubric}`] : []),
         ...REQUIRED_MACHINE_SUMMARY_KEYS.map(key => `${key}: ${values[key]}`)
     ];
     updated = mergeSectionByTitle(updated, '机器摘要', machineLines.join('\n'));
@@ -14916,30 +14924,21 @@ async function repairCoreSummarySection(
                 + '不要靠压缩其他句子来腾出句数，也不要新增任何句子。当前句子逐条编号如下，请直接指定保留与合并方式后再输出：\n'
                 + numberedSentences
             : '';
-        const lengthBudget = `当前摘要实际含 ${candidateChineseChars} 个汉字与中文标点，`
-            + (remainingChineseChars >= 0
-                ? `距 ${maxChineseChars} 个上限只剩 ${remainingChineseChars} 个。`
-                : `已超过 ${maxChineseChars} 个上限 ${-remainingChineseChars} 个。`)
+        const charDeltaHint = remainingChineseChars >= 0
+            ? `距上限 ${maxChineseChars} 剩 ${remainingChineseChars} 字`
+            : `超上限 ${-remainingChineseChars} 字（须先删减）`;
+        const sentenceDeltaHint = currentSentenceCount > maxSentenceCount
+            ? `，当前 ${currentSentenceCount} 句（超上限 ${currentSentenceCount - maxSentenceCount} 句，须合并删减）`
+            : `，当前 ${currentSentenceCount} 句`;
+        const lengthBudget = `当前 ${candidateChineseChars} 汉字与中文标点（${charDeltaHint}${sentenceDeltaHint}），`
             + (useExecutiveSummary
-                ? '本次完整输出以 850–1150 个为目标，须为 700–1400 个、10–26 句、3–4 个粗体引导词自然段。'
-                : '本次完整输出仍以 420–520 个为目标，须为 320–600 个、6–12 句。')
-            + sentenceOverflow
-            + '修正缺项应替换原有不完整或重复句，不在保留全部原句后另行追加说明。'
-            + '压缩表达不删改正确事实、比较条件、数字、单位、方向、边界或成本；'
-            + '反馈明确要求逐字保留的句子必须原样保留。';
-        const selfCheckChecklist = useExecutiveSummary
-            ? '\n\n【输出前自检，必须逐条满足】\n'
-                + '1. 只输出 `## 核心摘要` 一节，摘要内部严禁出现 `#`/`##`/`###` 等 Markdown 标题、独立编号标题行（如 `1. **...**`）或分隔线。\n'
-                + '2. 正文分成 3–4 个自然段（段间留一个空行，段内不拆行或列点），每段直接顶格以 `**问题与瓶颈：**`、`**核心思路与方法架构：**`、`**关键实验与核心代价：**`、`**适用边界与深读导览：**` 粗体引导词开头。\n'
-                + '3. 正文必须是 10–26 句，汉字与中文标点合计 700–1400 个（目标 850–1150 个）。\n'
-                + '4. 在实验段内（允许同段跨 1–3 句）完整写清评测设置或数据集、最强可比基线、原文指标名、双方具体数值与方向；所有摘要数值精度与百分号严格对齐原文，并如实交代工程代价或免训练计算方式。\n'
-                + '5. 其余各节一个字都不要改，也不要把修复内容写到摘要之外。'
-            : '\n\n【输出前自检，必须逐条满足】\n'
-                + '1. 只输出 `## 核心摘要` 一节，不放其他标题或说明。\n'
-                + '2. 正文必须是 6–12 句；句数以中文句号、问号、感叹号计。当前稿句数不对时，先删或合并重复说明句，再补缺项，绝不能靠追加句子解决。\n'
-                + '3. 正文汉字与中文标点合计 320–600 个。\n'
-                + '4. 必须有一句同时写清：评测设置或数据集、原文的指标名、两个数值、以及高低或变化方向；指标名不能用“性能”“效果”“分数”代替。\n'
-                + '5. 其余各节一个字都不要改，也不要把修复内容写到摘要之外。';
+                ? `目标 850–1150（硬范围 ${minChineseChars}–${maxChineseChars} 字、10–${maxSentenceCount} 句、3–4 个粗体引导词自然段）。`
+                : `目标 420–520（硬范围 ${minChineseChars}–${maxChineseChars} 字、6–${maxSentenceCount} 句）。`)
+            + sentenceOverflow;
+        const selfCheckChecklist = `\n\n【本轮动态边界】只输出 \`## 核心摘要\` 一节；`
+            + (useExecutiveSummary
+                ? `当前 ${candidateChineseChars} 字/${currentSentenceCount} 句，目标 850–1150 字（硬限 ${minChineseChars}–${maxChineseChars} 字、10–${maxSentenceCount} 句、3–4 个粗体引导词自然段，禁止 # 标题与编号行）；替换缺陷句而非末尾追加。`
+                : `当前 ${candidateChineseChars} 字/${currentSentenceCount} 句，硬限 ${minChineseChars}–${maxChineseChars} 字、6–${maxSentenceCount} 句；单句含设置/指标名/双数值/方向，替换缺陷句而非追加。`);
         const coreRepairPromptPath = currentTextStagePromptPath('coreSummaryRepair');
         const originalCorePromptBinding = require('./lib/selected-full-stage-reanalysis')
             .originalPromptBinding(coreRepairPromptPath);
@@ -15694,7 +15693,7 @@ module.exports = {
     canReuseStageForCoreSummaryRecovery,
     prepareCompletedCoreRecovery,
     coreSummaryV3MigrationPromptSetIsAllowed,
-    CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256,
+    LEGACY_CORE_SUMMARY_RUNTIME_PROMPT_SHA256,
     currentCoreSummaryV3MigrationPromptsAreExact,
     tryMigrateCoreSummaryV3LegacyCheckpoints,
     captureStaleAnalysisSnapshot,

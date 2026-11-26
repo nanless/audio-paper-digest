@@ -233,7 +233,7 @@ function parseAndValidateFactFeedbackFiles(factFeedbackFiles, targetIds = null, 
     return byPaperId;
 }
 
-function hasCurrentReaderV3(paper, options) {
+function hasCurrentReader(paper, options) {
     return !scoringRefresh.hasCheckpoint(paper) && !scoringRefresh.hasPreservedCheckpoint(paper, options)
         && hasValidIntegratedApiReaderRecords(paper)
         && !paper?.latestAnalysisAttemptError;
@@ -268,7 +268,7 @@ function resolveBatchRefreshIds(options) {
     if (savedBatchDate !== options.date) {
         throw new Error(`分析结果的批次日期为 ${savedBatchDate || '未知'}，不能按 ${options.date} 全量刷新。`);
     }
-    const currentReaderCheck = options.isCurrentReaderFn || hasCurrentReaderV3;
+    const currentReaderCheck = options.isCurrentReaderFn || hasCurrentReader;
     const selectPending = () => papers.filter(paper => !currentReaderCheck(paper));
     let skippedProtected = 0;
     let pending;
@@ -1173,7 +1173,7 @@ module.exports = {
     refreshApiReaders,
     parseRefreshCliArgs,
     resolveBatchRefreshIds,
-    hasCurrentReaderV3,
+    hasCurrentReader,
     resolveSavedAnalysisBatchDate,
     canRepairScoringBinding,
     canRepairCompletedPrimaryReader,

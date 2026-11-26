@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="464" viewBox="0 0 960 464" role="img" aria-labelledby="title desc">
   <title id="title">Mac 与 Android 工作台阅读、播客与同步边界</title>
-  <desc id="desc">Studio Monograph 客户端数据边界图：左侧音频研究门户快照与 1.5.0 每日音频播客只读流入 Mac 与 Android 工作台；右侧四条隔离通道分别处理个人模型提问、Zotero 文献归档、一键双向同步 WebDAV（含笔记冲突无损合并）以及完整研究空间版本快照备份（虚线表示用户确认后恢复）。</desc>
+  <desc id="desc">Studio Monograph 客户端数据边界图：左侧音频研究门户快照与 1.5.x 每日音频播客只读流入 Mac 与 Android 工作台；右侧四条隔离通道分别处理个人模型提问、Zotero 文献归档、一键双向同步 WebDAV（含笔记冲突无损合并）以及完整研究空间版本快照备份（虚线表示用户确认后恢复）。</desc>
   <defs>
     <style>
       text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; fill: #182120; }
@@ -29,7 +29,7 @@
 
   <rect width="960" height="464" rx="16" fill="#f7f5f0" stroke="#d6cfc3" stroke-width="1.5"/>
 
-  <text x="32" y="42" class="t-main">Mac 与 Android 工作台（1.5.0）· 公开订阅与个人同步边界</text>
+  <text x="32" y="42" class="t-main">Mac 与 Android 工作台（1.5.x）· 公开订阅与个人同步边界</text>
   <text x="32" y="64" class="t-sub">单向实线：只读获取或主动写入　　双向实线：一键同步 WebDAV　　虚线：用户确认后按快照回滚</text>
 
   <!-- Left: Public read-only inputs -->
@@ -40,7 +40,7 @@
   <text x="48" y="202" class="t-small">只读拉取 · 不触发重分析</text>
 
   <rect x="32" y="242" width="218" height="140" rx="12" fill="#fdf6f1" stroke="#e4bfa8" stroke-width="1.5"/>
-  <text x="48" y="270" class="t-card" fill="#a64d2a">每日音频播客（1.5.0）</text>
+  <text x="48" y="270" class="t-card" fill="#a64d2a">每日音频播客（1.5.x）</text>
   <text x="48" y="296" class="t-body">受控 Release HTTPS 下载</text>
   <text x="48" y="318" class="t-body">流式 SHA-256 + MP3 校验</text>
   <text x="48" y="356" class="t-small">150 MiB / 5 期 LRU 不进备份</text>
@@ -52,7 +52,7 @@
   <rect x="300" y="92" width="276" height="290" rx="14" fill="#ffffff" stroke="#b9cfc9" stroke-width="1.8"/>
   <rect x="300" y="92" width="276" height="44" rx="14" fill="#182120"/>
   <rect x="300" y="122" width="276" height="14" fill="#182120"/>
-  <text x="318" y="120" class="t-head">音频研究工作台（v1.5.0）</text>
+  <text x="318" y="120" class="t-head">音频研究工作台（1.5.x）</text>
 
   <text x="318" y="160" class="t-badge" fill="#0f5c58">Mac（Apple 芯片）· Android（4 ABI）</text>
   <text x="318" y="188" class="t-body">• 400 项九维分类与多词离线检索</text>
@@ -94,5 +94,5 @@
   <!-- Footer -->
   <rect x="32" y="402" width="896" height="44" rx="8" fill="#ece8de"/>
   <text x="48" y="421" class="t-small">隔离边界：WebDAV 同步/备份目录与 Zotero 附件目录相互独立；恢复快照保留历史问答但不重发模型请求。</text>
-  <text x="48" y="438" class="t-small">升级提示：1.5.0 兼容 1.4.x 备份与旧站点路径；macOS 需 15+（Apple 芯片），Android 1.4.4+ 可直接覆盖升级。</text>
+  <text x="48" y="438" class="t-small">升级提示：1.5.x 兼容 1.4.x 备份与旧站点路径；macOS 需 15+（Apple 芯片），Android 1.4.4+ 可直接覆盖升级。</text>
 </svg>

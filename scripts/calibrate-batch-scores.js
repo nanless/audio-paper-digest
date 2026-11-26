@@ -2,12 +2,12 @@
 'use strict';
 
 /**
- * Wave 14.4 CLI: Post-Batch Swiss-Tournament Bradley-Terry Relative Score Calibration.
+ * Post-Batch Swiss-Tournament Bradley-Terry Relative Score Calibration CLI.
  *
  * Cold-replay & sealed-data invariant:
  * - Strictly read-only on `deep-analysis-result.json`; NEVER mutates sealed input files
  *   or overwrites original `scoringAudit` scores.
- * - Produces an opt-in, deterministic, replayable `score-calibration-v1.json` sidecar.
+ * - Produces an opt-in, deterministic, replayable `score-calibration.json` sidecar.
  * - Uses `requestLlmJson` from `scripts/utils.js` ONLY when `--live` is explicitly passed;
  *   `--dry-run` and `--replay` execute 100% offline with zero LLM API calls.
  */
@@ -72,12 +72,12 @@ function formatUsage() {
         '  --date YYYY-MM-DD            Target batch date (resolves default input & output paths)',
         '  --conference-process <uuid>  Aggregate completed analysis.json files from a conference process run (read-only)',
         '  --input <path>               Path to sealed deep-analysis-result.json (read-only)',
-        '  --output <path>              Path to write score-calibration-v1.json sidecar',
+        '  --output <path>              Path to write score-calibration.json sidecar',
         '  --rounds <1..6>              Swiss tournament rounds (default: 3, max: 6)',
         '  --max-delta <0..5>           Max absolute score shift in points (default: 0.6)',
         '  --prior-weight <num>         Bradley-Terry virtual-anchor prior weight (default: 0.25)',
         '  --mapping <method>           Score mapping: moment_anchored | quantile_anchored (default: moment_anchored)',
-        '  --seed <string>              Deterministic pairing seed (default: swiss-bt-v1[:date])',
+        '  --seed <string>              Deterministic pairing seed (default: swiss-bt[:date])',
         '  --unidirectional             Disable reverse position-swap evaluation (default: bidirectional)',
         '  --concurrency <1..16>        Max concurrent LLM requests in --live mode (default: 4)',
         `  --max-tokens <256..192000>   Max output tokens per --live LLM call (default: ${DEFAULT_LIVE_MAX_TOKENS})`,
@@ -306,10 +306,10 @@ function resolveInputPath(options, paths = {}) {
 
 function resolveDefaultOutputPath(batchDate, { conferenceProcessId = null, dataDir = Config.DATA_DIR } = {}) {
     if (conferenceProcessId) {
-        return path.join(dataDir, 'runtime', 'score-calibrations', 'conference', conferenceProcessId, 'score-calibration-v1.json');
+        return path.join(dataDir, 'runtime', 'score-calibrations', 'conference', conferenceProcessId, 'score-calibration.json');
     }
     const safeBucket = isValidCalendarDate(batchDate) ? batchDate : 'undated';
-    return path.join(dataDir, 'runtime', 'score-calibrations', safeBucket, 'score-calibration-v1.json');
+    return path.join(dataDir, 'runtime', 'score-calibrations', safeBucket, 'score-calibration.json');
 }
 
 function readConferenceProcessBatch(processId, paths = {}) {
@@ -433,7 +433,7 @@ function assertSafeOutputPath(inputPath, outputPath) {
     if (path.basename(resolvedOutput).toLowerCase() === 'deep-analysis-result.json'
         || path.basename(canonicalOutput).toLowerCase() === 'deep-analysis-result.json') {
         throw new Error(
-            'Refusing to write to deep-analysis-result.json; calibration output must be a separate sidecar (e.g. score-calibration-v1.json).'
+            'Refusing to write to deep-analysis-result.json; calibration output must be a separate sidecar (e.g. score-calibration.json).'
         );
     }
 
@@ -574,7 +574,7 @@ async function invokeSinglePairwiseEvaluation(paperPresentedA, paperPresentedB, 
     const effectiveMaxTokens = options.maxTokens ?? DEFAULT_LIVE_MAX_TOKENS;
 
     const prompt = buildPairwiseComparisonPrompt(paperPresentedA, paperPresentedB);
-    const promptCacheKey = `score-calibration-v1:${sha256Hex(prompt.systemPrompt).slice(0, 16)}`;
+    const promptCacheKey = `score-calibration:${sha256Hex(prompt.systemPrompt).slice(0, 16)}`;
     const body = utils.buildRequestBody(
         apiType,
         model,

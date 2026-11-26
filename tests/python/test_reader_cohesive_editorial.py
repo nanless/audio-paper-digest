@@ -176,7 +176,7 @@ class ReaderCohesiveV4PythonTests(unittest.TestCase):
         self.assertEqual(v5_layout['minimumBridges'], 0)
         self.assertEqual(v5_layout['maximumBridges'], 4)
         self.assertFalse(v5_layout['requiresFocusBlockquote'])
-        self.assertEqual(v5_layout['editorialProfile'], formats.STRUCTURED_V5)
+        self.assertEqual(v5_layout['editorialProfile'], formats.STRUCTURED_EDITORIAL)
 
         v4_layout = formats.publication_layout(v4_plan)
         self.assertEqual(v4_layout['minimumSections'], 5)
@@ -184,7 +184,7 @@ class ReaderCohesiveV4PythonTests(unittest.TestCase):
         self.assertEqual(v4_layout['minimumBridges'], 0)
         self.assertEqual(v4_layout['maximumBridges'], 4)
         self.assertFalse(v4_layout['requiresFocusBlockquote'])
-        self.assertEqual(v4_layout['editorialProfile'], formats.COHESIVE_V4)
+        self.assertEqual(v4_layout['editorialProfile'], formats.COHESIVE_EDITORIAL)
 
         for legacy in (old_plan, v3_plan):
             legacy_layout = formats.publication_layout(legacy)

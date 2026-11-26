@@ -239,13 +239,13 @@ function normalizedPaper(source, publicationHeader = currentHeader('conference-o
 
 function buildReplayableReaderArtifacts(source, header) {
     const raw = source.structuredArtifacts;
-    const { ARTIFACT_V2_PROFILE } = require('./conference-extraction-receipt.js');
+    const { ARTIFACT_ENHANCED_PROFILE } = require('./conference-extraction-receipt.js');
     const sourceDom = value => stableHash(value);
-    const isV2 = raw.profile === ARTIFACT_V2_PROFILE;
-    // 旧版（v1）已保存并核验的 PDF 结构化提取记录里的 `tex` 可能含启发式矩阵和纯文本。
+    const isEnhanced = raw.profile === ARTIFACT_ENHANCED_PROFILE;
+    // 旧版已保存并核验的 PDF 结构化提取记录里的 `tex` 可能含启发式矩阵和纯文本。
     // 原样保留它们，绝不要把内容提升为 DOM 单元格或原始 LaTeX。
-    // v2 增强抽取器产生的已核验完整表格可进入 Reader structuredArtifacts.tables。
-    const tables = isV2
+    // 增强布局抽取器产生的已核验完整表格可进入 Reader structuredArtifacts.tables。
+    const tables = isEnhanced
         ? (raw.tables || [])
             .filter(table => table && table.recoveryStatus === 'complete'
                 && Array.isArray(table.cells) && table.cells.length >= 2
@@ -264,7 +264,7 @@ function buildReplayableReaderArtifacts(source, header) {
                             colspan: 1,
                             text: cellText,
                             sourceDomSha256: sourceDom({
-                                kind: 'pdf-table-v2-cell',
+                                kind: 'pdf-table-enhanced-cell',
                                 sourceRef: table.sourceRef,
                                 row: rowIndex,
                                 column: colIndex,
@@ -278,7 +278,7 @@ function buildReplayableReaderArtifacts(source, header) {
                     label: `Table ${table.ordinal}`,
                     caption: table.caption || '',
                     sourceDomSha256: sourceDom({
-                        kind: 'pdf-table-v2',
+                        kind: 'pdf-table-enhanced',
                         sourceRef: table.sourceRef,
                         caption: table.caption || '',
                         cells: matrix
@@ -318,15 +318,15 @@ function buildReplayableReaderArtifacts(source, header) {
 }
 
 function sourceDetails(source, formats = sourceFormatsForIntent()) {
-    const { ARTIFACT_V2_PROFILE } = require('./conference-extraction-receipt.js');
-    const isV2 = source.structuredArtifacts.profile === ARTIFACT_V2_PROFILE;
-    if (codec.isContract(source.structuredArtifacts.profile, 'conference-pdf-replayable-layout') || isV2) {
+    const { ARTIFACT_ENHANCED_PROFILE } = require('./conference-extraction-receipt.js');
+    const isEnhanced = source.structuredArtifacts.profile === ARTIFACT_ENHANCED_PROFILE;
+    if (codec.isContract(source.structuredArtifacts.profile, 'conference-pdf-replayable-layout') || isEnhanced) {
         const structuredArtifacts = buildReplayableReaderArtifacts(source, formats['conference-reader-pdf-artifacts']);
-        const tablesAvailable = isV2 && structuredArtifacts.tables.length > 0;
+        const tablesAvailable = isEnhanced && structuredArtifacts.tables.length > 0;
         return { text: source.text, source: 'conference_pdf_text', sourceId: source.paperId,
             imageInfos: [], htmlAvailability: 'not_applicable', htmlAttempts: 0,
             warnings: [tablesAvailable
-                ? 'PDF 表格与图片来自 v2 增强抽取结果；文字层公式不是原始 TeX，不提供可发布原始 TeX 公式。'
+                ? 'PDF 表格与图片来自增强布局抽取结果；文字层公式不是原始 TeX，不提供可发布原始 TeX 公式。'
                 : 'PDF 表格仅可引用原文或复核原页；文字层公式不是原始 TeX，不提供可发布结构化表格或公式。'],
             structuredArtifacts,
             conferenceCapabilities: { fullText: 'full', tables: tablesAvailable ? 'available' : 'unavailable',

@@ -1,5 +1,5 @@
 {
-  "rubricVersion": "type-aware-v2",
+  "rubricVersion": "type-aware",
   "legacyRubricVersion": "type-aware-v1",
   "scaleMax": 10.0,
   "coreDimensions": [
@@ -175,7 +175,7 @@
     "nonHighConfidenceTotalMax": 8.4,
     "multiComponentNoAblationInternalTotalMax": 7.2
   },
-  "calibrationProfile": "audio-rubric-v2.1",
+  "calibrationProfile": "audio-rubric-calibration",
   "calibrationAnchors": [
     {
       "score": 5.2,

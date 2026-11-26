@@ -12,7 +12,7 @@ import java.util.UUID
 
 /** Two exact previously fetched published cases; altered variants are explicitly synthetic negatives. No live HTTP/credentials/model. */
 class PublishedCitationRepositoryTest {
- private fun bytes(name:String)=javaClass.classLoader!!.getResourceAsStream("published-citation-v1/$name")!!.use{it.readBytes()}
+ private fun bytes(name:String)=javaClass.classLoader!!.getResourceAsStream("published-citation/$name")!!.use{it.readBytes()}
  private val manifest get()=JSONObject(PublishedUtf8.decode(bytes("public-source-manifest.json")))
  private fun fixture(kind:String,block:suspend(Fixture)->Unit)=runBlocking{
   val parent=Files.createTempDirectory("published-citation-").toRealPath().toFile()

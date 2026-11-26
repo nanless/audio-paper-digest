@@ -119,7 +119,7 @@ test('completed daily scoring is persisted and reused across the normal three Re
     assert(checkpoint.hasCheckpoint(saved));
     assert.equal(saved[checkpoint.FIELD].failures.length, 3);
     assert.equal(saved.analysisManifest.stages.scoringAudit.status, 'complete');
-    assert.equal(entry.hasCurrentReaderV3(saved), false);
+    assert.equal(entry.hasCurrentReader(saved), false);
     assert.equal(require('../scripts/analysis-engine').isSuccessfulAnalysisRecord(saved), false);
 });
 test('a later public entry resumes the saved scoring before any new model call', async t => {

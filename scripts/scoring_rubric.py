@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Shared Python engine for scoring rubric `type-aware-v2`.
+"""Shared Python engine for the unified type-aware scoring rubric.
 
-Loads `config/scoring-rubric-v2.json` and mirrors `scripts/lib/scoring-rubric-v2.js`
+Loads `config/scoring-rubric.json` and mirrors `scripts/lib/scoring-rubric.js`
 using exact integer thousandths arithmetic so Python and Node.js agree bit-for-bit.
 """
 
@@ -23,12 +23,14 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
-SPEC_PATH = Path(__file__).resolve().parent.parent / "config" / "scoring-rubric-v2.json"
+SPEC_PATH = Path(__file__).resolve().parent.parent / "config" / "scoring-rubric.json"
 SPEC: dict[str, Any] = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
 
-SCORING_RUBRIC_V1: str = SPEC["legacyRubricVersion"]
-SCORING_RUBRIC_V2: str = SPEC["rubricVersion"]
-SUPPORTED_SCORING_RUBRIC_VERSIONS = frozenset({SCORING_RUBRIC_V1, SCORING_RUBRIC_V2})
+LEGACY_SCORING_RUBRIC: str = SPEC["legacyRubricVersion"]
+CURRENT_SCORING_RUBRIC: str = SPEC["rubricVersion"]
+HISTORICAL_UNIFIED_SCORING_RUBRICS: tuple[str, ...] = ("type-aware-v2",)
+UNIFIED_SCORING_RUBRIC_VERSIONS = frozenset({CURRENT_SCORING_RUBRIC, *HISTORICAL_UNIFIED_SCORING_RUBRICS})
+SUPPORTED_SCORING_RUBRIC_VERSIONS = frozenset({LEGACY_SCORING_RUBRIC, *HISTORICAL_UNIFIED_SCORING_RUBRICS, CURRENT_SCORING_RUBRIC})
 
 _ALL_DIMS_BY_KEY: dict[str, dict[str, Any]] = {
     **{item["key"]: {**item, "max": float(SPEC["scaleMax"]), "isCore": True} for item in SPEC["coreDimensions"]},
@@ -39,21 +41,21 @@ _ALL_DIMS_BY_KEY: dict[str, dict[str, Any]] = {
     },
 }
 
-V2_DIMENSIONS: tuple[dict[str, Any], ...] = tuple(_ALL_DIMS_BY_KEY[k] for k in SPEC["dimensionDisplayOrder"])
-V2_CORE_DIMENSIONS: tuple[dict[str, Any], ...] = tuple(_ALL_DIMS_BY_KEY[item["key"]] for item in SPEC["coreDimensions"])
-V2_OPEN_SOURCE_ANCHORS: tuple[float, ...] = tuple(float(v) for v in SPEC["openSourceDimension"]["anchors"])
-V2_OPEN_SOURCE_RELEASED_THRESHOLD: float = float(SPEC["openSourceDimension"]["releasedThreshold"])
-V2_SCORE_DIMENSIONS: dict[str, dict[str, Any]] = {
+UNIFIED_DIMENSIONS: tuple[dict[str, Any], ...] = tuple(_ALL_DIMS_BY_KEY[k] for k in SPEC["dimensionDisplayOrder"])
+UNIFIED_CORE_DIMENSIONS: tuple[dict[str, Any], ...] = tuple(_ALL_DIMS_BY_KEY[item["key"]] for item in SPEC["coreDimensions"])
+UNIFIED_OPEN_SOURCE_ANCHORS: tuple[float, ...] = tuple(float(v) for v in SPEC["openSourceDimension"]["anchors"])
+UNIFIED_OPEN_SOURCE_RELEASED_THRESHOLD: float = float(SPEC["openSourceDimension"]["releasedThreshold"])
+UNIFIED_SCORE_DIMENSIONS: dict[str, dict[str, Any]] = {
     item["parsedField"]: {"label": item["label"], "max": float(item["max"]), "shortLabel": item["shortLabel"]}
-    for item in V2_DIMENSIONS
+    for item in UNIFIED_DIMENSIONS
 }
-V2_PUBLISH_DIMENSIONS: tuple[tuple[str, str, float], ...] = tuple(
-    (item["parsedField"], item["label"], float(item["max"])) for item in V2_DIMENSIONS
+UNIFIED_PUBLISH_DIMENSIONS: tuple[tuple[str, str, float], ...] = tuple(
+    (item["parsedField"], item["label"], float(item["max"])) for item in UNIFIED_DIMENSIONS
 )
-V2_PRESENTATION_DIMENSIONS: tuple[tuple[str, str, str], ...] = tuple(
-    (item["parsedField"], item["shortLabel"], "10") for item in V2_DIMENSIONS
+UNIFIED_PRESENTATION_DIMENSIONS: tuple[tuple[str, str, str], ...] = tuple(
+    (item["parsedField"], item["shortLabel"], "10") for item in UNIFIED_DIMENSIONS
 )
-CALIBRATION_PROFILE: str = str(SPEC.get("calibrationProfile") or "audio-rubric-v2.1").strip() or "audio-rubric-v2.1"
+CALIBRATION_PROFILE: str = str(SPEC.get("calibrationProfile") or "audio-rubric-calibration").strip() or "audio-rubric-calibration"
 CALIBRATION_ANCHORS: tuple[dict[str, Any], ...] = tuple(
     dict(card) for card in (SPEC.get("calibrationAnchors") or []) if isinstance(card, dict)
 )
@@ -71,8 +73,12 @@ _COMPACT_WEIGHT_LABELS: dict[str, str] = {
 }
 
 
-def is_v2_rubric(version: Any) -> bool:
-    return str(version or "").strip() == SCORING_RUBRIC_V2
+def is_unified_rubric(version: Any) -> bool:
+    return str(version or "").strip() in UNIFIED_SCORING_RUBRIC_VERSIONS
+
+
+def is_legacy_rubric(version: Any) -> bool:
+    return str(version or "").strip() == LEGACY_SCORING_RUBRIC
 
 
 def normalize_tenths(value: Any) -> int:
@@ -94,19 +100,19 @@ def normalize_tenths(value: Any) -> int:
     return int((Decimal(raw_str) * Decimal("10")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def is_v2_open_source_anchor(value: Any) -> bool:
+def is_open_source_anchor(value: Any) -> bool:
     try:
         tenths = normalize_tenths(value)
     except (ValueError, TypeError):
         return False
-    return any(int(round(anchor * 10)) == tenths for anchor in V2_OPEN_SOURCE_ANCHORS)
+    return any(int(round(anchor * 10)) == tenths for anchor in UNIFIED_OPEN_SOURCE_ANCHORS)
 
 
 def get_document_type_policy(document_type: Any) -> dict[str, Any]:
     key = str(document_type or "").strip()
     policy = SPEC["documentTypes"].get(key)
     if not policy:
-        raise ValueError(f"type-aware-v2 不支持的文档类型: {key!r}")
+        raise ValueError(f"{CURRENT_SCORING_RUBRIC} 不支持的文档类型: {key!r}")
     return policy
 
 
@@ -117,13 +123,13 @@ def format_document_type_weights_summary(document_type: Any) -> str:
         return ""
     parts = [
         f"{_COMPACT_WEIGHT_LABELS.get(dim['key'], dim.get('shortLabel') or dim['label'])} {int(policy['coreWeightPct'][dim['key']])}%"
-        for dim in V2_CORE_DIMENSIONS
+        for dim in UNIFIED_CORE_DIMENSIONS
     ]
     bonus = int(policy["openSourceMaxBonusTenths"]) / 10.0
     return f"{' · '.join(parts)}（开源上限加分 +{bonus:.1f}）"
 
 
-def rank_bucket_for_v2_score(score: Any) -> str:
+def rank_bucket_for_score(score: Any) -> str:
     tenths = normalize_tenths(score)
     for bucket in SPEC["rankBuckets"]:
         if tenths >= int(round(float(bucket["minScore"]) * 10)):
@@ -131,9 +137,9 @@ def rank_bucket_for_v2_score(score: Any) -> str:
     return "后50%"
 
 
-def rank_bucket_for_rubric(score: Any, rubric_version: Any = SCORING_RUBRIC_V1) -> str:
-    if is_v2_rubric(rubric_version):
-        return rank_bucket_for_v2_score(score)
+def rank_bucket_for_rubric(score: Any, rubric_version: Any = LEGACY_SCORING_RUBRIC) -> str:
+    if is_unified_rubric(rubric_version):
+        return rank_bucket_for_score(score)
     tenths = normalize_tenths(score)
     if tenths >= 90:
         return "前10%"
@@ -144,8 +150,8 @@ def rank_bucket_for_rubric(score: Any, rubric_version: Any = SCORING_RUBRIC_V1) 
     return "后50%"
 
 
-def calculate_v2_weighted_total(document_type: Any, scores_map: dict[str, Any]) -> dict[str, Any]:
-    """Compute exact type-aware-v2 total score with integer thousandths math matching JS bit-for-bit."""
+def calculate_weighted_total(document_type: Any, scores_map: dict[str, Any]) -> dict[str, Any]:
+    """Compute exact unified type-aware total score with integer thousandths math matching JS bit-for-bit."""
     policy = get_document_type_policy(document_type)
 
     def read_dim(dim: dict[str, Any]) -> int:
@@ -158,11 +164,11 @@ def calculate_v2_weighted_total(document_type: Any, scores_map: dict[str, Any]) 
             raw = raw.get("score")
         tenths = normalize_tenths(raw)
         if tenths < 0 or tenths > 100:
-            raise ValueError(f"type-aware-v2 维度 {dim['key']} 分数越界: {raw!r}")
+            raise ValueError(f"{CURRENT_SCORING_RUBRIC} 维度 {dim['key']} 分数越界: {raw!r}")
         return tenths
 
     core_scaled = 0
-    for dim in V2_CORE_DIMENSIONS:
+    for dim in UNIFIED_CORE_DIMENSIONS:
         weight_pct = int(policy["coreWeightPct"][dim["key"]])
         core_scaled += weight_pct * read_dim(dim)
     open_source_tenths = read_dim(_ALL_DIMS_BY_KEY["openSource"])
@@ -177,5 +183,5 @@ def calculate_v2_weighted_total(document_type: Any, scores_map: dict[str, Any]) 
         "openSourceMaxBonus": bonus_tenths / 10.0,
         "rawTotal": round(raw_total_scaled / 1000.0, 3),
         "total": total,
-        "rankBucket": rank_bucket_for_v2_score(total),
+        "rankBucket": rank_bucket_for_score(total),
     }

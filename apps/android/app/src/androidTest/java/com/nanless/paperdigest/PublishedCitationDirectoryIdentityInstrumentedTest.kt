@@ -116,7 +116,7 @@ class PublishedCitationDirectoryIdentityInstrumentedTest {
         try {
             fun asset(name: String): ByteArray {
                 require('/' !in name && '\\' !in name && name != "..")
-                return instrumentation.context.assets.open("published-citation-v1/$name").use { it.readBytes() }
+                return instrumentation.context.assets.open("published-citation/$name").use { it.readBytes() }
             }
             val records = JSONObject(PublishedUtf8.decode(asset("public-source-manifest.json"))).getJSONArray("records")
             val row = (0 until records.length()).map { records.getJSONObject(it) }.single { it.getString("kind") == "arxiv-micla" }

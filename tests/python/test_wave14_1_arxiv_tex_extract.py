@@ -179,7 +179,7 @@ class TestWave141ArxivTexExtract(unittest.TestCase):
         )
         ast = extractor.extract_tex_ast_from_bytes(archive, arxiv_id="2611.12345v2")
 
-        self.assertEqual(ast["contract"], "arxiv-tex-ast-v1")
+        self.assertEqual(ast["contract"], "arxiv-tex-ast")
         self.assertEqual(ast["arxivId"], "2611.12345")
         self.assertEqual(
             ast["title"],
@@ -281,7 +281,7 @@ class TestWave141ArxivTexExtract(unittest.TestCase):
 
         # Provenance
         prov = ast["provenance"]
-        self.assertEqual(prov["contract"], "arxiv-tex-ast-v1")
+        self.assertEqual(prov["contract"], "arxiv-tex-ast")
         self.assertEqual(prov["archiveSha256"], hashlib.sha256(archive).hexdigest())
         self.assertEqual(prov["archiveFormat"], "tar.gz")
         self.assertEqual(prov["rootTexFile"], "main.tex")
@@ -683,7 +683,7 @@ Body text here.
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             parsed = json.loads(out_file.read_text(encoding="utf-8"))
-            self.assertEqual(parsed["contract"], "arxiv-tex-ast-v1")
+            self.assertEqual(parsed["contract"], "arxiv-tex-ast")
             self.assertEqual(parsed["arxivId"], "2611.99999")
 
         # 2. stdin/stdout
@@ -1337,6 +1337,34 @@ Ours & 3.55 & 0.03 \tabularnewline
         t1 = ast["tables"][1]
         self.assertEqual(t1["headers"], ["System", "Score"])
         self.assertEqual(t1["rows"], [["Base", "1.0"], ["[Ours] Fast", "2.0"]])
+
+    def test_non_utf8_tar_header_rejected_without_latin1_fallback(self):
+        # Craft a valid-checksum POSIX tar header whose filename contains raw 0xFF (invalid UTF-8).
+        buf = bytearray(1536)
+        payload = b"\\documentclass{article}\\begin{document}Hi\\end{document}"
+        info = tarfile.TarInfo(name="main.tex")
+        info.size = len(payload)
+        raw_hdr = bytearray(info.tobuf(tarfile.USTAR_FORMAT))
+        raw_hdr[0:8] = b"ma\xffn.tex"
+        raw_hdr[148:156] = b"        "
+        chksum = sum(raw_hdr)
+        raw_hdr[148:156] = f"{chksum:06o}\x00 ".encode("ascii")
+        buf[0:512] = raw_hdr
+        buf[512 : 512 + len(payload)] = payload
+        non_utf8_tar = bytes(buf)
+
+        with self.assertRaises(extractor.ArxivTexExtractError) as ctx_pub:
+            extractor.extract_tex_ast_from_bytes(non_utf8_tar, arxiv_id="2611.99002")
+        self.assertEqual(ctx_pub.exception.code, "INVALID_ARCHIVE")
+
+        with self.assertRaises(extractor.ArxivTexExtractError) as ctx_direct:
+            extractor._extract_tar_in_memory(
+                non_utf8_tar,
+                max_members=10,
+                max_uncompressed_bytes=1024 * 1024,
+                max_single_tex_bytes=1024 * 1024,
+            )
+        self.assertEqual(ctx_direct.exception.code, "INVALID_ARCHIVE")
 
 
 if __name__ == "__main__":

@@ -1761,4 +1761,24 @@ describe('显式数据路径与 v7 缺少候选的诊断', () => {
             fs.rmSync(folder, { recursive: true, force: true });
         }
     });
+
+    it('CLI main() 在 CODEX_SANDBOX 下拒绝执行，但模块导入不受沙箱守卫影响', () => {
+        const scriptPath = path.resolve(__dirname, '../scripts/validate-data-files.js');
+        const cliRun = spawnSync(process.execPath, [scriptPath, '--allow-empty'], {
+            env: { ...process.env, CODEX_SANDBOX: '1' },
+            encoding: 'utf8'
+        });
+        assert.notStrictEqual(cliRun.status, 0, 'CLI 在 CODEX_SANDBOX 下必须非零退出');
+        assert.match(`${cliRun.stdout}\n${cliRun.stderr}`, /CODEX_SANDBOX|沙箱|sandbox/i);
+
+        const importRun = spawnSync(
+            process.execPath,
+            ['-e', `const mod = require(${JSON.stringify(scriptPath)}); if (typeof mod.validateCurrentDataFiles !== 'function') process.exit(2);`],
+            {
+                env: { ...process.env, CODEX_SANDBOX: '1' },
+                encoding: 'utf8'
+            }
+        );
+        assert.strictEqual(importRun.status, 0, importRun.stderr);
+    });
 });

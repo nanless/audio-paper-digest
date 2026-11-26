@@ -17,8 +17,8 @@ for p in (SCRIPTS_DIR, TESTS_PY_DIR):
 
 import protocol_codec as codec  # noqa: E402
 import reader_record_format as reader_formats  # noqa: E402
-import scoring_rubric_v2 as v2  # noqa: E402
-from test_reader_structured_v5 import (  # noqa: E402
+import scoring_rubric as sr  # noqa: E402
+from test_reader_structured_pipeline import (  # noqa: E402
     build_structured_v5_publication_paper,
     pub as publish_to_blog,
     reseal_v5,
@@ -37,21 +37,24 @@ class Wave13Track133ScoringDisplayTest(unittest.TestCase):
         policy_patch.start()
         self.addCleanup(policy_patch.stop)
 
-    def test_scoring_rubric_v2_additive_metadata_and_weights_summary(self):
-        self.assertEqual(v2.SCORING_RUBRIC_V2, 'type-aware-v2')
-        self.assertEqual(v2.CALIBRATION_PROFILE, 'audio-rubric-v2.1')
-        self.assertEqual([a['score'] for a in v2.CALIBRATION_ANCHORS], [5.2, 6.5, 7.5, 8.5, 9.2])
-        self.assertEqual(len(v2.DOMAIN_RED_LINES), 4)
+    def test_scoring_rubric_additive_metadata_and_weights_summary(self):
+        self.assertEqual(sr.CURRENT_SCORING_RUBRIC, 'type-aware')
+        self.assertTrue(sr.is_unified_rubric('type-aware'))
+        self.assertTrue(sr.is_unified_rubric('type-aware-v2'))
+        self.assertTrue(sr.is_legacy_rubric('type-aware-v1'))
+        self.assertEqual(sr.CALIBRATION_PROFILE, 'audio-rubric-calibration')
+        self.assertEqual([a['score'] for a in sr.CALIBRATION_ANCHORS], [5.2, 6.5, 7.5, 8.5, 9.2])
+        self.assertEqual(len(sr.DOMAIN_RED_LINES), 4)
         self.assertEqual(
-            v2.format_document_type_weights_summary('方法研究'),
+            sr.format_document_type_weights_summary('方法研究'),
             '创新 24% · 严谨 18% · 实验 22% · 清晰 8% · 影响 14% · 复现 7% · 工程 7%（开源上限加分 +0.5）',
         )
         self.assertEqual(
-            v2.format_document_type_weights_summary('理论研究'),
+            sr.format_document_type_weights_summary('理论研究'),
             '创新 26% · 严谨 30% · 实验 12% · 清晰 12% · 影响 14% · 复现 6% · 工程 0%（开源上限加分 +0.2）',
         )
-        self.assertEqual(v2.format_document_type_weights_summary('未知'), '')
-        self.assertEqual(v2.format_document_type_weights_summary(None), '')
+        self.assertEqual(sr.format_document_type_weights_summary('未知'), '')
+        self.assertEqual(sr.format_document_type_weights_summary(None), '')
 
     def test_render_verified_reader_resources_artifact_badges_and_v4_isolation(self):
         v5_plan_header = codec.record_header(codec.contract('beginner-researcher'), 'beginner-researcher')

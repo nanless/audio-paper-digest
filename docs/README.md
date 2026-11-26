@@ -30,7 +30,7 @@ Mac 与 Android 当前公开发行版本均为 **1.5.1（构建号 25）**（202
 
 | 版本（构建号） | 发布日期 | 核心改动摘要 | 详细记录 |
 |---|---|---|---|
-| 1.5.0 / 24 | 2026-11-26 | 双端原生每日音频播客播放器、Wave 12 / Track 13.3 排版升级、离线多词检索与品牌及默认站点路径迁移 | [1.5.0 记录](workbench-1.5.0-review.md) |
+| 1.5.0 / 24 | 2026-11-26 | 双端原生每日音频播客播放器、音频参数速览与评分审计排版升级、离线多词检索与品牌及默认站点路径迁移 | [1.5.0 记录](workbench-1.5.0-review.md) |
 | 1.4.7（23） | 2026-11-23 | 修复新版论文博客页打开问题，加固 HTML5/SVG/MathML 净化、网络、WebDAV 与 Zotero 路径 | [1.4.7 记录](workbench-1.4.7-review.md) |
 | 1.4.6（22） | 2026-11-20 | 优先读取 `client/details/*` 内容寻址快照，补齐笔记冲突无损合并与便携备份桌面详情冷核 | [1.4.6 记录](workbench-1.4.6-review.md) |
 | 1.4.5（21） | 2026-11-12 | 修复 Android 回前台重复全站同步、macOS 目录 JSON 损坏崩溃与 `test.sh` 提前退出 | [1.4.5 记录](workbench-1.4.5-review.md) |
@@ -53,7 +53,7 @@ Mac 与 Android 当前公开发行版本均为 **1.5.1（构建号 25）**（202
 | Mac 数据读取和个人模型记录 | [网站数据与恢复](mac-app-data.md) |
 | Mac Zotero 连接、归档与续传 | [Zotero 接口](mac-app-zotero.md) |
 | Mac 云端版本备份与恢复 | [云端资料与备份](mac-app-cloud.md) |
-| Mac 测试、逐项状态与验收 | [验证说明](mac-app-validation.md)、[验收矩阵](mac-app-acceptance.md)、[当前状态](mac-app-acceptance-status.md)、[审查说明](mac-app-review-log.md) |
+| Mac 测试、逐项状态与验收 | [验证与审查说明](mac-app-validation.md)、[验收矩阵](mac-app-acceptance.md)、[当前状态](mac-app-acceptance-status.md) |
 | Mac 安装包和图标 | [发行准备](mac-app-release.md)、[图标说明](mac-app-icon-design.md)、[图标源资产](../apps/macos/Assets/README.md) |
 | Android 产品与实现范围 | [功能说明](android-app-plan.md) |
 | Android Zotero 与完整备份 | [Zotero 接入](android-zotero-research.md)、[完整备份](android-cloud-contract.md) |
@@ -67,7 +67,7 @@ Mac 与 Android 当前公开发行版本均为 **1.5.1（构建号 25）**（202
 
 ## 运行一项内容生产任务
 
-维护网站时，先按[安装与配置](setup.md)准备环境，再按[操作手册](../SKILL.md)进入对应流程。三条流程怎样调用共同代码、保存不同来源，见[三流程与共享核心](three-workflows.md)；责任与设计取舍见[流程维护说明](workflow-sharing-plan.md)。
+维护网站时，先按[安装与配置](setup.md)准备环境，再按[操作手册](../SKILL.md)进入对应流程。三条流程怎样调用共同代码、保存不同来源及设计取舍，见[三流程与共享核心](three-workflows.md)。
 
 | 任务 | 操作说明 |
 |---|---|
@@ -113,7 +113,6 @@ Mac 与 Android 当前公开发行版本均为 **1.5.1（构建号 25）**（202
 | 分类词表的设计背景 | [标签设计](tag-system-design.md) |
 | 耗时测量与优化范围 | [性能说明](daily-performance.md) |
 | 发布三阶段的耗时基线与不可改约束 | [发布性能](publishing-performance.md) |
-| 兼容保留与文档维护原则 | [维护约定](repository-maintenance-review.md) |
 | 清理旧入口、迁移格式与恢复生产批次 | [维护可续跑的生产流程](../skills/stateful-workflow-maintenance/SKILL.md) |
 
 ## 阅读历史评审记录
@@ -123,9 +122,8 @@ Mac 与 Android 当前公开发行版本均为 **1.5.1（构建号 25）**（202
 - 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)、[1.4.6](workbench-1.4.6-review.md)、[1.4.7](workbench-1.4.7-review.md)、[1.5.0](workbench-1.5.0-review.md)、[1.5.1](workbench-1.5.1-review.md)。
 - Android 修复记录：[1.3.1](android-1.3.1-review.md)、[1.3.2](android-1.3.2-review.md)、[1.3.3](android-1.3.3-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
-- 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。
 
-写作和文档维护直接使用[项目写作约定](writing-guide.md)、[技术写作方法](../skills/clear-technical-writing/SKILL.md)与[维护约定](repository-maintenance-review.md)。已经结束的逐文件整理报告保留在 Git 历史中，避免过时的路径、行号和检查计数混入现行指南。
+写作和文档维护直接使用[项目写作约定](writing-guide.md)、[技术写作方法](../skills/clear-technical-writing/SKILL.md)与[维护指南](maintenance.md)。已经结束的逐文件整理报告保留在 Git 历史中，避免过时的路径、行号和检查计数混入现行指南。
 
 ## 什么时候可以报告完成
 

@@ -1161,7 +1161,7 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
         self.assertIsNotNone(res_zip)
         self.assertEqual(res_zip['mode'], 'single_institution')
         self.assertEqual(res_zip['authors'][0]['affiliations'], ['Stanford University, Stanford, CA 94305'])
-        res_zip_v1 = pae.extract_pdf_page1_authors_v1(pdf_zip)
+        res_zip_v1 = pae.extract_pdf_page1_authors_legacy(pdf_zip)
         self.assertIsNotNone(res_zip_v1)
         self.assertEqual(res_zip_v1['authors'][0]['affiliations'], ['Stanford University', 'Stanford, CA 94305'])
 
@@ -1917,7 +1917,7 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
                 {"name": "Alice Brown", "affiliations": [f"{inst}, {loc_only}"]},
                 {"name": "Bob White", "affiliations": [f"{inst}, {loc_only}"]},
             ])
-            res_cu_v1 = pae.extract_pdf_page1_authors_v1(pdf_cu)
+            res_cu_v1 = pae.extract_pdf_page1_authors_legacy(pdf_cu)
             self.assertIsNotNone(res_cu_v1)
             self.assertEqual(res_cu_v1["authors"], [
                 {"name": "Alice Brown", "affiliations": [inst, loc_only]},
@@ -3145,8 +3145,8 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
             p.insert_text((80, 158), "Stanford University", fontsize=10),
             p.insert_text((72, 220), "Abstract", fontsize=12),
         ))
-        expected_v2 = pae.extract_pdf_page1_authors_v2(pdf_bytes)
-        expected_v3 = pae.extract_pdf_page1_authors_v3(pdf_bytes)
+        expected_v2 = pae.extract_pdf_page1_authors_structured(pdf_bytes)
+        expected_v3 = pae.extract_pdf_page1_authors_geometric(pdf_bytes)
         self.assertIsNotNone(expected_v2)
         self.assertIsNotNone(expected_v3)
         self.assertEqual(expected_v2["contract"], pae.CONTRACT_V2)
@@ -3154,9 +3154,9 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
 
         def worker(idx: int):
             if idx % 2 == 0:
-                got = pae.extract_pdf_page1_authors_v2(pdf_bytes)
+                got = pae.extract_pdf_page1_authors_structured(pdf_bytes)
                 return ("v2", got, pae._V3_GUARDS_ENABLED)
-            got = pae.extract_pdf_page1_authors_v3(pdf_bytes)
+            got = pae.extract_pdf_page1_authors_geometric(pdf_bytes)
             return ("v3", got, pae._V3_GUARDS_ENABLED)
 
         with ThreadPoolExecutor(max_workers=8) as pool:

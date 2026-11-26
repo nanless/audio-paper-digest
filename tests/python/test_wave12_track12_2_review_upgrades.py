@@ -80,9 +80,21 @@ class Wave12Track122ReviewUpgradeTests(unittest.TestCase):
         self.assertIn('DePlot Read-First', prompt)
         self.assertIn('figureObservation', prompt)
         self.assertIn('对数轴（log scale）、双纵轴（dual y-axis）', prompt)
+        self.assertNotIn('汇总封面', prompt)
+        self.assertNotIn('TOP 10', prompt)
         # Static prefix sits cleanly ahead of dynamic <image_review_input>
         input_pos = prompt.index('<image_review_input>')
         self.assertGreater(input_pos / len(prompt), 0.75)
+
+        # Digest cover review conditionally includes Rule 4
+        cover_captured = []
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'muse-spark-1.3-contributor'}), \
+                mock.patch.object(pub, '_load_review_image', return_value=pixels), \
+                mock.patch.object(pub, 'call_llm_api', side_effect=lambda p, **kw: (cover_captured.append(p), deplot_response)[1]):
+            passed_cover, _ = pub.multimodal_review_images(content, '每日论文汇总 2026-11-26', required=True)
+        self.assertTrue(passed_cover)
+        self.assertIn('汇总封面', cover_captured[0])
+        self.assertIn('TOP 10', cover_captured[0])
 
 
 if __name__ == '__main__':

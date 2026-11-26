@@ -51,7 +51,7 @@ Dozens of new speech, music, acoustics, and Audio LLM papers arrive on arXiv and
 |---|---|
 | Jargon-heavy summaries that hide how a method actually works | Public **Reader** guides span **5,000–18,000 Chinese characters** across 5–9 problem/mechanism/finding sections with structured implementation specs and optional concept bridges—kept separate from the 13-section internal audit analysis. |
 | Hallucinated metrics, broken equations, mismatched figures | Official HTML and PDF bytes are sealed into a 4-file SHA-256 bundle before writing starts; table cells trace back to original tables, display equations come from source TeX, and original figures pass visual and caption checks. |
-| Dead "open-source" links and inflated scores | Code, weight, and demo URLs are probed for reachability (only verified `available` resources are marked open-source); scores use **type-aware 8-dimension rubrics (`type-aware-v2`)** recomputed in code. |
+| Dead "open-source" links and inflated scores | Code, weight, and demo URLs are probed for reachability (only verified `available` resources are marked open-source); scores use **type-aware 8-dimension rubrics (`type-aware`)** recomputed in code. |
 | Silent publish regressions or broken live pages | Every release executes `generate → 3-layer review → receipt-bound push → GitHub Pages deploy check → live HTTP 200 & title verification`, blocking publication on any failure. |
 
 ---
@@ -100,7 +100,7 @@ Content production runs an **LLM/API pipeline by default** across three active, 
 | Workflow | Status | Purpose & Source Boundary | Guide |
 |---|---|---|---|
 | **Daily digest** | **Active** | Tracks daily arXiv & HuggingFace audio preprints; syncs portal remote, deduplicates published pages only, seals official HTML + PDF | [Daily procedure](SKILL.md#1-日更) · [Fetch boundary](docs/daily-fetch-boundary.md) |
-| **Official conference** | **Active (Daily parity)** | Covers 22 official providers (including v2 & `2025+` core-audio families), default v2 PDF extraction, Studio Monograph 2.0 rendering, and Pages deploy verification | [Conference workflow](docs/conference-workflow.md) · [New conference guide](docs/conference-workflow.md#新会议全流程接入指南20262027) |
+| **Official conference** | **Active (Daily parity)** | Covers 22 official providers (including extended providers & `2025+` core-audio families), default layout-enhanced PDF extraction, Studio Monograph 2.0 rendering, and Pages deploy verification | [Conference workflow](docs/conference-workflow.md) · [New conference guide](docs/conference-workflow.md#新会议全流程接入指南20262027) |
 | **Historical update** | **Active (Daily parity)** | Discovers outdated posts via `history:outdated`, rewrites from sealed/local original papers with atomic daily-summary sync, and strictly preserves URLs | [Historical updates](docs/history-rewrite.md) · [Outdated rewrite guide](docs/history-rewrite.md#过时历史博客批量重写指南) · [Publication](docs/history-direct-publication.md) |
 
 Four engineering safeguards keep quality verifiable and cost bounded:

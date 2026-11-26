@@ -1,19 +1,19 @@
 'use strict';
 
 /**
- * Wave 14.4: Post-Batch Swiss-Tournament Bradley-Terry Relative Score Calibration.
+ * Post-Batch Swiss-Tournament Bradley-Terry Relative Score Calibration.
  *
  * Cold-replay & sealed-data invariant:
  * - Read-only over sealed `deep-analysis-result.json` papers; NEVER mutates input papers
  *   or overwrites original `scoringAudit` scores.
- * - Produces a deterministic, replayable `batch-score-calibration-v1` sidecar payload.
+ * - Produces a deterministic, replayable `batch-score-calibration` sidecar payload.
  */
 
 const crypto = require('node:crypto');
 const { strictJson } = require('./strict-json.js');
 const { extractAnalysisSection } = require('./analysis-section-titles.js');
 
-const SCORE_CALIBRATION_CONTRACT = 'batch-score-calibration-v1';
+const SCORE_CALIBRATION_CONTRACT = 'batch-score-calibration';
 
 const DEFAULT_SWISS_ROUNDS = 3;
 const MIN_SWISS_ROUNDS = 1;
@@ -27,7 +27,7 @@ const DEFAULT_CONVERGENCE_TOLERANCE = 1e-9;
 const DEFAULT_MAX_ITERATIONS = 500;
 const DEFAULT_MAX_DELTA = 0.6;
 const DEFAULT_SCORE_DECIMALS = 2;
-const DEFAULT_SEED = 'swiss-bt-v1';
+const DEFAULT_SEED = 'swiss-bt';
 
 const SCORE_MIN = 0;
 const SCORE_MAX = 10;
@@ -465,7 +465,7 @@ function buildMinimumRepeatFallbackMatching(pool, pairCounts) {
  * @param {Array<string|object>} items - Paper IDs or objects `{ id|paperId, rating|btLogStrength|score|rawScore }`
  * @param {object} [options]
  * @param {number} [options.round=1] - 1-based round number
- * @param {string|number} [options.seed='swiss-bt-v1'] - Deterministic tie-breaking seed
+ * @param {string|number} [options.seed='swiss-bt'] - Deterministic tie-breaking seed
  * @param {Iterable|Map} [options.previousPairs] - Prior matchups to avoid repeating
  * @param {Iterable|Map} [options.previousByes] - Prior bye recipients to rotate fairly
  * @param {boolean} [options.bidirectional=true] - Include both forward (A vs B) and reverse (B vs A) evaluations

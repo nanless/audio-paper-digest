@@ -75,8 +75,8 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
             # Pure offline AST parser worker enforces CODEX_SANDBOX only (no daily/history lock-in).
             self.assertIsNone(required_workspace_role_for_command('arxiv_tex_extract.py'))
 
-    def test_scoring_rubric_v2_direct_entry_guard_and_pure_import(self):
-        script = SCRIPTS / 'scoring_rubric_v2.py'
+    def test_scoring_rubric_direct_entry_guard_and_pure_import(self):
+        script = SCRIPTS / 'scoring_rubric.py'
         sandbox_env = dict(os.environ, CODEX_SANDBOX='test-seatbelt')
         sandbox_run = subprocess.run(
             [sys.executable, '-S', str(script)],
@@ -96,7 +96,7 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
         import_run = subprocess.run(
             [sys.executable, '-c',
              f'import sys; sys.path.insert(0, {str(SCRIPTS)!r}); '
-             'import scoring_rubric_v2 as v2; assert v2.SCORING_RUBRIC_V2 == "type-aware-v2"; print("ok")'],
+             'import scoring_rubric as sr; assert sr.CURRENT_SCORING_RUBRIC == "type-aware"; print("ok")'],
             cwd=ROOT, env=sandbox_env, capture_output=True, text=True, timeout=5,
         )
         self.assertEqual(import_run.returncode, 0, import_run.stdout + import_run.stderr)

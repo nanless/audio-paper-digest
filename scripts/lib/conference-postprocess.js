@@ -244,8 +244,11 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         .filter(binding => binding.authenticatedPdfTableEvidence !== undefined);
     const authenticatedPdfFootnotes = (sourcePaper.apiReaderResources?.resources || [])
         .some(resource => Object.hasOwn(resource, 'authenticatedPdfFootnoteEvidence'));
-    const usesConferencePdfPage1Authors = sourcePaper.apiReaderAuthors?.identity?.conferencePdfAuthorParser
-        === require('./reader-author-parser.js').CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3;
+    const authorParser = require('./reader-author-parser.js');
+    const usesConferencePdfPage1Authors = [
+        authorParser.CONFERENCE_PDF_AUTHOR_PDF_PAGE1,
+        'conference-pdf-author-pdf-page1-v3'
+    ].includes(sourcePaper.apiReaderAuthors?.identity?.conferencePdfAuthorParser);
     let readerPdfSourceHandle = loaded.recoveryWindow
         || require('./conference-source-resource-correction').isSourceCorrectionRecord(sourcePaper)
         || authenticatedPdfFootnotes
@@ -383,9 +386,9 @@ function getConsistentPublicationFields(paper, tagRules) {
         scoreDimensions: Object.fromEntries(SCORE_DIMENSIONS.map(([field]) => [field, String(value[field] ?? '').trim()])) });
     if (!parsed || stableHash(pick(parsed)) !== stableHash(pick(reparsed || {}))) fail('会议论文缓存的标签、摘要或评分字段与重新解析正文得到的结果不一致。');
     const value = pick(parsed); const score = Number(value.score);
-    const scoringRubricV2 = require('./scoring-rubric-v2');
-    const isV2 = scoringRubricV2.isV2Rubric(reparsed?.scoringRubricVersion);
-    const activeDims = isV2
+    const scoringRubric = require('./scoring-rubric');
+    const isUnified = scoringRubric.isUnifiedRubric(reparsed?.scoringRubricVersion);
+    const activeDims = isUnified
         ? SCORE_DIMENSIONS.map(([field, label]) => [field, label, 10])
         : SCORE_DIMENSIONS;
     if (!Number.isFinite(score) || score < 0 || score > 10 || !value.summary || !value.scoringReason
@@ -1460,8 +1463,8 @@ function buildAggregateArtifacts({ analysisRoot, aggregateRoot, apply = false, a
         spotlightLines.push('### 🌟 会议精选焦点', '',
             `> 🥇 **[${compactLabel(top.readerTitle, 48)}](${top.url})** · 总分 **${top.score}**/10（${metaBits.join(' · ')}）${badgeTail}`);
         const topParsed = readerRecordByPaperId.get(top.paperId)?.paper?.parsed || {};
-        const isV2Rubric = topParsed.scoringRubricVersion === 'type-aware-v2';
-        const dimDefs = isV2Rubric ? [
+        const isUnifiedRubric = require('./scoring-rubric').isUnifiedRubric(topParsed.scoringRubricVersion);
+        const dimDefs = isUnifiedRubric ? [
             ['innovationScore', '创新', 10], ['technicalRigorScore', '技术严谨', 10],
             ['experimentalSufficiencyScore', '实验充分', 10], ['clarityScore', '清晰度', 10],
             ['impactScore', '影响力', 10], ['openSourceScore', '开源', 10],
@@ -1476,7 +1479,7 @@ function buildAggregateArtifacts({ analysisRoot, aggregateRoot, apply = false, a
             const rawVal = topParsed[key];
             const num = Number(rawVal);
             if (rawVal === undefined || rawVal === null || rawVal === '' || !Number.isFinite(num)) return null;
-            return { ratio: num / max, max, text: `${label} ${isV2Rubric ? num.toFixed(1) : rawVal}/${max}` };
+            return { ratio: num / max, max, text: `${label} ${isUnifiedRubric ? num.toFixed(1) : rawVal}/${max}` };
         }).filter(Boolean).sort((a, b) => b.ratio - a.ratio || b.max - a.max);
         if (rankedDims.length) {
             spotlightLines.push('>', `> 突出维度：${rankedDims.slice(0, 3).map(d => d.text).join(' · ')}`);

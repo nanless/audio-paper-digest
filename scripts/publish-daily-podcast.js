@@ -375,7 +375,7 @@ function loadExistingEpisodes(episodesDir, currentDate) {
         try {
             const parsed = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
             if (parsed
-                && parsed.contract === 'daily-podcast-episode-v1'
+                && (parsed.contract === 'daily-podcast-episode' || parsed.contract === 'daily-podcast-episode-v1')
                 && typeof parsed.date === 'string'
                 && parsed.date !== currentDate) {
                 byDate.set(parsed.date, parsed);

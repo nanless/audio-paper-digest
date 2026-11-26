@@ -7,7 +7,7 @@ const {
 const {
     validateEditorialQuality,
     findDuplicateLongSentences,
-    maskStructuredV5NaturalNumerals,
+    maskStructuredNaturalNumerals,
     SCALED_ARABIC_MEASUREMENT_UNITS
 } = require('../editorial-quality.js');
 const {
@@ -223,7 +223,7 @@ function coalesceExcessCohesiveReaderSections(candidate) {
         const others = new Set(sections.filter((_, index) => index !== best && index !== best + 1)
             .map(section => section.heading.trim()));
         const headingOk = text => text.length >= 8 && text.length <= 80
-            && !GENERIC_V4_READER_HEADING_RE.test(text) && !READER_HEADING_FIG_TABLE_RE.test(text)
+            && !GENERIC_EDITORIAL_READER_HEADING_RE.test(text) && !READER_HEADING_FIG_TABLE_RE.test(text)
             && !others.has(text);
         const chosen = [combined, first.heading].map(text => String(text).trim()).find(headingOk);
         if (!chosen) return false;
@@ -651,8 +651,8 @@ function isAllowedReaderDefensiveNegationIssue(issue, article, options = {}) {
     const count = Number(issue.count);
     if (!Number.isFinite(count)) return false;
     const chineseChars = (String(article || '').match(/[\u3400-\u9fff]/g) || []).length;
-    const isCohesiveV4 = require('./reader-record-format').isModernEditorialProfile(options?.editorialProfile);
-    const readerLimit = isCohesiveV4
+    const isCohesiveEditorial = require('./reader-record-format').isModernEditorialProfile(options?.editorialProfile);
+    const readerLimit = isCohesiveEditorial
         ? Math.max(8, Math.ceil(chineseChars / 800))
         : Math.max(12, Math.ceil(chineseChars / 300));
     return count <= readerLimit;
@@ -836,7 +836,7 @@ function restoreReaderSectionHeadings(article, sections) {
 }
 
 const GENERIC_READER_HEADING_RE = /^(?:任务背景|背景与动机|问题定义|相关工作|方法(?:概述|全景|介绍)|核心创新(?:点)?|实验(?:设置|结果|分析)|结果分析|细节详述|局限(?:分析|与问题)?|复现(?:指南|说明)|总结(?:与展望)?|结论)$/;
-const GENERIC_V4_READER_HEADING_RE = /^(?:任务背景|背景与动机|问题定义|问题本质|问题与瓶颈|相关工作|已有路线与对比|方法(?:概述|全景|介绍)|核心(?:机制|创新(?:点)?)|训练(?:与优化|策略|目标)?|实验(?:设置|结果|分析)|主实验(?:验证|结果)?|评测协议与设置|结果分析|消融(?:实验|分析|与诊断)?|细节详述|局限(?:分析|与问题)?|适用边界|复现(?:指南|说明|核对)|实践与复现|总结(?:与展望)?|结论)[：:]?\s*$/u;
+const GENERIC_EDITORIAL_READER_HEADING_RE = /^(?:任务背景|背景与动机|问题定义|问题本质|问题与瓶颈|相关工作|已有路线与对比|方法(?:概述|全景|介绍)|核心(?:机制|创新(?:点)?)|训练(?:与优化|策略|目标)?|实验(?:设置|结果|分析)|主实验(?:验证|结果)?|评测协议与设置|结果分析|消融(?:实验|分析|与诊断)?|细节详述|局限(?:分析|与问题)?|适用边界|复现(?:指南|说明|核对)|实践与复现|总结(?:与展望)?|结论)[：:]?\s*$/u;
 const READER_HEADING_FIG_TABLE_RE = /(?<![A-Za-z0-9])(?:图|Figure|表|Table)\s*\d+\b/iu;
 
 function makeReaderHeadingSpecific(kind, heading, readerTitle, options = {}) {
@@ -938,22 +938,22 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
         maxChineseChars = resolvedOptions.maxChineseChars;
     }
     const readerFormat = require('./reader-record-format');
-    const isStructuredV5 = readerFormat.isStructuredV5(resolvedOptions?.editorialProfile);
+    const isStructuredEditorial = readerFormat.isStructuredEditorial(resolvedOptions?.editorialProfile);
     const isModernEditorial = readerFormat.isModernEditorialProfile(resolvedOptions?.editorialProfile);
     const effectiveTarget = Number.isInteger(targetChineseChars)
-        ? targetChineseChars : (isStructuredV5 ? 260 : isModernEditorial ? 300 : 190);
+        ? targetChineseChars : (isStructuredEditorial ? 260 : isModernEditorial ? 300 : 190);
     const effectiveMax = Number.isInteger(maxChineseChars)
-        ? maxChineseChars : (isStructuredV5 ? 380 : isModernEditorial ? 440 : 240);
-    const hardCapChars = isStructuredV5 ? 420 : 480;
-    const maxSentences = isStructuredV5 ? 9 : isModernEditorial ? 10 : 6;
-    const groupSentenceTarget = isStructuredV5 ? 5 : isModernEditorial ? 6 : 5;
+        ? maxChineseChars : (isStructuredEditorial ? 380 : isModernEditorial ? 440 : 240);
+    const hardCapChars = isStructuredEditorial ? 420 : 480;
+    const maxSentences = isStructuredEditorial ? 9 : isModernEditorial ? 10 : 6;
+    const groupSentenceTarget = isStructuredEditorial ? 5 : isModernEditorial ? 6 : 5;
     const chineseCount = value => (String(value || '').match(/[\u3400-\u9fff]/g) || []).length;
     const protectedBlock = value => /^(?:```|~~~|#{1,6}\s|>|\||[-*+]\s|\d+[.)、]\s|!\[|\$\$|\\\[)/.test(value.trim());
     return String(text || '').trim().split(/\n\s*\n/).flatMap(paragraph => {
         const trimmed = paragraph.trim();
         const sentenceEndCount = (trimmed.match(isModernEditorial ? /[。！？!?]/g : /[。！？!?；;]/g) || []).length;
         const chars = chineseCount(trimmed);
-        const withinBudget = isStructuredV5
+        const withinBudget = isStructuredEditorial
             ? !(chars > effectiveMax && sentenceEndCount > maxSentences) && chars <= hardCapChars && sentenceEndCount <= maxSentences + 1
             : isModernEditorial
                 ? !(chars > effectiveMax && sentenceEndCount > maxSentences) && chars <= hardCapChars
@@ -982,7 +982,7 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
 }
 
 function normalizeReaderProseFormatting(text, quantitativeIssues = [], options = {}) {
-    const isCohesiveV4 = require('./reader-record-format').isModernEditorialProfile(options?.editorialProfile);
+    const isCohesiveEditorial = require('./reader-record-format').isModernEditorialProfile(options?.editorialProfile);
     const protectedMarkdown = [];
     const protect = value => {
         const token = `__PD_READER_PROTECTED_${protectedMarkdown.length}__`;
@@ -1016,8 +1016,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
         // 结构上的一对一关系不是量出来的数值。它们在空格处理和过期的数字诊断里都要保护
         // 起来。
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
-            () => (isCohesiveV4 ? protectChinese('一对一') : protect('一对一')));
-    if (isCohesiveV4) {
+            () => (isCohesiveEditorial ? protectChinese('一对一') : protect('一对一')));
+    if (isCohesiveEditorial) {
         protectedText = protectedText
             .replace(/最小\s*2\s*乘/gu, '最小二乘')
             .replace(/每\s*1\s*(?=维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块|token|epoch)/giu, '每一')
@@ -1031,8 +1031,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
             .replace(/一分不得|一分为二|合二为一|一举两得|独一无二|举一反三|融为一体|一成不变|一概而论|一视同仁|一目了然|一脉相承|一步到位|二者合一|合而为一|万无一失|百里挑一|十拿九稳|一劳永逸|一锤定音|一针见血/gu, protectChinese)
             .replace(/第[一二三四五六七八九十百]+(?:个|步|段|层|阶段|类|轮|次|组|条|项|章|节|部分|分支|模块|帧|维|路|代|批|行|列|页|遍|点|种)/gu, protectChinese)
             .replace(/每一(?=\s*(?:维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块|token|epoch))/giu, protectChinese);
-        if (require('./reader-record-format').isStructuredV5(options?.editorialProfile)) {
-            protectedText = maskStructuredV5NaturalNumerals(protectedText, protectChinese);
+        if (require('./reader-record-format').isStructuredEditorial(options?.editorialProfile)) {
+            protectedText = maskStructuredNaturalNumerals(protectedText, protectChinese);
         }
     }
     const adjacentNumeralSurfaces = [];
@@ -1217,7 +1217,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
                 continue;
             }
         }
-        const widthFractionMatch = !isCohesiveV4 && match.match(/^([一二两三四五六七八九十百千万亿]+)分之([一二两三四五六七八九十百千万亿]+)宽$/);
+        const widthFractionMatch = !isCohesiveEditorial && match.match(/^([一二两三四五六七八九十百千万亿]+)分之([一二两三四五六七八九十百千万亿]+)宽$/);
         if (widthFractionMatch) {
             const denominator = chineseInteger(widthFractionMatch[1]);
             const numerator = chineseInteger(widthFractionMatch[2]);
@@ -1227,7 +1227,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
                 continue;
             }
         }
-        if (match === '一半' || match === '至少一半' || (!isCohesiveV4 && match === '半宽')) {
+        if (match === '一半' || match === '至少一半' || (!isCohesiveEditorial && match === '半宽')) {
             normalized = normalized.replaceAll(
                 match,
                 match === '半宽' ? '1/2 宽' : match === '至少一半' ? '至少 1/2' : '1/2'
@@ -1281,7 +1281,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
             if (/^千\s*/u.test(surface) && /[成上数]$/u.test(before.trimEnd())) return surface;
             // 旧诊断可能把“一致”“一般”“一定”的开头当成参数值；不能破坏自然词。
             if (surface.endsWith('一') && /^[致般定]/u.test(after)) return surface;
-            if (isCohesiveV4 && /[第每上下这那另哪同唯统单最]$/u.test(before.trimEnd())) return surface;
+            if (isCohesiveEditorial && /[第每上下这那另哪同唯统单最]$/u.test(before.trimEnd())) return surface;
             // 一个问题可能只指出更长数字或分数当中的一个后缀。
             if ((/[零〇一二两三四五六七八九十百千万亿]$|分之$/.test(before.trimEnd())
                     && !/(?:同一|统一|唯一|单一)$/.test(before.trimEnd()))
@@ -1781,7 +1781,7 @@ module.exports = {
     demoteReaderBodySectionHeadings,
     restoreReaderSectionHeadings,
     GENERIC_READER_HEADING_RE,
-    GENERIC_V4_READER_HEADING_RE,
+    GENERIC_EDITORIAL_READER_HEADING_RE,
     READER_HEADING_FIG_TABLE_RE,
     makeReaderHeadingSpecific,
     ensureApiReaderTableNarratives,

@@ -15,8 +15,8 @@
 | `analysis-waiver.js` | Node 流程入口或共享模块 |
 | `arxiv-source-authority.js` | Node 流程入口或共享模块 |
 | `batch-analyze.js` | Node 流程入口或共享模块 |
-| `calibrate-batch-scores.js` | Wave 14.4 CLI: Post-Batch Swiss-Tournament Bradley-Terry Relative Score Calibration. |
-| `compact-papers-ledger.js` | Safe lossless compaction CLI for data/current/papers.json (Wave 14.6A). |
+| `calibrate-batch-scores.js` | Post-Batch Swiss-Tournament Bradley-Terry Relative Score Calibration CLI. |
+| `compact-papers-ledger.js` | Safe lossless compaction CLI for data/current/papers.json. |
 | `conference-discover.js` | 根据已有本地文件寻找来源候选，匹配结果仍须核验。传入 --apply 时， |
 | `conference-filter-evidence.js` | Node 流程入口或共享模块 |
 | `conference-filter-run.js` | Node 流程入口或共享模块 |
@@ -33,7 +33,7 @@
 | `deep-analysis-only.js` | Node 流程入口或共享模块 |
 | `deep-analyzer.js` | Node 流程入口或共享模块 |
 | `digest-run-report.js` | Node 流程入口或共享模块 |
-| `digest-scorecard.js` | 只读 LLM 运行记分卡（Wave 11 Track 11C）。 |
+| `digest-scorecard.js` | 只读 LLM 运行记分卡。 |
 | `digest-status.js` | Node 流程入口或共享模块 |
 | `docs-consistency.js` | 检查文档里的 npm 命令、客户端版本声明、链接与锚点、双语索引、废弃写法、环境变量、env.example 同步及 AGENTS.md 体积。 |
 | `doctor.js` | 音频研究工作台只读体检命令。 |
@@ -118,8 +118,8 @@
 | `blog_review_state.py` | 博客审查状态账本：审查凭证读写校验、通过缓存、逐页检查点、失败状态与增量审查计划。 |
 | `blog_tag_catalog.py` | 标签受控词表快照、版本目录、展示策略、确定性序列化缓存与页面标签投影。 |
 | `build-tag-preview.py` | 根据历史博客元数据生成私有标签预览，不改写论文页面。 |
-| `conference_extractor_v2.py` | 会议 PDF 增强型确定性本地抽取器（Wave 13 Track 13.2 Companion v2）。 |
 | `conference_extractor.py` | 对暂存的会议 PDF 做本地确定性抽取。 |
+| `conference_layout_extractor.py` | 会议 PDF 增强型确定性本地布局抽取器。 |
 | `conference_publication_figure_crop.py` | Deterministic publication pixels; never Reader/model-input authority. |
 | `conference_publication_figure_view_replay.py` | Pure read-only view transform; output is NEVER source/review/publication authority. |
 | `conference_publication_figure_view.py` | Immutable publication-only figure views. |
@@ -143,7 +143,7 @@
 | `historical-page-render.py` | 根据历史论文记录及其来源证明生成单篇论文页面。 |
 | `history-inventory.py` | 生成历史页面清单及对应凭证的命令行入口；页面来源只读。 |
 | `icmc-proceedings.py` | 拆分 ICMC 2026 官方会议论文集 PDF。 |
-| `indextts_synth.py` | Wave 14.3: Pluggable IndexTTS latest (IndexTTS-2.5 / 2.0 / v1) podcast synthesizer. |
+| `indextts_synth.py` | Pluggable IndexTTS (IndexTTS-2.5 / 2.0 / v1) podcast synthesizer. |
 | `llm_account_pool.py` | Python 调用方使用的跨进程 OpenCode Go 账号池。 |
 | `llm_usage_format.py` | 只识别用量事件的原格式；不更改原账目或授予请求额度。 |
 | `llm_usage.py` | 记录模型请求的用量、状态与摘要，不保存请求或响应正文；格式与 lib/llm-usage.js 一致。 |
@@ -158,7 +158,7 @@
 | `paper_reader_presentation.py` | Shared Reader presentation after each workflow authenticates its source records. |
 | `parse-arxiv-atom.py` | 严格解析抓取阶段的 Atom 响应，只向标准输出写入结构化 JSON。 |
 | `path_config.py` | Python 侧共用的项目路径，以及确保文件内容完整保存的写入辅助函数。 |
-| `pdf_author_extract_v1.py` | 从已封存论文 PDF 第 1 页的字体与上标几何结构中确定性提取作者与机构绑定。 |
+| `pdf_author_extract_legacy.py` | 从已封存论文 PDF 第 1 页的字体与上标几何结构中确定性提取作者与机构绑定。 |
 | `pdf_author_extract.py` | 从已封存论文 PDF 第 1 页的字体与上标几何结构中确定性提取作者与机构绑定。 |
 | `pdf_figure_table_extract.py` | Deterministic PyMuPDF figure-bbox and table extractor for sealed PDF sources. |
 | `pdf-layout-extract.py` | 只有 PDF 的论文来源共用的 PyMuPDF 抽取逻辑。 |
@@ -194,7 +194,7 @@
 | `review-blog.py` | 严格审查已生成的博客清单，并保存哈希核验记录。 |
 | `runtime_guard.py` | 需要宿主机联网的命令共用的运行时前置检查。 |
 | `scoring_record_format.py` | 读取评分记录原有或现用的完整格式头；不代替来源、正文和费用核验。 |
-| `scoring_rubric_v2.py` | Shared Python engine for scoring rubric `type-aware-v2`. |
+| `scoring_rubric.py` | Shared Python engine for the unified type-aware scoring rubric. |
 | `scoring_stability.py` | Strict read-only scoring proof predicate, mirrored by lib/scoring-stability.js. |
 | `tag_catalog_publication.py` | 只读核验发布页面所绑定的标签词表已完整安装在博客中。 |
 | `tag_catalog.py` | 读取并核验标签词表，按指定规则查找标签对应的概念。 |
@@ -220,9 +220,9 @@
 | `lib/arxiv-metadata-source.js` | Node 内部共享支撑模块 |
 | `lib/arxiv-origin-gate.js` | 进程内全局 arXiv 源站并发与共享 Retry-After 冷却门禁。 |
 | `lib/arxiv-source-authority.js` | 保存官方 arXiv 抓取结果，供历史 paper-source-authority 来源核验读取。 |
-| `lib/arxiv-tex-source.js` | arXiv /e-print/<id> TeX Source Channel Fetcher & Sidecar Manager (Wave 14.1) |
+| `lib/arxiv-tex-source.js` | arXiv /e-print/<id> TeX Source Channel Fetcher & Sidecar Manager. |
 | `lib/blog-record-format.js` | Node 内部共享支撑模块 |
-| `lib/bradley-terry-calibration.js` | Wave 14.4: Post-Batch Swiss-Tournament Bradley-Terry Relative Score Calibration. |
+| `lib/bradley-terry-calibration.js` | Post-Batch Swiss-Tournament Bradley-Terry Relative Score Calibration. |
 | `lib/cancelled-reader-audit-recovery.js` | Node 内部共享支撑模块 |
 | `lib/cancelled-reader-final-checkpoint.js` | Node 内部共享支撑模块 |
 | `lib/cli-arguments.js` | 入口参数白名单。batch/reanalyze 曾静默忽略未知 --flag：例如把 |
@@ -349,7 +349,7 @@
 | `lib/llm-usage.js` | 只记元数据。服务商返回的用量与按字符估算的值按设计分开；缓存和推理的小计都不 |
 | `lib/merge-failed-reader-bundle.js` | Node 内部共享支撑模块 |
 | `lib/model-text-sanitization.js` | Node 内部共享支撑模块 |
-| `lib/official-conference-acquisition-v2.js` | 官方会议录获取扩展模块 v2（Wave 13 Track 13.1A）。 |
+| `lib/official-conference-acquisition-extended.js` | 官方会议录获取扩展模块。 |
 | `lib/official-conference-acquisition.js` | Node 内部共享支撑模块 |
 | `lib/original-file-evidence.js` | Registered original files are data evidence. Never require/evaluate their |
 | `lib/page-source-crosswalk.js` | 来源身份对应表。verified 分配必须引用重新核对过的、已认证的来源或身份授权； |
@@ -471,7 +471,7 @@
 | `lib/scoring-audit-consensus.js` | Node 内部共享支撑模块 |
 | `lib/scoring-audit-contract.js` | Node 内部共享支撑模块 |
 | `lib/scoring-record-format.js` | Node 内部共享支撑模块 |
-| `lib/scoring-rubric-v2.js` | Shared Node.js engine for scoring rubric `type-aware-v2`. |
+| `lib/scoring-rubric.js` | Shared Node.js engine for the unified type-aware scoring rubric. |
 | `lib/scoring-stability.js` | A proof check only: this does not grant requests, alter attempts or repair a |
 | `lib/scoring-third-party-resource-replay.js` | Node 内部共享支撑模块 |
 | `lib/selected-full-stage-reanalysis.js` | 仅本次明确选择的论文全阶段重跑；旧账归档不改签，正常恢复不使用本作用域。 |

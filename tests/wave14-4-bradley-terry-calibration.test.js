@@ -80,7 +80,7 @@ function makeTempDir(prefix = 'wave14-4-bt-') {
 // ═══════════════════════════════════════════════════════
 
 test('Wave 14.4: exports exact contract identifier and validates bounds', () => {
-    assert.equal(bt.SCORE_CALIBRATION_CONTRACT, 'batch-score-calibration-v1');
+    assert.equal(bt.SCORE_CALIBRATION_CONTRACT, 'batch-score-calibration');
     assert.equal(bt.validateSwissRounds(3), 3);
     assert.equal(bt.validateSwissRounds(6), 6);
     assert.throws(() => bt.validateSwissRounds(0), RangeError);
@@ -430,7 +430,7 @@ test('Wave 14.4: calibrateBatchScores sharpens an 8-paper tie cluster at 7.4 wit
 
     const result = bt.calibrateBatchScores(sealedBatch, comparisons, { maxDelta: 0.6, rounds: 3 });
 
-    assert.equal(result.contract, 'batch-score-calibration-v1');
+    assert.equal(result.contract, 'batch-score-calibration');
     assert.equal(result.solver.converged, true);
     assert.equal(result.readOnlyInvariant.mutatedSealedInput, false);
     assert.equal(result.readOnlyInvariant.overwroteScoringAudit, false);
@@ -610,8 +610,8 @@ test('Wave 14.4 CLI: --dry-run and --replay execute 100% offline, never call req
         const inputPath = path.join(tmpDir, 'deep-analysis-result.json');
         const dryOutPath = path.join(tmpDir, 'dry-run-plan.json');
         const replayCompsPath = path.join(tmpDir, 'comparisons.json');
-        const replayOut1 = path.join(tmpDir, 'score-calibration-v1.json');
-        const replayOut2 = path.join(tmpDir, 'score-calibration-v1-second.json');
+        const replayOut1 = path.join(tmpDir, 'score-calibration.json');
+        const replayOut2 = path.join(tmpDir, 'score-calibration-second.json');
 
         const batch = {
             batchDate: '2026-11-24',
@@ -644,7 +644,7 @@ test('Wave 14.4 CLI: --dry-run and --replay execute 100% offline, never call req
         });
 
         const dryPayload = JSON.parse(dryStdout);
-        assert.equal(dryPayload.contract, 'batch-score-calibration-v1');
+        assert.equal(dryPayload.contract, 'batch-score-calibration');
         assert.equal(dryPayload.mode, 'dry_run');
         assert.equal(dryPayload.readOnlyInvariant.llmRequestsSent, 0);
         assert.equal(dryPayload.schedule.rounds, 3);
@@ -700,7 +700,7 @@ test('Wave 14.4 CLI: --dry-run and --replay execute 100% offline, never call req
         const sidecar1 = JSON.parse(fs.readFileSync(replayOut1, 'utf8'));
         const sidecar2 = JSON.parse(fs.readFileSync(replayOut2, 'utf8'));
 
-        assert.equal(sidecar1.contract, 'batch-score-calibration-v1');
+        assert.equal(sidecar1.contract, 'batch-score-calibration');
         assert.equal(sidecar1.mode, 'replay');
         assert.equal(sidecar1.readOnlyInvariant.llmRequestsSent, 0);
         assert.equal(sidecar1.diagnostics.positionConsistencyRate, 0.75); // 3 consistent / 4 bidirectional
@@ -778,7 +778,7 @@ test('Wave 14.4 CLI: explicit --live mode executes round-by-round Swiss tourname
     const tmpDir = makeTempDir();
     try {
         const inputPath = path.join(tmpDir, 'deep-analysis-result.json');
-        const outPath = path.join(tmpDir, 'score-calibration-v1.json');
+        const outPath = path.join(tmpDir, 'score-calibration.json');
 
         const batch = {
             batchDate: '2026-11-24',
@@ -906,7 +906,7 @@ test('Wave 14.4 Regression [P0-1]: assertSafeOutputPath blocks case variants, sy
         );
 
         // Hardlink to sealed input under an unrelated filename
-        const hardlinkPath = path.join(tmpDir, 'score-calibration-v1.json');
+        const hardlinkPath = path.join(tmpDir, 'score-calibration.json');
         fs.linkSync(inputPath, hardlinkPath);
         assert.throws(() => cli.assertSafeOutputPath(inputPath, hardlinkPath), /hardlink/);
 
@@ -1426,7 +1426,7 @@ test('Wave 14.4 Conference Parity: --conference-process aggregates completed ana
         assert.equal(dry.sidecar.schedule.estimatedApiCalls, 8);
         assert.equal(dry.sidecar.readOnlyInvariant.llmRequestsSent, 0);
 
-        // --replay writes default sidecar under runtime/score-calibrations/conference/<processId>/score-calibration-v1.json
+        // --replay writes default sidecar under runtime/score-calibrations/conference/<processId>/score-calibration.json
         const replayFile = path.join(tmpDir, 'conf-comparisons.json');
         fs.writeFileSync(replayFile, JSON.stringify({
             comparisons: [
@@ -1439,7 +1439,7 @@ test('Wave 14.4 Conference Parity: --conference-process aggregates completed ana
         assert.equal(replayed.sidecar.mode, 'replay');
         assert.equal(replayed.sidecar.papers.length, 4);
         assert.equal(replayed.sidecar.papers[0].paperId, entries[0].paperId);
-        assert.ok(replayed.outputPath.endsWith(path.join('runtime', 'score-calibrations', 'conference', processId, 'score-calibration-v1.json')));
+        assert.ok(replayed.outputPath.endsWith(path.join('runtime', 'score-calibrations', 'conference', processId, 'score-calibration.json')));
         assert.ok(fs.existsSync(replayed.outputPath));
     } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });

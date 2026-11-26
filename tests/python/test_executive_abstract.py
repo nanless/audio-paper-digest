@@ -24,7 +24,8 @@ from test_publish_to_blog import (
 setUpModule, tearDownModule = isolate_module_environment()
 
 OLD_SUMMARY_FP = '0492b17abed5cb34bcd340790cb9bd803e79c59b2e7bbb08a13de750e0f66ba6'
-NEW_SUMMARY_FP = 'f4354643c215dba4717d9769a310db87adafec301da7ec30434c8f43c1ef8f99'
+V4_SUMMARY_FP = 'f4354643c215dba4717d9769a310db87adafec301da7ec30434c8f43c1ef8f99'
+NEW_SUMMARY_FP = 'b6ccc6ae8a62b3a5ac240ee930a303847ee1cb613f68bfcaf45424d353d78762'
 
 EXECUTIVE_SOURCE_TEXT = (
     'We address streaming low-bitrate speech coding at 1.5 kbps on 16 kHz mono waveforms. '
@@ -173,13 +174,16 @@ class ExecutiveAbstractV4Test(unittest.TestCase):
         current = csf.current_header()
         self.assertEqual(current, {'contract': 'core-summary', 'schemaFingerprint': NEW_SUMMARY_FP})
         self.assertEqual(csf.LEGACY_SCHEMA_FINGERPRINT, OLD_SUMMARY_FP)
+        self.assertEqual(csf.V4_SCHEMA_FINGERPRINT, V4_SUMMARY_FP)
         self.assertEqual(csf.ORIGINAL_TAG, 'core-summary-detailed-v3')
         self.assertTrue(protocols.is_contract('core-summary-detailed-v3', 'core-summary'))
         self.assertTrue(protocols.has_valid_header({'contract': 'core-summary', 'schemaFingerprint': OLD_SUMMARY_FP}, 'core-summary'))
+        self.assertTrue(protocols.has_valid_header({'contract': 'core-summary', 'schemaFingerprint': V4_SUMMARY_FP}, 'core-summary'))
         self.assertTrue(protocols.has_valid_header(current, 'core-summary'))
         self.assertFalse(protocols.has_valid_header({'contract': 'core-summary', 'schemaFingerprint': 'f' * 64}, 'core-summary'))
 
         self.assertTrue(csf.is_executive_abstract_header(current))
+        self.assertTrue(csf.is_executive_abstract_header({'contract': 'core-summary', 'schemaFingerprint': V4_SUMMARY_FP}))
         self.assertFalse(csf.is_executive_abstract_header({'contract': 'core-summary', 'schemaFingerprint': OLD_SUMMARY_FP}))
         self.assertFalse(csf.is_executive_abstract_header('core-summary-detailed-v3'))
         self.assertFalse(csf.is_executive_abstract_header({'contract': 'core-summary-detailed-v3'}))

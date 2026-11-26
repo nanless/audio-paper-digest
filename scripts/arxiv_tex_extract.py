@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Safe arXiv /e-print/<id> TeX source archive unpacker and AST extractor.
 
-Contract: ``arxiv-tex-ast-v1``
+Contract: ``arxiv-tex-ast``
 
 Security properties enforced fail-closed:
 - Pure in-memory archive unpacking (no temp files or filesystem extraction gadgets).
@@ -35,7 +35,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-TEX_AST_CONTRACT = "arxiv-tex-ast-v1"
+TEX_AST_CONTRACT = "arxiv-tex-ast"
 
 DEFAULT_MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 DEFAULT_MAX_MEMBERS = 256
@@ -295,12 +295,7 @@ def _extract_tar_in_memory(
 
     try:
         tf = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:", encoding="utf-8", errors="strict")
-    except UnicodeDecodeError:
-        try:
-            tf = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:", encoding="latin-1", errors="strict")
-        except (tarfile.TarError, EOFError, OSError, UnicodeDecodeError, RecursionError, ValueError) as exc:
-            raise ArxivTexExtractError(f"Invalid tar archive: {exc}", code="INVALID_ARCHIVE") from exc
-    except (tarfile.TarError, EOFError, OSError, RecursionError, ValueError) as exc:
+    except (tarfile.TarError, EOFError, OSError, UnicodeDecodeError, RecursionError, ValueError) as exc:
         raise ArxivTexExtractError(f"Invalid tar archive: {exc}", code="INVALID_ARCHIVE") from exc
 
     with tf:
@@ -3057,7 +3052,7 @@ def extract_tex_ast_from_bytes(
     max_input_expansions: int = DEFAULT_MAX_INPUT_EXPANSIONS,
     max_expanded_chars: int = DEFAULT_MAX_EXPANDED_CHARS,
 ) -> dict[str, Any]:
-    """Safely extract structured `arxiv-tex-ast-v1` JSON dict from arXiv /e-print bytes."""
+    """Safely extract structured `arxiv-tex-ast` JSON dict from arXiv /e-print bytes."""
     normalized_id = _normalize_arxiv_id(arxiv_id)
     if not isinstance(raw_bytes, (bytes, bytearray)):
         raise ArxivTexExtractError("raw_bytes must be bytes", code="INVALID_ARCHIVE")
@@ -3232,7 +3227,7 @@ def main(argv: list[str] | None = None) -> int:
     require_external_runtime("arxiv_tex_extract.py")
 
     parser = argparse.ArgumentParser(
-        description="Safely extract structured arxiv-tex-ast-v1 JSON from arXiv /e-print TeX payloads."
+        description="Safely extract structured arxiv-tex-ast JSON from arXiv /e-print TeX payloads."
     )
     parser.add_argument("--input", default="-", help="Input archive/.tex file path, or '-' for stdin")
     parser.add_argument("--output", default="-", help="Output JSON file path, or '-' for stdout")

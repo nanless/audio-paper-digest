@@ -2,9 +2,6 @@
 const { matchesRunProvenance } = require('./lib/daily-source-format');
 const qualityFormats = require('./lib/analysis-quality-format');
 const { setupScriptLogging } = require('./log-setup');
-if (require.main === module && !process.argv.includes('--json')) {
-    setupScriptLogging(__filename);
-}
 
 const fs = require('fs');
 const path = require('path');
@@ -27,11 +24,11 @@ const {
     normalizeScoreToOneDecimal,
     isOpenSourceScoreAnchor,
     OPEN_SOURCE_SCORE_ANCHORS,
-    V2_OPEN_SOURCE_SCORE_ANCHORS,
+    UNIFIED_OPEN_SOURCE_SCORE_ANCHORS,
     parseAnalysis,
     readTagValidation
 } = require('./utils.js');
-const scoringRubricV2 = require('./lib/scoring-rubric-v2.js');
+const scoringRubric = require('./lib/scoring-rubric.js');
 const {
     getInvalidAnalysisReason,
     analysisManifestRequiresExperimentTableContract,
@@ -560,7 +557,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
     }
     const legacyCoreSummaryCompatible = options.allowLegacyCoreSummarySuccess === true
         && isLegacyApiAnalysisSuccessForReadOnlyValidation(options.paper);
-    if (options.requireComplete) {
+    if (options.requireComplete && !options.analysisWaived) {
         for (const stage of REQUIRED_RECOVERY_STAGES) {
             if (legacyCoreSummaryCompatible && stage === 'coreSummaryRepair') continue;
             const state = manifest.stages[stage];
@@ -570,7 +567,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
                 addIssue(issues, filePath, `${prefix}.stages.${stage} 尚未完成: ${state.status}`);
             }
         }
-        const coreSummaryBindingIssue = manifest.stages.coreSummaryRepair && !options.analysisWaived
+        const coreSummaryBindingIssue = manifest.stages.coreSummaryRepair
             ? validateCoreSummaryStageBinding(options.paper) : null;
         if (coreSummaryBindingIssue) addIssue(issues, filePath, `${prefix} ${coreSummaryBindingIssue}`);
         const tagStageProofIssue = !legacyCoreSummaryCompatible && !manifest.manualTakeover
@@ -583,14 +580,14 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
     }
     const scoring = manifest.stages.scoringAudit;
     if (require('./lib/scoring-record-format').hasScoringAuditFormat(scoring)) {
-        if (!scoringStabilityIsResolved(scoring)) {
+        if (!options.analysisWaived && !scoringStabilityIsResolved(scoring)) {
             addIssue(
                 issues,
                 filePath,
                 `${prefix}.stages.scoringAudit 评分稳定性告警尚未形成有效二次审计 resolution`
             );
         }
-        if (options.requireComplete && !hasValidIntegratedApiReaderRecords(options.paper)) {
+        if (options.requireComplete && !options.analysisWaived && !hasValidIntegratedApiReaderRecords(options.paper)) {
             addIssue(
                 issues,
                 filePath,
@@ -598,7 +595,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
             );
         }
     }
-    if (hasRecoverableFailure && typeof analysisCheckpoint !== 'string') {
+    if (hasRecoverableFailure && !options.analysisWaived && typeof analysisCheckpoint !== 'string') {
         addIssue(issues, filePath, `${prefix} 存在可恢复失败阶段但缺少 analysisCheckpoint`);
     }
 }
@@ -945,24 +942,39 @@ function validateDeepAnalysisMetadata(filePath, data, papers, issues, options = 
         addIssue(issues, filePath, 'deepAnalysisCompletedAt 必须是北京时间 ISO 时间戳');
     }
     if (['complete', 'partial_failed', 'failed'].includes(data.status)) {
-        const analysisRunSummary = getValidationAnalysisRunSummary(papers, {
-            allowLegacyCoreSummarySuccess: options.allowLegacyCoreSummarySuccess === true,
-            waivedIds: options.analysisWaiver?.paperIds || new Set()
+        const waivedIds = options.analysisWaiver?.paperIds || new Set();
+        const rawSummary = getValidationAnalysisRunSummary(papers, {
+            allowLegacyCoreSummarySuccess: options.allowLegacyCoreSummarySuccess === true
         });
-        if (analysisRunSummary.status !== data.status) {
+        const hasWaiver = waivedIds.size > 0;
+        const waivedSummary = hasWaiver
+            ? getValidationAnalysisRunSummary(papers, {
+                allowLegacyCoreSummarySuccess: options.allowLegacyCoreSummarySuccess === true,
+                waivedIds
+            })
+            : rawSummary;
+        const matchesRaw = rawSummary.status === data.status;
+        const matchesWaived = hasWaiver && waivedSummary.status === data.status;
+        if (!matchesRaw && !matchesWaived) {
             addIssue(
                 issues,
                 filePath,
-                `status (${data.status}) 与逐篇检查得到的批次状态 (${analysisRunSummary.status}) 不一致`
+                `status (${data.status}) 与逐篇检查得到的批次状态 (${rawSummary.status}) 不一致`
             );
         }
-        if (stats.remainingFailed !== undefined
-            && stats.remainingFailed !== analysisRunSummary.remaining) {
-            addIssue(
-                issues,
-                filePath,
-                `stats.remainingFailed (${stats.remainingFailed}) 与逐篇检查得到的未完成数量 (${analysisRunSummary.remaining}) 不一致`
-            );
+        if (stats.remainingFailed !== undefined) {
+            const expectedRemaining = matchesRaw
+                ? rawSummary.remaining
+                : (matchesWaived ? waivedSummary.remaining : rawSummary.remaining);
+            const matchesExpected = stats.remainingFailed === expectedRemaining
+                || (matchesRaw && matchesWaived && stats.remainingFailed === waivedSummary.remaining);
+            if (!matchesExpected) {
+                addIssue(
+                    issues,
+                    filePath,
+                    `stats.remainingFailed (${stats.remainingFailed}) 与逐篇检查得到的未完成数量 (${expectedRemaining}) 不一致`
+                );
+            }
         }
     }
     for (const field of ['arxivFetched', 'hfFetched', 'totalMerged', 'afterFilter', 'newlyAnalyzed', 'preservedExisting', 'totalAfterMerge']) {
@@ -1126,7 +1138,9 @@ function validatePaperListFile(filePath, options = {}) {
             }
             const parsed = paper.parsed;
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                addIssue(issues, filePath, `papers[${index}] 缺少有效 parsed 评分缓存`);
+                if (!analysisWaived || hasAnalysisBody) {
+                    addIssue(issues, filePath, `papers[${index}] 缺少有效 parsed 评分缓存`);
+                }
             } else {
                 try { readTagValidation(parsed); }
                 catch (error) { addIssue(issues, filePath, `papers[${index}] ${error.message}`); }
@@ -1145,11 +1159,11 @@ function validatePaperListFile(filePath, options = {}) {
                 }
 
                 const parsedRubric = parsed.scoringRubricVersion || SCORING_RUBRIC_VERSION;
-                const isParsedV2 = scoringRubricV2.isV2Rubric(parsedRubric);
-                const effectiveDimensions = isParsedV2
+                const isParsedUnified = scoringRubric.isUnifiedRubric(parsedRubric);
+                const effectiveDimensions = isParsedUnified
                     ? Object.fromEntries(Object.keys(SCORE_DIMENSIONS).map(k => [k, 10]))
                     : SCORE_DIMENSIONS;
-                const effectiveOpenAnchors = isParsedV2 ? V2_OPEN_SOURCE_SCORE_ANCHORS : OPEN_SOURCE_SCORE_ANCHORS;
+                const effectiveOpenAnchors = isParsedUnified ? UNIFIED_OPEN_SOURCE_SCORE_ANCHORS : OPEN_SOURCE_SCORE_ANCHORS;
                 const dimensionValues = {};
                 let validDimCount = 0;
                 for (const [field, maxScore] of Object.entries(effectiveDimensions)) {
@@ -1168,12 +1182,12 @@ function validatePaperListFile(filePath, options = {}) {
                     }
                 }
                 if (validDimCount === Object.keys(SCORE_DIMENSIONS).length && Number.isFinite(score)) {
-                    const expected = isParsedV2 && parsed.documentType
-                        ? scoringRubricV2.calculateV2WeightedTotal(parsed.documentType, dimensionValues).total
+                    const expected = isParsedUnified && parsed.documentType
+                        ? scoringRubric.calculateWeightedTotal(parsed.documentType, dimensionValues).total
                         : normalizeScoreToOneDecimal(Math.min(10, Object.values(dimensionValues).reduce((sum, value) => sum + value, 0)));
                     const actual = normalizeScoreToOneDecimal(score);
                     if (actual !== expected) {
-                        const label = isParsedV2 && parsed.documentType ? 'type-aware-v2 加权计算结果' : '八项合计封顶结果';
+                        const label = isParsedUnified && parsed.documentType ? `${parsedRubric} 加权计算结果` : '八项合计封顶结果';
                         addIssue(issues, filePath, `papers[${index}] parsed.score (${actual}) 与${label} (${expected}) 不一致`);
                     }
                 }
@@ -1181,8 +1195,8 @@ function validatePaperListFile(filePath, options = {}) {
                 const openSourceScore = numericScore(parsed.openSourceScore);
                 const hasResource = [parsed.hasCode, parsed.hasModel, parsed.hasDataset]
                     .some(value => value === '是' || value === 'yes');
-                const openReleasedFloor = isParsedV2 ? scoringRubricV2.V2_OPEN_SOURCE_RELEASED_THRESHOLD : 1;
-                if ((parsed.documentType !== '理论研究' || isParsedV2)
+                const openReleasedFloor = isParsedUnified ? scoringRubric.UNIFIED_OPEN_SOURCE_RELEASED_THRESHOLD : 1;
+                if ((parsed.documentType !== '理论研究' || isParsedUnified)
                     && Number.isFinite(openSourceScore) && openSourceScore >= openReleasedFloor && !hasResource) {
                     addIssue(issues, filePath, `papers[${index}] parsed.openSourceScore=${openSourceScore} 但无代码、模型或数据资源`);
                 }
@@ -1238,7 +1252,7 @@ function validatePaperListFile(filePath, options = {}) {
                     issues,
                     paper.analysisCheckpoint,
                     {
-                        requireComplete: hasAnalysisBody,
+                        requireComplete: hasAnalysisBody && !analysisWaived,
                         analysis: paper.analysis,
                         sourceText,
                         imageManifest: paper.imageManifest,
@@ -1981,16 +1995,31 @@ function validateFilteredDeepPapersConsistency(files = Config.FILES, options = {
 
                 const deepPaper = deepById.get(id);
                 if (!deepPaper) continue;
-                const deepSucceeded = options.analysisWaiver?.paperIds?.has(id)
-                    || getReadOnlyValidationAnalysisRunSummary([deepPaper]).success === 1;
+                const actualDeepSucceeded = getReadOnlyValidationAnalysisRunSummary([deepPaper]).success === 1;
+                const isWaived = Boolean(options.analysisWaiver?.paperIds?.has(id));
                 const digestStatus = databasePaper.digestStatus?.status;
                 const latestAttemptStatus = databasePaper.digestStatus?.latestAttemptStatus;
-                if (deepSucceeded) {
+                if (actualDeepSucceeded) {
                     if (digestStatus !== 'analyzed') {
                         addIssue(issues, files.papers, `${id} 深度分析成功，但 digestStatus.status 不是 analyzed`);
                     }
                     if (latestAttemptStatus !== undefined && latestAttemptStatus !== 'analyzed') {
                         addIssue(issues, files.papers, `${id} 深度分析成功，但 digestStatus.latestAttemptStatus 不是 analyzed`);
+                    }
+                } else if (isWaived) {
+                    const validWaivedFailureState = (digestStatus === 'analysis_failed'
+                        && (latestAttemptStatus === undefined || latestAttemptStatus === 'analysis_failed'))
+                        || (digestStatus === 'analyzed' && latestAttemptStatus === 'analysis_failed');
+                    const hasBody = typeof deepPaper.analysis === 'string' && deepPaper.analysis.trim().length > 0;
+                    const validWaivedAnalyzedBodyState = hasBody
+                        && digestStatus === 'analyzed'
+                        && (latestAttemptStatus === undefined || latestAttemptStatus === 'analyzed');
+                    if (!validWaivedFailureState && !validWaivedAnalyzedBodyState) {
+                        addIssue(
+                            issues,
+                            files.papers,
+                            `${id} 深度分析已豁免，但 digestStatus (${digestStatus || '缺失'} / ${latestAttemptStatus || '缺失'}) 不是合法的失败、保留旧成功或已有正文状态`
+                        );
                     }
                 } else {
                     const preservesOlderSuccess = digestStatus === 'analyzed'
@@ -2085,6 +2114,15 @@ function hasAnyCurrentDataFiles(files = Config.FILES) {
 }
 
 function main(argv = process.argv.slice(2)) {
+    try {
+        require('./env-loader.js').requireExternalRuntime('validate-data-files.js');
+    } catch (error) {
+        console.error(`[validate-data-files] ${error.message}`);
+        process.exit(1);
+    }
+    if (require.main === module && !argv.includes('--json')) {
+        setupScriptLogging(__filename);
+    }
     const allowEmpty = argv.includes('--allow-empty');
     const unknown = argv.filter(arg => arg !== '--allow-empty');
     if (unknown.length > 0) {

@@ -3,8 +3,11 @@
 const protocols = require('./protocol-codec');
 const name = 'core-summary';
 const legacySchemaFingerprint = '0492b17abed5cb34bcd340790cb9bd803e79c59b2e7bbb08a13de750e0f66ba6';
+const v4SchemaFingerprint = 'f4354643c215dba4717d9769a310db87adafec301da7ec30434c8f43c1ef8f99';
+const EXECUTIVE_ABSTRACT_PROFILES = Object.freeze(['executive-abstract', 'executive-abstract-v4']);
 const originalTag = protocols.historicalHeader(name, 'source-bound-detailed-summary', null).contract;
 const legacyHeader = () => protocols.historicalHeader(name, 'source-bound-detailed-summary', legacySchemaFingerprint);
+const v4Header = () => protocols.historicalHeader(name, 'source-bound-detailed-summary', v4SchemaFingerprint);
 const currentHeader = () => protocols.recordHeader(name, name);
 
 function readDeclaration(value) {
@@ -16,8 +19,13 @@ function readDeclaration(value) {
 
 function isExecutiveAbstractHeader(header) {
     const resolved = typeof header === 'string' ? readDeclaration(header) : header;
-    return Boolean(resolved && typeof resolved === 'object' && !Array.isArray(resolved)
-        && protocols.isCurrentHeader(resolved, name));
+    if (!resolved || typeof resolved !== 'object' || Array.isArray(resolved)
+        || !protocols.hasValidHeader(resolved, name)
+        || !Object.hasOwn(resolved, 'schemaFingerprint')) {
+        return false;
+    }
+    const schema = protocols.declaredSchema(resolved.contract, name, resolved.schemaFingerprint);
+    return EXECUTIVE_ABSTRACT_PROFILES.includes(schema?.summaryProfile);
 }
 
 function stageFields(header) {
@@ -37,7 +45,10 @@ function readStage(declaration, stage) {
 module.exports = {
     originalTag,
     legacySchemaFingerprint,
+    v4SchemaFingerprint,
+    EXECUTIVE_ABSTRACT_PROFILES,
     legacyHeader,
+    v4Header,
     currentHeader,
     isExecutiveAbstractHeader,
     readDeclaration,

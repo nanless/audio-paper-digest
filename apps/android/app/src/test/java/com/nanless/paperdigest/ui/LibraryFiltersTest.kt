@@ -7,7 +7,7 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 
-class LibraryV15FiltersTest {
+class LibraryFiltersTest {
     private fun paperWithConcepts(
         id: String,
         title: String,

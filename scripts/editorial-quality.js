@@ -9,7 +9,7 @@ const {
     visibleAnalysisLines
 } = require('./lib/analysis-section-titles.js');
 const {
-    STRUCTURED_V5,
+    isStructuredEditorial,
     isModernEditorialProfile
 } = require('./lib/reader-record-format.js');
 
@@ -121,7 +121,7 @@ const READER_TEMPLATE_PATTERNS = Object.freeze([
     /下一段将(?:解释|说明|展示|讨论)/gu,
     /^\s*\d+[.)、]\s*是(?=\S)/gmu
 ]);
-const READER_V4_TEMPLATE_PATTERNS = Object.freeze([
+const READER_MODERN_TEMPLATE_PATTERNS = Object.freeze([
     /(?:这张图|该图|本图)确实可见/gu,
     /从像素可见/gu,
     /比较的?问题是\s*[：:]/gu,
@@ -130,7 +130,7 @@ const READER_V4_TEMPLATE_PATTERNS = Object.freeze([
 ]);
 
 const PERCENT_METRICS_RE = /(?:准确率|正确率|召回率|错误率|覆盖率|命中率|\b(?:WER|CER|PER)\b|F-?score|S-BAcc|state-balanced accuracy|step accuracy)/i;
-const STRUCTURED_V5_PERCENT_METRICS_RE = /(?:准确率|正确率|召回率|错误率|覆盖率|命中率|\b(?:WER|CER|PER|EER)\b|F-?score|S-BAcc|state-balanced accuracy|step accuracy)/i;
+const STRUCTURED_EDITORIAL_PERCENT_METRICS_RE = /(?:准确率|正确率|召回率|错误率|覆盖率|命中率|\b(?:WER|CER|PER|EER)\b|F-?score|S-BAcc|state-balanced accuracy|step accuracy)/i;
 const AUDIO_METRIC_WHITELIST = Object.freeze([
     'UTMOS', 'DNSMOS', 'NISQA', 'ViSQOL', 'STOI', 'ESTOI',
     'FAD', 'CLAP', 'RTF', 'TTFA', 'EER', 'SI-SDR', 'SI-SDRi',
@@ -138,7 +138,7 @@ const AUDIO_METRIC_WHITELIST = Object.freeze([
     'WER', 'CER', 'PER', 'DER', 'JER', 'SIM', 'SECS', 'SDR', 'SNR'
 ]);
 const DIRECTION_RE = /(?:提高|提升|增加|改善|下降|降低|减少|相差|差距|高于|低于|从.+(?:到|降至|升至))/;
-const STRUCTURED_V5_DIRECTION_RE = /(?:提高|提升|增加|改善|下降|降低|减少|升至|降至|相差|差距|高于|低于|从.+(?:到|降至|升至))/;
+const STRUCTURED_EDITORIAL_DIRECTION_RE = /(?:提高|提升|增加|改善|下降|降低|减少|升至|降至|相差|差距|高于|低于|从.+(?:到|降至|升至))/;
 const DEFENSIVE_NEGATION_RE = /(?:不能|不应|不足以|不等于|并不代表|并不能|尚不能|不可外推)/g;
 const READER_SPACED_QUANTIFIERS = Object.freeze([
     '个百分点', '个随机种子', '名参与者', '个文件', '个会话', '个模型', '个候选', '个组合',
@@ -337,7 +337,7 @@ function isDiscourseTaskConditionNumeral(text, index, surface) {
 }
 
 let cachedQuantitativePatterns = null;
-function getQuantitativePatterns(isCohesiveV4) {
+function getQuantitativePatterns(isCohesiveEditorial) {
     if (!cachedQuantitativePatterns) {
         const unitAlternation = EMPIRICAL_COUNT_UNITS
             .slice()
@@ -380,11 +380,11 @@ function getQuantitativePatterns(isCohesiveV4) {
             legacy: makePatterns(false)
         };
     }
-    return isCohesiveV4 ? cachedQuantitativePatterns.modern : cachedQuantitativePatterns.legacy;
+    return isCohesiveEditorial ? cachedQuantitativePatterns.modern : cachedQuantitativePatterns.legacy;
 }
 
-function maskStructuredV5NaturalNumerals(text, replacer) {
-    // 仅作用于 STRUCTURED_V5：保护自然中文单数“一”与常见惯用表达，避免把
+function maskStructuredNaturalNumerals(text, replacer) {
+    // 仅作用于 STRUCTURED_EDITORIAL：保护自然中文单数“一”与常见惯用表达，避免把
     // “留一会话/这一对比/另一位/最后一次/一次看清/一套/一路/一种/一帧/二次开发”等
     // 自然中文改写成生硬的“留 1 会话/这 1 对比/1 次”。
     // 真实定量计数（>=2 如“三个模型/五层/十六千赫兹/百分之八十五”）、小数/分数/比值/乘积
@@ -445,7 +445,7 @@ function maskStructuredV5NaturalNumerals(text, replacer) {
 }
 
 function findQuantitativeChineseNumerals(text, options = {}) {
-    const isCohesiveV4 = isModernEditorialProfile(options?.editorialProfile);
+    const isCohesiveEditorial = isModernEditorialProfile(options?.editorialProfile);
     // 下列“一步”都是篇章连接或指代，不是精确的 1 个步骤；用等长空白
     // 屏蔽它们以保持后续 issue index/line 不漂移。
     let value = normalizeNfkc(text)
@@ -473,7 +473,7 @@ function findQuantitativeChineseNumerals(text, options = {}) {
             /(?:进一步|这一步|下一步|上一步|每一步|一次性|这一类|有趣二分)|(?:同一|统一|唯一|单一)(?=[\p{Script=Han}])|一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))|二分(?=(?:解释|结构|视角|框架|法))/gu,
             match => ' '.repeat(match.length)
         );
-    if (isCohesiveV4) {
+    if (isCohesiveEditorial) {
         value = value
             .replace(/最小二乘(?:法|估计|解|回归|拟合|问题|损失|误差)?/gu, match => ' '.repeat(match.length))
             .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一对一|一对多|多对一|多对多|一一对应)/gu, match => ' '.repeat(match.length))
@@ -485,11 +485,11 @@ function findQuantitativeChineseNumerals(text, options = {}) {
                 match => ' '.repeat(match.length))
             .replace(/每一\s*(?:维|帧|步|个|次|层|段|组|条|路|类|轮|批|项|种|秒|毫秒|分钟|小时|天|人|名|例|张|篇|对|位|核|通道|阶段|分支|样本|模块|token|epoch)/giu,
                 match => ' '.repeat(match.length));
-        if (options?.editorialProfile === STRUCTURED_V5) {
-            value = maskStructuredV5NaturalNumerals(value, match => ' '.repeat(match.length));
+        if (isStructuredEditorial(options?.editorialProfile)) {
+            value = maskStructuredNaturalNumerals(value, match => ' '.repeat(match.length));
         }
     }
-    const patterns = getQuantitativePatterns(isCohesiveV4);
+    const patterns = getQuantitativePatterns(isCohesiveEditorial);
     const candidates = [];
     for (const [regex, reason] of patterns) {
         for (const finding of collectRegexMatches(value, regex, reason)) {
@@ -652,8 +652,8 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = [], option
         .replace(/!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)/g, protect)
         .replace(/“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)/g, protect)
         .replace(/^(?:原文|原句|逐字引语|口语(?:转录|转写|输出)|输入(?:转录)?|Transcript|Input)\s*[:：][^\n]*/gmi, protect);
-    if (options?.editorialProfile === STRUCTURED_V5) {
-        normalized = maskStructuredV5NaturalNumerals(normalized, protect);
+    if (isStructuredEditorial(options?.editorialProfile)) {
+        normalized = maskStructuredNaturalNumerals(normalized, protect);
     }
     const expandDecimalScale = (raw, places) => {
         const sign = /^[+-]/.test(raw) ? raw[0] : '';
@@ -729,7 +729,7 @@ function findReaderTemplatePhrases(text, options = {}) {
     const value = normalizeNfkc(text);
     const findings = [];
     const patterns = isModernEditorialProfile(options?.editorialProfile)
-        ? [...READER_TEMPLATE_PATTERNS, ...READER_V4_TEMPLATE_PATTERNS]
+        ? [...READER_TEMPLATE_PATTERNS, ...READER_MODERN_TEMPLATE_PATTERNS]
         : READER_TEMPLATE_PATTERNS;
     for (const regex of patterns) {
         findings.push(...collectRegexMatches(value, regex, 'reader_template_phrase'));
@@ -854,7 +854,7 @@ function findReaderLanguageIssues(text, { contextText = '', sourceText = '', doc
             {
                 code: 'reader_workflow_leakage',
                 regex: /(?:这张图|该图|本图)确实可见|从像素可见|比较的?问题是\s*[：:]|(?:这张表|该表|本表)支撑的判断是|本表数值与单位依据论文\s*PDF/gu,
-                message: '这句使用了生硬的二代校验套话。请改为直接结合论文具体机制、图表要素或实验条件展开自然讲解，保留原数字、单位、方法归属与来源证据。'
+                message: '这句使用了生硬的模板化校验套话。请改为直接结合论文具体机制、图表要素或实验条件展开自然讲解，保留原数字、单位、方法归属与来源证据。'
             },
             {
                 code: 'reader_awkward_translation',
@@ -871,7 +871,7 @@ function findReaderLanguageIssues(text, { contextText = '', sourceText = '', doc
                 regex: /虚拟语音质量客观听众/gu,
                 message: '不要把标准声学指标缩写 ViSQOL 生硬逐词直译成“虚拟语音质量客观听众”；请保留官方指标名 ViSQOL，并在首次出现时用自然中文括号说明其含义（如“ViSQOL（语音感知质量客观指标）”）。'
             },
-            ...(editorialProfile === STRUCTURED_V5 ? [
+            ...(isStructuredEditorial(editorialProfile) ? [
                 {
                     code: 'reader_awkward_translation',
                     regex: /评论(?:更新|网络|模型|器|与学生)/gu,
@@ -1254,8 +1254,8 @@ function findCrossSectionNearDuplicates(input, options = {}) {
 
 function numericFactSignatures(text, options = {}) {
     const minimumNumbers = Number.isInteger(options.minimumNumbers) ? options.minimumNumbers : 2;
-    const isStructuredV5 = options?.editorialProfile === STRUCTURED_V5;
-    const metricRegex = isStructuredV5
+    const isStructured = isStructuredEditorial(options?.editorialProfile);
+    const metricRegex = isStructured
         ? /(?:\b(?:WER|CER|PER|EER|DER|JER|F-?score|mAP|MAE|RMSE|PESQ|UTMOS|DNSMOS|NISQA|ViSQOL|WV-MOS|MOS|STOI|ESTOI|FAD|CLAP|RTF|TTFA|SI-SDRi?|MCD|LSD|SRCC)\b|准确率|召回率|错误率|覆盖率|延迟|吞吐|能耗)/gi
         : /(?:WER|CER|PER|F-?score|mAP|MAE|RMSE|PESQ|SI-SDR|SRCC|准确率|召回率|错误率|覆盖率|延迟|吞吐|能耗)/gi;
     const signatures = [];
@@ -1295,16 +1295,16 @@ function findCrossSectionNumericFactReuse(input, options = {}) {
 }
 
 function findLongParagraphs(input, options = {}) {
-    const isStructuredV5 = options.editorialProfile === STRUCTURED_V5;
+    const isStructured = isStructuredEditorial(options.editorialProfile);
     const isModernEditorial = isModernEditorialProfile(options.editorialProfile);
     const warningChars = Number.isInteger(options.warningChars)
-        ? options.warningChars : (isStructuredV5 ? 320 : isModernEditorial ? 340 : 180);
+        ? options.warningChars : (isStructured ? 320 : isModernEditorial ? 340 : 180);
     const errorChars = Number.isInteger(options.errorChars)
-        ? options.errorChars : (isStructuredV5 ? 420 : isModernEditorial ? 480 : 260);
+        ? options.errorChars : (isStructured ? 420 : isModernEditorial ? 480 : 260);
     const warningSentences = Number.isInteger(options.warningSentences)
-        ? options.warningSentences : (isStructuredV5 ? 7 : isModernEditorial ? 8 : 5);
+        ? options.warningSentences : (isStructured ? 7 : isModernEditorial ? 8 : 5);
     const errorSentences = Number.isInteger(options.errorSentences)
-        ? options.errorSentences : (isStructuredV5 ? 10 : isModernEditorial ? 11 : 7);
+        ? options.errorSentences : (isStructured ? 10 : isModernEditorial ? 11 : 7);
     const sentenceRegex = options.countSemicolons === false || isModernEditorial ? /[。！？!?]/g : /[。！？；!?;]/g;
     // validateEditorialQuality 传进来的是已经整理好的读者小节对象。
     // 若再把它收成六个核心小节，authors/review/scoring/openSource
@@ -1473,9 +1473,9 @@ function maskBoundParameterSweeps(text, percentMetricsRe = PERCENT_METRICS_RE) {
 }
 
 function findMissingComparisonUnits(text, options = {}) {
-    const isStructuredV5 = options?.editorialProfile === STRUCTURED_V5;
-    const percentMetricsRe = isStructuredV5 ? STRUCTURED_V5_PERCENT_METRICS_RE : PERCENT_METRICS_RE;
-    const directionRe = isStructuredV5 ? STRUCTURED_V5_DIRECTION_RE : DIRECTION_RE;
+    const isStructured = isStructuredEditorial(options?.editorialProfile);
+    const percentMetricsRe = isStructured ? STRUCTURED_EDITORIAL_PERCENT_METRICS_RE : PERCENT_METRICS_RE;
+    const directionRe = isStructured ? STRUCTURED_EDITORIAL_DIRECTION_RE : DIRECTION_RE;
     const value = stripCodeLinksAndUrls(text)
         // 否则「一对一分配」会被读成两个数值后面跟一个「分」。
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
@@ -1525,7 +1525,7 @@ function findMissingComparisonUnits(text, options = {}) {
             /([λε])\s*在\s*[-+]?\d+(?:\.\d+)?\s*(?:到|至)\s*[-+]?\d+(?:\.\d+)?\s*之间/gu
         )];
         let comparisonText = maskBoundParameterSweeps(
-            maskExplicitTurnRangeAxis(maskBoundMetricDeltaIntervals(sentence.text, percentMetricsRe, { allowMetricGap: isStructuredV5 })),
+            maskExplicitTurnRangeAxis(maskBoundMetricDeltaIntervals(sentence.text, percentMetricsRe, { allowMetricGap: isStructured })),
             percentMetricsRe
         );
         // NFE 的显式取值集合与同句展开步数 K 是设置条件。
@@ -1734,7 +1734,7 @@ function findMissingComparisonUnits(text, options = {}) {
                 /(?:时间步|步数|迭代步|NFE)\s*(?:从|为|在)?\s*\d+(?:\.\d+)?\s*(?:到|至|[-–—])\s*\d+(?:\.\d+)?/giu,
                 match => ' '.repeat(match.length)
             );
-        if (isStructuredV5) {
+        if (isStructured) {
             const negateGuard = (match, offset, original) => {
                 const start = Math.max(...['。', '！', '？', '!', '?', '；', ';', '，', ',', '\n']
                     .map(delimiter => original.lastIndexOf(delimiter, offset - 1)));
@@ -1751,7 +1751,7 @@ function findMissingComparisonUnits(text, options = {}) {
             const nonPercentMetricNames = '(?:SI-SDRi|SI-SDR|SDR|SNR|STOI|ESTOI|FAD|CLAP|RTF|TTFA|MCD|LSD|SIM|SECS|CIDEr|SPIDEr|METEOR|SPICE|BLEU(?:-[1-4])?|ROUGE(?:-[12L])?|FENSE)';
             const postUnitMetricNames = '(?:CIDEr|SPIDEr|METEOR|SPICE|BLEU(?:-[1-4])?|ROUGE(?:-[12L])?|FENSE)';
             numericText = numericText
-                // 仅在 STRUCTURED_V5 屏蔽已知非百分比音频与描述指标（1–5 感知打分、声学客观指标、无量纲描述指标）的直接取值/变化区间，
+                // 仅在 STRUCTURED_EDITORIAL 屏蔽已知非百分比音频与描述指标（1–5 感知打分、声学客观指标、无量纲描述指标）的直接取值/变化区间，
                 // 以及显式带非百分比时延/容量/码率/采样率/声学单位的数值；EER 属于百分率指标故不在此屏蔽，且严格保留同句否定归属保护。
                 .replace(
                     new RegExp(
@@ -2463,12 +2463,12 @@ function validateEditorialQuality(input, options = {}) {
     };
 }
 
-const STRUCTURED_V5_CANNED_PREFIXES = new Set([
+const STRUCTURED_EDITORIAL_CANNED_PREFIXES = new Set([
     '问题本质', '方法全景', '核心机制', '核心机理', '主实验验证', '实验验证',
     '适用边界', '适用边界与复现要点', '总结与选型', '背景与问题', '方法与架构', '实验与结论'
 ]);
 
-function stripStructuredV5NonProseBlocks(body) {
+function stripStructuredNonProseBlocks(body) {
     const lines = String(body || '').split('\n');
     const kept = [];
     let fenceEnd = null;
@@ -2519,9 +2519,9 @@ function stripFencedCodeForHierarchy(body) {
     return kept.join('\n');
 }
 
-const V5_HEADING_BARE_ENGLISH_RE = /(?<=[\u4e00-\u9fff][ \t]*)(?:grounding|grounded|pending|backchannel(?:ing)?|embodied|scaling|alignment|rollout|trade-?off|lookahead|pipeline|baseline|critic)(?=[ \t]*(?:[\u4e00-\u9fff]|[，,。；;！？!?]|$))/u;
+const STRUCTURED_HEADING_BARE_ENGLISH_RE = /(?<=[\u4e00-\u9fff][ \t]*)(?:grounding|grounded|pending|backchannel(?:ing)?|embodied|scaling|alignment|rollout|trade-?off|lookahead|pipeline|baseline|critic)(?=[ \t]*(?:[\u4e00-\u9fff]|[，,。；;！？!?]|$))/u;
 
-function findStructuredV5SectionIssues(sections = []) {
+function findStructuredSectionIssues(sections = []) {
     if (!Array.isArray(sections) || sections.length === 0) return { issues: [], warnings: [] };
     const issues = [];
     const warnings = [];
@@ -2529,7 +2529,7 @@ function findStructuredV5SectionIssues(sections = []) {
     const cannedIndexes = [];
     sections.forEach((section, index) => {
         const heading = String(section?.heading || '').trim();
-        const headingBareEnglish = V5_HEADING_BARE_ENGLISH_RE.exec(heading);
+        const headingBareEnglish = STRUCTURED_HEADING_BARE_ENGLISH_RE.exec(heading);
         if (headingBareEnglish) {
             issues.push({
                 code: 'reader_heading_bare_english',
@@ -2544,11 +2544,11 @@ function findStructuredV5SectionIssues(sections = []) {
             const prefix = colonMatch[1].trim();
             if (!byPrefix.has(prefix)) byPrefix.set(prefix, []);
             byPrefix.get(prefix).push(index);
-            if (STRUCTURED_V5_CANNED_PREFIXES.has(prefix)) cannedIndexes.push(index);
+            if (STRUCTURED_EDITORIAL_CANNED_PREFIXES.has(prefix)) cannedIndexes.push(index);
         }
         const body = String(section?.body || '');
         const unfencedBody = stripFencedCodeForHierarchy(body);
-        const proseText = stripStructuredV5NonProseBlocks(body);
+        const proseText = stripStructuredNonProseBlocks(body);
         const proseChars = chineseCharacterCount(proseText);
         const hasSubheading = /^#{4,6}\s+\S/m.test(unfencedBody);
         const listItems = unfencedBody.match(/^[ \t]*(?:[-*+]\s+|\d+[.)、]\s+)\S/gm) || [];
@@ -2641,12 +2641,12 @@ module.exports = {
     normalizeEvidence,
     coerceCoreSections,
     isDiscourseTaskConditionNumeral,
-    maskStructuredV5NaturalNumerals,
+    maskStructuredNaturalNumerals,
     findQuantitativeChineseNumerals,
     normalizeIssueBoundReaderQuantitativeNumerals,
     findReaderTemplatePhrases,
     findReaderLanguageIssues,
-    findStructuredV5SectionIssues,
+    findStructuredSectionIssues,
     normalizeDanglingReaderConnectors,
     findBrokenProse,
     findNumericTypographyDefects,

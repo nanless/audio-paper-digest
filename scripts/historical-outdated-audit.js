@@ -10,6 +10,8 @@ const path = require('node:path');
 const YAML = require('yaml');
 const { requireExternalRuntime } = require('./env-loader.js');
 const codec = require('./lib/protocol-codec.js');
+const readerFormat = require('./lib/reader-record-format.js');
+const scoringRubric = require('./lib/scoring-rubric.js');
 const tagRulesApi = require('./lib/tag-rules.js');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -30,11 +32,14 @@ const USAGE = [
 
 function currentStandards() {
     const tagRules = tagRulesApi.getDefaultTagRules();
+    const currentReaderFp = codec.schemaFingerprint('beginner-researcher');
     return {
         readerContract: codec.contract('beginner-researcher'),
-        readerSchemaFingerprint: codec.schemaFingerprint('beginner-researcher'),
-        readerEditorialProfile: 'structured-pipeline-v5',
-        scoringRubricVersion: 'type-aware-v2',
+        readerSchemaFingerprint: currentReaderFp,
+        acceptedReaderSchemaFingerprints: [currentReaderFp, readerFormat.V5_PLAN_FP],
+        readerEditorialProfile: readerFormat.STRUCTURED_EDITORIAL,
+        scoringRubricVersion: scoringRubric.CURRENT_SCORING_RUBRIC,
+        acceptedScoringRubricVersions: [...scoringRubric.UNIFIED_SCORING_RUBRIC_VERSIONS],
         tagsRegistrySha256: tagRules.registrySha256,
         tagsRegistryVersion: tagRules.registryVersion,
         readerQualityContract: codec.contract('reader-facing-page'),
@@ -163,19 +168,26 @@ function evaluatePageOutdatedReasons(record, standards) {
         ? frontmatter.paper_digest_api_reader_schema_fingerprint.trim() : '';
     const readerContract = typeof frontmatter.paper_digest_api_reader_contract === 'string'
         ? frontmatter.paper_digest_api_reader_contract.trim() : '';
-    if (readerContract !== standards.readerContract || readerFp !== standards.readerSchemaFingerprint) {
-        reasons.push('missing-structured-pipeline-v5');
+    const acceptedReaderFps = Array.isArray(standards.acceptedReaderSchemaFingerprints)
+        ? standards.acceptedReaderSchemaFingerprints
+        : [standards.readerSchemaFingerprint];
+    if (readerContract !== standards.readerContract || !acceptedReaderFps.includes(readerFp)) {
+        reasons.push('missing-structured-pipeline-reader');
     }
     const rubricVersion = typeof frontmatter.paper_digest_scoring_rubric_version === 'string'
         ? frontmatter.paper_digest_scoring_rubric_version.trim() : '';
     const scoringContract = typeof frontmatter.paper_digest_scoring_contract === 'string'
         ? frontmatter.paper_digest_scoring_contract.trim() : '';
-    const hasTypeAwareV2 = rubricVersion === standards.scoringRubricVersion
-        || scoringContract.includes(standards.scoringRubricVersion)
-        || /type-aware-v2/i.test(body)
+    const acceptedRubrics = Array.isArray(standards.acceptedScoringRubricVersions)
+        ? standards.acceptedScoringRubricVersions
+        : [standards.scoringRubricVersion];
+    const hasUnifiedRubric = acceptedRubrics.includes(rubricVersion)
+        || scoringRubric.isUnifiedRubric(rubricVersion)
+        || acceptedRubrics.some(v => v && scoringContract.includes(v))
+        || /(?:^|[^\w-])type-aware(?:-v2)?(?:$|[^\w-])/i.test(body)
         || /八维.*0[–-]10|\/10\s*\|.*\/10\s*\|.*\/10/.test(body);
-    if (!hasTypeAwareV2) {
-        reasons.push('missing-type-aware-v2');
+    if (!hasUnifiedRubric) {
+        reasons.push('missing-type-aware-rubric');
     }
     const readerSections = frontmatter.paper_digest_reader_sections;
     if (!Array.isArray(readerSections) || readerSections.length === 0) {

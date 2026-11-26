@@ -27,9 +27,9 @@ SCORE_DIMENSIONS = (
 
 
 def score_dimensions_for_rubric(rubric_version=None):
-    import scoring_rubric_v2 as _scoring_v2
-    if _scoring_v2.is_v2_rubric(rubric_version):
-        return _scoring_v2.V2_PRESENTATION_DIMENSIONS
+    import scoring_rubric as _scoring
+    if _scoring.is_unified_rubric(rubric_version):
+        return _scoring.UNIFIED_PRESENTATION_DIMENSIONS
     return SCORE_DIMENSIONS
 
 

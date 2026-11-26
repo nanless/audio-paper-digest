@@ -3666,18 +3666,18 @@ def _try_mode_inline_author_aff(merged_lines: list[dict]) -> tuple[list[dict], s
     return None
 
 
-def extract_pdf_page1_authors_v1(pdf_bytes: bytes) -> dict | None:
+def extract_pdf_page1_authors_legacy(pdf_bytes: bytes) -> dict | None:
     with _PDF_AUTHOR_EXTRACT_LOCK:
-        import pdf_author_extract_v1 as _v1
-        return _v1.extract_pdf_page1_authors(pdf_bytes)
+        import pdf_author_extract_legacy as _legacy
+        return _legacy.extract_pdf_page1_authors(pdf_bytes)
 
 
-def extract_pdf_page1_authors_v2(pdf_bytes: bytes) -> dict | None:
+def extract_pdf_page1_authors_structured(pdf_bytes: bytes) -> dict | None:
     with _PDF_AUTHOR_EXTRACT_LOCK:
-        return _extract_pdf_page1_authors_v2_locked(pdf_bytes)
+        return _extract_pdf_page1_authors_structured_locked(pdf_bytes)
 
 
-def _extract_pdf_page1_authors_v2_locked(pdf_bytes: bytes) -> dict | None:
+def _extract_pdf_page1_authors_structured_locked(pdf_bytes: bytes) -> dict | None:
     if not isinstance(pdf_bytes, (bytes, bytearray)) or len(pdf_bytes) < 5 or len(pdf_bytes) > MAX_PDF_BYTES or not pdf_bytes.startswith(b"%PDF-"):
         return None
     pdf_sha = _sha256_bytes(bytes(pdf_bytes))
@@ -4297,13 +4297,13 @@ def _extract_pdf_page1_authors_v2_locked(pdf_bytes: bytes) -> dict | None:
     return None
 
 
-def extract_pdf_page1_authors_v3(pdf_bytes: bytes) -> dict | None:
+def extract_pdf_page1_authors_geometric(pdf_bytes: bytes) -> dict | None:
     with _PDF_AUTHOR_EXTRACT_LOCK:
         global _V3_GUARDS_ENABLED
         prev = _V3_GUARDS_ENABLED
         _V3_GUARDS_ENABLED = True
         try:
-            result = extract_pdf_page1_authors_v2(pdf_bytes)
+            result = extract_pdf_page1_authors_structured(pdf_bytes)
         finally:
             _V3_GUARDS_ENABLED = prev
     if isinstance(result, dict):
@@ -4314,11 +4314,11 @@ def extract_pdf_page1_authors_v3(pdf_bytes: bytes) -> dict | None:
 def extract_pdf_page1_authors(pdf_bytes: bytes, contract: str = CONTRACT_V2) -> dict | None:
     with _PDF_AUTHOR_EXTRACT_LOCK:
         if contract in (CONTRACT_V1, "v1"):
-            return extract_pdf_page1_authors_v1(pdf_bytes)
+            return extract_pdf_page1_authors_legacy(pdf_bytes)
         if contract in (CONTRACT_V2, "v2", None, ""):
-            return extract_pdf_page1_authors_v2(pdf_bytes)
+            return extract_pdf_page1_authors_structured(pdf_bytes)
         if contract in (CONTRACT_V3, "v3"):
-            return extract_pdf_page1_authors_v3(pdf_bytes)
+            return extract_pdf_page1_authors_geometric(pdf_bytes)
     raise ValueError(f"Unsupported PDF page-1 author contract: {contract}")
 
 

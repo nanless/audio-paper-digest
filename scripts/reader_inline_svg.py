@@ -511,7 +511,7 @@ def _hidpi_scale_factor(width, height):
     return 1.0
 
 
-def _hidpi_scale_factor_v2(width, height):
+def _hidpi_scale_factor_deterministic(width, height):
     """Choose a deterministic integer HiDPI scale (1, 2, or 3) to avoid fractional subpixel jitter."""
     long_edge = max(float(width), float(height))
     if long_edge <= 0 or long_edge >= 1600:
@@ -525,14 +525,15 @@ def _hidpi_scale_factor_v2(width, height):
     return 1
 
 
-def render_svg(raw, *, hidpi=False, deterministic_v2=False):
+def render_svg(raw, *, hidpi=False, deterministic_hidpi=False, deterministic_v2=False):
+    deterministic_hidpi = bool(deterministic_hidpi or deterministic_v2)
     text = validate_svg(raw)
     canonical_markup = _serialize_validated_svg(ET.fromstring(text))
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
         expected = Path(playwright.chromium.executable_path)
         options = {'headless': True}
-        if deterministic_v2:
+        if deterministic_hidpi:
             options['args'] = list(_DETERMINISTIC_V2_CHROMIUM_ARGS)
         if not expected.is_file():
             candidates = []
@@ -563,7 +564,7 @@ def render_svg(raw, *, hidpi=False, deterministic_v2=False):
                     page.set_content('<!doctype html><meta charset="utf-8">'
                                      '<style>html,body{margin:0;background:white}</style>' + canonical_markup,
                                      wait_until='load', timeout=30_000)
-                    if deterministic_v2:
+                    if deterministic_hidpi:
                         page.evaluate("() => (document.fonts && document.fonts.ready) ? document.fonts.ready.then(() => true) : true")
                     figure = page.locator('body > svg')
                     bounds = figure.bounding_box()
@@ -571,7 +572,7 @@ def render_svg(raw, *, hidpi=False, deterministic_v2=False):
                             or not 0 < bounds['width'] <= 4096 or not 0 < bounds['height'] <= 4096
                             or bounds['width'] * bounds['height'] > 16_000_000):
                         raise ValueError('内联 SVG 实际显示尺寸超过受控上限')
-                    if deterministic_v2 and scale_factor == 1.0:
+                    if deterministic_hidpi and scale_factor == 1.0:
                         quality_issue = figure.evaluate("""svg => {
                             const rawLatexRe = /\\\\(?:scriptsize|textstyle|displaystyle|footnotesize|tiny|normalsize|textbf|textit|mathrm|mathbf)\\b/;
                             const walker = document.createTreeWalker(svg, NodeFilter.SHOW_TEXT);
@@ -665,7 +666,7 @@ def render_svg(raw, *, hidpi=False, deterministic_v2=False):
                     if not 0 < width <= 4096 or not 0 < height <= 4096 or width * height > 16_000_000:
                         raise ValueError('内联 SVG 实际绘制范围超过受控上限')
                     if probe_hidpi and scale_factor == 1.0:
-                        desired = _hidpi_scale_factor_v2(width, height) if deterministic_v2 else _hidpi_scale_factor(width, height)
+                        desired = _hidpi_scale_factor_deterministic(width, height) if deterministic_hidpi else _hidpi_scale_factor(width, height)
                         if desired > 1.0:
                             return None, desired
                     if left < 0 or top < 0:
@@ -684,7 +685,7 @@ def render_svg(raw, *, hidpi=False, deterministic_v2=False):
             png, desired_scale = _measure_and_shot(1.0, probe_hidpi=hidpi)
             if png is None and desired_scale > 1.0:
                 scale = desired_scale
-                step = 1.0 if deterministic_v2 else 0.5
+                step = 1.0 if deterministic_hidpi else 0.5
                 while scale >= 1.0:
                     candidate, _ = _measure_and_shot(scale, probe_hidpi=False)
                     if isinstance(candidate, bytes) and candidate.startswith(b'\x89PNG\r\n\x1a\n') and len(candidate) <= MAX_OUTPUT_BYTES:
@@ -704,9 +705,15 @@ def render_svg(raw, *, hidpi=False, deterministic_v2=False):
 if __name__ == '__main__':
     require_external_runtime('render-reader-inline-svg')
     use_hidpi = '--hidpi' in sys.argv[1:]
-    use_v2 = '--v2' in sys.argv[1:]
+    use_deterministic_hidpi = ('--deterministic-hidpi' in sys.argv[1:]) or ('--v2' in sys.argv[1:])
     try:
-        sys.stdout.buffer.write(render_svg(sys.stdin.buffer.read(MAX_SOURCE_BYTES + 1), hidpi=use_hidpi, deterministic_v2=use_v2))
+        sys.stdout.buffer.write(
+            render_svg(
+                sys.stdin.buffer.read(MAX_SOURCE_BYTES + 1),
+                hidpi=use_hidpi,
+                deterministic_hidpi=use_deterministic_hidpi,
+            )
+        )
     except UnsupportedSvgDependency as error:
         sys.stderr.write(json.dumps({'contract': 'reader-inline-svg-error-v1',
             'code': 'unsupported_dependency', 'reason': error.reason}, separators=(',', ':')) + '\n')

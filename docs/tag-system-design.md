@@ -102,7 +102,7 @@
 
 只读预览中，选择 LoRA 的论文也能通过“参数高效微调”父节点查询找到，卡片不会同时重复显示这两个概念。如果论文确实比较 LoRA 与 Adapter，可以选择两个有独立证据的叶节点，因为它们不在同一条父子链上。
 
-一个主任务可以出现在多个导航专题，但增加专题链接不会改变任务的上下级关系。v1 按 `broaderId` 记录上下级关系，每个概念最多有一个上级概念。未来若需要多父级，必须升级协议并逐条审查“是某种”的关系；“使用了”“发生在”或“服务于”不能用作父子关系。
+一个主任务可以出现在多个导航专题，但增加专题链接不会改变任务的上下级关系。当前词表按 `broaderId` 记录上下级关系，每个概念最多有一个上级概念。未来若需要多父级，必须升级协议并逐条审查“是某种”的关系；“使用了”“发生在”或“服务于”不能用作父子关系。
 
 ### 3.3 统计口径
 
@@ -216,29 +216,7 @@
 | 论文构造基准或语料 | 标题包含 benchmark、corpus、dataset，或正文明确构造基准、语料时，`conceptIds` 必须包含基准测试或数据集这类研究成果的标签。在每篇 3–5 个标签的数量限制内，优先于泛泛的条件或模型族 |
 | 其他任务只是评测工具 | 次任务须有并列贡献或并列评测证据。用 WER 评测增强等工具用途不构成次任务 |
 
-下面是记录结构的提案，版本为 `proposal-v1`，不是当前可安装的生产格式；其中 ID 示例不能作为现行词表选择的依据：
-
-```json
-{
-  "tagCatalogVersion": "proposal-v1",
-  "paperId": "2609.03622",
-  "primaryTask": "task.speech-enhancement",
-  "secondaryTasks": [],
-  "primaryMethod": "method.test-time-adaptation",
-  "methods": ["method.test-time-adaptation", "method.autoregressive"],
-  "settings": [],
-  "signals": ["speech"],
-  "inputModalities": ["audio"],
-  "outputModalities": ["audio"],
-  "evidence": [
-    {"field": "primaryTask", "sourceSha256": "需要填入实际原文 SHA", "locator": "需要填入任务定义与主实验的位置"},
-    {"field": "primaryMethod", "sourceSha256": "需要填入实际原文 SHA", "locator": "需要填入适应目标和语音先验的位置"}
-  ],
-  "reviewStatus": "human_or_agent_review_required"
-}
-```
-
-示例论文不会因为用了编解码器就标“语音编码”，也不会因辅助 WER 评价而变成 ASR 研究，或因提出停止预测就标“实时”。证据占位须替换为真实 64 位 SHA 与原文段落或 DOM 定位；若引用已有来源绑定的 Reader，还要保存 Reader SHA 和具体小节。示例本身不构成有效的生产记录。
+现行生产标签记录与页面元数据字段详见[数据格式](data-format.md)与[标签显示与版本说明](tag-display-policy.md#三条流程共用的目录与呈现)；不再在本文重复维护早期提案 JSON 样例。判定标签时同样须守住边界：不能因论文用了编解码器就标“语音编码”，也不能因辅助 WER 评价而归入 ASR 研究，或因提出停止预测就标“实时”。
 
 另外，LibriBrain100 的词分类输入是脑信号，应先检查言语神经解码，不能沿用声学 ASR。RIR 表征压缩研究编码，不能因测试混响就改为去混响。LoRA 语音识别只选择 ASR、LoRA 及有证据的条件，不再同时展示参数高效微调祖先。
 
@@ -248,7 +226,7 @@
 
 [共享词表](../config/tag-catalog.json) 供 Node、Python、生产提示词和历史预览共同读取。别名及 `deprecated` 概念只能通过显式历史兼容模式（`legacy`）解释，不能直接写入新的正式分析结果。生产分类已接入，博客代码中按九个分类维度组织的导航已实现，新分析的标签和历史页面的标签是否经过按原文核验，仍须分别确认。
 
-v1 概念字段为 `id`、`facet`、`preferredLabel`、`aliases`、`broaderId`、`definition`、`scopeNote`、`status` 和 `replacedBy`；`preferredLabel` 是 `{ zh, en }` 对象，中文首选名在 `zh`，英文规范名在 `en`。名称、定义、范围、父级和弃用关系都有明确位置，适用与不适用的情形写入 `scopeNote`。独立相关关系与逐概念引入版本尚属未来协议；当前各概念使用整份词表的版本。
+当前概念字段为 `id`、`facet`、`preferredLabel`、`aliases`、`broaderId`、`definition`、`scopeNote`、`status` 和 `replacedBy`；`preferredLabel` 是 `{ zh, en }` 对象，中文首选名在 `zh`，英文规范名在 `en`。名称、定义、范围、父级和弃用关系都有明确位置，适用与不适用的情形写入 `scopeNote`。独立相关关系与逐概念引入版本尚属未来协议；当前各概念使用整份词表的版本。
 
 维护概念身份时，ID 不得复用，每种语言只有一个首选名；同一分类维度的别名不能指向多个 ID。上级概念必须存在、有效且属于同一维度，层级不得成环。
 

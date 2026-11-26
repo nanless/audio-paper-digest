@@ -294,6 +294,41 @@ function validateItems(items, processId, state = null) {
                     || item.retryBudgetStart < 0 || item.retryBudgetStart > item.attempts))
             || (item.retryNotBefore != null && !Number.isFinite(Date.parse(item.retryNotBefore)))) return false;
         const revision = item.readerRevision;
+        const strictUuidRe = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+        const sourceAdoption = item.sourceResourceCorrectionAdoption;
+        const hasSourceAdoption = sourceAdoption !== undefined && sourceAdoption !== null;
+        const validSourceAdoption = hasSourceAdoption
+            && typeof sourceAdoption === 'object' && !Array.isArray(sourceAdoption)
+            && typeof sourceAdoption.manifestFile === 'string' && Boolean(sourceAdoption.manifestFile.trim())
+            && SHA256_RE.test(sourceAdoption.manifestSha256 || '')
+            && SHA256_RE.test(sourceAdoption.previousStateSha256 || '')
+            && SHA256_RE.test(sourceAdoption.previousItemSha256 || '')
+            && Number.isSafeInteger(sourceAdoption.previousAttempts) && sourceAdoption.previousAttempts >= 0
+            && (sourceAdoption.previousFailure === null
+                || (typeof sourceAdoption.previousFailure === 'object' && !Array.isArray(sourceAdoption.previousFailure)))
+            && strictUuidRe.test(sourceAdoption.selectedMainExecutionId || '')
+            && strictUuidRe.test(sourceAdoption.readerParentExecutionId || '')
+            && sourceAdoption.newApiRequests === 0
+            && strictUuidRe.test(item.analysisRunId || '')
+            && item.analysisRunId !== sourceAdoption.selectedMainExecutionId
+            && item.analysisRunId !== sourceAdoption.readerParentExecutionId;
+        if (hasSourceAdoption && !validSourceAdoption) return false;
+        const maintenanceAdoption = item.textMaintenanceAdoption;
+        const hasMaintenanceAdoption = maintenanceAdoption !== undefined && maintenanceAdoption !== null;
+        const validMaintenanceAdoption = hasMaintenanceAdoption
+            && typeof maintenanceAdoption === 'object' && !Array.isArray(maintenanceAdoption)
+            && Boolean(revision) && typeof revision === 'object' && !Array.isArray(revision)
+            && strictUuidRe.test(maintenanceAdoption.batchId || '')
+            && SHA256_RE.test(maintenanceAdoption.manifestSha256 || '')
+            && strictUuidRe.test(maintenanceAdoption.previousExecutionId || '')
+            && revision.parentExecutionId === maintenanceAdoption.previousExecutionId
+            && maintenanceAdoption.previousExecutionId !== item.analysisRunId
+            && Boolean(revision.readerReviewMaintenance)
+            && typeof revision.readerReviewMaintenance === 'object'
+            && !Array.isArray(revision.readerReviewMaintenance)
+            && revision.readerReviewMaintenance.batchId === maintenanceAdoption.batchId
+            && revision.readerReviewMaintenance.manifestSha256 === maintenanceAdoption.manifestSha256;
+        if (hasMaintenanceAdoption && !validMaintenanceAdoption) return false;
         if (revision !== undefined && revision !== null) {
             if (typeof revision !== 'object' || Array.isArray(revision)) return false;
             const { revisionSha256, ...body } = revision;
@@ -314,14 +349,16 @@ function validateItems(items, processId, state = null) {
             } catch (_) {
                 return false;
             }
+            const allowedParentExecutionId = preservedComplete.has(paperId)
+                || revision.parentExecutionId === deterministicUuid(processId, paperId, 'analysis')
+                || validMaintenanceAdoption;
             if (revisionSha256 !== stableHash(body) || (!validOriginal && !validWindow)
                 || revision.paperId !== paperId || revision.executionId !== item.analysisRunId
-                || (!preservedComplete.has(paperId)
-                    && revision.parentExecutionId !== deterministicUuid(processId, paperId, 'analysis'))) {
+                || !allowedParentExecutionId) {
                 return false;
             }
         }
-        if (!revision && !preservedComplete.has(paperId)
+        if (!revision && !preservedComplete.has(paperId) && !validSourceAdoption
             && item.analysisRunId !== deterministicUuid(processId, paperId, 'analysis')) return false;
         if (preservedComplete.has(paperId)
             && (!(item.preservedOriginalComplete || item.preservedPriorUpgradeComplete)

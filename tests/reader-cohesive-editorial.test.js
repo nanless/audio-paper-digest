@@ -125,13 +125,29 @@ test('reader.json registers historical fingerprints and cohesive-functional-v4 /
     assert.notEqual(currentPlan.schemaFingerprint, format.OLD_PLAN_FP);
     assert.notEqual(currentDraft.schemaFingerprint, format.V4_DRAFT_FP);
     assert.notEqual(currentPlan.schemaFingerprint, format.V4_PLAN_FP);
-    assert.equal(format.draftFormat(currentDraft).editorialProfile, format.STRUCTURED_V5);
-    assert.equal(format.planEditorialProfile(currentPlan), format.STRUCTURED_V5);
+    assert.notEqual(currentDraft.schemaFingerprint, format.V5_DRAFT_FP);
+    assert.notEqual(currentPlan.schemaFingerprint, format.V5_PLAN_FP);
+    assert.equal(format.draftFormat(currentDraft).editorialProfile, format.STRUCTURED_EDITORIAL);
+    assert.equal(format.planEditorialProfile(currentPlan), format.STRUCTURED_EDITORIAL);
+    assert.equal(format.isStructuredEditorial(format.STRUCTURED_EDITORIAL), true);
+
+    const v5Draft = codec.historicalHeader('reader-draft', format.INTEGRATED, format.V5_DRAFT_FP);
+    const v5Plan = codec.historicalHeader('beginner-researcher', format.INTEGRATED, format.V5_PLAN_FP);
+    assert.equal(format.draftFormat(v5Draft).editorialProfile, format.STRUCTURED_V5_EDITORIAL);
+    assert.equal(format.planEditorialProfile(v5Plan), format.STRUCTURED_V5_EDITORIAL);
+    assert.equal(format.isStructuredEditorial(format.STRUCTURED_V5_EDITORIAL), true);
+    assert.deepEqual(format.compilationOptionsForSavedPlan(v5Plan), {
+        requiredProfile: format.INTEGRATED,
+        compileCurrent: true,
+        editorialProfile: format.STRUCTURED_V5_EDITORIAL,
+        compiledPlanHeader: v5Plan
+    });
+    assert.deepEqual(format.draftHeaderForSavedPlan(v5Plan), v5Draft);
 
     const v4Draft = codec.historicalHeader('reader-draft', format.INTEGRATED, format.V4_DRAFT_FP);
     const v4Plan = codec.historicalHeader('beginner-researcher', format.INTEGRATED, format.V4_PLAN_FP);
-    assert.equal(format.draftFormat(v4Draft).editorialProfile, format.COHESIVE_V4);
-    assert.equal(format.planEditorialProfile(v4Plan), format.COHESIVE_V4);
+    assert.equal(format.draftFormat(v4Draft).editorialProfile, format.COHESIVE_EDITORIAL);
+    assert.equal(format.planEditorialProfile(v4Plan), format.COHESIVE_EDITORIAL);
 
     const oldDraft = codec.historicalHeader('reader-draft', format.INTEGRATED, format.OLD_DRAFT_FP);
     const oldPlan = codec.historicalHeader('beginner-researcher', format.INTEGRATED, format.OLD_PLAN_FP);
@@ -153,14 +169,14 @@ test('reader.json registers historical fingerprints and cohesive-functional-v4 /
     assert.deepEqual(format.compilationOptionsForSavedPlan(v4Plan), {
         requiredProfile: format.INTEGRATED,
         compileCurrent: true,
-        editorialProfile: format.COHESIVE_V4,
+        editorialProfile: format.COHESIVE_EDITORIAL,
         compiledPlanHeader: v4Plan
     });
     assert.deepEqual(format.draftHeaderForSavedPlan(v4Plan), v4Draft);
     assert.deepEqual(format.compilationOptionsForSavedPlan(currentPlan), {
         requiredProfile: format.INTEGRATED,
         compileCurrent: true,
-        editorialProfile: format.STRUCTURED_V5,
+        editorialProfile: format.STRUCTURED_EDITORIAL,
         compiledPlanHeader: currentPlan
     });
     assert.deepEqual(format.draftHeaderForSavedPlan(currentPlan), currentDraft);
@@ -304,7 +320,7 @@ test('cohesive-functional-v4 preserves 380-char semicolon-connected paragraphs w
     assert.ok(cohesiveParagraph.length >= 260 && cohesiveParagraph.length <= 430);
 
     const splitResult = deep.splitReaderLongParagraphs(cohesiveParagraph, {
-        editorialProfile: format.COHESIVE_V4
+        editorialProfile: format.COHESIVE_EDITORIAL
     });
     assert.equal(splitResult, cohesiveParagraph, 'v4 不应在分号处或 440 字以内强行切碎连贯段落');
 
@@ -322,7 +338,7 @@ test('cohesive-functional-v4 preserves 380-char semicolon-connected paragraphs w
 });
 
 test('cohesive-functional-v4 blocks validator cliches, bare English scatter words, and bad literal translations while protecting natural numerals', () => {
-    const v4Opts = { editorialProfile: format.COHESIVE_V4 };
+    const v4Opts = { editorialProfile: format.COHESIVE_EDITORIAL };
 
     // 数字规则：保护数学/统计专名与序数、逐指词，但仍拦截真实未量化阿拉伯数字缺口
     const cleanNumeralSentence = '第三个模块采用最小二乘拟合二维频谱，消除二阶盲辨识误差，使每一帧与每一维满足一对一映射且置信区间半宽受控，避免一分不得。';
@@ -463,7 +479,7 @@ test('section reorganization bounds and candidate/content-mode multi-fingerprint
 });
 
 test('PUA Chinese numeral protection preserves Han-ASCII/digit spacing without technical_term_adhesion and supports geometric dimensions', () => {
-    const v4Opts = { editorialProfile: format.COHESIVE_V4 };
+    const v4Opts = { editorialProfile: format.COHESIVE_EDITORIAL };
 
     // 覆盖 MLP第一个、二阶Newton、最小二乘L2、最小二乘2范数、3D每一帧
     const mixedInput = 'MLP第一个隐藏层采用二阶Newton步求解最小二乘2范数与最小二乘L2正则，并对3D每一帧采样。';
@@ -510,7 +526,7 @@ test('signed claim projection, conceptBridge surface inverse, and git-prompt-evi
     // 1. normalizeSignedReaderClaim 透传 cohesive-functional-v4 时保留每一层/二阶/二维 Mel 频谱并正确加中英空格
     const rawNode = '前文交代输入边界。在编码阶段，MLP每一层采用二阶Newton步更新二维Mel频谱掩码。后文核对实验代价。';
     const rawClaim = 'MLP每一层采用二阶Newton步更新二维Mel频谱掩码。';
-    const projectedV4 = normalizeSignedReaderClaim(rawClaim, rawNode, { editorialProfile: format.COHESIVE_V4 });
+    const projectedV4 = normalizeSignedReaderClaim(rawClaim, rawNode, { editorialProfile: format.COHESIVE_EDITORIAL });
     assert.equal(projectedV4, 'MLP 每一层采用二阶 Newton 步更新二维 Mel 频谱掩码。');
 
     // 2. reconstructReaderDraftSurface 在 v4 下含保护中文数词的 conceptBridges 精确往返

@@ -1237,7 +1237,7 @@ function loadBatch({manifestPath,processDirectory,analysisRoot}) {
         for(const mapping of m.aggregatePaperFeedback) {
             const member=m.members.find(member=>member.paperId===mapping.paperId);
             const parent=adapter().loadConferenceAnalysis({analysisRoot,executionId:member?.parentExecutionId});
-            const parsed=require('./reader-author-parser').parseConferencePdfAuthorsV2(parent.source.sourceDetails.text);
+            const parsed=require('./reader-author-parser').parseConferencePdfAuthorsFromLines(parent.source.sourceDetails.text);
             const before=parent.analysis.papers[0].apiReaderAuthors?.authors.find(author=>author.name===mapping.authorName);
             const after=parsed?.authors.find(author=>author.name===mapping.authorName);
             check(parsed&&mapping.sourceQuote===parsed.sourceEvidence&&before&&after

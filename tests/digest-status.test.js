@@ -183,4 +183,69 @@ describe('digest status 辅助函数', () => {
             assert.strictEqual(merged.papers['2607.00004'].analysis, validAnalysisText());
         }
     });
+
+    it('恢复成功的 analyzed 记录会清除陈旧 error 和全部结构化失败字段，失败记录仍保留', () => {
+        const staleFailureFields = {
+            error: 'HTTP 503 upstream timeout',
+            errorCode: 'MODEL_HTTP_TRANSIENT',
+            errorCategory: 'transient',
+            errorStatus: 503,
+            errorScope: 'paper',
+            errorRetryable: true,
+            latestAnalysisAttemptError: 'HTTP 503 upstream timeout',
+            latestAnalysisAttemptAt: '2026-07-08T11:00:00+08:00',
+            latestAnalysisAttemptErrorCode: 'MODEL_HTTP_TRANSIENT',
+            latestAnalysisAttemptRetryable: true,
+            latestAnalysisAttemptErrorRetryable: true,
+            latestAnalysisAttemptErrorCategory: 'transient',
+            latestAnalysisAttemptErrorStatus: 503,
+            latestAnalysisAttemptErrorScope: 'paper',
+            analysisCheckpoint: 'partial checkpoint',
+            analysisStageCheckpoints: { primaryAnalysis: 'draft' },
+            analysisFactReviewObligation: { pending: true },
+            analysisRecoveryImageManifest: { selected: [] }
+        };
+
+        const existingFailed = {
+            arxivId: '2607.00005',
+            title: 'Recovered paper',
+            ...staleFailureFields,
+            digestStatus: { status: 'analysis_failed', latestAttemptStatus: 'analysis_failed', error: 'HTTP 503 upstream timeout' }
+        };
+        const recovered = validAnalysisRecord('2607.00005', { title: 'Recovered paper' });
+
+        // 正向：mergeAnalysisDigestPaper 与 applyAnalysisDigestStatuses 均彻底清除陈旧失败字段
+        const mergedSuccess = mergeAnalysisDigestPaper(existingFailed, recovered);
+        for (const field of Object.keys(staleFailureFields)) {
+            assert.strictEqual(Object.prototype.hasOwnProperty.call(mergedSuccess, field), false, `expected ${field} to be cleared`);
+        }
+
+        const papersData = { papers: { '2607.00005': structuredClone(existingFailed) } };
+        applyAnalysisDigestStatuses(papersData, [recovered], {
+            batchDate: '2026-07-08',
+            updatedAt: '2026-07-08T12:30:00+08:00'
+        });
+        const saved = papersData.papers['2607.00005'];
+        assert.strictEqual(saved.digestStatus.status, 'analyzed');
+        assert.strictEqual(saved.digestStatus.latestAttemptStatus, 'analyzed');
+        assert.strictEqual(saved.digestStatus.error, null);
+        for (const field of Object.keys(staleFailureFields)) {
+            assert.strictEqual(Object.prototype.hasOwnProperty.call(saved, field), false, `expected ${field} to be cleared in papers.json`);
+        }
+
+        // 负向：仍失败的记录不得被清除错误字段
+        const stillFailed = mergeAnalysisDigestPaper(existingFailed, {
+            arxivId: '2607.00005',
+            analysis: null,
+            error: 'HTTP 502 bad gateway',
+            errorCode: 'MODEL_HTTP_TRANSIENT',
+            errorCategory: 'transient',
+            errorStatus: 502,
+            errorScope: 'paper',
+            errorRetryable: true
+        });
+        assert.strictEqual(stillFailed.error, 'HTTP 502 bad gateway');
+        assert.strictEqual(stillFailed.errorCode, 'MODEL_HTTP_TRANSIENT');
+        assert.strictEqual(stillFailed.errorStatus, 502);
+    });
 });

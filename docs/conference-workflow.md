@@ -33,7 +33,7 @@ npm run workspace:role -- status
 
 后文的冷核，是重新打开保存的来源、稿件及凭证，执行同一组检查；重放则按原请求、响应和处理规则重新构建结果。它们不能仅靠 JSON 自报通过。“闭合”要求相关材料的来源、字节 SHA、父子身份及数量关系全部对应；具体需要哪些材料，仍以各条条件为准。
 
-会议来源与 arXiv 日更不同，分析仍复用 `analysis-engine.js`、正式分析的 13 个解析标题（含 `700–1,400` 汉字全景导读 `核心摘要`）、`type-aware-v2` 类型感知八维评分、400 项九维标签词表、`structured-pipeline-v5` 契约的 `beginner-researcher` 解读及 `api-reader-source-bindings` 来源核验；两者分别按登记的结构指纹核对。所有模型阶段同步启用按阶段分级推理（`PD_TIERED_REASONING_EFFORT=1`）与阶段稳定前缀缓存键（`PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=1`）。单篇页面经 9 步 Reader 显示归一化与 `_nest_reader_headings` 层级嵌套，和 `reader-facing-page` 会议汇总一起按 **Studio Monograph 2.0** 样式呈现，包含中英文题目、分档、文档类型、评分、作者机构、资源状态及官方记录和 PDF 链接，不能沿用旧标签或另造会议标签。旧的 `beginner-researcher-v3`、`api-reader-source-bindings-v4` 和 `reader-facing-v3` 头只用于读取原记录。
+会议来源与 arXiv 日更不同，分析仍复用 `analysis-engine.js`、正式分析的 13 个解析标题（含 `700–1,400` 汉字全景导读 `核心摘要`）、`type-aware` 类型感知八维评分（旧 `type-aware-v2`/`type-aware-v1` 归档保持冷核兼容）、400 项九维标签词表、`structured-pipeline` 契约的 `beginner-researcher` 解读及 `api-reader-source-bindings` 来源核验；两者分别按登记的结构指纹核对。所有模型阶段同步启用按阶段分级推理（`PD_TIERED_REASONING_EFFORT=1`）与阶段稳定前缀缓存键（`PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=1`）。单篇页面经 9 步 Reader 显示归一化与 `_nest_reader_headings` 层级嵌套，和 `reader-facing-page` 会议汇总一起按 **Studio Monograph 2.0** 样式呈现，包含中英文题目、分档、文档类型、评分、作者机构、资源状态及官方记录和 PDF 链接，不能沿用旧标签或另造会议标签。旧的 `structured-pipeline-v5`、`beginner-researcher-v3`、`api-reader-source-bindings-v4` 和 `reader-facing-v3` 头只用于读取原记录。
 
 会议汇总只读取已通过来源、解读和分类检查的单篇结果，不再让模型总结整批，因此不会为了汇总重复生成每篇深度解读。队列入口只协调已筛选会议的处理和发布，不负责获取或筛选。
 
@@ -56,13 +56,13 @@ npm run workspace:role -- status
 
 ## 获取官方目录和 PDF
 
-当前实现通过两个隔离模块支持 **22 个官方会议提供方**（v1 保持逐字节冻结以保全历史冷重放，新增会议一律接入 v2 伴生模块）：
+当前实现通过两个隔离模块支持 **22 个官方会议提供方**（基础提供方模块保持逐字节冻结以保全历史冷重放，新增会议一律接入扩展提供方伴生模块）：
 
 | 模块与类别 | 来源代号 |
 |---|---|
-| v1 语音、音频和音乐（10 项，`official-conference-acquisition.js`） | `odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、`interspeech-2026`、`iwslt-2026`、`eusipco-2026`、`nime-2026`、`dafx-2026`、`icmc-2026`。 |
-| v1 AI、机器学习、视觉和语言（6 项，`official-conference-acquisition.js`） | `aaai-2026`（OJS 第 40 卷）、`aistats-2026`（PMLR v300）、`uai-2026`（PMLR v337）、`cvpr-2026`（CVF 主会）、`acl-2026`、`eacl-2026`。 |
-| v2 扩展提供方（6 项，`official-conference-acquisition-v2.js`） | `emnlp-2026`（ACL Anthology Main/Short/Findings）、`ismir-2026`（Zenodo REST API v1）、`dcase-2026`（Zenodo REST API v1）、`neurips-2026`（`proceedings.neurips.cc`）、`waspaa-2025` 与 `asru-2025`（IEEE 本地 `proceedings.json` 清单与 PDF 封存）。 |
+| 基础提供方 · 语音、音频和音乐（10 项，`official-conference-acquisition.js`） | `odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、`interspeech-2026`、`iwslt-2026`、`eusipco-2026`、`nime-2026`、`dafx-2026`、`icmc-2026`。 |
+| 基础提供方 · AI、机器学习、视觉和语言（6 项，`official-conference-acquisition.js`） | `aaai-2026`（OJS 第 40 卷）、`aistats-2026`（PMLR v300）、`uai-2026`（PMLR v337）、`cvpr-2026`（CVF 主会）、`acl-2026`、`eacl-2026`。 |
+| 扩展提供方（6 项，`official-conference-acquisition-extended.js`） | `emnlp-2026`（ACL Anthology Main/Short/Findings）、`ismir-2026`（Zenodo REST API v1）、`dcase-2026`（Zenodo REST API v1）、`neurips-2026`（`proceedings.neurips.cc`）、`waspaa-2025` 与 `asru-2025`（IEEE 本地 `proceedings.json` 清单与 PDF 封存）。 |
 
 筛选阶段对核心音频会议家族支持动态年份匹配（`2025+`）：`scripts/lib/conference-filter.js` 中的 `CORE_AUDIO_CONFERENCE_FAMILY_LABELS` 覆盖 `asru`、`chime`、`dafx`、`dcase`、`icmc`、`interspeech`、`ismir`、`iwslt`、`jep`、`nime`、`odyssey`、`speechprosody`、`waspaa` 共 13 个家族，任意 2025 年及之后的同族会议（如 `interspeech-2027`、`ismir-2027`）自动识别为核心音频会议并放行摘要不足项给 LLM，无需重复硬编码年份；非核心综合会议同时叠加与日更共用的 `daily-filter-prefilter.js` 高召回预筛层。
 
@@ -374,7 +374,7 @@ Hugo 在隔离目录保留固定博客提交的完整物理旧来源，供站点
 
 汇总作者来源拒稿可以用 `aggregatePaperFeedback` 绑定真实原失败、第几篇条目的完整 SHA、官方记录链接、作者名与同篇认证原文逐字窗口，交该真实单篇正常 Reader；原单篇通过记录及 summary 的 `paperId:null` 保留，不能伪造单篇失败。
 
-加载器另核当前父包、真实作者 v2 解析确实改变对应机构，不能拿旧汇总或别篇机构移植。公共新 Reader/完整分析与独立作者刷新显式使用 `conference-pdf-author-lines-v2`，作者 identity 保存版本；旧无版本签名及旧发布冷核仍用原 v1，只刷新图片不改旧作者，零请求 operator 按原范围保留原作者字节。
+加载器另核当前父包、真实首页几何作者解析确实改变对应机构，不能拿旧汇总或别篇机构移植。公共新 Reader/完整分析与独立作者刷新显式使用 `conference-pdf-author-lines-v2`，作者 identity 保存版本；旧无版本签名及旧发布冷核仍用旧版解析，只刷新图片不改旧作者，零请求 operator 按原范围保留原作者字节。
 
 #### 原审查意见怎样进入新稿
 
@@ -771,7 +771,7 @@ process 的重试窗口和子运行固定轮次是两个上限；任一实际耗
 
 共性检查修复后，尚无任何子运行路径的失败项会先按同一原计划、来源和完成凭证正常重验父稿；通过即可复用原分析证明并更新暂存页，不发送模型请求。只要子运行路径已经存在，就继续原子运行与其失败义务，不回退父稿。目录权限、来源身份及运行级错误不能当作普通内容失败吞掉。
 
-两处新版资源正文协议声明均不存在的旧 v1 记录，按原网址、引文、身份和状态只读核验；新版协议只声明一处、版本未知或混用时，不能伪装成旧记录。
+两处新版资源正文协议声明均不存在的旧版记录，按原网址、引文、身份和状态只读核验；新版协议只声明一处、版本未知或混用时，不能伪装成旧记录。
 
 当前出版仍使用同一封存全文重放资源分类和正文的实际声明，单篇与汇总使用临时的当前展示视图，不改签原资源记录；只能证明论文列有项目链接时，显示“论文所列链接”，不能借旧 `dataset` 或 `code` 类型声称作者已开放资源。真实不当声明继续阻断出版。
 
@@ -823,11 +823,11 @@ process 会将余额、认证、限流、配置及被分类为系统传输故障
 
 process 的当前实现指纹由固定入口清单及本地传递依赖闭包派生，覆盖共享引擎、深度分析、来源核验与来源上下文、JS/Python 论文身份、Reader 修复及表格和资源处理、会议暂存及渲染，以及实际分析、Reader、评分、开源扫描和修复提示词。
 
-来源核验那一组是 `conference-source-ledger.js`、`conference-importer.js`、`conference-extraction-receipt.js`、`conference-pdf-source.js` 和 `conference-source-context.js`；它们只进当前指纹，不写进 v1 冻结清单，所以旧记录仍按当时那份清单复算。
+来源核验那一组是 `conference-source-ledger.js`、`conference-importer.js`、`conference-extraction-receipt.js`、`conference-pdf-source.js` 和 `conference-source-context.js`；它们只进当前指纹，不写进初代冻结清单，所以旧记录仍按当时那份清单复算。
 
 当前 process 与页面后处理的 Node 闭包，还会在实际读取 `reader_grouped_vector_column_units.py` 时纳入它动态读取的 `lib/validation-rules.json` 原字节；缺失或不安全文件不能被静默略过。规则文件未被该闭包消费时，不因遍历目录而一并纳入。
 
-闭包收集器自身也是当前依赖，因此修复收集逻辑会影响其它使用它的历史页面与审查当前指纹。旧 v1 清单、原回执与费用不补写；需要使用新实现时按正常迁移重核，不因指纹变化自动重分析。
+闭包收集器自身也是当前依赖，因此修复收集逻辑会影响其它使用它的历史页面与审查当前指纹。旧版清单、原回执与费用不补写；需要使用新实现时按正常迁移重核，不因指纹变化自动重分析。
 
 Python 发布器独立维护的生成模板和审查协议指纹也包含该规则文件的完整字节 SHA；仅规则字节变化就会改变两项指纹及审查协议缓存键，缺失或不可读时停止计算。
 
@@ -1078,7 +1078,7 @@ npm run conference:migrate-process -- --apply \
 
 #### 付费稿已退休，但外层保存没有完成时
 
-还有一种窄恢复来源：最新付费 Reader 已移入唯一 `.resolved.json`，但外层保存失败，实际 canonical 仍是旧 Reader，且没有活跃候选。显式成员可声明 `originKind: latest_resolved_paid_reader`，仅允许 v1 既有节点修正。
+还有一种窄恢复来源：最新付费 Reader 已移入唯一 `.resolved.json`，但外层保存失败，实际 canonical 仍是旧 Reader，且没有活跃候选。显式成员可声明 `originKind: latest_resolved_paid_reader`，仅允许既有节点修正。
 
 程序须先重放真实登记许可的完整账本，核对最新付费 patch、唯一请求/响应及完成费用事件、原 Prompt 字节、全部实现迁移与原失败历史，再以正常共享归一函数逐字还原退休稿。
 
@@ -1144,7 +1144,7 @@ npm run conference:process -- --source-upgrade-promote \
 
 `PLAN_SHA256` 必须等于刚核对的计划 SHA，`--paper-ids` 只列本会明确授权的新分析对象，`--authorize-new-analysis` 不能省略。未选择的旧成果保留；新提取组使用新的来源依据，不能放宽旧回执或覆写旧文件。来源获取或提取的 generation 不等于论文 `vN` 修订号。
 
-新来源升级计划使用 v2 格式和当前词表字段，随后建立同代的子进程。已明确授权的 `--paper-ids` 固定首轮范围，子进程也按正常全批轮次后仅续失败集合，不扩展新分析授权。
+新来源升级计划使用现行升级计划格式和当前词表字段，随后建立同代的子进程。已明确授权的 `--paper-ids` 固定首轮范围，子进程也按正常全批轮次后仅续失败集合，不扩展新分析授权。
 
 恢复已有计划时，先核原计划、授权、检查点及父进程对应关系，再按已核格式完整重算；原计划 SHA、尝试次数和已完成结果不能为了恢复而被替换。
 
@@ -1182,19 +1182,19 @@ npm run conference:validate-run -- --run NAME.json --ledger NAME.json
 
 新增一届官方会议（例如 2026 下半年或 2027 年的新届次）时，按下面五步接入，既与现行日更内容标准完全对齐，又不触碰任何历史冻结哈希。
 
-### 第 1 步：在 v2 获取模块注册提供方
+### 第 1 步：在扩展获取模块注册提供方
 
-在 `scripts/lib/official-conference-acquisition-v2.js` 的 `PROVIDERS_V2` 中新增会议条目（**绝不修改**受历史 SHA 逐字节锁死的 `scripts/lib/official-conference-acquisition.js`）。可直接复用已内置的四种解析器之一：`acl-anthology-html`、`zenodo-json`、`neurips-proceedings-html` 或 `ieee-local-manifest`，按实际官方域名设置 `allowedHosts`、`recordPath` 和 `pdfPath`。若是新的核心音频会议家族（不在现有 13 个 `CORE_AUDIO_CONFERENCE_FAMILY_LABELS` 家族中），同步在 `scripts/lib/conference-filter.js` 登记家族标签；属于已有 13 个家族的 `2025+` 新年份会自动匹配。
+在 `scripts/lib/official-conference-acquisition-extended.js` 的 `EXTENDED_PROVIDERS` 中新增会议条目（**绝不修改**受历史 SHA 逐字节锁死的 `scripts/lib/official-conference-acquisition.js`）。可直接复用已内置的四种解析器之一：`acl-anthology-html`、`zenodo-json`、`neurips-proceedings-html` 或 `ieee-local-manifest`，按实际官方域名设置 `allowedHosts`、`recordPath` 和 `pdfPath`。若是新的核心音频会议家族（不在现有 13 个 `CORE_AUDIO_CONFERENCE_FAMILY_LABELS` 家族中），同步在 `scripts/lib/conference-filter.js` 登记家族标签；属于已有 13 个家族的 `2025+` 新年份会自动匹配。
 
-### 第 2 步：确定性 PDF 抽取（默认 `v2`）
+### 第 2 步：确定性 PDF 抽取（默认 `enhanced`）
 
-新会议批次默认使用 `scripts/conference_extractor_v2.py`（环境变量 `PD_CONFERENCE_EXTRACTOR_VERSION` 默认为 `v2`，历史冷重放自动识别并保留冻结的 `v1` 抽取器 `scripts/conference_extractor.py`）。`v2` 相对 `v1` 补齐了与日更一致的版面与证据能力：
+新会议批次默认使用布局增强版抽取器 `scripts/conference_layout_extractor.py`（环境变量 `PD_CONFERENCE_EXTRACTOR_PROFILE` 默认为 `enhanced`，旧别名 `PD_CONFERENCE_EXTRACTOR_VERSION` 仍兼容；历史冷重放自动识别并保留冻结的旧版抽取器 `scripts/conference_extractor.py`）。布局增强版相对旧版补齐了与日更一致的版面与证据能力：
 
 - **双栏感知文本重排**：消除 IEEE、ISCA 等双栏排版中左右栏文本交错。
 - **288 DPI 高清自适应插图裁切**：兼容图注位于图上或图下、跨栏图与旋转页，并保持单图 2 MiB / 整篇 24 MiB 安全上限。
-- **结构化表格与首页作者机构抽取**：覆盖 Booktabs 横线表、严格网格表、旋转 `sidewaystable`、跨页续表拼接与音频指标无框表回退，同时接入 `pdf_author_extract.py` v2 首页几何作者抽取并保留官方元数据机构字段。
+- **结构化表格与首页作者机构抽取**：覆盖 Booktabs 横线表、严格网格表、旋转 `sidewaystable`、跨页续表拼接与音频指标无框表回退，同时接入 `pdf_author_extract.py` 首页几何作者抽取并保留官方元数据机构字段。
 
-如需回退旧抽取器验证，可显式设置 `PD_CONFERENCE_EXTRACTOR_VERSION=v1` 或向 `conference:extract` 传入 `--extractor v1`。
+如需回退旧抽取器验证，可显式设置 `PD_CONFERENCE_EXTRACTOR_PROFILE=legacy` 或向 `conference:extract` 传入 `--extractor legacy`。
 
 ### 第 3 步：依次运行获取、筛选、处理与发布
 
@@ -1213,7 +1213,7 @@ npm run conference:discover -- --apply --adapter official-proceedings --conferen
 npm run conference:evidence -- plan --catalog neurips-2026.json --report neurips-2026-report.json --run EVIDENCE_UUID
 npm run conference:evidence -- apply --catalog neurips-2026.json --report neurips-2026-report.json --run EVIDENCE_UUID --all --expected-total N
 
-# 3. 会议筛选（含 Wave 11C 高召回关键词预筛叠加层）
+# 3. 会议筛选（含高召回关键词预筛叠加层）
 npm run conference:filter -- spec --catalog neurips-2026.json --report neurips-2026-report.json --evidence-run EVIDENCE_UUID --output neurips-2026-filter.json
 npm run conference:filter -- prepare --catalog neurips-2026.json --report neurips-2026-report.json --evidence-run EVIDENCE_UUID --spec neurips-2026-filter.json
 npm run conference:filter:run -- --apply --catalog neurips-2026.json --report neurips-2026-report.json --evidence-run EVIDENCE_UUID --spec neurips-2026-filter.json --filter FILTER_UUID --owner filter.worker

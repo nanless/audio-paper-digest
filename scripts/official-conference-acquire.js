@@ -6,17 +6,17 @@ const { requireExternalRuntime, loadProjectEnv } = require('./env-loader.js');
 const { requireWorkspaceRole } = require('./workspace-role.js');
 const { FILES } = require('./config.js');
 const acquisition = require('./lib/official-conference-acquisition.js');
-const acquisitionV2 = require('./lib/official-conference-acquisition-v2.js');
+const acquisitionExtended = require('./lib/official-conference-acquisition-extended.js');
 
 const USAGE = [
     'Use: official-conference-acquire.js catalog|download|status|verify',
-    `--provider odyssey-2026|chime-2026|jep-2026|speechprosody-2026|interspeech-2026|icmc-2026|iwslt-2026|eusipco-2026|nime-2026|dafx-2026|aaai-2026|aistats-2026|uai-2026|cvpr-2026|acl-2026|eacl-2026|${acquisitionV2.listProviderIds().join('|')}`,
+    `--provider odyssey-2026|chime-2026|jep-2026|speechprosody-2026|interspeech-2026|icmc-2026|iwslt-2026|eusipco-2026|nime-2026|dafx-2026|aaai-2026|aistats-2026|uai-2026|cvpr-2026|acl-2026|eacl-2026|${acquisitionExtended.listProviderIds().join('|')}`,
     '--conference-id ID --year YYYY',
     '[--dry-run|--apply] [--limit N] [--concurrency 1..5] [--retries 0..5]'
 ].join(' ');
 
 function resolveAcquisitionModule(providerId) {
-    return acquisitionV2.hasProvider(providerId) ? acquisitionV2 : acquisition;
+    return acquisitionExtended.hasProvider(providerId) ? acquisitionExtended : acquisition;
 }
 
 function parseArgs(argv, { acquisitionRoot = FILES.officialConferenceAcquisitionDir } = {}) {

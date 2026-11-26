@@ -262,7 +262,7 @@ class ReaderInlineSvgDependencyTest(unittest.TestCase):
 
         def flaky_render(svg_bytes, **kwargs):
             calls.append(kwargs)
-            if kwargs == {'hidpi': True, 'deterministic_v2': True}:
+            if kwargs == {'hidpi': True, 'deterministic_hidpi': True}:
                 return png_exact if len(calls) == 3 else png_jitter
             return png_jitter
 
@@ -273,7 +273,7 @@ class ReaderInlineSvgDependencyTest(unittest.TestCase):
         self.assertEqual(replayed, png_exact)
         self.assertIsNone(provenance)
         self.assertEqual(len(calls), 3)
-        self.assertTrue(all(c == {'hidpi': True, 'deterministic_v2': True} for c in calls))
+        self.assertTrue(all(c == {'hidpi': True, 'deterministic_hidpi': True} for c in calls))
 
         with mock.patch.object(renderer, 'render_svg', return_value=png_jitter), \
              mock.patch.object(replay_mod, '_trusted_renderers', return_value=iter(())):

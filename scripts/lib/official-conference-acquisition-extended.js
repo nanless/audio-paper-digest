@@ -1,12 +1,12 @@
 'use strict';
 
 /**
- * 官方会议录获取扩展模块 v2（Wave 13 Track 13.1A）。
+ * 官方会议录获取扩展模块。
  *
  * 设计约束：
  * - scripts/lib/official-conference-acquisition.js 受 config/workflow-historical-records.json
  *   与 tests/acquisition-parser-compatibility.test.js 的 SHA-256 逐字节锁死，绝不修改该原文件。
- * - 本伴生模块与 v1 保持同等安全、流式限流、目录边界、去重键 JSON 校验与不可变凭证契约，
+ * - 本伴生模块与冻结获取模块保持同等安全、流式限流、目录边界、去重键 JSON 校验与不可变凭证契约，
  *   新增对下列音频/语音/多模态核心会议的支持：
  *   - EMNLP 2026（ACL Anthology HTML：Main / Short / Findings）
  *   - ISMIR 2026（Zenodo REST API v1 分页 JSON + PDF）
@@ -22,8 +22,8 @@ const path = require('node:path');
 const cheerio = require('cheerio');
 const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
 
-const CATALOG_RECEIPT_CONTRACT_V2 = 'official-conference-catalog-receipt-v2';
-const PDF_RECEIPT_CONTRACT_V2 = 'official-conference-pdf-receipt-v2';
+const EXTENDED_CATALOG_RECEIPT_CONTRACT = 'official-conference-catalog-receipt-extended';
+const EXTENDED_PDF_RECEIPT_CONTRACT = 'official-conference-pdf-receipt-extended';
 const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_RECEIPT_BYTES = 1024 * 1024;
@@ -37,16 +37,16 @@ const PAPER_FIELDS = Object.freeze(['abstract', 'authors', 'doi', 'id', 'pdfFile
 const TEMP_FILE_RE = /^\..+\.[a-f0-9]{16}\.[1-9]\d*\.[a-f0-9-]{36}\.tmp$/;
 const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
-class OfficialConferenceAcquisitionV2Error extends Error {
+class OfficialConferenceAcquisitionExtendedError extends Error {
     constructor(message) {
         super(message);
-        this.name = 'OfficialConferenceAcquisitionV2Error';
-        this.code = 'OFFICIAL_CONFERENCE_ACQUISITION_V2_ERROR';
+        this.name = 'OfficialConferenceAcquisitionExtendedError';
+        this.code = 'OFFICIAL_CONFERENCE_ACQUISITION_EXTENDED_ERROR';
     }
 }
 
 function fail(message) {
-    throw new OfficialConferenceAcquisitionV2Error(message);
+    throw new OfficialConferenceAcquisitionExtendedError(message);
 }
 
 function compareCodePoints(left, right) {
@@ -180,7 +180,7 @@ function normalizePaperRecord(raw, index) {
     return record;
 }
 
-const PROVIDERS_V2 = Object.freeze({
+const EXTENDED_PROVIDERS = Object.freeze({
     'emnlp-2026': Object.freeze({
         conference: Object.freeze({ id: 'emnlp-2026', year: 2026 }),
         parser: 'acl-anthology-html',
@@ -241,22 +241,22 @@ const PROVIDERS_V2 = Object.freeze({
 });
 
 function hasProvider(providerId) {
-    return Object.prototype.hasOwnProperty.call(PROVIDERS_V2, providerId);
+    return Object.prototype.hasOwnProperty.call(EXTENDED_PROVIDERS, providerId);
 }
 
 function providerFor(providerId) {
     if (!hasProvider(providerId)) {
-        fail(`不受支持的 v2 官方会议提供方：${providerId}`);
+        fail(`不受支持的扩展官方会议提供方：${providerId}`);
     }
-    return PROVIDERS_V2[providerId];
+    return EXTENDED_PROVIDERS[providerId];
 }
 
 function listProviderIds() {
-    return Object.keys(PROVIDERS_V2);
+    return Object.keys(EXTENDED_PROVIDERS);
 }
 
 function implementationSha256() {
-    return readStableFile(__filename, 'official-conference-acquisition-v2.js', MAX_INDEX_BYTES, { requireMode0600: false }).sha256;
+    return readStableFile(__filename, 'official-conference-acquisition-extended.js', MAX_INDEX_BYTES, { requireMode0600: false }).sha256;
 }
 
 function validateUrlForProvider(provider, rawUrl, kind) {
@@ -356,7 +356,7 @@ async function readResponseBytes(response, maxBytes, label) {
     return Buffer.concat(chunks, total);
 }
 
-async function fetchOfficialV2({ provider, url, kind, maxBytes, timeoutMs = REQUEST_TIMEOUT_MS }, dependencies = {}) {
+async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs = REQUEST_TIMEOUT_MS }, dependencies = {}) {
     const requestedUrl = validateUrlForProvider(provider, url, kind);
     const fetchImpl = dependencies.fetch || dependencies.fetchImpl || globalThis.fetch;
     if (typeof fetchImpl !== 'function') fail('当前运行时缺少 fetch 实现');
@@ -441,7 +441,7 @@ async function fetchOfficialV2({ provider, url, kind, maxBytes, timeoutMs = REQU
         }
         fail('官方响应超过重定向上限');
     } catch (error) {
-        if (error instanceof OfficialConferenceAcquisitionV2Error) throw error;
+        if (error instanceof OfficialConferenceAcquisitionExtendedError) throw error;
         if (error?.name === 'AbortError') fail(`official ${kind} request timed out`);
         const reason = String(error?.cause?.code || error?.code || error?.message || 'network error')
             .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 160);
@@ -454,7 +454,7 @@ async function fetchOfficialV2({ provider, url, kind, maxBytes, timeoutMs = REQU
 /**
  * 解析 ACL Anthology 会议页面 HTML（EMNLP 2026：Main / Short / Findings）。
  */
-function parseEmnlpCatalogHtml(htmlText, provider = PROVIDERS_V2['emnlp-2026']) {
+function parseEmnlpCatalogHtml(htmlText, provider = EXTENDED_PROVIDERS['emnlp-2026']) {
     const $ = cheerio.load(String(htmlText || ''));
     const byId = new Map();
     $('p.d-sm-flex').each((_, el) => {
@@ -570,7 +570,7 @@ function parseZenodoRecordsPages(pages, provider) {
 /**
  * 解析 NeurIPS 官方论文集页面 HTML（proceedings.neurips.cc，严格无查询串 canonical URL）。
  */
-function parseNeuripsProceedingsHtml(htmlText, provider = PROVIDERS_V2['neurips-2026']) {
+function parseNeuripsProceedingsHtml(htmlText, provider = EXTENDED_PROVIDERS['neurips-2026']) {
     const $ = cheerio.load(String(htmlText || ''));
     const byId = new Map();
     const year = provider.conference.year;
@@ -772,7 +772,7 @@ function readStableFile(filename, label, maxBytes, { requireMode0600 = true } = 
         }
         return { bytes, sha256: sha256(bytes), size: bytes.length };
     } catch (error) {
-        if (error instanceof OfficialConferenceAcquisitionV2Error) throw error;
+        if (error instanceof OfficialConferenceAcquisitionExtendedError) throw error;
         fail(`无法读取 ${label}：${error.code || error.message}`);
     } finally {
         if (fd !== undefined) fs.closeSync(fd);
@@ -806,7 +806,7 @@ function readCanonicalJson(filename, label, maxBytes, options = {}) {
         rejectDuplicateJsonKeys(text, label);
         value = JSON.parse(text);
     } catch (error) {
-        if (error instanceof OfficialConferenceAcquisitionV2Error) throw error;
+        if (error instanceof OfficialConferenceAcquisitionExtendedError) throw error;
         fail(`${label} 必须为合法的严格 UTF-8 JSON`);
     }
     return { ...loaded, value };
@@ -865,7 +865,7 @@ function validateObservedAt(value, label) {
 
 function buildCatalogReceipt(provider, responseEntries, metadataBytes, papers) {
     const core = {
-        contract: CATALOG_RECEIPT_CONTRACT_V2,
+        contract: EXTENDED_CATALOG_RECEIPT_CONTRACT,
         providerId: provider.conference.id,
         conference: { ...provider.conference },
         parser: provider.parser,
@@ -888,7 +888,7 @@ function buildPdfReceipt(provider, paper, metadataSha256, {
     observedAt
 }) {
     const core = {
-        contract: PDF_RECEIPT_CONTRACT_V2,
+        contract: EXTENDED_PDF_RECEIPT_CONTRACT,
         acquisitionMode,
         providerId: provider.conference.id,
         metadataSha256,
@@ -927,7 +927,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
     let metadata;
 
     if (provider.parser === 'acl-anthology-html' || provider.parser === 'neurips-proceedings-html') {
-        const fetched = await fetchOfficialV2({
+        const fetched = await fetchOfficialExtended({
             provider, url: provider.indexUrl, kind: 'index', maxBytes: MAX_INDEX_BYTES
         }, dependencies);
         const rel = 'responses/index.html';
@@ -954,7 +954,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
             const validatedUrl = validateUrlForProvider(provider, nextUrl, 'api');
             if (seenUrls.has(validatedUrl)) fail(`${providerId} Zenodo 分页出现循环 URL：${validatedUrl}`);
             seenUrls.add(validatedUrl);
-            const fetched = await fetchOfficialV2({
+            const fetched = await fetchOfficialExtended({
                 provider, url: validatedUrl, kind: 'api', maxBytes: MAX_INDEX_BYTES
             }, dependencies);
             const rel = `responses/page-${String(pageNo).padStart(3, '0')}.json`;
@@ -998,7 +998,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
         });
         metadata = parseIeeeLocalManifest(loaded.value, provider);
     } else {
-        fail(`不支持的 v2 解析器类型：${provider.parser}`);
+        fail(`不支持的扩展解析器类型：${provider.parser}`);
     }
 
     const metadataBytes = prettyBytes(metadata);
@@ -1050,7 +1050,7 @@ function replayCatalog(providerId, outputRoot) {
         'conference', 'contract', 'implementationSha256', 'metadataFile',
         'metadataSha256', 'paperSetSha256', 'parser', 'providerId', 'receiptSha256', 'responses'
     ], `${providerId} catalog.receipt.json`);
-    if (receipt.contract !== CATALOG_RECEIPT_CONTRACT_V2
+    if (receipt.contract !== EXTENDED_CATALOG_RECEIPT_CONTRACT
         || receipt.providerId !== provider.conference.id
         || receipt.parser !== provider.parser
         || receipt.metadataFile !== 'metadata.json'
@@ -1128,7 +1128,7 @@ function replayCatalog(providerId, outputRoot) {
         rejectDuplicateJsonKeys(text, `${providerId} proceedings.json`);
         replayedMetadata = parseIeeeLocalManifest(JSON.parse(text), provider);
     } else {
-        fail(`不支持的 v2 解析器：${provider.parser}`);
+        fail(`不支持的扩展解析器：${provider.parser}`);
     }
 
     const storedMetadataLoaded = readCanonicalJson(paths.metadataFile, `${providerId} metadata.json`, MAX_INDEX_BYTES);
@@ -1170,7 +1170,7 @@ function replayPdfReceipt(replayed, paper) {
         'receiptSha256', 'redirects', 'requestedUrl', 'responseStatus'
     ], `${paper.id} PDF receipt`);
     const expectedMode = replayed.provider.parser === 'ieee-local-manifest' ? 'local-sealed-pdf' : 'official-http-pdf';
-    if (receipt.contract !== PDF_RECEIPT_CONTRACT_V2
+    if (receipt.contract !== EXTENDED_PDF_RECEIPT_CONTRACT
         || receipt.acquisitionMode !== expectedMode
         || receipt.providerId !== replayed.provider.conference.id
         || receipt.metadataSha256 !== replayed.metadataSha256
@@ -1284,7 +1284,7 @@ async function downloadPapers(
         let fetched;
         for (let attempt = 0; ; attempt += 1) {
             try {
-                fetched = await fetchOfficialV2({
+                fetched = await fetchOfficialExtended({
                     provider: replayed.provider,
                     url: paper.pdfUrl,
                     kind: 'pdf',
@@ -1456,13 +1456,13 @@ function verifyAcquisition({ providerId, outputRoot }) {
 }
 
 module.exports = {
-    OfficialConferenceAcquisitionV2Error,
+    OfficialConferenceAcquisitionExtendedError,
     PAPER_FIELDS,
-    CATALOG_RECEIPT_CONTRACT_V2,
-    PDF_RECEIPT_CONTRACT_V2,
+    EXTENDED_CATALOG_RECEIPT_CONTRACT,
+    EXTENDED_PDF_RECEIPT_CONTRACT,
     MAX_INDEX_BYTES,
     MAX_PDF_BYTES,
-    PROVIDERS_V2,
+    EXTENDED_PROVIDERS,
     hasProvider,
     providerFor,
     listProviderIds,

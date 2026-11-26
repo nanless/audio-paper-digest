@@ -14,9 +14,9 @@ const executionApi = require('./conference-execution.js');
 const planApi = require('./conference-plan.js');
 const {
     validatePdfFormulaRecord,
-    ARTIFACT_V2_CONTRACT,
-    ARTIFACT_V2_PROFILE,
-    RECEIPT_V2_CONTRACT
+    ARTIFACT_ENHANCED_CONTRACT,
+    ARTIFACT_ENHANCED_PROFILE,
+    RECEIPT_ENHANCED_CONTRACT
 } = require('./conference-extraction-receipt.js');
 const codec = require('./protocol-codec');
 const readerPdfIdentity = require('./conference-reader-pdf-identity');
@@ -59,7 +59,7 @@ function recordHeaderFor(value, family) {
     try { return readRecordHeader(value, family); }
     catch (error) { integrity(`格式头不受支持：${error.message}`, 'invalid_artifact_schema'); }
 }
-const replayable = profile => codec.isContract(profile, 'conference-pdf-replayable-layout') || profile === ARTIFACT_V2_PROFILE;
+const replayable = profile => codec.isContract(profile, 'conference-pdf-replayable-layout') || profile === ARTIFACT_ENHANCED_PROFILE;
 const weak = profile => codec.isContract(profile, 'conference-pdf-weak-layout');
 const unavailable = profile => codec.isContract(profile, 'conference-pdf-unavailable-layout');
 function headerForAuthority(authority, family, variant) {
@@ -290,23 +290,23 @@ function validateVisualAudit(value) {
 }
 
 function validateStructuredArtifacts(value, sourceText) {
-    const v2 = plain(value) && value.contract === ARTIFACT_V2_CONTRACT;
-    const header = v2 ? { contract: ARTIFACT_V2_CONTRACT } : recordHeaderFor(value, 'conference-structured-artifacts');
+    const enhanced = plain(value) && value.contract === ARTIFACT_ENHANCED_CONTRACT;
+    const header = enhanced ? { contract: ARTIFACT_ENHANCED_CONTRACT } : recordHeaderFor(value, 'conference-structured-artifacts');
     const fields = [...Object.keys(header), 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages', 'tables', 'formulas', 'figures', 'payloadSha256',
-        ...(v2 ? ['visualAudit', 'authorEvidence', 'extractorProfile'] : [])];
+        ...(enhanced ? ['visualAudit', 'authorEvidence', 'extractorProfile'] : [])];
     const actual = Object.keys(value).sort();
-    const expected = v2
+    const expected = enhanced
         ? fields.sort()
         : [...fields, ...(Object.hasOwn(value, 'visualAudit') ? ['visualAudit'] : [])].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         integrity('structuredArtifacts 包含未允许的字段，或缺少必填字段', 'invalid_artifact_schema');
     }
-    if (v2) {
-        if (value.profile !== ARTIFACT_V2_PROFILE) {
-            integrity('v2 structuredArtifacts 的 profile 不受支持', 'unsupported_artifact_profile');
+    if (enhanced) {
+        if (value.profile !== ARTIFACT_ENHANCED_PROFILE) {
+            integrity('增强 structuredArtifacts 的 profile 不受支持', 'unsupported_artifact_profile');
         }
         if (!plain(value.authorEvidence) || !plain(value.extractorProfile)) {
-            integrity('v2 structuredArtifacts 的 authorEvidence 或 extractorProfile 必须是对象', 'invalid_artifact_schema');
+            integrity('增强 structuredArtifacts 的 authorEvidence 或 extractorProfile 必须是对象', 'invalid_artifact_schema');
         }
         exact(value.extractorProfile, ['readingOrder', 'figureTargetDpi', 'tableRecovery'], 'structuredArtifacts.extractorProfile');
     } else if (!replayable(value.profile) && !weak(value.profile) && !unavailable(value.profile)) {
@@ -377,7 +377,7 @@ function unavailableCapability(reason) {
 function structuredCapabilityReason(profile) {
     if (weak(profile)) return 'structured-artifacts-profile-weak';
     if (unavailable(profile)) return 'structured-artifacts-profile-unavailable';
-    if (replayable(profile)) return (profile === REPLAYABLE_PROFILE || profile === ARTIFACT_V2_PROFILE)
+    if (replayable(profile)) return (profile === REPLAYABLE_PROFILE || profile === ARTIFACT_ENHANCED_PROFILE)
         ? codec.contract('conference-replayable-extraction-capability')
         : codec.historicalContract('conference-replayable-extraction-capability', 'actual-pdf-replay');
     return NO_REPLAYABLE_RECEIPT;
@@ -493,8 +493,8 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
         pdfDescriptor: pdfSource.descriptor,
         metadata, text, structuredArtifacts,
         analysisReady: true, textOffsetUnit: OFFSET_UNIT,
-        extractionReceipt: { contract: structuredArtifacts.contract === ARTIFACT_V2_CONTRACT
-                ? RECEIPT_V2_CONTRACT
+        extractionReceipt: { contract: structuredArtifacts.contract === ARTIFACT_ENHANCED_CONTRACT
+                ? RECEIPT_ENHANCED_CONTRACT
                 : codec.isCurrentHeader(structuredArtifacts, 'conference-structured-artifacts')
                     ? PDF_EXTRACTION_RECEIPT_CONTRACT : codec.historicalContract('conference-pdf-extraction-receipt', 'raw-input-output-bindings'),
             available: replayable(structuredArtifacts.profile),

@@ -183,10 +183,10 @@ def run_bounded_llm_tasks(items, worker, max_workers, on_result=None):
     return results
 
 
-import scoring_rubric_v2 as _scoring_v2
-SCORING_RUBRIC_VERSION = _scoring_v2.SCORING_RUBRIC_V1
-CURRENT_SCORING_RUBRIC_VERSION = _scoring_v2.SCORING_RUBRIC_V2
-SUPPORTED_SCORING_RUBRIC_VERSIONS = _scoring_v2.SUPPORTED_SCORING_RUBRIC_VERSIONS
+import scoring_rubric as _scoring
+SCORING_RUBRIC_VERSION = _scoring.LEGACY_SCORING_RUBRIC
+CURRENT_SCORING_RUBRIC_VERSION = _scoring.CURRENT_SCORING_RUBRIC
+SUPPORTED_SCORING_RUBRIC_VERSIONS = _scoring.SUPPORTED_SCORING_RUBRIC_VERSIONS
 ALLOWED_DOCUMENT_TYPES = {
     '方法研究', '系统技术报告', '模型报告', '数据集与基准',
     '综述', '理论研究', '应用研究'
@@ -6457,9 +6457,9 @@ def validate_publish_parsed(
         raise PublishDataValidationError(
             f'{source} 的 scoringRubricVersion 非法: {rubric_version!r}'
         )
-    is_v2 = _scoring_v2.is_v2_rubric(rubric_version)
-    active_dimensions = _scoring_v2.V2_PUBLISH_DIMENSIONS if is_v2 else SCORING_DIMENSIONS
-    active_open_anchors = _scoring_v2.V2_OPEN_SOURCE_ANCHORS if is_v2 else OPEN_SOURCE_SCORE_ANCHORS
+    is_unified = _scoring.is_unified_rubric(rubric_version)
+    active_dimensions = _scoring.UNIFIED_PUBLISH_DIMENSIONS if is_unified else SCORING_DIMENSIONS
+    active_open_anchors = _scoring.UNIFIED_OPEN_SOURCE_ANCHORS if is_unified else OPEN_SOURCE_SCORE_ANCHORS
 
     dimension_total = 0.0
     dimension_scores = {}
@@ -6500,8 +6500,8 @@ def validate_publish_parsed(
     if abs(total * 10 - round(total * 10)) > 1e-9:
         raise PublishDataValidationError(f'{source} 的 score 最多只能有一位小数')
     expected_total = (
-        _scoring_v2.calculate_v2_weighted_total(document_type, dimension_scores)['total']
-        if is_v2 else min(10.0, dimension_total)
+        _scoring.calculate_weighted_total(document_type, dimension_scores)['total']
+        if is_unified else min(10.0, dimension_total)
     )
     if abs(total - expected_total) > 0.051:
         raise PublishDataValidationError(

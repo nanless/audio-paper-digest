@@ -87,7 +87,7 @@ private actor SyncDAVFixture {
     @MainActor static func main() async throws {
         let args = Array(CommandLine.arguments.dropFirst())
         let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf:
-            URL(fileURLWithPath: "tests/fixtures/workbench/full-webdav-sync-v1.json")))
+            URL(fileURLWithPath: "tests/fixtures/workbench/full-webdav-sync.json")))
         if args.first == "--live" {
             do { try await live(args, fixture: fixture) }
             catch {

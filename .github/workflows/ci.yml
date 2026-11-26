@@ -191,7 +191,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
 
       - name: 配置 Python 测试运行时
         uses: actions/setup-python@v5
@@ -212,31 +211,22 @@ jobs:
             yes | "$cli/sdkmanager" --licenses >/dev/null 2>&1 || true
           fi
 
-      - name: 安装项目依赖
-        run: npm ci
-
       - name: 安装 katex（Gradle 资产步骤依赖）
-        # 根目录没有 npm workspaces。:app:testDebugUnitTest 的任务图包含
-        # :app:prepareDebugPublishedAssets，它无条件从 apps/macos/node_modules/katex
-        # 复制文件；只跑根 npm ci 会在干净 checkout 上 ENOENT。
+        # :app:testDebugUnitTest 的任务图包含 :app:prepareDebugPublishedAssets，
+        # 它无条件从 apps/macos/node_modules/katex 复制文件；无需安装根项目依赖。
         working-directory: apps/macos
         run: npm ci
 
       - name: 运行 Android 非设备合约与资产测试
         run: |
           set -euo pipefail
-          for script in \
-            apps/android/Tests/DeviceSelection.test.py \
-            apps/android/Tests/WorkbenchBranding.test.py \
-            apps/android/Tests/CompiledSecurityResources.test.py \
-            apps/android/Tests/ReleasePackaging.test.py \
-            apps/android/Tests/AndroidReleaseStages.test.py \
-            apps/android/Tests/ReleaseBoundaries.test.py \
-            apps/android/Tests/ReleaseKeystoreCanonical.test.py \
-            apps/android/Tests/ReleaseCompiledIcon.test.py \
-            apps/android/Tests/ReleasePackagedAssets.test.py \
-            apps/android/Tests/ReleaseSignatureSchemes.test.py \
-            apps/android/Tests/ReleaseFinalizeSigned.test.py; do
+          scripts=()
+          while IFS= read -r script; do
+            test -e "$script"
+            scripts+=("$script")
+          done < <(find apps/android/Tests -maxdepth 1 -type f -name '*.test.py' | LC_ALL=C sort)
+          test "${#scripts[@]}" -ge 11
+          for script in "${scripts[@]}"; do
             bash scripts/python-runtime.sh "$script"
           done
           node --test apps/android/AssetsChannel.test.mjs

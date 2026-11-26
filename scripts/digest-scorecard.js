@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * 只读 LLM 运行记分卡（Wave 11 Track 11C）。
+ * 只读 LLM 运行记分卡。
  *
  * 按北京日期汇总真实 LLM 请求的成功率、ECONNRESET/传输错误率、KV 前缀缓存命中率、
  * 隐式思考 token 占比、各阶段 P50/P95 延迟与匿名化账号负载分布。
@@ -389,7 +389,7 @@ function buildScorecard(events, { dates, source, workflow = null }) {
     );
 
     return {
-        contract: 'digest-scorecard-v1',
+        contract: 'digest-scorecard',
         dates,
         source,
         ...(workflow ? { workflow } : {}),

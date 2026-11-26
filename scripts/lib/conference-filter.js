@@ -65,7 +65,7 @@ const LLM_FILTER_PROMPT = renderFilterPrompt({
 }, LLM_FILTER_PROMPT_PATH);
 const DAILY_DECISION_PARSER_CONTRACT = decisionApi.FILTER_DECISION_CONTRACT;
 const CORE_CONFERENCE_FALLBACK_CONTRACT = codec.contract('core-audio-conferences-2026');
-const PRIOR_V1_CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
+const PRIOR_CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
     'chime-2026': 'CHiME Speech Separation and Recognition',
     'dafx-2026': 'Digital Audio Effects',
     'icmc-2026': 'International Computer Music Conference',
@@ -78,7 +78,7 @@ const PRIOR_V1_CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
 });
 const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
     'asru-2025': 'IEEE Automatic Speech Recognition and Understanding Workshop',
-    ...PRIOR_V1_CORE_AUDIO_CONFERENCE_LABELS,
+    ...PRIOR_CORE_AUDIO_CONFERENCE_LABELS,
     'dcase-2026': 'Detection and Classification of Acoustic Scenes and Events',
     'ismir-2026': 'International Society for Music Information Retrieval',
     'waspaa-2025': 'IEEE Workshop on Applications of Signal Processing to Audio and Acoustics'
@@ -138,11 +138,11 @@ const FILTER_CONFIG_BINDING = Object.freeze({
     coreAudioConferenceFamilyLabels: CORE_AUDIO_CONFERENCE_FAMILY_LABELS,
     dailyFilterPrefilterSha256: dailyFilterPrefilter.DAILY_FILTER_PREFILTER_SHA256
 });
-const PRIOR_V1_LLM_FILTER_POLICY = JSON.stringify({
+const PRIOR_LLM_FILTER_POLICY = JSON.stringify({
     prompt: 'filter:first-fenced-block',
     parser: DAILY_DECISION_PARSER_CONTRACT,
     ...FILTER_CONFIG_BINDING_BASE,
-    coreAudioConferenceLabels: PRIOR_V1_CORE_AUDIO_CONFERENCE_LABELS
+    coreAudioConferenceLabels: PRIOR_CORE_AUDIO_CONFERENCE_LABELS
 });
 const LLM_FILTER_POLICY = JSON.stringify({
     prompt: 'filter:first-fenced-block',
@@ -178,21 +178,21 @@ function exact(value, fields, label) {
 }
 function sha256(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
 const LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(LLM_FILTER_POLICY, 'utf8'));
-const PRIOR_V1_LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(PRIOR_V1_LLM_FILTER_POLICY, 'utf8'));
+const PRIOR_LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(PRIOR_LLM_FILTER_POLICY, 'utf8'));
 const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
 // 核心音频会议及其标签也参与筛选策略的 SHA 计算。恢复时保留下列旧策略 SHA，
 // 因为已保存的状态和请求记录仍对应标签扩充前的策略。
 // 只接受明确列出的旧值，不接受任意策略 SHA。
 // '382af440…' = interspeech-2026 加入 core-audio 标签之前的策略；
 // '11b277a5…' = 最初的 2026 会议标签之前的策略。
-// 只兼容同一运行预算与会议身份下的固定旧 v4、v5 词表策略，不接受任意外来版本。
+// 只兼容同一运行预算与会议身份下的固定旧词表策略，不接受任意外来版本。
 const LEGACY_KEYWORD_FILTER_POLICY_SHA256 = new Set([
     ...historicalWorkflows.previousKeywordPolicyHashes(),
-    PRIOR_V1_LLM_FILTER_POLICY_SHA256
+    PRIOR_LLM_FILTER_POLICY_SHA256
 ]);
 const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
     ...historicalWorkflows.filterPolicyHashes(),
-    PRIOR_V1_LLM_FILTER_POLICY_SHA256
+    PRIOR_LLM_FILTER_POLICY_SHA256
 ]);
 const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, ...LEGACY_FILTER_POLICY_SHA256_LIST]);
 // 筛选提示词的兼容窗口。会议路径按「渲染占位符之后的首块」算 SHA，改一个字就会让
@@ -1532,7 +1532,7 @@ function evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus
         ? keywordPrefilter.evaluateKeywordPrefilter(record)
         : dailyFilterPrefilter.evaluateDailyFilterPrefilter(record);
     const conferenceCategoryLabel = legacy
-        ? (PRIOR_V1_CORE_AUDIO_CONFERENCE_LABELS[conferenceId] || null)
+        ? (PRIOR_CORE_AUDIO_CONFERENCE_LABELS[conferenceId] || null)
         : resolveCoreAudioConferenceLabel(conferenceId);
     const conferenceCategoryFallback = Boolean(conferenceCategoryLabel);
     const evidenceFailOpen = evidenceStatus !== 'ready';

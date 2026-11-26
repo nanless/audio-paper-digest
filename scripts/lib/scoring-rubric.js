@@ -1,36 +1,38 @@
 'use strict';
 
 /**
- * Shared Node.js engine for scoring rubric `type-aware-v2`.
- * Loads `config/scoring-rubric-v2.json` and mirrors `scripts/scoring_rubric_v2.py`
+ * Shared Node.js engine for the unified type-aware scoring rubric.
+ * Loads `config/scoring-rubric.json` and mirrors `scripts/scoring_rubric.py`
  * using exact integer thousandths arithmetic so JS and Python agree bit-for-bit.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SPEC_PATH = path.resolve(__dirname, '../../config/scoring-rubric-v2.json');
+const SPEC_PATH = path.resolve(__dirname, '../../config/scoring-rubric.json');
 const SPEC = Object.freeze(JSON.parse(fs.readFileSync(SPEC_PATH, 'utf8')));
 
-const SCORING_RUBRIC_V1 = SPEC.legacyRubricVersion;
-const SCORING_RUBRIC_V2 = SPEC.rubricVersion;
-const SUPPORTED_SCORING_RUBRIC_VERSIONS = Object.freeze([SCORING_RUBRIC_V1, SCORING_RUBRIC_V2]);
+const LEGACY_SCORING_RUBRIC = SPEC.legacyRubricVersion;
+const CURRENT_SCORING_RUBRIC = SPEC.rubricVersion;
+const HISTORICAL_UNIFIED_SCORING_RUBRICS = Object.freeze(['type-aware-v2']);
+const UNIFIED_SCORING_RUBRIC_VERSIONS = Object.freeze([CURRENT_SCORING_RUBRIC, ...HISTORICAL_UNIFIED_SCORING_RUBRICS]);
+const SUPPORTED_SCORING_RUBRIC_VERSIONS = Object.freeze([LEGACY_SCORING_RUBRIC, ...HISTORICAL_UNIFIED_SCORING_RUBRICS, CURRENT_SCORING_RUBRIC]);
 
 const ALL_DIM_BY_KEY = new Map([
     ...SPEC.coreDimensions.map(item => [item.key, Object.freeze({ ...item, max: SPEC.scaleMax, isCore: true })]),
     [SPEC.openSourceDimension.key, Object.freeze({ ...SPEC.openSourceDimension, max: SPEC.scaleMax, isCore: false })]
 ]);
 
-const V2_DIMENSIONS = Object.freeze(
+const UNIFIED_DIMENSIONS = Object.freeze(
     SPEC.dimensionDisplayOrder.map(key => ALL_DIM_BY_KEY.get(key))
 );
-const V2_CORE_DIMENSIONS = Object.freeze(SPEC.coreDimensions.map(item => ALL_DIM_BY_KEY.get(item.key)));
-const V2_OPEN_SOURCE_ANCHORS = Object.freeze([...SPEC.openSourceDimension.anchors]);
-const V2_OPEN_SOURCE_RELEASED_THRESHOLD = SPEC.openSourceDimension.releasedThreshold;
-const V2_EVIDENCE_CAPS = Object.freeze({ ...SPEC.evidenceCaps });
+const UNIFIED_CORE_DIMENSIONS = Object.freeze(SPEC.coreDimensions.map(item => ALL_DIM_BY_KEY.get(item.key)));
+const UNIFIED_OPEN_SOURCE_ANCHORS = Object.freeze([...SPEC.openSourceDimension.anchors]);
+const UNIFIED_OPEN_SOURCE_RELEASED_THRESHOLD = SPEC.openSourceDimension.releasedThreshold;
+const UNIFIED_EVIDENCE_CAPS = Object.freeze({ ...SPEC.evidenceCaps });
 const CALIBRATION_PROFILE = typeof SPEC.calibrationProfile === 'string' && SPEC.calibrationProfile.trim()
     ? SPEC.calibrationProfile.trim()
-    : 'audio-rubric-v2.1';
+    : 'audio-rubric-calibration';
 const CALIBRATION_ANCHORS = Object.freeze(
     Array.isArray(SPEC.calibrationAnchors)
         ? SPEC.calibrationAnchors.map(card => Object.freeze({
@@ -56,12 +58,16 @@ const COMPACT_WEIGHT_LABELS = Object.freeze({
     reproducibility: '复现',
     engineering: '工程'
 });
-const V2_SCORE_DIMENSIONS_BY_PARSED_FIELD = Object.freeze(
-    Object.fromEntries(V2_DIMENSIONS.map(item => [item.parsedField, Object.freeze({ label: item.label, max: item.max, shortLabel: item.shortLabel })]))
+const UNIFIED_SCORE_DIMENSIONS_BY_PARSED_FIELD = Object.freeze(
+    Object.fromEntries(UNIFIED_DIMENSIONS.map(item => [item.parsedField, Object.freeze({ label: item.label, max: item.max, shortLabel: item.shortLabel })]))
 );
 
-function isV2Rubric(version) {
-    return String(version || '').trim() === SCORING_RUBRIC_V2;
+function isUnifiedRubric(version) {
+    return UNIFIED_SCORING_RUBRIC_VERSIONS.includes(String(version || '').trim());
+}
+
+function isLegacyRubric(version) {
+    return String(version || '').trim() === LEGACY_SCORING_RUBRIC;
 }
 
 function normalizeTenths(value) {
@@ -92,17 +98,17 @@ function normalizeTenths(value) {
     return (sign * absTenths) || 0;
 }
 
-function isV2OpenSourceAnchor(value) {
+function isOpenSourceAnchor(value) {
     const tenths = normalizeTenths(value);
     if (!Number.isFinite(tenths)) return false;
-    return V2_OPEN_SOURCE_ANCHORS.some(anchor => Math.round(anchor * 10) === tenths);
+    return UNIFIED_OPEN_SOURCE_ANCHORS.some(anchor => Math.round(anchor * 10) === tenths);
 }
 
 function getDocumentTypePolicy(documentType) {
     const key = String(documentType || '').trim();
     const policy = Object.hasOwn(SPEC.documentTypes, key) ? SPEC.documentTypes[key] : null;
     if (!policy) {
-        throw new Error(`type-aware-v2 不支持的文档类型: ${String(documentType || '')}`);
+        throw new Error(`${CURRENT_SCORING_RUBRIC} 不支持的文档类型: ${String(documentType || '')}`);
     }
     return policy;
 }
@@ -111,7 +117,7 @@ function formatDocumentTypeWeightsSummary(documentType) {
     const key = String(documentType || '').trim();
     const policy = Object.hasOwn(SPEC.documentTypes, key) ? SPEC.documentTypes[key] : null;
     if (!policy) return '';
-    const parts = V2_CORE_DIMENSIONS.map(dim => {
+    const parts = UNIFIED_CORE_DIMENSIONS.map(dim => {
         const label = COMPACT_WEIGHT_LABELS[dim.key] || dim.shortLabel || dim.label;
         const pct = policy.coreWeightPct[dim.key];
         return `${label} ${pct}%`;
@@ -121,7 +127,7 @@ function formatDocumentTypeWeightsSummary(documentType) {
 }
 
 /**
- * Compute exact type-aware-v2 total score from dimension scores (accepting either
+ * Compute exact unified type-aware total score from dimension scores (accepting either
  * audit keys like `innovation`/`technicalRigor` or parsed keys like `innovationScore`).
  *
  * Uses exact integer thousandths arithmetic:
@@ -130,7 +136,7 @@ function formatDocumentTypeWeightsSummary(documentType) {
  * - rawTotalScaled = coreScaled + bonusScaled (thousandths of a point)
  * - totalTenths = min(100, floor((rawTotalScaled + 50) / 100))  // HALF_UP to 0.1
  */
-function calculateV2WeightedTotal(documentType, scoresMap) {
+function calculateWeightedTotal(documentType, scoresMap) {
     const policy = getDocumentTypePolicy(documentType);
     const readDim = dim => {
         let raw;
@@ -143,13 +149,13 @@ function calculateV2WeightedTotal(documentType, scoresMap) {
         }
         const tenths = normalizeTenths(raw);
         if (!Number.isFinite(tenths) || tenths < 0 || tenths > 100) {
-            throw new Error(`type-aware-v2 维度 ${dim.key} 分数无效: ${String(raw)}`);
+            throw new Error(`${CURRENT_SCORING_RUBRIC} 维度 ${dim.key} 分数无效: ${String(raw)}`);
         }
         return tenths;
     };
 
     let coreScaled = 0;
-    for (const dim of V2_CORE_DIMENSIONS) {
+    for (const dim of UNIFIED_CORE_DIMENSIONS) {
         const weightPct = policy.coreWeightPct[dim.key];
         coreScaled += weightPct * readDim(dim);
     }
@@ -165,11 +171,11 @@ function calculateV2WeightedTotal(documentType, scoresMap) {
         openSourceMaxBonus: bonusTenths / 10,
         rawTotal: Number((rawTotalScaled / 1000).toFixed(3)),
         total: totalTenths / 10,
-        rankBucket: rankBucketForV2Score(totalTenths / 10)
+        rankBucket: rankBucketForScore(totalTenths / 10)
     };
 }
 
-function rankBucketForV2Score(score) {
+function rankBucketForScore(score) {
     const tenths = normalizeTenths(score);
     if (!Number.isFinite(tenths)) return '';
     for (const bucket of SPEC.rankBuckets) {
@@ -180,8 +186,8 @@ function rankBucketForV2Score(score) {
     return '后50%';
 }
 
-function rankBucketForRubric(score, rubricVersion = SCORING_RUBRIC_V1) {
-    if (isV2Rubric(rubricVersion)) return rankBucketForV2Score(score);
+function rankBucketForRubric(score, rubricVersion = LEGACY_SCORING_RUBRIC) {
+    if (isUnifiedRubric(rubricVersion)) return rankBucketForScore(score);
     const tenths = normalizeTenths(score);
     if (!Number.isFinite(tenths)) return '';
     if (tenths >= 90) return '前10%';
@@ -193,24 +199,27 @@ function rankBucketForRubric(score, rubricVersion = SCORING_RUBRIC_V1) {
 module.exports = {
     SPEC_PATH,
     SPEC,
-    SCORING_RUBRIC_V1,
-    SCORING_RUBRIC_V2,
+    LEGACY_SCORING_RUBRIC,
+    CURRENT_SCORING_RUBRIC,
+    HISTORICAL_UNIFIED_SCORING_RUBRICS,
+    UNIFIED_SCORING_RUBRIC_VERSIONS,
     SUPPORTED_SCORING_RUBRIC_VERSIONS,
-    V2_DIMENSIONS,
-    V2_CORE_DIMENSIONS,
-    V2_OPEN_SOURCE_ANCHORS,
-    V2_OPEN_SOURCE_RELEASED_THRESHOLD,
-    V2_EVIDENCE_CAPS,
+    UNIFIED_DIMENSIONS,
+    UNIFIED_CORE_DIMENSIONS,
+    UNIFIED_OPEN_SOURCE_ANCHORS,
+    UNIFIED_OPEN_SOURCE_RELEASED_THRESHOLD,
+    UNIFIED_EVIDENCE_CAPS,
     CALIBRATION_PROFILE,
     CALIBRATION_ANCHORS,
     DOMAIN_RED_LINES,
-    V2_SCORE_DIMENSIONS_BY_PARSED_FIELD,
-    isV2Rubric,
+    UNIFIED_SCORE_DIMENSIONS_BY_PARSED_FIELD,
+    isUnifiedRubric,
+    isLegacyRubric,
     normalizeTenths,
-    isV2OpenSourceAnchor,
+    isOpenSourceAnchor,
     getDocumentTypePolicy,
     formatDocumentTypeWeightsSummary,
-    calculateV2WeightedTotal,
-    rankBucketForV2Score,
+    calculateWeightedTotal,
+    rankBucketForScore,
     rankBucketForRubric
 };

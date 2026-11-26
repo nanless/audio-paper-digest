@@ -34,7 +34,7 @@ class DailyHtmlProjectionV2Test(unittest.TestCase):
         self.cases = json.loads(FIXTURE.read_text(encoding='utf-8'))['cases']
 
     def project(self, body, *, limits=None):
-        return projection.project_daily_html_v2(original.page(body), expected_canonical=original.URL,
+        return projection.project_historical_spaced_daily_html(original.page(body), expected_canonical=original.URL,
             **({} if limits is None else {'limits': limits}))
 
     def reject(self, body, reason=None):
@@ -55,7 +55,7 @@ class DailyHtmlProjectionV2Test(unittest.TestCase):
 
     def test_fixed_v2_entry_and_contract_do_not_change_the_v1_profile(self):
         self.assertEqual(projection.PROFILE, 'daily-static-html-projection-v1')
-        self.assertEqual(projection.PROFILE_V2, V2)
+        self.assertEqual(projection.HISTORICAL_SPACED_PROFILE, V2)
         result = self.project(r'\(r + s\)')
         self.assertEqual((result['contract'], result['version']), (V2, 2))
         self.assertEqual(result['payload']['coverage']['math'],
@@ -80,7 +80,7 @@ class DailyHtmlProjectionV2Test(unittest.TestCase):
             for variant in ('normal', 'production_flags'):
                 case = next(row for row in self.cases if row['group'] == 'new'
                             and row['source'] == source and row['variant'] == variant)
-                results.append(projection.project_daily_html_v2(raw_case(case), expected_canonical=case['canonical']))
+                results.append(projection.project_historical_spaced_daily_html(raw_case(case), expected_canonical=case['canonical']))
             with self.subTest(source=source):
                 self.assertEqual(results[0]['payload'], results[1]['payload'])
                 self.assertEqual(results[0]['payloadSha256'], results[1]['payloadSha256'])
@@ -96,7 +96,7 @@ class DailyHtmlProjectionV2Test(unittest.TestCase):
         for case in self.cases:
             if case['group'] == 'old' and case['source'] == 'display-fixed':
                 self.assertEqual(case['v1Baseline']['reason'], 'whitespace')
-                results.append(projection.project_daily_html_v2(raw_case(case), expected_canonical=case['canonical']))
+                results.append(projection.project_historical_spaced_daily_html(raw_case(case), expected_canonical=case['canonical']))
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0]['payloadSha256'], results[1]['payloadSha256'])
         for body in (r'\(a b c\)', r'\[\gamma + \delta\]', r'\(\text{c d} + m\ n\)', r'\(a+b\)'):
@@ -108,11 +108,11 @@ class DailyHtmlProjectionV2Test(unittest.TestCase):
             if case['source'] in ('math-whitespace-controls', 'display-spaced') or (
                     case['source'] == 'inline-spaced' and case['variant'] == 'normal'):
                 with self.subTest(case=case['id']), self.assertRaises(projection.ProjectionError):
-                    projection.project_daily_html_v2(raw_case(case), expected_canonical=case['canonical'])
+                    projection.project_historical_spaced_daily_html(raw_case(case), expected_canonical=case['canonical'])
         compressed = next(row for row in self.cases if row['source'] == 'inline-spaced'
                           and row['variant'] == 'production_flags')
         # A supported compressed endpoint cannot repair its unsupported normal peer.
-        self.assertEqual(projection.project_daily_html_v2(raw_case(compressed),
+        self.assertEqual(projection.project_historical_spaced_daily_html(raw_case(compressed),
             expected_canonical=compressed['canonical'])['stats']['formulas'], 1)
 
     def test_space_deletion_and_movement_are_never_normalized(self):
@@ -151,7 +151,7 @@ class DailyHtmlProjectionV2Test(unittest.TestCase):
         zero = original.page(r'\(a+b\)')
         before = projection.project_daily_html(zero, expected_canonical=original.URL)
         for _ in range(3):
-            self.assertEqual(projection.project_daily_html_v2(raw, expected_canonical=original.URL)['version'], 2)
+            self.assertEqual(projection.project_historical_spaced_daily_html(raw, expected_canonical=original.URL)['version'], 2)
             with self.assertRaises(projection.ProjectionError):
                 projection.project_daily_html(raw, expected_canonical=original.URL)
             self.assertEqual(projection.project_daily_html(zero, expected_canonical=original.URL), before)

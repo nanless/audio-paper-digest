@@ -2322,6 +2322,7 @@ def _validate_api_reader_author_identity(paper, *, hooks: Mapping | None = None)
             base_identity_keys | {'conferencePdfAuthorParser'}
             if (is_conference_paper and conference_author_parser in {
                 'conference-pdf-author-lines-v2',
+                'conference-pdf-author-pdf-page1',
                 'conference-pdf-author-pdf-page1-v3',
             })
             else base_identity_keys
@@ -2330,7 +2331,10 @@ def _validate_api_reader_author_identity(paper, *, hooks: Mapping | None = None)
             raise _H.PublishDataValidationError('读者文章的作者来源记录格式无效、缺少必要字段，或含有不允许的字段。')
         allowed_dom_source_kinds = (
             {'html_dom', 'pdf_text', 'official_metadata'}
-            if (is_conference_paper and conference_author_parser == 'conference-pdf-author-pdf-page1-v3')
+            if (is_conference_paper and conference_author_parser in {
+                'conference-pdf-author-pdf-page1',
+                'conference-pdf-author-pdf-page1-v3',
+            })
             else {'html_dom', 'pdf_text'}
         )
         identity_sha = _H._reader_record_sha256(identity, 'API reader 作者来源记录')

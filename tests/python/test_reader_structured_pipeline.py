@@ -11,7 +11,7 @@ import protocol_codec as codec
 import publish_common as pc
 import reader_record_format as formats
 from blog_entry_loader import load_publish_to_blog
-from test_reader_cohesive_v4 import build_cohesive_v4_publication_paper
+from test_reader_cohesive_editorial import build_cohesive_v4_publication_paper
 from test_publish_to_blog import reseal_llm_api_reader_fixture
 
 pub = load_publish_to_blog()
@@ -73,7 +73,7 @@ class ReaderStructuredV5PythonTests(unittest.TestCase):
     def test_v5_payload_validates_chinese_caption_and_implementation_specs_and_renders_page(self):
         paper = build_structured_v5_publication_paper()
         payload = pub._api_reader_payload_uncached(paper)
-        self.assertEqual(formats.plan_editorial_profile(payload['plan']), formats.STRUCTURED_V5)
+        self.assertEqual(formats.plan_editorial_profile(payload['plan']), formats.STRUCTURED_EDITORIAL)
         self.assertEqual(payload['plan']['figurePlacements'][0]['chineseCaption'], '双耳流式架构主干与低延迟编码路径示意')
         self.assertIn('trainingData', payload['plan']['implementationSpecs'])
 
@@ -102,8 +102,18 @@ class ReaderStructuredV5PythonTests(unittest.TestCase):
         v4_paper['analysisManifest']['stages']['apiReaderArticle']['readerProtocols']['article'] = v4_header
         v4_paper['apiReaderPlan']['implementationSpecs'] = copy.deepcopy(paper['apiReaderPlan']['implementationSpecs'])
         reseal_llm_api_reader_fixture(v4_paper)
-        with self.assertRaisesRegex(pub.PublishDataValidationError, '非 structured-pipeline-v5'):
+        with self.assertRaisesRegex(pub.PublishDataValidationError, '非 structured-pipeline'):
             pub._api_reader_payload_uncached(v4_paper)
+
+        # Archived structured-pipeline-v5 header remains 100% valid with implementationSpecs and chineseCaption
+        v5_archived = copy.deepcopy(paper)
+        v5_archived_header = codec.historical_header('beginner-researcher', formats.INTEGRATED, formats.V5_PLAN_FP)
+        v5_archived['apiReaderPlan'].update(v5_archived_header)
+        v5_archived['analysisManifest']['stages']['apiReaderArticle']['readerProtocols']['article'] = v5_archived_header
+        reseal_v5(v5_archived)
+        archived_payload = pub._api_reader_payload_uncached(v5_archived)
+        self.assertEqual(formats.plan_editorial_profile(archived_payload['plan']), formats.STRUCTURED_V5_EDITORIAL)
+        self.assertTrue(formats.is_structured_editorial(formats.plan_editorial_profile(archived_payload['plan'])))
 
     def test_partial_readme_documentation_surfaces_only_on_structured_v5_pages(self):
         v5_paper = build_structured_v5_publication_paper()
@@ -216,11 +226,11 @@ class ReaderStructuredV5PythonTests(unittest.TestCase):
 
         # R2-H2: chineseCaption star normalization (* -> 一个星号, *** -> 三个星号, outer quotes, trailing full-width period)
         self.assertEqual(
-            pub._format_expected_v5_chinese_caption('在测试集上显著优于基线（p < 0.05*，***代表 p < 0.001）．'),
+            pub._format_expected_chinese_caption('在测试集上显著优于基线（p < 0.05*，***代表 p < 0.001）．'),
             '在测试集上显著优于基线（p < 0.05一个星号，三个星号代表 p < 0.001）',
         )
         self.assertEqual(
-            pub._format_expected_v5_chinese_caption('“测试显著性 $p^*$ 与 p < 0.05* 对比”'),
+            pub._format_expected_chinese_caption('“测试显著性 $p^*$ 与 p < 0.05* 对比”'),
             '测试显著性 $p^*$ 与 p < 0.05一个星号 对比',
         )
 

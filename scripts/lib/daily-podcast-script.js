@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 
-const DAILY_PODCAST_SCRIPT_CONTRACT = 'daily-podcast-script-v1';
+const DAILY_PODCAST_SCRIPT_CONTRACT = 'daily-podcast-script';
 const DEFAULT_MAX_HIGHLIGHTS = 4;
 const DEFAULT_MAX_QUICK_RUNDOWN = 12;
 const DEFAULT_MAX_CHUNK_CHARS = 180;

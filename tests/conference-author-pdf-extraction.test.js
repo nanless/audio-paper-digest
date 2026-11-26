@@ -129,7 +129,7 @@ test('Track 13.2: conference v3 binds superscript PDF Page-1 authors where plain
         conferencePdfAuthorParserVersion: 3,
         pdfBytes
     });
-    assert.equal(v3.identity.conferencePdfAuthorParser, parser.CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3);
+    assert.equal(v3.identity.conferencePdfAuthorParser, parser.CONFERENCE_PDF_AUTHOR_PDF_PAGE1);
     assert.equal(v3.authors[0].name, 'Alice Zhang');
     assert.match(v3.authors[0].affiliations[0], /Tsinghua University/);
     assert.equal(v3.authors[1].name, 'Bob Li');
@@ -183,7 +183,7 @@ test('Track 13.2: official venue metadata affiliations preserve OpenReview/IEEE/
         officialMetadataAuthors: officialMeta,
         expectedMetadataSha256: metadataSha
     });
-    assert.equal(resolved.identity.conferencePdfAuthorParser, parser.CONFERENCE_PDF_AUTHOR_PDF_PAGE1_V3);
+    assert.equal(resolved.identity.conferencePdfAuthorParser, parser.CONFERENCE_PDF_AUTHOR_PDF_PAGE1);
     assert.deepEqual(resolved.authors, [
         { name: 'Alice Zhang', affiliations: ['Tsinghua University'] },
         { name: 'Bob Li', affiliations: ['Carnegie Mellon University'] }
@@ -311,8 +311,8 @@ test('Track 13.2 R1 security & parity: rejects spoofed pdfPage1Authors, handles 
     assert.ok(jsEvidence);
     const pyOut = execFileSync('bash', [
         path.join(ROOT, 'scripts/python-runtime.sh'), '-c',
-        `import json, sys; sys.path.insert(0, "scripts"); import conference_extractor_v2 as v2; `
-        + `print(json.dumps(v2.extract_official_metadata_authors(json.loads(sys.argv[1]), sys.argv[2]), ensure_ascii=False))`,
+        `import json, sys; sys.path.insert(0, "scripts"); import conference_layout_extractor as cle; `
+        + `print(json.dumps(cle.extract_official_metadata_authors(json.loads(sys.argv[1]), sys.argv[2]), ensure_ascii=False))`,
         JSON.stringify(parityMeta),
         metaSha
     ], { cwd: ROOT, encoding: 'utf8' }).trim();

@@ -157,7 +157,7 @@ test('daily-podcast-script: deterministic source-grounded script, excludes error
     const reversed = { ...data, papers: [...data.papers].reverse() };
     const script2 = scriptLib.buildDailyPodcastScript(reversed, { maxHighlights: 3 });
 
-    assert.equal(script1.contract, 'daily-podcast-script-v1');
+    assert.equal(script1.contract, 'daily-podcast-script');
     assert.equal(script1.date, '2026-11-24');
     assert.equal(script1.paperCount, 4); // excluded all 3 errored/failed papers despite partial parsed fields!
     assert.deepEqual(script1.highlightPaperIds, ['2611.10001v1', '2611.10002v1', '2611.10003v1']);

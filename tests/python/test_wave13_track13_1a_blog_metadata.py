@@ -15,7 +15,7 @@ for p in (SCRIPTS_DIR, TESTS_PY_DIR):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from test_reader_structured_v5 import (  # noqa: E402
+from test_reader_structured_pipeline import (  # noqa: E402
     build_structured_v5_publication_paper,
     pub as publish_to_blog,
 )

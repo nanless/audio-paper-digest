@@ -78,14 +78,14 @@ class ObservedProjectionIdentityTest(unittest.TestCase):
 
     def test_retained_hugo_projection_replays_the_actual_historical_sha(self):
         from protocol_codec import record_header
-        from daily_html_projection import project_daily_html_v2
+        from daily_html_projection import project_historical_spaced_daily_html
         fixture = Path(__file__).resolve().parents[1] / 'fixtures/daily-math-profile-calibration.json'
         saved = next(row for row in json.loads(fixture.read_bytes())['cases']
                      if row['id'] == 'new/normal/math-inline-isolated')
         raw = saved['html'].encode('utf-8')
         self.assertEqual(hashlib.sha256(raw).hexdigest(),
                          'b21bb8c7994bcd08f5c052d305c0e184a99e44fab78976046dc0174b538e7e75')
-        old = project_daily_html_v2(raw, expected_canonical=saved['canonical'])
+        old = project_historical_spaced_daily_html(raw, expected_canonical=saved['canonical'])
         self.assertEqual(old['payloadSha256'],
                          '1730ec1fb8e470803744e53c423545f5542e51410596a316421779d0c7cabcbe')
         historical = {'contract': old['contract'], 'version': old['version']}

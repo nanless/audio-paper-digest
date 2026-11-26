@@ -19,7 +19,7 @@ for p in (SCRIPTS_DIR, TESTS_PY_DIR):
 import protocol_codec as codec  # noqa: E402
 import publish_common  # noqa: E402
 import reader_record_format as reader_formats  # noqa: E402
-from test_reader_structured_v5 import (  # noqa: E402
+from test_reader_structured_pipeline import (  # noqa: E402
     build_structured_v5_publication_paper,
     pub as publish_to_blog,
     reseal_v5,
@@ -48,7 +48,7 @@ class Wave12Track124SpecCardAndRoundupTest(unittest.TestCase):
         # 1. Existing 6-key v5 paper WITHOUT audioSignalSpecs stays 100% valid
         paper_without = build_structured_v5_publication_paper()
         payload_without = publish_to_blog._api_reader_payload_uncached(paper_without)
-        self.assertEqual(reader_formats.plan_editorial_profile(payload_without['plan']), reader_formats.STRUCTURED_V5)
+        self.assertEqual(reader_formats.plan_editorial_profile(payload_without['plan']), reader_formats.STRUCTURED_EDITORIAL)
         md_without, _ = publish_to_blog.generate_paper_page(paper_without, '2026-11-24')
         self.assertNotIn('音频信号与流式规格', md_without)
         self.assertIn('- **训练与评测数据**：', md_without)

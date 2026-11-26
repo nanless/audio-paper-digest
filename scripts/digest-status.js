@@ -72,7 +72,19 @@ const FAILURE_RECOVERY_FIELDS = Object.freeze([
     'analysisCheckpoint',
     'analysisStageCheckpoints',
     'latestAnalysisAttemptError',
-    'latestAnalysisAttemptAt'
+    'latestAnalysisAttemptAt',
+    'latestAnalysisAttemptErrorCode',
+    'latestAnalysisAttemptRetryable',
+    'latestAnalysisAttemptErrorRetryable',
+    'latestAnalysisAttemptErrorCategory',
+    'latestAnalysisAttemptErrorStatus',
+    'latestAnalysisAttemptErrorScope',
+    'error',
+    'errorCode',
+    'errorCategory',
+    'errorStatus',
+    'errorScope',
+    'errorRetryable'
 ]);
 
 function mergeSourcesField(target, first, second) {
@@ -698,12 +710,7 @@ function mergeQualifiedAnalysisDigestPaper(existing, paper, successful, hadUsabl
         merged.latestAnalysisAttemptError = paper.error || '分析未完成';
         merged.latestAnalysisAttemptAt = getBeijingISOString();
     } else if (successful) {
-        delete merged.analysisFactReviewObligation;
-        delete merged.analysisRecoveryImageManifest;
-        delete merged.analysisCheckpoint;
-        delete merged.analysisStageCheckpoints;
-        delete merged.latestAnalysisAttemptError;
-        delete merged.latestAnalysisAttemptAt;
+        clearFailureRecoveryFields(merged);
     }
     return stripPapersLedgerEphemeralFields(merged);
 }

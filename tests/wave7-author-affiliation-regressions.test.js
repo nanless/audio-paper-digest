@@ -1913,7 +1913,7 @@ test('Wave 7 R13 回归：5 项 JS O(n²) ReDoS 归零、裸/方括号邮箱多�
         ['unclosed_angle_at', () => parser.parseArxivReaderAuthors(cheerio.load(`<html><body><div class="ltx_authors"><div class="ltx_creator ltx_role_author"><span class="ltx_personname">&gt;&lt;${'@'.repeat(20000)}</span></div></div></body></html>`))],
         ['unclosed_sq_at', () => parser.parseArxivReaderAuthors(cheerio.load(`<html><body><div class="ltx_authors"><div class="ltx_creator ltx_role_author"><span class="ltx_personname">][${'@'.repeat(20000)}</span></div></div></body></html>`))],
         ['nl_abstract_v1', () => parser.parseConferencePdfAuthors('\n'.repeat(50000) + 'x')],
-        ['nl_abstract_v2', () => parser.parseConferencePdfAuthorsV2('\n'.repeat(50000) + 'x')],
+        ['nl_abstract_v2', () => parser.parseConferencePdfAuthorsFromLines('\n'.repeat(50000) + 'x')],
         ['br_repeat', () => parser.parseArxivReaderAuthors(cheerio.load(`<html><body><div class="ltx_authors"><div class="ltx_creator ltx_role_author"><span class="ltx_personname">Alice ${'<br> '.repeat(20000)}Brown<sup>1</sup></span></div></div><p><sup>1</sup>MIT</p></body></html>`))],
         ['mixed_wide_space', () => parser.parseConferencePdfAuthors(`Title\nAlice Brown, Bob White\na${' \u2002'.repeat(20000)}b\nABSTRACT\nBody`)]
     ]) {

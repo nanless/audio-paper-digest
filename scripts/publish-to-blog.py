@@ -2372,6 +2372,12 @@ def multimodal_review_images(
 
     summary_blob = chr(10).join(img_summary)
     source_note_block = f"{source_figure_note}\n\n" if source_figure_note else ""
+    is_cover_review = any(is_cover for _, _, is_cover in image_meta) or ('汇总' in str(title or ''))
+    cover_rule_line = (
+        "4. 若图片是汇总封面，必须逐字段核对所附确定性上下文；标题、热门方向、计数、TOP 10 顺序、完整英文标题、分数和任务标签不一致均为 error。\n5. "
+        if is_cover_review
+        else "4. "
+    )
     prompt = f"""你是一个学术博客图片质量与视觉事实验证专家。
 
 请先结构化读取本次实际附上的这一张图片（DePlot Read-First 协议），再核对它与对应元数据、alt 及局部正文是否一致。
@@ -2380,7 +2386,7 @@ def multimodal_review_images(
 
 【步骤一：先结构化读图（填入输出 JSON 的 `figureObservation`）】
 在做出任何通过/失败判断之前，先客观记录本图实际像素内容：
-1. `chartType`：图类型（架构/流程图、折线图、柱状图、热力图/语谱图、波形图、汇总封面等）。
+1. `chartType`：图类型（架构/流程图、折线图、柱状图、热力图/语谱图、波形图{'、汇总封面' if is_cover_review else ''}等）。
 2. `axesAndScale`：逐一读取横纵坐标轴名称、刻度区间与单位，**明确核查是否为对数轴（log scale）、双纵轴（dual y-axis）或截断坐标轴**（非坐标系图写“无坐标轴”）。
 3. `legendSeries`：判断曲线或柱形的归属前，逐一核对本图图例的线型、标记、颜色与坐标分组（含实心/斜纹填充含义），不要凭颜色印象互换图例，也不要混淆大小写标签或相邻分组。
 4. `errorBarsAndUnits`：核查误差棒/置信区间；柱顶数字可能是样本计数，纵轴可能是比例，须按本图实际图注、坐标轴和分组语义区分，不能直接把计数当百分比或假定所有组共用分母。
@@ -2391,8 +2397,7 @@ def multimodal_review_images(
 2. 图片是否包含明显错误、空白、损坏、无关内容或隐私信息。
 3. 图片 alt 文本是否为空、重复或与实际像素冲突。
    概括性的任务/方法示意图标题不限定画面必须是流程图或模块框图；输入与输出的实例、频谱、音符或其他结果可用于展示任务。不能仅因 alt 没有枚举坐标轴、图层或全部细节而判为语义冲突；须指出 alt 或局部正文中的具体断言与本张像素如何矛盾，证据不足时只说明局限。该规则不豁免真实的图例、坐标、方向、数值、来源或科学内容冲突（包含对数轴、双纵轴与截断轴误读）。
-4. 若图片是汇总封面，必须逐字段核对所附确定性上下文；标题、热门方向、计数、TOP 10 顺序、完整英文标题、分数和任务标签不一致均为 error。
-5. 作者文字或图注也可能与实际像素相互矛盾，不能无条件将文字当作图像事实。若局部正文无条件复述与本图冲突的结论，仍须报告具体冲突；若正文已明确归属并如实披露这种矛盾及不确定性，不要要求它强行统一成一个确定结论。
+{cover_rule_line}作者文字或图注也可能与实际像素相互矛盾，不能无条件将文字当作图像事实。若局部正文无条件复述与本图冲突的结论，仍须报告具体冲突；若正文已明确归属并如实披露这种矛盾及不确定性，不要要求它强行统一成一个确定结论。
 
 【格式说明与禁止误报项】
 - 博客正文中的实际图片格式为标准 Markdown：`![alt](url)`；自链接 `[![alt](url)](url)` 合法，不报普通链接格式错误
@@ -4552,11 +4557,11 @@ def format_complete_score_line(parsed):
     if not isinstance(parsed, dict) or parsed.get('score') is None:
         return ''
     from paper_reader_presentation import score_dimensions_for_rubric
-    import scoring_rubric_v2 as _scoring_v2
-    is_v2 = _scoring_v2.is_v2_rubric(parsed.get('scoringRubricVersion'))
+    import scoring_rubric as _scoring
+    is_unified = _scoring.is_unified_rubric(parsed.get('scoringRubricVersion'))
     active_dims = score_dimensions_for_rubric(parsed.get('scoringRubricVersion'))
     sub_scores = ' | '.join(
-        f'{label} {float(parsed[key]):.1f}/{maximum}' if is_v2 else f'{label} {parsed[key]}/{maximum}'
+        f'{label} {float(parsed[key]):.1f}/{maximum}' if is_unified else f'{label} {parsed[key]}/{maximum}'
         for key, label, maximum in active_dims
         if parsed.get(key) is not None
     )
@@ -6392,12 +6397,12 @@ IMPLEMENTATION_SPEC_LABELS = (
 )
 
 
-def _paper_uses_structured_v5(paper):
+def _paper_uses_structured_editorial(paper):
     plan = paper.get('apiReaderPlan') if isinstance(paper, dict) else None
     if not isinstance(plan, dict) or not reader_formats.is_integrated_plan(plan):
         return False
     try:
-        return reader_formats.is_structured_v5(reader_formats.plan_editorial_profile(plan))
+        return reader_formats.is_structured_editorial(reader_formats.plan_editorial_profile(plan))
     except (ValueError, TypeError):
         return False
 
@@ -6506,7 +6511,7 @@ def _sanitize_implementation_spec_text(text):
     return ''.join(out)
 
 
-def _format_expected_v5_chinese_caption(raw_caption):
+def _format_expected_chinese_caption(raw_caption):
     """Mirror deep-analyzer.js readerFigureCaptionLine star/quote/period normalization."""
     original = str(raw_caption or '')
     placeholder_prefix = '\uE000PD_FIGURE_MATH_STAR_'
@@ -6533,7 +6538,7 @@ def _render_api_reader_implementation_specs(plan):
     if not isinstance(plan, dict) or not reader_formats.is_integrated_plan(plan):
         return ''
     try:
-        if not reader_formats.is_structured_v5(reader_formats.plan_editorial_profile(plan)):
+        if not reader_formats.is_structured_editorial(reader_formats.plan_editorial_profile(plan)):
             return ''
     except (ValueError, TypeError):
         return ''
@@ -6581,7 +6586,7 @@ def render_verified_reader_resources(resources, *, paper=None):
         if isinstance(documentation, dict):
             if documentation.get('completeness') == 'complete':
                 status += '；README 已验证包含安装、推理与微调文档'
-            elif documentation.get('completeness') == 'partial' and _paper_uses_structured_v5(paper):
+            elif documentation.get('completeness') == 'partial' and _paper_uses_structured_editorial(paper):
                 caps = documentation.get('capabilities') if isinstance(documentation.get('capabilities'), dict) else {}
                 present = [
                     label for key, label in (
@@ -6600,7 +6605,7 @@ def render_verified_reader_resources(resources, *, paper=None):
                 if present:
                     missing_note = f'（未见{"、".join(missing)}文档）' if missing else ''
                     status += f'；README 已验证包含{"、".join(present)}文档{missing_note}'
-        if resource.get('availability') == 'available' and _paper_uses_structured_v5(paper):
+        if resource.get('availability') == 'available' and _paper_uses_structured_editorial(paper):
             demo_stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('demoLinkScan')
             if isinstance(demo_stage, dict):
                 def _norm_probe_url(raw_u):
@@ -6769,7 +6774,7 @@ def render_verified_reader_resources(resources, *, paper=None):
 
 def render_verified_reader_scoring_notes(paper, parsed=None):
     """Use the same assessment explanation in all three publication adapters."""
-    import scoring_rubric_v2 as _scoring_v2
+    import scoring_rubric as _scoring
     parsed = parsed or paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
     scoring_note_lines = ['评分属于系统判断，不是论文实验结果；八维数值与总分见页首，原始审计记录保留在后端。']
     stages = (paper.get('analysisManifest') or {}).get('stages') or {}
@@ -6781,10 +6786,10 @@ def render_verified_reader_scoring_notes(paper, parsed=None):
         if isinstance(value, str) and value.strip():
             safe_value = html.escape(re.sub(r'\s+', ' ', value.strip()))
             scoring_note_lines.append(f'- {label}：{safe_value}')
-    if _scoring_v2.is_v2_rubric(rubric_version):
+    if _scoring.is_unified_rubric(rubric_version):
         audit = scoring.get('audit') if isinstance(scoring.get('audit'), dict) else {}
         doc_type = audit.get('documentType') or parsed.get('documentType')
-        weights_summary = _scoring_v2.format_document_type_weights_summary(doc_type)
+        weights_summary = _scoring.format_document_type_weights_summary(doc_type)
         if weights_summary and isinstance(doc_type, str) and doc_type.strip():
             safe_doc_type = html.escape(re.sub(r'\s+', ' ', doc_type.strip()))
             scoring_note_lines.append(f'- 维度权重（{safe_doc_type}）：{weights_summary}')
@@ -7507,8 +7512,8 @@ def _render_daily_spotlight(scored, date_str, paper_slugs):
         f'> 🥇 **{ref}** · 总分 **{top_score}**/10{meta_tail}{badge_tail}',
     ]
     from paper_reader_presentation import score_dimensions_for_rubric
-    import scoring_rubric_v2 as _scoring_v2
-    is_v2 = _scoring_v2.is_v2_rubric(parsed.get('scoringRubricVersion'))
+    import scoring_rubric as _scoring
+    is_v2 = _scoring.is_unified_rubric(parsed.get('scoringRubricVersion'))
     active_dims = score_dimensions_for_rubric(parsed.get('scoringRubricVersion'))
     ranked_dims = []
     for key, label, maximum in active_dims:
@@ -9406,11 +9411,11 @@ def _api_reader_payload_uncached(paper):
     # 与 Node 的 API_READER_REQUIRED_KINDS 保持一致：只强制五个教学阶段，
     # 其余阶段由论文证据决定是否展开。
     editorial_profile = layout.get('editorialProfile')
-    is_cohesive_v4 = reader_formats.is_modern_editorial_profile(editorial_profile)
-    is_structured_v5 = reader_formats.is_structured_v5(editorial_profile)
+    is_cohesive_editorial = reader_formats.is_modern_editorial_profile(editorial_profile)
+    is_structured_editorial = reader_formats.is_structured_editorial(editorial_profile)
     if 'implementationSpecs' in plan:
-        if not is_structured_v5:
-            raise PublishDataValidationError('非 structured-pipeline-v5 编辑计划不得包含 implementationSpecs。')
+        if not is_structured_editorial:
+            raise PublishDataValidationError('非 structured-pipeline 编辑计划不得包含 implementationSpecs。')
         specs = plan.get('implementationSpecs')
         required_spec_keys = set(reader_formats.IMPLEMENTATION_SPEC_KEYS)
         allowed_spec_keys = required_spec_keys | set(
@@ -9432,7 +9437,7 @@ def _api_reader_payload_uncached(paper):
             )
     required_kinds = ({
         'problem', 'method_overview', 'result',
-    } if is_cohesive_v4 else {
+    } if is_cohesive_editorial else {
         'problem', 'method_overview', 'result', 'limitation', 'synthesis',
     } if reader_formats.is_structured_contract(reader_contract) else {
         'background', 'related_work', 'method_overview', 'experiment_setup',
@@ -9456,13 +9461,13 @@ def _api_reader_payload_uncached(paper):
         if kind not in allowed_kinds or not isinstance(heading, str) or not heading.strip():
             raise PublishDataValidationError('编辑计划的小节类型不符合要求，或小节标题不是非空字符串。')
         rank = allowed_kinds.index(kind)
-        if not is_cohesive_v4 and rank < previous_rank:
+        if not is_cohesive_editorial and rank < previous_rank:
             raise PublishDataValidationError('编辑计划中的小节未按规定的学习顺序排列。')
         previous_rank = rank
         kinds.append(kind)
         planned_headings.append(heading.strip())
     if not required_kinds.issubset(kinds) or (
-            is_cohesive_v4 and not ({'limitation', 'synthesis'} & set(kinds))):
+            is_cohesive_editorial and not ({'limitation', 'synthesis'} & set(kinds))):
         raise PublishDataValidationError('编辑计划缺少读者文章必需的小节类型。')
     article_headings = re.findall(r'^###\s+(.+?)\s*$', article, flags=re.MULTILINE)
     if article_headings != planned_headings or len(set(article_headings)) != len(article_headings):
@@ -9506,11 +9511,11 @@ def _api_reader_payload_uncached(paper):
                     'leadQuote', 'explanationQuote'}
             if integrated:
                 expected_placement_fields.add('focusPoints')
-            if is_structured_v5 and isinstance(placement, dict) and 'chineseCaption' in placement:
+            if is_structured_editorial and isinstance(placement, dict) and 'chineseCaption' in placement:
                 expected_placement_fields.add('chineseCaption')
             chinese_caption = placement.get('chineseCaption') if isinstance(placement, dict) else None
             invalid_chinese_caption = (
-                is_structured_v5 and isinstance(placement, dict) and 'chineseCaption' in placement and (
+                is_structured_editorial and isinstance(placement, dict) and 'chineseCaption' in placement and (
                     not isinstance(chinese_caption, str)
                     or '\n' in chinese_caption or '\r' in chinese_caption
                     or not 12 <= len(chinese_caption.strip()) <= 160
@@ -9595,7 +9600,7 @@ def _api_reader_payload_uncached(paper):
                 })
             if integrated:
                 expected_figure_fields.add('focusPoints')
-            if is_structured_v5 and isinstance(item, dict) and 'chineseCaption' in item:
+            if is_structured_editorial and isinstance(item, dict) and 'chineseCaption' in item:
                 if not isinstance(item.get('chineseCaption'), str):
                     raise PublishDataValidationError('读者文章的图片记录中 chineseCaption 必须为字符串。')
                 expected_figure_fields.add('chineseCaption')
@@ -9607,12 +9612,12 @@ def _api_reader_payload_uncached(paper):
                 binding_keys = (
                     'marker', 'leadQuote', 'explanationQuote', 'targetKind',
                     *(() if not integrated else ('focusPoints',)),
-                    *(() if not is_structured_v5 else ('chineseCaption',)),
+                    *(() if not is_structured_editorial else ('chineseCaption',)),
                 )
                 if placement is None or any(
                         item.get(key) != placement.get(key)
                         for key in binding_keys) \
-                        or (is_structured_v5 and (('chineseCaption' in item) != ('chineseCaption' in placement))):
+                        or (is_structured_editorial and (('chineseCaption' in item) != ('chineseCaption' in placement))):
                     raise PublishDataValidationError(
                         '图片记录缺少对应的位置计划，或图片内容字段与计划不一致。'
                     )
@@ -9651,7 +9656,7 @@ def _api_reader_payload_uncached(paper):
                         )
                 else:
                     caption_para = article_paragraphs[image_index + 1].strip() if (image_index is not None and image_index + 1 < len(article_paragraphs)) else ''
-                    expected_zh_caption = _format_expected_v5_chinese_caption(item.get('chineseCaption')) if (is_structured_v5 and isinstance(item.get('chineseCaption'), str)) else None
+                    expected_zh_caption = _format_expected_chinese_caption(item.get('chineseCaption')) if (is_structured_editorial and isinstance(item.get('chineseCaption'), str)) else None
                     if image_index is None or image_index < 1 \
                             or image_index + 2 >= len(article_paragraphs) \
                             or article_paragraphs[image_index - 1].strip().startswith('> **看图路径') \
@@ -14751,12 +14756,12 @@ def generation_template_fingerprint():
         'lib/core-symbolic-source-numerals.js': script_dir / 'lib' / 'core-symbolic-source-numerals.js',
         'lib/reader-author-replay-cli.js': script_dir / 'lib' / 'reader-author-replay-cli.js',
         'pdf_author_extract.py': script_dir / 'pdf_author_extract.py',
-        'pdf_author_extract_v1.py': script_dir / 'pdf_author_extract_v1.py',
+        'pdf_author_extract_legacy.py': script_dir / 'pdf_author_extract_legacy.py',
         'pdf_figure_table_extract.py': script_dir / 'pdf_figure_table_extract.py',
         'lib/reader-pdf-figure-crop.js': script_dir / 'lib' / 'reader-pdf-figure-crop.js',
-        'scoring_rubric_v2.py': script_dir / 'scoring_rubric_v2.py',
-        'lib/scoring-rubric-v2.js': script_dir / 'lib' / 'scoring-rubric-v2.js',
-        'config/scoring-rubric-v2.json': script_dir.parent / 'config' / 'scoring-rubric-v2.json',
+        'scoring_rubric.py': script_dir / 'scoring_rubric.py',
+        'lib/scoring-rubric.js': script_dir / 'lib' / 'scoring-rubric.js',
+        'config/scoring-rubric.json': script_dir.parent / 'config' / 'scoring-rubric.json',
         'config/workflow-leak-patterns.json': script_dir.parent / 'config' / 'workflow-leak-patterns.json',
         'lib/paid-core-literal-correction.js': script_dir / 'lib' / 'paid-core-literal-correction.js',
         'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',

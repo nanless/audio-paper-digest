@@ -19,7 +19,7 @@
 
 ## 过时历史博客批量重写指南
 
-日常维护中，如果想把早期尚未采用 `structured-pipeline-v5`、`type-aware-v2`、400 项九维词表或 Studio Monograph 2.0 汇总结构的旧博客按日期或范围升级到与日更完全一致的标准，可按下面四步执行：
+日常维护中，如果想把早期尚未采用 `structured-pipeline`、`type-aware`、400 项九维词表或 Studio Monograph 2.0 汇总结构的旧博客按日期或范围升级到与日更完全一致的标准，可按下面四步执行：
 
 1. **只读扫描过时页面并分组**：先运行 `npm run history:outdated` 审计博客仓库 `content/posts/`，不修改任何文件。支持按日期、范围和完整日批次过滤：
 
@@ -27,7 +27,7 @@
 # 查看指定日期区间内所有完整日批次的过时单篇与旧汇总
 npm run history:outdated -- --from-date 2026-09-01 --to-date 2026-09-30 --scope daily --complete-days-only
 
-# 输出机器可读 JSON（含每页过时原因：missing-structured-pipeline-v5 / missing-type-aware-v2 /
+# 输出机器可读 JSON（含每页过时原因：missing-structured-pipeline-reader / missing-type-aware-rubric /
 # missing-reader-sections / outdated-tag-registry / legacy-short-summary 及可执行命令清单）
 npm run history:outdated -- --scope all --json
 ```
@@ -92,18 +92,18 @@ npm run history:conference-local-sources -- --apply \
   --icml-pdf-root /absolute/path/data/pdfs/icml2026
 
 npm run history:inputs -- --apply \
-  --conference-manifest /absolute/path/conference-local-sources-v2.json \
+  --conference-manifest /absolute/path/conference-local-sources.json \
   --inventory /absolute/path/all-history.json \
   --blog-root /absolute/path/audio-research-portal
 
 npm run history:conference-projections -- --apply \
-  --catalog /absolute/path/scoped-historical-local-data-v5.json \
+  --catalog /absolute/path/scoped-historical-local-data.json \
   --inventory /absolute/path/all-history.json
 
 npm run history:plan -- --apply \
-  --catalog /absolute/path/scoped-historical-local-data-v5.json \
+  --catalog /absolute/path/scoped-historical-local-data.json \
   --inventory /absolute/path/all-history.json \
-  --conference-projections /absolute/path/conference-page-projections-v3.json
+  --conference-projections /absolute/path/conference-page-projections.json
 ```
 
 后三个命令也接受 `--dry-run`，可以先检查再保存。不要向 `history:inputs` 传 `--arxiv-manifest`；它不接受另一份本地 arXiv 来源清单，也不会把旧 TXT、PDF、图片、分析或 Reader 当作重写输入。会议部分先核对冻结页面 SHA，再读取 front matter 的标题指纹，与本地论文信息精确匹配，不把正文用于创作。
@@ -125,7 +125,7 @@ npm run history:plan -- --apply \
 `history:sources` 准备来源，不调用分析或 Reader，也不生成博客。arXiv 的 `generation` 是来源获取序号，不是论文修订号；新序号重新获取官方正文和 PDF，保存到 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-000001/`。该目录只能有 `source.txt`、`source.pdf`、`source-runtime.json` 和 `source-manifest.json` 四文件。标题来自同批官方来源保存的运行信息，不能沿用旧博客标题。会议论文核对清单已绑定的本地论文信息及 PDF SHA，标题取自对应论文信息。
 
 ```bash
-npm run history:sources -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
+npm run history:sources -- --apply --plan /absolute/path/direct-rewrite-plan.json \
   --queue all --generation 1 --max-papers 100 --arxiv-concurrency 3 --conference-concurrency 5
 ```
 
@@ -135,17 +135,17 @@ arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。�
 
 ### 当前 PDF 不可用时的历史版本
 
-通常保存不带版本号的当前官方 PDF，已有普通 v2 来源文件保持兼容。只有该 PDF 明确返回 HTTP 404，才允许尝试同一规范化 arXiv ID 的官方 `vN` PDF。跨 ID、带 query 或 fragment、非官方主机、没有当前 PDF 404 记录的版本回退均拒绝。选择历史版本后，`source.txt` 必须从选中 PDF 字节重新提取，不能分析撤稿页、当前 HTML 或混用其他版本 HTML 证据。
+通常保存不带版本号的当前官方 PDF，已有普通历史来源文件保持兼容。只有该 PDF 明确返回 HTTP 404，才允许尝试同一规范化 arXiv ID 的官方 `vN` PDF。跨 ID、带 query 或 fragment、非官方主机、没有当前 PDF 404 记录的版本回退均拒绝。选择历史版本后，`source.txt` 必须从选中 PDF 字节重新提取，不能分析撤稿页、当前 HTML 或混用其他版本 HTML 证据。
 
 `source-runtime.json` 此时增加自哈希 `sourceVersion`，记录当前 URL/status、选中 `vN` 的身份和 URL、文本与 PDF 同版本关系及“当前稿不可用”的说明。运行信息 SHA 进入来源 manifest、分析来源描述、来源证明和页面 manifest。版本说明既是 `source.txt` 顶部的实际分析输入，也须在最终单篇页 front matter 后第一位置显示。确定性页面检查拒绝删除、移动或改写该说明。普通当前版本来源不增加此字段，兼容规则不变。
 
 ## 分析、图片和发布用元数据
 
-历史更新与日更共用 `analysis-engine.js` 和 `deep-analyzer.js`，采用同一当前提示词登记表、正式分析（含 `700–1,400` 汉字全景导读 `核心摘要`）、`type-aware-v2` 八维评分、400 项九维标签、`structured-pipeline-v5` 契约的 `beginner-researcher` Reader 与来源核验，并同步启用按阶段分级推理（`PD_TIERED_REASONING_EFFORT=1`）与稳定 `prompt_cache_key`。新模型请求使用当前登记版本；已保存阶段继续按其原版本、内容 SHA、来源与费用恢复，不把旧调用冒充新版本。
+历史更新与日更共用 `analysis-engine.js` 和 `deep-analyzer.js`，采用同一当前提示词登记表、正式分析（含 `700–1,400` 汉字全景导读 `核心摘要`）、`type-aware` 八维评分（旧 `type-aware-v2`/`type-aware-v1` 归档保持冷核兼容）、400 项九维标签、`structured-pipeline` 契约的 `beginner-researcher` Reader 与来源核验，并同步启用按阶段分级推理（`PD_TIERED_REASONING_EFFORT=1`）与稳定 `prompt_cache_key`。新模型请求使用当前登记版本；已保存阶段继续按其原版本、内容 SHA、来源与费用恢复，不把旧调用冒充新版本。
 
 在来源证据层面，历史流程现已与日更完全齐平：
 
-- **作者解析 v3**：arXiv 历史四文件来源与本地会议 PDF 来源均接入 `pdfPage1Authors` 首页几何作者机构解析与 `reader-author-parser.js` v3，避免早期页面出现作者或机构空白。
+- **首页几何作者机构解析**：arXiv 历史四文件来源与本地会议 PDF 来源均接入 `pdfPage1Authors` 首页几何作者机构解析与 `reader-author-parser.js`，避免早期页面出现作者或机构空白。
 - **四文件封存 PDF 证据模块全量接入**：`fresh-analysis-context.js` 与 `reader-pdf-cell-evidence.js`、`reader-sealed-figure-alias.js`、`reader-sealed-pdf-column-units.js`、`reader-sealed-pdf-quote-evidence.js`、`reader-sealed-pdf-table-evidence.js` 同步支持历史封存四文件根目录，保持与日更一致的原表单元格、列单位、引文与图号冷核能力。
 - **Studio Monograph 2.0 与扩展元数据**：页面渲染通过 `paper-page-staging.js` 和 `historical-page-render.py` 对齐日更与会议的 Studio Monograph 2.0 单篇及汇总排版（含 9 步 Reader 显示归一化与 `_nest_reader_headings` 层级嵌套），并透传 `venueBadge`、`doi`、`comment` 与 `journalRef` 等扩展元数据；真实会议身份的作者、资源、摘要和评分展示通过 `paper_reader_presentation.py` 复用，保留历史 URL、论文身份与特殊来源披露。渲染实现 SHA 根据实际本地依赖闭包计算，包含共享 Python/Node 校验器；共享修复升级后旧暂存页重新生成。
 
@@ -158,9 +158,9 @@ arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。�
 arXiv 单篇页研究工作区展示的原始摘要统一来自官方 Atom 附属文件。从 `source.txt` 中限定范围提取 Abstract 只作诊断，不能替代发布来源。计划中的 arXiv 论文都不得使用旧博客、爬虫或模型生成的摘要。
 
 ```bash
-npm run history:metadata -- --dry-run --plan /absolute/path/direct-rewrite-plan-v5.json \
+npm run history:metadata -- --dry-run --plan /absolute/path/direct-rewrite-plan.json \
   --generation 1 --all-plan-arxiv
-npm run history:metadata -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
+npm run history:metadata -- --apply --plan /absolute/path/direct-rewrite-plan.json \
   --generation 1 --all-plan-arxiv --concurrency 3
 ```
 
@@ -172,12 +172,12 @@ socket、DNS、超时和 HTTP 408/425/429/5xx 在共享主机调度器内最多�
 
 `direct-run` 在分析前预检、暂存时再次读取这些文件。已暂存任务恢复、汇总及最终发布也重新读取并校验原始 Atom 响应；缺失、额外文件、权限不符、硬链接、ID、获取序号或 SHA 与原记录不同均拒绝。
 
-现行 `official-arxiv-atom-metadata-v1` 提取字段时保留原 XML 实体写法及作者空白，避免改变已封存记录的 SHA。解析仍先严格核验完整 XML 与论文身份；命名空间或属性写法无法按既有字段规则重新解析并得到原记录时，明确拒绝。正常日更抓取使用解码后的 XML 字段；若更改从官方元数据提取字段的规则，须另立协议版本并保留 v1 读取，不能直接重算旧记录证明。
+现行 `official-arxiv-atom-metadata-v1` 提取字段时保留原 XML 实体写法及作者空白，避免改变已封存记录的 SHA。解析仍先严格核验完整 XML 与论文身份；命名空间或属性写法无法按既有字段规则重新解析并得到原记录时，明确拒绝。正常日更抓取使用解码后的 XML 字段；若更改从官方元数据提取字段的规则，须另立协议版本并保留旧格式读取，不能直接重算旧记录证明。
 
 ### 分析与暂存页面
 
 ```bash
-npm run history:run -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
+npm run history:run -- --apply --plan /absolute/path/direct-rewrite-plan.json \
   --queue all --generation 1 --max-papers 50 --concurrency 3
 ```
 
@@ -204,8 +204,8 @@ npm run history:run -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json
 未显式指定 ID 的分析始终跳过已经由当前 renderer 合格暂存的成员，不论是否限量；显式 ID 仍完整冷核验已有结果。`--queue`、ID及限量在取得操作锁后只确定首轮范围，同次调用的失败轮不重新选择新论文、不扩大范围。处理完本次范围后，重跑原限量入口再推进下一批；仍失败的成员须先按正常恢复与原预算处理，不能删除其记录来推进队列。来源阶段同样核验已有 arXiv 四文件，并根据来源状态推进会议批次。来源和分析分别使用与计划 SHA、获取序号绑定的暂停标记和操作锁：来源标记在 `fetched-arxiv-sources` 根目录，分析标记为该轮执行记录文件加 `.pause`，不能自行改路径脱离控制命令。
 
 ```bash
-npm run history:pause -- --plan /absolute/path/direct-rewrite-plan-v5.json --phase source --generation 1
-npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v5.json --phase source --generation 1
+npm run history:pause -- --plan /absolute/path/direct-rewrite-plan.json --phase source --generation 1
+npm run history:resume -- --plan /absolute/path/direct-rewrite-plan.json --phase source --generation 1
 # 分析阶段将 --phase source 改为 --phase analysis
 ```
 
@@ -227,12 +227,12 @@ Node 历史分析读取错误代码和作用范围，识别账号池耗尽、认
 
 ```bash
 npm run history:aggregate -- projection --apply \
-  --plan-file /absolute/path/direct-rewrite-plan-v5.json \
-  --inventory-file /absolute/path/all-history.json --output-name direct-aggregate-projection-v3.json
+  --plan-file /absolute/path/direct-rewrite-plan.json \
+  --inventory-file /absolute/path/all-history.json --output-name direct-aggregate-projection.json
 npm run history:aggregate -- aggregate --apply \
-  --plan-file /absolute/path/direct-rewrite-plan-v5.json \
+  --plan-file /absolute/path/direct-rewrite-plan.json \
   --registry-file /absolute/path/direct-run-registry.json \
-  --projection-file /absolute/path/direct-aggregate-projection-v3.json --daily YYYY-MM-DD
+  --projection-file /absolute/path/direct-aggregate-projection.json --daily YYYY-MM-DD
 # 会议汇总将 --daily YYYY-MM-DD 改为 --conference conference-key
 ```
 
@@ -249,10 +249,10 @@ npm run history:aggregate -- aggregate --apply \
 ## 查看状态和验收结果
 
 ```bash
-npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --generation 1
-npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --generation 1 --watch-seconds 5
-npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --generation 1 --verify-sources true
-npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --generation 1 --publication-id UUID
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan.json --generation 1
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan.json --generation 1 --watch-seconds 5
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan.json --generation 1 --verify-sources true
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan.json --generation 1 --publication-id UUID
 ```
 
 `history:status` 只读运行记录，报告全部执行状态、完成百分比、最近失败、暂停与锁、各类汇总缺口、会议任务页及发布阻断。普通或 watch 查询对会议来源只检查路径、普通文件和 PDF 大小；单次 `--verify-sources true` 才重算全部论文信息及 PDF SHA，不能与 watch 同用。
@@ -267,7 +267,7 @@ npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --ge
 
 ### 会议页面与 PDF 的对应关系
 
-ICML Daily 页使用 catalog v5 保存的 poster 对应记录。冻结单篇页须有唯一官方 poster URL；`tau-Voice` 的空单篇页只允许从同一冻结 Daily 汇总中，按精确单篇 URL 所属段落找到唯一 poster。poster 再唯一对应 OpenReview forum ID 与按 forum ID 命名的 PDF，不能按标题猜测。旧正文仅提供字节区间及 SHA，不进入分析、Reader 或新稿。
+ICML Daily 页使用当前来源目录保存的 poster 对应记录。冻结单篇页须有唯一官方 poster URL；`tau-Voice` 的空单篇页只允许从同一冻结 Daily 汇总中，按精确单篇 URL 所属段落找到唯一 poster。poster 再唯一对应 OpenReview forum ID 与按 forum ID 命名的 PDF，不能按标题猜测。旧正文仅提供字节区间及 SHA，不进入分析、Reader 或新稿。
 
 来源清单保存全部论文身份记录和当前已有可用 PDF 的子集；页面对应关系和计划只处理后者。缺 PDF 的身份仍可审计，但页面保持未覆盖。PDF 经专用来源程序核验保存、并重建清单之后，才能进入任务。
 
@@ -291,7 +291,7 @@ npm run history:openreview-pdf-source -- --apply --snapshot /abs/poster-authorit
 
 不同标题的作者早期预印本默认不能进入写作队列。唯一例外是用户已明确授权、代码精确列入白名单的 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`。来源必须重新核对 poster/forum、凭证、PDF SHA、固定预印本标题、作者、DOI 及来源绑定，计划须包含带自哈希的 `sourceDisclosure`。分析执行器把“并非会议终稿”的警告放入所有模型读取的全文前缀，暂存页在 Hugo front matter 后第一位置放入同样的醒目中文说明。披露和最终页面字节都进入 manifest、`pageSet` 及其 SHA。任一字段缺失或与原记录不同都会拒绝，其他 forum 不得套用例外。
 
-如果 SSRN 自动下载被 Cloudflare 阻断，但浏览器能够下载 PDF，可通过 `--import-file ABSOLUTE.pdf` 导入。该入口仅对 `n1mAjfRDZ6` 开放，会重新提取 PDF 文本，要求固定来源标题、作者、预印本日期及多个跨页特征文本全部匹配。PDF 自身不含 DOI，因此 SSRN DOI 由固定来源记录绑定。导入凭证记录 `operator-browser-download` 和 `networkResponseObserved: false`，不能伪造网络响应状态。原网络下载凭证与普通 plan v5 来源仍按既有方式核验，暂停、状态查询和恢复要求不变。
+如果 SSRN 自动下载被 Cloudflare 阻断，但浏览器能够下载 PDF，可通过 `--import-file ABSOLUTE.pdf` 导入。该入口仅对 `n1mAjfRDZ6` 开放，会重新提取 PDF 文本，要求固定来源标题、作者、预印本日期及多个跨页特征文本全部匹配。PDF 自身不含 DOI，因此 SSRN DOI 由固定来源记录绑定。导入凭证记录 `operator-browser-download` 和 `networkResponseObserved: false`，不能伪造网络响应状态。原网络下载凭证与普通重写计划来源仍按既有方式核验，暂停、状态查询和恢复要求不变。
 
 具体操作见[会议工作流](conference-workflow.md)。
 
@@ -359,7 +359,7 @@ npm run history:resolve-conflict -- --apply --crosswalk UUID --page-key page:SHA
 `history:resume` 有两种明确模式。现行计划仍使用原控制协议恢复暂停阶段：
 
 ```bash
-npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v5.json --phase analysis --generation 1
+npm run history:resume -- --plan /absolute/path/direct-rewrite-plan.json --phase analysis --generation 1
 ```
 
 旧 `fresh-rewrite-run-v1` 必须已经保存在当前项目 `data/runtime/fresh-rewrites/<runId>/`；先只读查询，再恢复原分析：

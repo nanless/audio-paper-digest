@@ -5,16 +5,20 @@
 const codec = require('./protocol-codec');
 const INTEGRATED = 'integrated-article';
 const COMPACT = 'compact-article';
-const STRUCTURED_V5 = 'structured-pipeline-v5';
-const COHESIVE_V4 = 'cohesive-functional-v4';
+const STRUCTURED_EDITORIAL = 'structured-pipeline';
+const STRUCTURED_V5_EDITORIAL = 'structured-pipeline-v5';
+const HISTORICAL_STRUCTURED_EDITORIALS = Object.freeze([STRUCTURED_V5_EDITORIAL]);
+const COHESIVE_EDITORIAL = 'cohesive-functional-v4';
 const LEGACY_INTEGRATED = 'legacy-integrated';
 const OLD_DRAFT_FP = 'beea25256472a7b9cb4550dafd753db7d1231632a85d6dbb7f9c2e620a0628f9';
 const OLD_PLAN_FP = 'cd8baf5b8bda3a49eec64f6005931af63de4e9a13148cba5f354c661ca6e9df2';
 const V4_DRAFT_FP = '70509d972ac881cc32bdc6cd182ec830ac3676b01fb0c81375849cd3ff429733';
 const V4_PLAN_FP = '7c0300b9342334b864b6a304dcf02a96fb8dbbe8f4061b6dbc0ddfdd249ceceb';
+const V5_DRAFT_FP = 'c885be94603c4da688140a9b370c93a71ce5674acb2b0ded5011d3a4053ac5c4';
+const V5_PLAN_FP = '502f149770c20bc8f28660fa7f98bbeaaaecaff2b5f8c6236663e323d34a595c';
 const DRAFT_FIELDS = Object.freeze(['readerTitle', 'oneSentenceThesis', 'sections',
     'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings']);
-const V5_OPTIONAL_DRAFT_FIELDS = Object.freeze(['implementationSpecs']);
+const STRUCTURED_OPTIONAL_DRAFT_FIELDS = Object.freeze(['implementationSpecs']);
 const IMPLEMENTATION_SPEC_KEYS = Object.freeze([
     'trainingData', 'computeHardware', 'keyHyperparams',
     'inferenceCost', 'openSourceArtifacts', 'appendixHighlights'
@@ -22,11 +26,15 @@ const IMPLEMENTATION_SPEC_KEYS = Object.freeze([
 const OPTIONAL_IMPLEMENTATION_SPEC_KEYS = Object.freeze([
     'audioSignalSpecs'
 ]);
-function isStructuredV5(profile) { return profile === STRUCTURED_V5; }
-function isModernEditorialProfile(profile) { return profile === COHESIVE_V4 || profile === STRUCTURED_V5; }
+function isStructuredEditorial(profile) {
+    return profile === STRUCTURED_EDITORIAL || HISTORICAL_STRUCTURED_EDITORIALS.includes(profile);
+}
+function isCohesiveEditorial(profile) { return profile === COHESIVE_EDITORIAL; }
+function isModernEditorialProfile(profile) { return profile === COHESIVE_EDITORIAL || isStructuredEditorial(profile); }
 function resolveSchemaEditorialProfile(schema) {
-    if (schema?.editorialProfile === STRUCTURED_V5) return STRUCTURED_V5;
-    if (schema?.editorialProfile === COHESIVE_V4) return COHESIVE_V4;
+    if (schema?.editorialProfile === STRUCTURED_EDITORIAL) return STRUCTURED_EDITORIAL;
+    if (schema?.editorialProfile === STRUCTURED_V5_EDITORIAL) return STRUCTURED_V5_EDITORIAL;
+    if (schema?.editorialProfile === COHESIVE_EDITORIAL) return COHESIVE_EDITORIAL;
     return LEGACY_INTEGRATED;
 }
 function draftFormat(value) {
@@ -47,8 +55,8 @@ function isIntegratedDraft(value) {
 function draftFields(value) {
     const fmt = draftFormat(value);
     return [...Object.keys(fmt.header), ...DRAFT_FIELDS,
-        ...(fmt.editorialProfile === STRUCTURED_V5 && value && Object.hasOwn(value, 'implementationSpecs')
-            ? V5_OPTIONAL_DRAFT_FIELDS : [])];
+        ...(isStructuredEditorial(fmt.editorialProfile) && value && Object.hasOwn(value, 'implementationSpecs')
+            ? STRUCTURED_OPTIONAL_DRAFT_FIELDS : [])];
 }
 function profileForOptions(options = {}) {
     if (options.version !== undefined && options.version !== null) return codec.format(options.version, 'reader-draft');
@@ -70,6 +78,9 @@ function compiledPlanHeader(format, { compileCurrent = false, compiledPlanHeader
     if (format.current) {
         if (format.profile !== INTEGRATED) throw new Error('旧简版文章不能转换为当前完整文章');
         return codec.recordHeader(codec.contract('beginner-researcher'), 'beginner-researcher');
+    }
+    if (format.header?.contract === 'reader-draft' && format.header?.schemaFingerprint === V5_DRAFT_FP) {
+        return codec.historicalHeader('beginner-researcher', INTEGRATED, V5_PLAN_FP);
     }
     if (format.header?.contract === 'reader-draft' && format.header?.schemaFingerprint === V4_DRAFT_FP) {
         return codec.historicalHeader('beginner-researcher', INTEGRATED, V4_PLAN_FP);
@@ -109,7 +120,7 @@ function planEditorialProfile(value) {
 }
 function effectiveEditorialProfile(format, options = {}) {
     if (options?.editorialProfile) return options.editorialProfile;
-    return format?.editorialProfile || STRUCTURED_V5;
+    return format?.editorialProfile || STRUCTURED_EDITORIAL;
 }
 function isIntegratedPlan(value) { try { return storedPlanFormat(value) === INTEGRATED; } catch { return false; } }
 function isStructuredContract(raw) {
@@ -130,10 +141,13 @@ function compilationOptionsForSavedPlan(plan) {
         return { requiredProfile: INTEGRATED, compileCurrent: false, editorialProfile: LEGACY_INTEGRATED };
     }
     if (codec.isCurrentHeader(header, 'beginner-researcher')) {
-        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: STRUCTURED_V5, compiledPlanHeader: header };
+        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: STRUCTURED_EDITORIAL, compiledPlanHeader: header };
+    }
+    if (header.contract === 'beginner-researcher' && header.schemaFingerprint === V5_PLAN_FP) {
+        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: STRUCTURED_V5_EDITORIAL, compiledPlanHeader: header };
     }
     if (header.contract === 'beginner-researcher' && header.schemaFingerprint === V4_PLAN_FP) {
-        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: COHESIVE_V4, compiledPlanHeader: header };
+        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: COHESIVE_EDITORIAL, compiledPlanHeader: header };
     }
     if (header.contract === 'beginner-researcher' && header.schemaFingerprint === OLD_PLAN_FP) {
         return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: LEGACY_INTEGRATED, compiledPlanHeader: header };
@@ -147,6 +161,9 @@ function draftHeaderForSavedPlan(plan) {
     if (codec.isCurrentHeader(header, 'beginner-researcher')) {
         return codec.recordHeader(codec.contract('reader-draft'), 'reader-draft');
     }
+    if (header.contract === 'beginner-researcher' && header.schemaFingerprint === V5_PLAN_FP) {
+        return codec.historicalHeader('reader-draft', INTEGRATED, V5_DRAFT_FP);
+    }
     if (header.contract === 'beginner-researcher' && header.schemaFingerprint === V4_PLAN_FP) {
         return codec.historicalHeader('reader-draft', INTEGRATED, V4_DRAFT_FP);
     }
@@ -155,9 +172,9 @@ function draftHeaderForSavedPlan(plan) {
     }
     throw new Error('原稳定格式尚无对应冷重放编译器');
 }
-module.exports = { INTEGRATED, COMPACT, STRUCTURED_V5, COHESIVE_V4, LEGACY_INTEGRATED,
-    OLD_DRAFT_FP, OLD_PLAN_FP, V4_DRAFT_FP, V4_PLAN_FP, DRAFT_FIELDS, V5_OPTIONAL_DRAFT_FIELDS,
-    IMPLEMENTATION_SPEC_KEYS, OPTIONAL_IMPLEMENTATION_SPEC_KEYS, isStructuredV5, isModernEditorialProfile,
+module.exports = { INTEGRATED, COMPACT, STRUCTURED_EDITORIAL, STRUCTURED_V5_EDITORIAL, HISTORICAL_STRUCTURED_EDITORIALS, COHESIVE_EDITORIAL, LEGACY_INTEGRATED,
+    OLD_DRAFT_FP, OLD_PLAN_FP, V4_DRAFT_FP, V4_PLAN_FP, V5_DRAFT_FP, V5_PLAN_FP, DRAFT_FIELDS, STRUCTURED_OPTIONAL_DRAFT_FIELDS,
+    IMPLEMENTATION_SPEC_KEYS, OPTIONAL_IMPLEMENTATION_SPEC_KEYS, isStructuredEditorial, isCohesiveEditorial, isModernEditorialProfile,
     draftFormat, isIntegratedDraft, draftFields, profileForOptions, assertRequiredProfile, compiledPlanHeader,
     storedPlanFormat, storedPlanHeader, planEditorialProfile, effectiveEditorialProfile, isIntegratedPlan,
     isStructuredContract, compilationOptionsForSavedPlan, draftHeaderForSavedPlan };

@@ -58,12 +58,13 @@ test('评分恢复读取声明的 v4 首块 SHA，不把旧版本核验成当前
     assert.notEqual(deep.resolvedRuntimePromptTemplateSha256('0'.repeat(64),originalPath),'0'.repeat(64));
 });
 
-test('正式评分入口实际构造的新请求使用 type-aware-v2 盲审提示并保持静态前缀前置', async () => {
+test('正式评分入口实际构造的新请求使用 type-aware 盲审提示并保持静态前缀前置', async () => {
     capturedRequest = null;
     await assert.rejects(deep.auditTypeAwareScoringDetailed(validAnalysisText(), 'Synthetic source evidence.'), /synthetic request capture stop/);
     assert.ok(capturedRequest);
     const text = JSON.stringify(capturedRequest);
-    assert.match(text,/type-aware-v2/);
+    assert.match(text,/type-aware/);
+    assert.doesNotMatch(text,/type-aware-v2/);
     assert.match(text,/0\.0–10\.0 统一量表/);
     assert.match(text,/<paper_input>/);
     assert.doesNotMatch(text,/只有工程叙述或间接指标/);

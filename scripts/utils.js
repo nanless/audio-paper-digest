@@ -281,10 +281,10 @@ function stripMd(text) {
     return t.trim();
 }
 
-const scoringRubricV2 = require('./lib/scoring-rubric-v2');
-const SCORING_RUBRIC_VERSION = scoringRubricV2.SCORING_RUBRIC_V1;
-const CURRENT_SCORING_RUBRIC_VERSION = scoringRubricV2.SCORING_RUBRIC_V2;
-const SUPPORTED_SCORING_RUBRIC_VERSIONS = scoringRubricV2.SUPPORTED_SCORING_RUBRIC_VERSIONS;
+const scoringRubric = require('./lib/scoring-rubric');
+const SCORING_RUBRIC_VERSION = scoringRubric.LEGACY_SCORING_RUBRIC;
+const CURRENT_SCORING_RUBRIC_VERSION = scoringRubric.CURRENT_SCORING_RUBRIC;
+const SUPPORTED_SCORING_RUBRIC_VERSIONS = scoringRubric.SUPPORTED_SCORING_RUBRIC_VERSIONS;
 const DOCUMENT_TYPES = Object.freeze([
     '方法研究',
     '系统技术报告',
@@ -1598,24 +1598,24 @@ const SCORE_DIMENSIONS = Object.freeze({
 });
 
 const OPEN_SOURCE_SCORE_ANCHORS = Object.freeze([0, 0.2, 0.5, 1.0, 1.2, 1.5]);
-const V2_OPEN_SOURCE_SCORE_ANCHORS = scoringRubricV2.V2_OPEN_SOURCE_ANCHORS;
+const UNIFIED_OPEN_SOURCE_SCORE_ANCHORS = scoringRubric.UNIFIED_OPEN_SOURCE_ANCHORS;
 
 function normalizeScoreToOneDecimal(value) {
     return Math.round((Number(value) + Number.EPSILON) * 10) / 10;
 }
 
 function isOpenSourceScoreAnchor(value, rubricVersion = SCORING_RUBRIC_VERSION) {
-    if (scoringRubricV2.isV2Rubric(rubricVersion)) {
-        return scoringRubricV2.isV2OpenSourceAnchor(value);
+    if (scoringRubric.isUnifiedRubric(rubricVersion)) {
+        return scoringRubric.isOpenSourceAnchor(value);
     }
     const normalized = normalizeScoreToOneDecimal(value);
     return OPEN_SOURCE_SCORE_ANCHORS.some(anchor => Math.abs(anchor - normalized) < 1e-9);
 }
 
 function parseScoringDimensions(scoringText, rubricVersion = SCORING_RUBRIC_VERSION) {
-    const isV2 = scoringRubricV2.isV2Rubric(rubricVersion);
-    const dimDefs = isV2 ? scoringRubricV2.V2_SCORE_DIMENSIONS_BY_PARSED_FIELD : SCORE_DIMENSIONS;
-    const anchors = isV2 ? V2_OPEN_SOURCE_SCORE_ANCHORS : OPEN_SOURCE_SCORE_ANCHORS;
+    const isUnified = scoringRubric.isUnifiedRubric(rubricVersion);
+    const dimDefs = isUnified ? scoringRubric.UNIFIED_SCORE_DIMENSIONS_BY_PARSED_FIELD : SCORE_DIMENSIONS;
+    const anchors = isUnified ? UNIFIED_OPEN_SOURCE_SCORE_ANCHORS : OPEN_SOURCE_SCORE_ANCHORS;
     const occurrences = Object.fromEntries(Object.keys(dimDefs).map(field => [field, []]));
     const errors = [];
 
@@ -1970,13 +1970,13 @@ function parseAnalysis(analysis, options = {}) {
     // 只有八维评分完整、唯一且分母/范围合法时才覆盖 LLM 给出的总分。
     const scoringText = result.scoringReason || '';
     const activeRubricVersion = result.scoringRubricVersion || SCORING_RUBRIC_VERSION;
-    const isV2 = scoringRubricV2.isV2Rubric(activeRubricVersion);
+    const isUnified = scoringRubric.isUnifiedRubric(activeRubricVersion);
     result.scoreValidation = parseScoringDimensions(scoringText, activeRubricVersion);
     if (result.scoreValidation.valid) {
             const dimScores = result.scoreValidation.scores;
-            if (isV2 && result.documentType) {
-                const v2Calc = scoringRubricV2.calculateV2WeightedTotal(result.documentType, dimScores);
-                result.score = v2Calc.total.toFixed(1);
+            if (isUnified && result.documentType) {
+                const weightedCalc = scoringRubric.calculateWeightedTotal(result.documentType, dimScores);
+                result.score = weightedCalc.total.toFixed(1);
             } else {
                 let total = Object.values(dimScores).reduce((a, b) => a + normalizeScoreToOneDecimal(b), 0);
                 total = Math.min(10.0, total);
@@ -2007,8 +2007,8 @@ function parseAnalysis(analysis, options = {}) {
     const hasCodeYes = result.hasCode === '是' || result.hasCode === 'yes';
     const hasModelYes = result.hasModel === '是' || result.hasModel === 'yes';
     const hasDatasetYes = result.hasDataset === '是' || result.hasDataset === 'yes';
-    const releasedOpenThreshold = isV2 ? scoringRubricV2.V2_OPEN_SOURCE_RELEASED_THRESHOLD : 1.0;
-    if (result.scoreValidation.valid && (!isTheoryPaper || isV2) && openScoreVal >= releasedOpenThreshold
+    const releasedOpenThreshold = isUnified ? scoringRubric.UNIFIED_OPEN_SOURCE_RELEASED_THRESHOLD : 1.0;
+    if (result.scoreValidation.valid && (!isTheoryPaper || isUnified) && openScoreVal >= releasedOpenThreshold
         && !hasCodeYes && !hasModelYes && !hasDatasetYes) {
         // 论文没有任何开源链接但得了高分，强制降低
         result.openSourceScore = '0.0';
@@ -2016,9 +2016,9 @@ function parseAnalysis(analysis, options = {}) {
         // 必须从修正后的八个子项重新计算。不能从已封顶的总分直接减，
         // 否则原始子项和超过 10 时会丢失封顶前的分数。
         result.scoreValidation.scores.openSourceScore = 0.0;
-        if (isV2 && result.documentType) {
-            const v2Calc = scoringRubricV2.calculateV2WeightedTotal(result.documentType, result.scoreValidation.scores);
-            result.score = v2Calc.total.toFixed(1);
+        if (isUnified && result.documentType) {
+            const weightedCalc = scoringRubric.calculateWeightedTotal(result.documentType, result.scoreValidation.scores);
+            result.score = weightedCalc.total.toFixed(1);
         } else {
             let total = Object.values(result.scoreValidation.scores)
                 .reduce((sum, value) => sum + normalizeScoreToOneDecimal(value), 0);
@@ -2031,7 +2031,7 @@ function parseAnalysis(analysis, options = {}) {
     if (result.score) {
         const s = parseFloat(result.score);
         if (!isNaN(s)) {
-            result.rankBucket = scoringRubricV2.rankBucketForRubric(s, activeRubricVersion);
+            result.rankBucket = scoringRubric.rankBucketForRubric(s, activeRubricVersion);
             // 同步 machineSummary
             if (result.machineSummary) {
                 result.machineSummary.rankBucket = result.rankBucket;
@@ -2569,7 +2569,7 @@ module.exports = {
     PRIMARY_METHOD_TAGS,
     SCORE_DIMENSIONS,
     OPEN_SOURCE_SCORE_ANCHORS,
-    V2_OPEN_SOURCE_SCORE_ANCHORS,
+    UNIFIED_OPEN_SOURCE_SCORE_ANCHORS,
     normalizeScoreToOneDecimal,
     isOpenSourceScoreAnchor,
     normalizeDocumentType,

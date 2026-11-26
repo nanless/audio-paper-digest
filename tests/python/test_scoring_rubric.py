@@ -11,19 +11,19 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import paper_reader_presentation as prp  # noqa: E402
 import publish_common as pc  # noqa: E402
-import scoring_rubric_v2 as v2  # noqa: E402
+import scoring_rubric as sr  # noqa: E402
 import utils  # noqa: E402
 
 
-class ScoringRubricV2PythonTests(unittest.TestCase):
+class ScoringRubricPythonTests(unittest.TestCase):
     def test_all_document_type_weights_sum_to_100_and_bounded_open_bonus(self):
-        for doc_type, policy in v2.SPEC["documentTypes"].items():
+        for doc_type, policy in sr.SPEC["documentTypes"].items():
             self.assertEqual(sum(policy["coreWeightPct"].values()), 100, doc_type)
             self.assertGreaterEqual(policy["openSourceMaxBonusTenths"], 2)
             self.assertLessEqual(policy["openSourceMaxBonusTenths"], 8)
 
-    def test_v2_weighted_total_and_rank_buckets(self):
-        res = v2.calculate_v2_weighted_total(
+    def test_weighted_total_and_rank_buckets(self):
+        res = sr.calculate_weighted_total(
             "模型报告",
             {
                 "innovation": 8.5,
@@ -40,7 +40,7 @@ class ScoringRubricV2PythonTests(unittest.TestCase):
         self.assertEqual(res["rankBucket"], "前10%")
         self.assertEqual(res["openSourceBonus"], 0.6)
 
-        theory = v2.calculate_v2_weighted_total(
+        theory = sr.calculate_weighted_total(
             "理论研究",
             {
                 "innovation": 8.0,
@@ -99,6 +99,15 @@ has_dataset: 否
         self.assertIn("**9.1/10**", score_line)
         self.assertIn("创新 8.5/10", score_line)
         self.assertIn("开源 10.0/10", score_line)
+
+        # Current version-free type-aware rubric parses, validates, and renders identically
+        current_analysis = v2_analysis.replace("rubric_version: type-aware-v2", "rubric_version: type-aware")
+        current_parsed = utils.parse_analysis(current_analysis)
+        self.assertEqual(current_parsed["scoringRubricVersion"], "type-aware")
+        self.assertEqual(current_parsed["score"], "9.1")
+        self.assertEqual(current_parsed["rankBucket"], "前10%")
+        current_validated = pc.validate_publish_parsed(current_parsed, "current", require_reason_dimensions=True, validate_tags=False)
+        self.assertEqual(prp.reader_score_line(current_validated), score_line)
 
         # Legacy v1 analysis without rubric_version continues working bit-identically
         v1_analysis = """## 评分

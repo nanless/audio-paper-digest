@@ -2883,3 +2883,111 @@ test('lockStatus 返回真实 consistent、跳过远端主机 PID 探测并将 E
     };
     assert.equal(cli.lockStatus(malformedStub, target).consistent, false);
 });
+
+test('assertState 接受合法的 sourceResourceCorrectionAdoption 与链式 textMaintenanceAdoption 并拒绝伪造绑定', async t => {
+    const f = fixture(t, 2);
+    const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
+        filterId: f.authority.filterId, concurrency: 1 };
+    const completed = await processApi.runConferenceProcess(options, { ...f.deps,
+        processPaper: async (_context, _shared, item) => success(item) });
+    const directory = path.join(f.files.conferenceProcessDir, completed.processId);
+    const baseState = JSON.parse(fs.readFileSync(path.join(directory, 'state.json')));
+    const adapter = require('../scripts/lib/conference-analysis-adapter.js');
+    const codec = require('../scripts/lib/protocol-codec');
+    const [paperA, paperB] = f.members.map(m => m.paperId);
+
+    // 1. 合法的 sourceResourceCorrectionAdoption（无 readerRevision，analysisRunId 为新子运行 UUID）
+    const sourceChildId = '11111111-2222-4333-8444-555555555555';
+    const selectedMainId = '22222222-2222-4333-8444-555555555555';
+    const readerParentId = '33333333-2222-4333-8444-555555555555';
+    const adoptedSourceState = structuredClone(baseState);
+    adoptedSourceState.status = 'running';
+    adoptedSourceState.aggregate = null;
+    adoptedSourceState.completionReceiptSha256 = null;
+    adoptedSourceState.items[paperA] = {
+        ...adoptedSourceState.items[paperA],
+        analysisRunId: sourceChildId,
+        sourceResourceCorrectionAdoption: {
+            manifestFile: '/tmp/source-correction-manifest.json',
+            manifestSha256: H('source-manifest'),
+            previousStateSha256: baseState.stateSha256,
+            previousItemSha256: H(baseState.items[paperA]),
+            previousAttempts: 1,
+            previousFailure: null,
+            selectedMainExecutionId: selectedMainId,
+            readerParentExecutionId: readerParentId,
+            newApiRequests: 0
+        }
+    };
+    delete adoptedSourceState.items[paperA].readerRevision;
+    adoptedSourceState.stateSha256 = processApi.stateDigest(adoptedSourceState);
+    assert.equal(processApi.assertState(adoptedSourceState).items[paperA].analysisRunId, sourceChildId);
+
+    // 2. 合法的链式 textMaintenanceAdoption（在 sourceResourceCorrectionAdoption 子运行上再建维护 revision）
+    const batchId = '44444444-2222-4333-8444-555555555555';
+    const maintenanceManifestSha = H('maintenance-manifest');
+    const revHeader = codec.recordHeader('conference-reader-source-revision', 'conference-reader-source-revision');
+    const parentAnalysisSha = H('source-child-analysis');
+    const revBody = {
+        ...revHeader,
+        paperId: paperA,
+        parentExecutionId: sourceChildId,
+        parentAnalysisFileSha256: parentAnalysisSha,
+        readerReviewMaintenance: { batchId, manifestSha256: maintenanceManifestSha },
+        executionId: adapter.readerRevisionExecutionId(sourceChildId, parentAnalysisSha, revHeader)
+    };
+    const chainedRevision = { ...revBody, revisionSha256: H(revBody) };
+    const chainedState = structuredClone(adoptedSourceState);
+    chainedState.items[paperA] = {
+        ...chainedState.items[paperA],
+        analysisRunId: chainedRevision.executionId,
+        readerRevision: chainedRevision,
+        textMaintenanceAdoption: {
+            batchId,
+            manifestSha256: maintenanceManifestSha,
+            previousExecutionId: sourceChildId
+        }
+    };
+    chainedState.stateSha256 = processApi.stateDigest(chainedState);
+    assert.equal(processApi.assertState(chainedState).items[paperA].analysisRunId, chainedRevision.executionId);
+
+    // 3. 负向测试：未绑定随机 analysisRunId、篡改 sourceResourceCorrectionAdoption、未绑定链式 parentExecutionId、篡改 textMaintenanceAdoption
+    const resign = candidate => {
+        candidate.stateSha256 = processApi.stateDigest(candidate);
+        return candidate;
+    };
+
+    const unboundRandom = structuredClone(adoptedSourceState);
+    delete unboundRandom.items[paperA].sourceResourceCorrectionAdoption;
+    assert.throws(() => processApi.assertState(resign(unboundRandom)), /item integrity failed/);
+
+    const badSourceRequests = structuredClone(adoptedSourceState);
+    badSourceRequests.items[paperA].sourceResourceCorrectionAdoption.newApiRequests = 1;
+    assert.throws(() => processApi.assertState(resign(badSourceRequests)), /source correction adoption integrity failed/);
+
+    const selfSourceParent = structuredClone(adoptedSourceState);
+    selfSourceParent.items[paperA].analysisRunId = selectedMainId;
+    assert.throws(() => processApi.assertState(resign(selfSourceParent)), /source correction adoption integrity failed/);
+
+    const unboundChainedRevision = structuredClone(chainedState);
+    delete unboundChainedRevision.items[paperA].textMaintenanceAdoption;
+    assert.throws(() => processApi.assertState(resign(unboundChainedRevision)), /Reader revision integrity failed/);
+
+    const mismatchedMaintenancePrev = structuredClone(chainedState);
+    mismatchedMaintenancePrev.items[paperA].textMaintenanceAdoption.previousExecutionId = '66666666-2222-4333-8444-555555555555';
+    assert.throws(() => processApi.assertState(resign(mismatchedMaintenancePrev)), /text maintenance adoption integrity failed/);
+
+    const mismatchedMaintenanceBatch = structuredClone(chainedState);
+    mismatchedMaintenanceBatch.items[paperA].textMaintenanceAdoption.batchId = '77777777-2222-4333-8444-555555555555';
+    assert.throws(() => processApi.assertState(resign(mismatchedMaintenanceBatch)), /text maintenance adoption integrity failed/);
+
+    const missingMaintenanceLocator = structuredClone(chainedState);
+    const noLocBody = { ...revBody };
+    delete noLocBody.readerReviewMaintenance;
+    missingMaintenanceLocator.items[paperA].readerRevision = { ...noLocBody, revisionSha256: H(noLocBody) };
+    assert.throws(() => processApi.assertState(resign(missingMaintenanceLocator)), /text maintenance adoption integrity failed/);
+
+    const strayRandomPaperB = structuredClone(baseState);
+    strayRandomPaperB.items[paperB].analysisRunId = '88888888-2222-4333-8444-555555555555';
+    assert.throws(() => processApi.assertState(resign(strayRandomPaperB)), /item integrity failed/);
+});

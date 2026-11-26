@@ -60,7 +60,7 @@ def replay_saved_inline_svg_pixels(raw, expected_sha256, *, contract=None):
         v2_attempts = 16 if contract == V2_CONTRACT else 8
         for attempt in range(v2_attempts):
             try:
-                v2_actual = render_svg(raw, hidpi=True, deterministic_v2=True)
+                v2_actual = render_svg(raw, hidpi=True, deterministic_hidpi=True)
                 if hashlib.sha256(v2_actual).hexdigest() == expected_sha256:
                     return v2_actual, None
             except (UnsupportedSvgDependency, ValueError):
@@ -102,7 +102,9 @@ def replay_saved_inline_svg_pixels(raw, expected_sha256, *, contract=None):
             params = inspect.signature(producer).parameters
             if 'hidpi' in params:
                 calls.append({'hidpi': True})
-            if 'hidpi' in params and 'deterministic_v2' in params:
+            if 'hidpi' in params and 'deterministic_hidpi' in params:
+                calls.append({'hidpi': True, 'deterministic_hidpi': True})
+            elif 'hidpi' in params and 'deterministic_v2' in params:
                 calls.append({'hidpi': True, 'deterministic_v2': True})
         except (TypeError, ValueError):
             pass

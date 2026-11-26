@@ -232,7 +232,7 @@ test('v2 质量拒绝精确透传 raw_latex_leak_in_svg 与 foreign_object_text_
         const child = spawnSync('bash', [
             path.join(projectRoot, 'scripts/python-runtime.sh'),
             path.join(projectRoot, 'scripts/reader_inline_svg.py'),
-            '--v2'
+            '--deterministic-hidpi'
         ], { cwd: projectRoot, input: input.inlineSvg, encoding: 'utf8', timeout: 30000 });
         assert.equal(child.error, undefined);
         assert.equal(child.status, 65, `${expectedReason}: stderr=${child.stderr}`);

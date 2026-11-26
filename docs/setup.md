@@ -149,7 +149,7 @@ npm run validate:data -- --allow-empty
 | `PD_DAILY_SOURCE_SKIP_MAX` | 默认 2，范围 0–5；封存阶段官方 PDF 全地址 404 时本批最多跳过篇数 |
 | `PD_DAILY_CORRECTION_LIMIT` | 默认 `min(15, max(10, floor(N/10)))`，范围 1–15；仅允许抬高、不能降低默认值 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 日更独立页面审查默认 16，范围 1–32；会议页面审查最多 5 路，汇总优先派发 |
-| `PD_CONFERENCE_EXTRACTOR_VERSION` | 会议 PDF 抽取器版本，默认 `v2`（双栏重排、结构化表与 288 DPI 裁切），可设为 `v1` 兼容旧抽取器 |
+| `PD_CONFERENCE_EXTRACTOR_PROFILE` | 会议 PDF 抽取器模式，默认 `enhanced`（双栏重排、结构化表与 288 DPI 裁切），可设为 `legacy` 兼容旧抽取器（兼容旧别名 `PD_CONFERENCE_EXTRACTOR_VERSION`） |
 | `PD_CONFERENCE_QUEUE_CONCURRENCY` | 会议队列调度最大并发上限，默认 3，范围 1–32 |
 | `PD_PAGES_DEPLOY_POLL_SECONDS` | 会议发布后等待 GitHub Pages 部署的轮询间隔（秒），默认 10，范围 1–120 |
 | `PD_PAGES_DEPLOY_TIMEOUT_SECONDS` | 会议发布后等待 GitHub Pages 部署的超时上限（秒），默认 600，范围 10–1800 |
@@ -202,7 +202,7 @@ Reader 的一次逻辑请求最多进行2次传输尝试；筛选默认最多5�
 
 ## 可选副模型
 
-当前 API Reader（现行契约 `structured-pipeline-v5`）会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前使用的 `muse-spark-1.3-contributor` 与此前的 `deepseek-v4.1-flash` 都通过 Responses 接收图片（`input_image.image_url` 传 data URI 字符串），兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
+当前 API Reader（现行契约 `structured-pipeline`）会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前使用的 `muse-spark-1.3-contributor` 与此前的 `deepseek-v4.1-flash` 都通过 Responses 接收图片（`input_image.image_url` 传 data URI 字符串），兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
 
 `PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数（未传参数时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`，默认 5；可显式设为 1–60，例如 `--concurrency 10`）。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
 
