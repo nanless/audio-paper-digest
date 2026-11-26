@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://nanless.github.io/audio-research-portal/"><img src="https://img.shields.io/badge/Live_Portal-Audio_Research_Portal-0f766e?style=flat-square" alt="Audio Research Portal" /></a>
-  <a href="https://github.com/nanless/audio-research-workbench/releases"><img src="https://img.shields.io/badge/Client-v1.5.0_(Build_24)-1d4ed8?style=flat-square" alt="Client v1.5.0" /></a>
+  <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0"><img src="https://img.shields.io/badge/Client-v1.5.0_(Build_24)-1d4ed8?style=flat-square" alt="Client v1.5.0" /></a>
   <img src="https://img.shields.io/badge/macOS-15%2B_Apple_Silicon-334155?style=flat-square" alt="macOS 15+" />
   <img src="https://img.shields.io/badge/Android-9%2B_(4_ABIs)-334155?style=flat-square" alt="Android 9+" />
   <img src="https://img.shields.io/badge/Archive-9%2C300%2B_Verified_Papers-4338ca?style=flat-square" alt="9,300+ Verified Papers" />
@@ -98,8 +98,7 @@ Production, publishing, and personal reading stay strictly isolated:
 | Zotero Archiving (metadata + guide + PDF + notes) | 📥 BibTeX / RIS | ✅ Local Zotero Desktop API | ✅ Official Zotero Web API v3 |
 | Versioned WebDAV Sync & lossless note conflict merge | — | ✅ Secrets stay on device | ✅ Secrets stay on device |
 
-- **Current source version**: **1.5.0 (build 24)** on both macOS and Android (adds the native daily podcast player, aligned offline search/filtering, full rename to `音频研究工作台` / Audio Research Workbench, and legacy `/audio-paper-digest-blog/` compatibility; see the [1.5.0 record](docs/workbench-1.5.0-review.md)).
-- **Latest public release**: **1.4.7 / build 23** (published 23 Nov 2026; see [GitHub Release v1.4.7](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.7) and [client release verification](docs/client-release-verification.md)). Earlier versions live in [docs/README.en.md](docs/README.en.md).
+- **Latest public release**: **1.5.0 (build 24)** on both macOS and Android, published on 26 Nov 2026 (commit `5b5a8e79`; adds the native daily podcast player, aligned offline search/filtering, full rename to `音频研究工作台` / Audio Research Workbench, and migration to the new portal URL with legacy `/audio-paper-digest-blog/` compatibility). Download from [GitHub Release v1.5.0](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0), and see the [1.5.0 release record](docs/workbench-1.5.0-review.md) and [client release verification](docs/client-release-verification.md). Earlier versions live in [docs/README.en.md](docs/README.en.md).
 - **Upgrade notes**: Upgrading from 1.4.x to 1.5.0 renames the macOS app bundle to `音频研究工作台.app` while preserving `com.nanless.PaperDigest`, existing data directories, and Keychain entries—quit and remove the old bundle after installing. macOS builds use local ad-hoc signing (not Apple-notarized, macOS 15+ Apple silicon). Android keeps `com.nanless.paperdigest` and the 1.4.4+ signing certificate so 1.4.4+ upgrades in place (1.4.3 requires backing up and uninstalling first).
 
 ---

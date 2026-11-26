@@ -2,7 +2,11 @@
 
 ## 当前源码与已发行版本
 
-Mac 和 Android 的当前源码版本统一为 **1.5.0（构建号 24）**（尚未公开发布，改动与验证范围见[1.5.0 记录](workbench-1.5.0-review.md)）；最近公开发行版本为 1.4.7 / 构建号 23（2026-11-23 发布，来源提交 `520e93c3`），下载见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.4.7)。1.4.6 于 2026-11-20 发布，1.4.5 于 2026-11-12 发布，1.4.4 于 2026-11-05 发布，1.4.3 同日发布，原记录保留。1.4.4 换了 Android 签名证书，已安装 1.4.3 的用户不能覆盖升级，需要先导出完整备份、卸载旧版再安装；1.4.5、1.4.6 与 1.4.7 沿用 1.4.4 的签名库，已安装 1.4.4、1.4.5 或 1.4.6 的用户可以直接覆盖升级。1.4.7 的改动与验证范围见[1.4.7 记录](workbench-1.4.7-review.md)，1.4.6 见[1.4.6 记录](workbench-1.4.6-review.md)，1.4.5 见[1.4.5 记录](workbench-1.4.5-review.md)，构建与签名核验见[客户端发行核验](client-release-verification.md)。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-paper-digest/releases)
+Mac 和 Android 的当前公开发行版本统一为 **1.5.0（构建号 24）**（2026-11-26 发布，来源提交 `5b5a8e79`，改动与验证范围见[1.5.0 记录](workbench-1.5.0-review.md)，下载见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0)）；上一版为 1.4.7 / 构建号 23（2026-11-23 发布，来源提交 `520e93c3`）。1.4.6 于 2026-11-20 发布，1.4.5 于 2026-11-12 发布，1.4.4 于 2026-11-05 发布，1.4.3 同日发布，原记录保留。1.4.4 换了 Android 签名证书，已安装 1.4.3 的用户不能覆盖升级，需要先导出完整备份、卸载旧版再安装；1.4.5 至 1.5.0 沿用 1.4.4 的签名库，已安装 1.4.4–1.4.7 的用户可以直接覆盖升级。1.5.0 的改动与验证范围见[1.5.0 记录](workbench-1.5.0-review.md)，1.4.7 见[1.4.7 记录](workbench-1.4.7-review.md)，1.4.6 见[1.4.6 记录](workbench-1.4.6-review.md)，1.4.5 见[1.4.5 记录](workbench-1.4.5-review.md)，构建与签名核验见[客户端发行核验](client-release-verification.md)。开发测试使用独立工作目录和测试资料。每个公开安装包的版本和下载状态以发行页为准。下列记录保留当时实测的版本、设备和结果。[GitHub 发行页](https://github.com/nanless/audio-research-workbench/releases)
+
+## 1.5.0 公开发行
+
+公开 APK 为 `paperdigest-android-1.5.0-24-universal.apk`，versionName 1.5.0、versionCode 24，minSdk 28、targetSdk 37，包含四种 ABI 且原生库符合 16 KiB ELF 对齐，应用标识为 `com.nanless.paperdigest`，零新增权限、依赖或组件。公开的 `android-build-info.json` 与 `apksigner verify` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（APK Signature Scheme v3，`signingOrigin: provided-signed-apk`），与 1.4.4–1.4.7 相同，因此已安装 1.4.4–1.4.7 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，仍需先导出完整备份、卸载旧版再安装。1.5.0 没有重新执行 84/86 项人工验收，也没有新增实体机或完整 TalkBack 遍历；改动由双端全量自动测试、服务端回归、打包回读、匿名下载签名复核与线上门户核验覆盖。签名、十二件附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
 
 ## 1.4.6 公开发行
 

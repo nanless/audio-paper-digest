@@ -1,4 +1,48 @@
-# 客户端发行核验（1.4.7）
+# 客户端发行核验（1.5.0）
+
+## 1.5.0 公开结果
+
+| 项 | 值 |
+|---|---|
+| 标签 | `v1.5.0`（附注标签 `24a48710db724898cd89c0b73f0ac054f68fb697`），指向发行提交 `5b5a8e79e5e70290cb650fd37e71417f46946a2b`（`5b5a8e79`） |
+| 发布时间 | 2026-11-26 10:12（北京时间，`2026-11-26T02:12:48Z`） |
+| 发行页 | https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0（Release ID `458861899`，`draft: false`，`prerelease: false`） |
+| 版本、构建号 | 两端均为 1.5.0、24（Android `versionName` 1.5.0、`versionCode` 24） |
+| 附件 | 12 件：Mac 6 件（ZIP、DMG、`build-info.json`、`RELEASE_NOTES.md`、`release-manifest.json`、`SHA256SUMS`），Android 6 件（APK、`android-build-info.json`、`android-source-inputs.json`、`android-runtime-materials.json`、`android-release-manifest.json`、`ANDROID-SHA256SUMS`） |
+| 匿名下载 | 发行页与 12 件附件未登录请求（无 Cookie、无 `Authorization` 头）均返回 HTTP 200（2026-11-26 复核），下载文件字节数、SHA-256 与双端 `verify-downloaded` 包体回读均一致 |
+| Android 签名 | 沿用 1.4.4–1.4.7 发布签名库（`apksigner` 36.0.0 以 APK Signature Scheme v3 签名并经 `finalize-signed` 封存核验，`signingOrigin: provided-signed-apk`），证书 SHA-256 `6a0c3138…`；1.4.4–1.4.7 用户可直接覆盖升级，1.4.3（`d7c680d9…`）用户仍需备份后卸载重装 |
+| 人工验收 | 未重新执行 84/86 项人工图形与实机验收矩阵；本版完成双端全量自动测试、服务端 JS/Python 回归、打包回读、匿名下载签名核验与“音频研究门户”线上部署核验 |
+
+1.5.0 的改动与验证范围见 [1.5.0 记录](workbench-1.5.0-review.md)。
+
+## 1.5.0 的十二件附件
+
+以下字节与 SHA-256 于 2026-11-26 对公开 Release 页面及 12 件附件执行未登录下载复核；按 `SHA256SUMS` 与 `ANDROID-SHA256SUMS` 对照，逐件字节数与 SHA-256 与下表一致。两份校验表都不包含自身；`SHA256SUMS` 覆盖其余五件 Mac 资产（含 `release-manifest.json`），`ANDROID-SHA256SUMS` 覆盖 APK 与三份 Android 构建记录，不包含 `android-release-manifest.json`，核对时以表内条目为准。
+
+| 平台 | 附件 | 字节 | SHA-256 |
+|---|---|---:|---|
+| Mac | `PaperDigest-macOS-1.5.0-arm64.dmg` | 58640859 | `ab3758f18f975fd441134fb30ee4e933ab7efc3413d41a20ad58983ee4ec1269` |
+| Mac | `PaperDigest-macOS-1.5.0-arm64.zip` | 50252065 | `0bfa261a233cb8025b3db473b8a5537ea9cbad4d7db7246f48b7e9aa7ca19321` |
+| Mac | `RELEASE_NOTES.md` | 3744 | `0c21bcfe489260f1e9648c8a207888c2a74f27b5849afa7772900eb181d9ebe9` |
+| Mac | `SHA256SUMS` | 453 | `1cb239f27fbd8d184d8433dbd2f94aa4b9a7ccb4edbe9c118a72dc0b5bc7faab` |
+| Mac | `build-info.json` | 1528 | `b3a954de2d81adb9ceab5441ce133c6c175be89d18dda166f8272419483a3e26` |
+| Mac | `release-manifest.json` | 687 | `0a6b020fe112fd4f9f54b0eec919f0c8e16673f8e40d115e44fb8495fc56e37f` |
+| Android | `paperdigest-android-1.5.0-24-universal.apk` | 76482118 | `980cf5e628e4712f441ab73f2e38a0f19a4e37967c6e3f7adf6b0ec6eba85443` |
+| Android | `ANDROID-SHA256SUMS` | 389 | `d37720934d05b61bb3383375f2ff734b52bd679c34f348e761be316d1e49b243` |
+| Android | `android-build-info.json` | 346263 | `b302163cb32cd184a9452c0c5d316af8437343062c9f4d83e6fe1f0be5c75d68` |
+| Android | `android-source-inputs.json` | 198252 | `b43e2fbef292385801c95f99ea9625d658325b3489b17b414b6da3699e365eb5` |
+| Android | `android-runtime-materials.json` | 31654 | `b22576c093c870d36e4f0d9b95eab83073a0f6a982dc845aa3591f1dd4b8160b` |
+| Android | `android-release-manifest.json` | 591 | `752f077090aa1ee4719c9f8eba7e2f8dc67dfd99ed8f5fa61ca356e3d68f7955` |
+
+## 1.5.0 的签名
+
+Mac 应用自 1.5.0 起更名为 `音频研究工作台.app`，继续使用应用标识 `com.nanless.PaperDigest` 与本地 `ad-hoc; not notarized` 签名（未经过 Apple 公证）。公开 ZIP 中的应用包经 `codesign -dv --verbose=4` 核对：格式为 arm64 Mach-O，`Signature=adhoc`，`TeamIdentifier=not set`，CDHash `f694ae0ba15e9f9db97f76febc3d607ea85cb6da`；`build-info.json` 记录 `sourceCommit` 与 `releaseHead` 均为 `5b5a8e79e5e70290cb650fd37e71417f46946a2b`，版本 1.5.0（构建号 24）、`arm64`、最低系统 macOS 15.0、随包 Node `24.19.0`。ad-hoc 签名只证明包在打包后没有被改动，不提供 Apple 开发者身份。
+
+公开 APK 沿用 1.4.4–1.4.7 的发布签名库（使用 `apksigner` 36.0.0 签名并经 `finalize-signed` 封存核验，`signingOrigin: provided-signed-apk`）。经 `apksigner verify --print-certs --verbose` 核对，证书 DN 为 `CN=Paper Digest, OU=Release, O=nanless, L=Shanghai, ST=Shanghai, C=CN`，证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（RSA 4096），实际通过 **APK Signature Scheme v3** 验证（`v1/v2/v3.1/v4` 为 `false`）；`android-build-info.json` 记录 `versionName` 1.5.0、`versionCode` 24、`minSdk` 28、`targetSdk` 37，应用标识 `com.nanless.paperdigest`，四种 ABI 齐全且原生库符合 16 KiB ELF 对齐。已安装 1.4.4–1.4.7 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9…`，仍需先导出完整备份、卸载旧版再安装。
+
+# 1.4.7 发行核验（历史存档）
+
+本节记录上一版 1.4.7 的公开结果、附件与签名；当前公开发行版本 1.5.0 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
 
 ## 1.4.7 公开结果
 

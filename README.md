@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://nanless.github.io/audio-research-portal/"><img src="https://img.shields.io/badge/Live_Portal-音频研究门户-0f766e?style=flat-square" alt="音频研究门户" /></a>
-  <a href="https://github.com/nanless/audio-research-workbench/releases"><img src="https://img.shields.io/badge/Client-v1.5.0_(Build_24)-1d4ed8?style=flat-square" alt="Client v1.5.0" /></a>
+  <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0"><img src="https://img.shields.io/badge/Client-v1.5.0_(Build_24)-1d4ed8?style=flat-square" alt="Client v1.5.0" /></a>
   <img src="https://img.shields.io/badge/macOS-15%2B_Apple_Silicon-334155?style=flat-square" alt="macOS 15+" />
   <img src="https://img.shields.io/badge/Android-9%2B_(4_ABIs)-334155?style=flat-square" alt="Android 9+" />
   <img src="https://img.shields.io/badge/Archive-9%2C300%2B_已核验论文-4338ca?style=flat-square" alt="9,300+ Verified Papers" />
@@ -98,8 +98,7 @@
 | Zotero 文献归档（书目 + 导读 + PDF + 笔记） | 📥 BibTeX / RIS | ✅ 本机 Zotero API | ✅ 官方 Zotero Web API v3 |
 | WebDAV 坚果云全空间版本备份与冲突合并 | — | ✅ 无损合并 + 密钥不离机 | ✅ 无损合并 + 密钥不离机 |
 
-- **当前源码版本**：Mac 与 Android 均为 **1.5.0（构建号 24）**（新增原生每日音频播客播放器、离线检索筛选对齐、全量更名为“音频研究工作台”并兼容旧站点路径 `/audio-paper-digest-blog/`，详见 [1.5.0 审改记录](docs/workbench-1.5.0-review.md)）。
-- **最近公开发行**：**1.4.7 / 构建号 23**（2026-11-23 发布，见 [GitHub Release v1.4.7](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.7) 与 [客户端发行核验](docs/client-release-verification.md)）。历史版本说明集中记录在 [docs/README.md](docs/README.md#阅读历史评审记录)。
+- **当前公开发行**：Mac 与 Android 均为 **1.5.0（构建号 24）**，已于 2026-11-26 公开发布（来源提交 `5b5a8e79`，新增原生每日音频播客播放器、离线检索筛选对齐、全量更名为“音频研究工作台”并迁移至新门户站点同时兼容旧路径 `/audio-paper-digest-blog/`）。安装包与校验值见 [GitHub Release v1.5.0](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0)、[1.5.0 发版记录](docs/workbench-1.5.0-review.md) 与 [客户端发行核验](docs/client-release-verification.md)；历史版本说明见 [docs/README.md](docs/README.md#阅读历史评审记录)。
 - **升级提示**：从 1.4.x 升级到 1.5.0 时，macOS 应用包更名为 `音频研究工作台.app`，继续共用 `com.nanless.PaperDigest` 标识、原资料目录与钥匙串，安装后退出并移除旧包即可；macOS 包使用本地 ad-hoc 签名（未 Apple 公证，需 macOS 15+ Apple Silicon）。Android 保持 `com.nanless.paperdigest` 与 1.4.4+ 同签名证书，1.4.4+ 可直接覆盖升级，1.4.3 需先备份卸载再装。
 
 ---
