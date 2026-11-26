@@ -24,7 +24,8 @@ const {
     classifyOpenCodeGoQuotaResponse,
     replaceCredentialHeaders,
     selectApiKey,
-    markQuotaExhausted
+    markQuotaExhausted,
+    recordAccountUsage
 } = require('./llm-account-pool.js');
 
 // ═══════════════════════════════════════════════════════
@@ -1512,7 +1513,16 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
         );
         const quota = classifyOpenCodeGoQuotaResponse(response, { endpoint });
         if (!quota && response?.statusCode === 401) throw new LlmAccountAuthError();
-        if (!quota) return response;
+        if (!quota) {
+            if (response?.statusCode >= 200 && response?.statusCode < 300 && response?.body?.usage) {
+                try {
+                    recordAccountUsage(selection, { usage: response.body.usage, costUsd: response.body.cost }, stateFile);
+                } catch (usageErr) {
+                    console.warn(`[llm-account-pool] 记录账号用量失败（不影响本次成功响应）: ${usageErr.message}`);
+                }
+            }
+            return response;
+        }
         const blockedUntilMs = markQuotaExhausted(selection, quota, stateFile);
         blockedUntilValues.push(blockedUntilMs);
         const accountNumber = apiKeys.indexOf(selection.apiKey) + 1;

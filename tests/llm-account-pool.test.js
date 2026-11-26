@@ -1670,3 +1670,243 @@ test('resolvePrimaryApiKeyPool 拒绝重复密钥且 selectApiKey 清理过期�
     });
     assert.ok(laterKeys.includes(picked.apiKey));
 });
+
+describe('OpenCode Go 月到期优先、同天剩余最多与三窗口额度调度', () => {
+    const pool = require('../scripts/llm-account-pool.js');
+    const BASE_NOW = Date.parse('2026-11-26T04:00:00Z'); // 北京时间 2026-11-26 12:00
+
+    it('月额度最先到期的账号优先于到期更晚但剩余更多的账号', () => {
+        const { file } = tempState();
+        const keys = ['acct-late-rich', 'acct-early-low', 'acct-mid-full'];
+        pool.setAccountQuota(keys[0], ENDPOINT, {
+            monthlyExpiry: '2026-12-20', monthlyRemainingPct: 100, weeklyRemainingPct: 100, rolling5hRemainingPct: 100
+        }, file, { nowMs: BASE_NOW });
+        pool.setAccountQuota(keys[1], ENDPOINT, {
+            monthlyExpiry: '2026-12-03', monthlyRemainingPct: 25, weeklyRemainingPct: 40, rolling5hRemainingPct: 50
+        }, file, { nowMs: BASE_NOW });
+        pool.setAccountQuota(keys[2], ENDPOINT, {
+            monthlyExpiry: '2026-12-10', monthlyRemainingPct: 90, weeklyRemainingPct: 100, rolling5hRemainingPct: 100
+        }, file, { nowMs: BASE_NOW });
+
+        const picked = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 1000, affinityKey: '2611.00001' });
+        assert.strictEqual(picked.apiKey, 'acct-early-low');
+        assert.strictEqual(picked.selectionMode, 'expiry_priority');
+
+        // key 顺序打乱且传入不同 affinityKey 仍稳定选最早到期的账号
+        const shuffled = pool.selectApiKey([...keys].reverse(), ENDPOINT, file, { nowMs: BASE_NOW + 2000, affinityKey: '2611.99999' });
+        assert.strictEqual(shuffled.apiKey, 'acct-early-low');
+    });
+
+    it('按北京时间判断同一天到期（含跨 UTC 零点），优先选有效剩余月额度最多；月并列再比周/5小时', () => {
+        const { file } = tempState();
+        // 2026-12-02T16:30:00Z = 北京 2026-12-03 00:30；2026-12-03T10:00:00Z = 北京 2026-12-03 18:00
+        // 两者按北京时间属于同一天（2026-12-03）！
+        const keys = ['acct-bj-early-less', 'acct-bj-later-more', 'acct-bj-tie-week-less'];
+        pool.setAccountQuota(keys[0], ENDPOINT, {
+            monthlyExpiry: '2026-12-02T16:30:00Z', monthlyRemainingPct: 40, weeklyRemainingPct: 100, rolling5hRemainingPct: 100
+        }, file, { nowMs: BASE_NOW });
+        pool.setAccountQuota(keys[1], ENDPOINT, {
+            monthlyExpiry: '2026-12-03T10:00:00Z', monthlyRemainingPct: 80, weeklyRemainingPct: 90, rolling5hRemainingPct: 70
+        }, file, { nowMs: BASE_NOW });
+        pool.setAccountQuota(keys[2], ENDPOINT, {
+            monthlyExpiry: '2026-12-03T08:00:00Z', monthlyRemainingPct: 80, weeklyRemainingPct: 50, rolling5hRemainingPct: 100
+        }, file, { nowMs: BASE_NOW });
+
+        // 同一天到期：80% > 40%，月剩余并列 80% 时周剩余 90% > 50%
+        const picked = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 1000 });
+        assert.strictEqual(picked.apiKey, 'acct-bj-later-more');
+
+        // 若周剩余也调成 90%，再比 5 小时剩余（100% > 70%）
+        pool.setAccountQuota(keys[2], ENDPOINT, {
+            weeklyRemainingPct: 90, rolling5hRemainingPct: 100
+        }, file, { nowMs: BASE_NOW + 2000 });
+        const picked2 = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 3000 });
+        assert.strictEqual(picked2.apiKey, 'acct-bj-tie-week-less');
+    });
+
+    it('月/周/5小时任一窗口冷却或手动置 0% 时立即跳过，窗口恢复后自动回到优先位', () => {
+        const { file } = tempState();
+        const keys = ['acct-earliest', 'acct-second', 'acct-third'];
+        pool.setAccountQuota(keys[0], ENDPOINT, {
+            monthlyExpiry: '2026-12-01', monthlyRemainingPct: 90, weeklyRemainingPct: 90, rolling5hRemainingPct: 90
+        }, file, { nowMs: BASE_NOW });
+        pool.setAccountQuota(keys[1], ENDPOINT, {
+            monthlyExpiry: '2026-12-05', monthlyRemainingPct: 70, weeklyRemainingPct: 0, rolling5hRemainingPct: 100
+        }, file, { nowMs: BASE_NOW });
+        pool.setAccountQuota(keys[2], ENDPOINT, {
+            monthlyExpiry: '2026-12-15', monthlyRemainingPct: 60, weeklyRemainingPct: 60, rolling5hRemainingPct: 60
+        }, file, { nowMs: BASE_NOW });
+
+        // acct-earliest 触发 5 小时限额冷却 2 小时，acct-second 周额度手动为 0% -> 应直接跳到 acct-third
+        const sel0 = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 100 });
+        assert.strictEqual(sel0.apiKey, 'acct-earliest');
+        pool.markQuotaExhausted(sel0, {
+            limitClass: 'rolling_5h',
+            blockedUntilMs: BASE_NOW + 2 * 3600_000
+        }, file, { nowMs: BASE_NOW + 200 });
+
+        const duringCooldown = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 3600_000 });
+        assert.strictEqual(duringCooldown.apiKey, 'acct-third');
+
+        // 2 小时后 5h 窗口恢复，acct-earliest 仍有月/周额度 -> 重新回到第一优先
+        const after5hReset = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 2 * 3600_000 + 1000 });
+        assert.strictEqual(after5hReset.apiKey, 'acct-earliest');
+
+        // 5h 429 不覆盖月额度剩余百分比与到期日
+        const stateAfter = pool.readStateStrict(file);
+        const identity = pool.getPoolIdentity(keys, ENDPOINT);
+        const rec0 = stateAfter.services[identity.serviceId].accounts[pool.getAccountId(keys[0])];
+        assert.strictEqual(rec0.quota.monthlyRemainingPct, 90);
+        assert.strictEqual(rec0.quota.rolling5hRemainingPct, 0);
+    });
+
+    it('月 429 自动学习到期日且跨月周期滚动；新周期的 5h 429 不复活旧月 0% 快照', () => {
+        const { file } = tempState();
+        const keys = ['acct-auto-learn', 'acct-later'];
+        pool.setAccountQuota(keys[1], ENDPOINT, {
+            monthlyExpiry: '2026-12-20', monthlyRemainingPct: 80
+        }, file, { nowMs: BASE_NOW });
+
+        // acct-auto-learn 最初未配置到期日，触发一次 monthly 429（冷却至 2026-12-03T10:00:00Z）
+        const resetDec3 = Date.parse('2026-12-03T10:00:00Z');
+        pool.markQuotaExhausted(selectionFor(keys, keys[0]), {
+            limitClass: 'monthly',
+            blockedUntilMs: resetDec3
+        }, file, { nowMs: BASE_NOW });
+
+        // 冷却期内只选 acct-later
+        assert.strictEqual(pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 1000 }).apiKey, 'acct-later');
+
+        // 2026-12-04（下月周期开启后）触发一次 5h 429（至 12-04 12:00Z），不应复活上月的 monthlyRemainingPct=0
+        const dec4Morning = Date.parse('2026-12-04T06:00:00Z');
+        pool.markQuotaExhausted(selectionFor(keys, keys[0]), {
+            limitClass: 'rolling_5h',
+            blockedUntilMs: dec4Morning + 3600_000
+        }, file, { nowMs: dec4Morning });
+
+        // 12-04 08:00Z（5h 恢复后）：acct-auto-learn 应已恢复月额度且下一次月到期自动滚到 2027-01-03，
+        // 晚于 acct-later（2026-12-20），因此先选 acct-later；到 2026-12-21 后 acct-later 滚到 2027-01-20，
+        // 此时 acct-auto-learn（2027-01-03）自动成为最先到期第一优先！
+        const dec4After5h = Date.parse('2026-12-04T08:00:00Z');
+        const evalDec4 = pool.evaluateAccountQuota(
+            pool.readStateStrict(file).services[pool.getPoolIdentity(keys, ENDPOINT).serviceId].accounts[pool.getAccountId(keys[0])],
+            dec4After5h
+        );
+        assert.strictEqual(evalDec4.eligible, true);
+        assert.strictEqual(evalDec4.hasMonthlyQuota, true);
+        assert.strictEqual(evalDec4.monthlyCycle.expiryBeijingDate, '2027-01-03');
+        assert.strictEqual(pool.selectApiKey(keys, ENDPOINT, file, { nowMs: dec4After5h }).apiKey, 'acct-later');
+
+        const dec21 = Date.parse('2026-12-21T00:00:00Z');
+        assert.strictEqual(pool.selectApiKey(keys, ENDPOINT, file, { nowMs: dec21 }).apiKey, 'acct-auto-learn');
+    });
+
+    it('recordAccountUsage 动态扣减本地估算剩余并触发同天到期平滑切换，且绝不因估算误锁死账号', () => {
+        const { file } = tempState();
+        const keys = ['acct-a', 'acct-b'];
+        pool.setAccountQuota(keys[0], ENDPOINT, {
+            monthlyExpiry: '2026-12-06', monthlyBudgetUsd: 10, monthlyRemainingPct: 60
+        }, file, { nowMs: BASE_NOW });
+        pool.setAccountQuota(keys[1], ENDPOINT, {
+            monthlyExpiry: '2026-12-06', monthlyBudgetUsd: 10, monthlyRemainingPct: 55
+        }, file, { nowMs: BASE_NOW });
+
+        // 初始 acct-a (60%) > acct-b (55%)
+        const first = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 100 });
+        assert.strictEqual(first.apiKey, 'acct-a');
+
+        // 记入 acct-a 本次消耗 $1.00（占 $10 预算的 10% -> 估算剩余降至 50% < 55%）
+        pool.recordAccountUsage(first, { estimatedCostUsd: 1.0, totalTokens: 500_000 }, file, { nowMs: BASE_NOW + 200 });
+        const second = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 300 });
+        assert.strictEqual(second.apiKey, 'acct-b');
+
+        // 即使估算消耗远超预算（如 $100），估算剩余保底 0.01%，不会在没收到真实 429 前锁死账号
+        pool.recordAccountUsage(first, { estimatedCostUsd: 100.0 }, file, { nowMs: BASE_NOW + 400 });
+        pool.recordAccountUsage(second, { estimatedCostUsd: 100.0 }, file, { nowMs: BASE_NOW + 500 });
+        const stillUsable = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 600 });
+        assert.ok(keys.includes(stillUsable.apiKey));
+    });
+
+    it('未知到期日账号（Tier 2）始终排在已知到期日账号（Tier 1）之后，且 equal_rotation 开关可回退旧策略', () => {
+        const { file } = tempState();
+        const keys = ['acct-unknown-1', 'acct-unknown-2', 'acct-known'];
+        pool.setAccountQuota(keys[2], ENDPOINT, {
+            monthlyExpiry: '2026-12-28', monthlyRemainingPct: 10
+        }, file, { nowMs: BASE_NOW });
+
+        // 默认 expiry_priority：Tier 1 始终优先于 Tier 2
+        assert.strictEqual(
+            pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 100, affinityKey: '2611.00001' }).apiKey,
+            'acct-known'
+        );
+
+        // Tier 1 冷却后，自动退回 Tier 2 的 affinityKey 亲和路由
+        pool.markQuotaExhausted(selectionFor(keys, keys[2]), {
+            limitClass: 'rolling_5h',
+            blockedUntilMs: BASE_NOW + 3600_000
+        }, file, { nowMs: BASE_NOW + 200 });
+        const t2a = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 300, affinityKey: '2611.12345' });
+        const t2b = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 400, affinityKey: '2611.12345' });
+        assert.strictEqual(t2a.apiKey, t2b.apiKey);
+        assert.ok(['acct-unknown-1', 'acct-unknown-2'].includes(t2a.apiKey));
+
+        // 显式 strategy='equal_rotation' 时忽略到期日，恢复等权轮转
+        const eq1 = pool.selectApiKey(keys, ENDPOINT, file, {
+            nowMs: BASE_NOW + 3600_000 + 100, strategy: 'equal_rotation'
+        });
+        const eq2 = pool.selectApiKey(keys, ENDPOINT, file, {
+            nowMs: BASE_NOW + 3600_000 + 200, strategy: 'equal_rotation'
+        });
+        assert.notStrictEqual(eq1.apiKey, eq2.apiKey);
+    });
+
+    it('Node 与 Python 在同一共享状态文件上对到期优先、同天平局与消耗扣减完全一致', { skip: !HAS_PYTHON }, () => {
+        const { file } = tempState();
+        const keys = ['parity-k1', 'parity-k2', 'parity-k3'];
+        // parity-k1 与 parity-k2 在北京时间同日（2026-12-06）到期，parity-k3 晚到 2026-12-18
+        pool.setAccountQuota(keys[0], ENDPOINT, {
+            monthlyExpiry: '2026-12-05T18:00:00Z', monthlyBudgetUsd: 20, monthlyRemainingPct: 70, weeklyRemainingPct: 80, rolling5hRemainingPct: 90
+        }, file, { nowMs: BASE_NOW });
+        pool.setAccountQuota(keys[1], ENDPOINT, {
+            monthlyExpiry: '2026-12-06T10:08:00Z', monthlyBudgetUsd: 20, monthlyRemainingPct: 65, weeklyRemainingPct: 90, rolling5hRemainingPct: 90
+        }, file, { nowMs: BASE_NOW });
+        pool.setAccountQuota(keys[2], ENDPOINT, {
+            monthlyExpiry: '2026-12-18', monthlyBudgetUsd: 20, monthlyRemainingPct: 100, weeklyRemainingPct: 100, rolling5hRemainingPct: 100
+        }, file, { nowMs: BASE_NOW });
+
+        const nodePick1 = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 1000 });
+        assert.strictEqual(nodePick1.apiKey, 'parity-k1');
+
+        const pyScript = [
+            'import json, sys',
+            `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..', 'scripts'))})`,
+            'from llm_account_pool import select_api_key, record_account_usage, mark_quota_exhausted',
+            `keys = ${JSON.stringify(keys)}`,
+            `endpoint = ${JSON.stringify(ENDPOINT)}`,
+            `state_file = ${JSON.stringify(file)}`,
+            `now_ms = ${BASE_NOW + 1500}`,
+            'pick1 = select_api_key(keys, endpoint, state_file, now_ms=now_ms)',
+            'record_account_usage(pick1, {"estimated_cost_usd": 2.0, "total_tokens": 200000}, state_file, now_ms=now_ms + 100)',
+            'pick2 = select_api_key(keys, endpoint, state_file, now_ms=now_ms + 200)',
+            'mark_quota_exhausted(pick2, {"limit_class": "rolling_5h", "blocked_until_ms": now_ms + 3600000}, state_file, now_ms=now_ms + 300)',
+            'pick3 = select_api_key(keys, endpoint, state_file, now_ms=now_ms + 400)',
+            'print(json.dumps([pick1["api_key"], pick2["api_key"], pick3["api_key"]]))'
+        ].join('\n');
+        const pyRes = spawnSync(PYTHON_BIN, ['-c', pyScript], { encoding: 'utf8' });
+        assert.strictEqual(pyRes.status, 0, pyRes.stderr);
+        const pyPicks = JSON.parse(pyRes.stdout);
+        // pick1=parity-k1 (70%>65%), 扣 $2 ($2/$20=10% -> 60%<65%) 后 pick2=parity-k2,
+        // parity-k2 5h 冷却后 pick3 回到仍有三窗口额度的 parity-k1（依然早于 12-18 的 parity-k3！）
+        assert.deepStrictEqual(pyPicks, ['parity-k1', 'parity-k2', 'parity-k1']);
+
+        // Node 读取 Python 写回的状态，选出的结果与 Python 一致
+        const nodeAfterPy = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 2500 });
+        assert.strictEqual(nodeAfterPy.apiKey, 'parity-k1');
+        // 若再排除 parity-k1，则 parity-k2 在 5h 冷却中，只能落到 parity-k3
+        const nodeFallback = pool.selectApiKey(keys, ENDPOINT, file, {
+            nowMs: BASE_NOW + 2500,
+            excludeAccountIds: [pool.getAccountId('parity-k1')]
+        });
+        assert.strictEqual(nodeFallback.apiKey, 'parity-k3');
+    });
+});

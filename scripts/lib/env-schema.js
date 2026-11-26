@@ -35,6 +35,8 @@ const SCHEMA = Object.freeze([
     { name: 'PAPER_ANALYZER_SECONDARY_API_KEY', required: false, type: 'string', secret: true },
     { name: 'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS', required: false, type: 'csv', secret: true },
     { name: 'PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY', required: false, type: 'csv', secret: true },
+    { name: 'PD_LLM_ACCOUNT_POOL_STRATEGY', required: false, type: 'string', allowed: ['expiry_priority', 'equal_rotation'],
+        hint: 'OpenCode Go 多账号调度策略：expiry_priority（默认，月额度最先到期优先，同天到期选剩余最多且三窗口有额）或 equal_rotation（纯等权轮转）' },
     { name: 'HTTPS_PROXY', required: false, type: 'proxy', hint: 'Muse/arXiv 必须走项目 HTTP CONNECT 代理' },
     { name: 'HTTP_PROXY', required: false, type: 'proxy' },
     { name: 'https_proxy', required: false, type: 'proxy' },

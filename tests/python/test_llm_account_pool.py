@@ -858,6 +858,7 @@ class LlmAccountPoolTest(unittest.TestCase):
             self.assertIsNone(normalize_opencode_go_service(bad), msg=bad)
 
     def test_retry_after_date_formats_match_node(self):
+        import os
         from datetime import datetime, timezone
         now_ms = int(datetime(2026, 10, 21, 7, 27, 0, tzinfo=timezone.utc).timestamp() * 1000)
         for header, expected_delta in (
@@ -1019,6 +1020,117 @@ class LlmAccountPoolTest(unittest.TestCase):
                 affinity_key='2611.99999v1',
             )
             self.assertIn(third['api_key'], other_keys)
+
+    def test_expiry_priority_same_day_beijing_tie_break_and_three_window_gating(self):
+        import os
+        from datetime import datetime, timezone
+        from llm_account_pool import (
+            _new_state,
+            beijing_date_from_ms,
+            evaluate_account_quota,
+            record_account_usage,
+        )
+        # 2026-11-26T04:00:00Z = 北京时间 2026-11-26 12:00
+        now_ms = int(datetime(2026, 11, 26, 4, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        self.assertEqual(beijing_date_from_ms(now_ms), '2026-11-26')
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'pool.json'
+            keys = ['py-acct-early-low', 'py-acct-early-high', 'py-acct-late']
+            identity = get_pool_identity(keys, ENDPOINT)
+            # 两个账号跨 UTC 零点但同属北京时间 2026-12-03，第三个账号 2026-12-15 到期
+            dec3_a = int(datetime(2026, 12, 2, 16, 30, tzinfo=timezone.utc).timestamp() * 1000)
+            dec3_b = int(datetime(2026, 12, 3, 10, 0, tzinfo=timezone.utc).timestamp() * 1000)
+            dec15 = int(datetime(2026, 12, 15, 10, 0, tzinfo=timezone.utc).timestamp() * 1000)
+            self.assertEqual(beijing_date_from_ms(dec3_a), '2026-12-03')
+            self.assertEqual(beijing_date_from_ms(dec3_b), '2026-12-03')
+            payload = {
+                **_new_state(),
+                'generation': 1,
+                'services': {
+                    identity['service_id']: {
+                        'endpoint': identity['service'],
+                        'accounts': {
+                            get_account_id(keys[0]): {
+                                'status': 'eligible',
+                                'quota': {
+                                    'monthlyResetAtMs': dec3_a,
+                                    'monthlyResetTzOffsetMin': 0,
+                                    'monthlyResetSource': 'manual',
+                                    'monthlyBudgetUsd': 10,
+                                    'monthlyRemainingPct': 50,
+                                    'weeklyRemainingPct': 80,
+                                    'rolling5hRemainingPct': 90,
+                                    'monthlySnapshotAtMs': now_ms,
+                                    'weeklySnapshotAtMs': now_ms,
+                                    'rolling5hSnapshotAtMs': now_ms,
+                                },
+                            },
+                            get_account_id(keys[1]): {
+                                'status': 'eligible',
+                                'quota': {
+                                    'monthlyResetAtMs': dec3_b,
+                                    'monthlyResetTzOffsetMin': 0,
+                                    'monthlyResetSource': 'manual',
+                                    'monthlyBudgetUsd': 10,
+                                    'monthlyRemainingPct': 55,
+                                    'weeklyRemainingPct': 70,
+                                    'rolling5hRemainingPct': 80,
+                                    'monthlySnapshotAtMs': now_ms,
+                                    'weeklySnapshotAtMs': now_ms,
+                                    'rolling5hSnapshotAtMs': now_ms,
+                                },
+                            },
+                            get_account_id(keys[2]): {
+                                'status': 'eligible',
+                                'quota': {
+                                    'monthlyResetAtMs': dec15,
+                                    'monthlyResetTzOffsetMin': 0,
+                                    'monthlyResetSource': 'manual',
+                                    'monthlyBudgetUsd': 10,
+                                    'monthlyRemainingPct': 100,
+                                    'weeklyRemainingPct': 100,
+                                    'rolling5hRemainingPct': 100,
+                                    'monthlySnapshotAtMs': now_ms,
+                                    'weeklySnapshotAtMs': now_ms,
+                                    'rolling5hSnapshotAtMs': now_ms,
+                                },
+                            },
+                        },
+                        'groups': {},
+                    },
+                },
+            }
+            state_file.write_text(json.dumps(payload), encoding='utf-8')
+            os.chmod(state_file, 0o600)
+
+            # 同天到期选剩余最多：55% > 50%
+            pick1 = select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms + 1000)
+            self.assertEqual(pick1['api_key'], 'py-acct-early-high')
+            self.assertEqual(pick1['selection_mode'], 'expiry_priority')
+
+            # 记录消费 $1.00（10% 预算 -> 降至 45% < 50%），自动切到 py-acct-early-low
+            record_account_usage(pick1, {'estimated_cost_usd': 1.0, 'total_tokens': 100000}, state_file, now_ms=now_ms + 2000)
+            pick2 = select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms + 3000)
+            self.assertEqual(pick2['api_key'], 'py-acct-early-low')
+
+            # 对两个 12-03 账号分别打上 5h / weekly 冷却，自动回退到 12-15 账号
+            mark_quota_exhausted(pick2, {'limit_class': 'rolling_5h', 'blocked_until_ms': now_ms + 3600000}, state_file, now_ms=now_ms + 4000)
+            mark_quota_exhausted(pick1, {'limit_class': 'weekly', 'blocked_until_ms': now_ms + 86400000}, state_file, now_ms=now_ms + 5000)
+            pick3 = select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms + 6000)
+            self.assertEqual(pick3['api_key'], 'py-acct-late')
+
+            # 5h 窗口恢复后，py-acct-early-low 优先回归，不误受旧快照阻塞
+            pick4 = select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms + 3600000 + 1000)
+            self.assertEqual(pick4['api_key'], 'py-acct-early-low')
+            rec_low = read_state_strict(state_file)['services'][identity['service_id']]['accounts'][get_account_id(keys[0])]
+            ev = evaluate_account_quota(rec_low, now_ms + 3600000 + 1000)
+            self.assertTrue(ev['eligible'])
+            self.assertEqual(ev['effective_monthly_remaining_pct'], 50.0)
+
+            # strategy='equal_rotation' 显式恢复等权轮转
+            eq_a = select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms + 86400000 + 1000, strategy='equal_rotation')
+            eq_b = select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms + 86400000 + 2000, strategy='equal_rotation')
+            self.assertNotEqual(eq_a['api_key'], eq_b['api_key'])
 
 
 if __name__ == '__main__':

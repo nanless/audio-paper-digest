@@ -17,6 +17,7 @@ balance 才会在同一请求内切到下一个账号并写冷却。普通的 40
 请求（既有行为，见 publish_common.py 的单账号分支），不写账号池状态。
 """
 
+import calendar
 import errno
 import hashlib
 import json
@@ -44,6 +45,18 @@ LOCK_STALE_SECONDS = 120
 MAX_BLOCK_MS = 370 * 24 * 60 * 60 * 1000
 UNKNOWN_QUOTA_BLOCK_MS = 30 * 60 * 1000
 MAX_SAFE_INTEGER = (1 << 53) - 1
+BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000
+HOUR_MS = 60 * 60 * 1000
+DAY_MS = 24 * HOUR_MS
+ROLLING_5H_MS = 5 * HOUR_MS
+ROLLING_5H_BUCKET_MS = 15 * 60 * 1000
+DEFAULT_MONTHLY_BUDGET_USD = 30.0
+DEFAULT_INPUT_USD_PER_M = 0.60
+DEFAULT_CACHED_INPUT_USD_PER_M = 0.15
+DEFAULT_OUTPUT_USD_PER_M = 2.40
+MIN_ESTIMATED_REMAINING_PCT = 0.01
+QUOTA_WINDOWS = ('monthly', 'weekly', 'rolling_5h', 'balance', 'unknown')
+SAFE_ACCOUNT_LABEL_RE = re.compile(r'^[A-Za-z0-9._\u4e00-\u9fff-]{1,40}$')
 # 成员集合变化会生成新的 group_id（新组 cursor 从 0 开始）。同一 service
 # 下超过这段时间没有被任何选择使用的其他分组会被清理，避免状态文件随历次
 # key 变更无限增长；仍在并行使用的不同 key 集合（例如主/副模型各自的池）
@@ -830,6 +843,84 @@ def _reject_non_finite_json(value):
     raise ValueError(f'非法非有限数值: {value}')
 
 
+def _is_non_negative_finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) \
+        and math.isfinite(value) and value >= 0
+
+
+def _is_percent_value(value):
+    return _is_non_negative_finite(value) and value <= 100
+
+
+def _validate_account_subrecords(record, target):
+    if 'windows' in record:
+        windows = record['windows']
+        if not isinstance(windows, dict):
+            raise LlmAccountPoolStateError(f'LLM 账号池状态 account.windows 非法，已阻止覆盖 {target}')
+        for window_name, entry in windows.items():
+            if window_name not in QUOTA_WINDOWS or not isinstance(entry, dict) \
+                    or ('blockedUntilMs' in entry and not _is_non_negative_finite(entry['blockedUntilMs'])):
+                raise LlmAccountPoolStateError(
+                    f'LLM 账号池状态 account.windows.{window_name} 非法，已阻止覆盖 {target}'
+                )
+    if 'quota' in record:
+        q = record['quota']
+        if not isinstance(q, dict):
+            raise LlmAccountPoolStateError(f'LLM 账号池状态 account.quota 非法，已阻止覆盖 {target}')
+        label = q.get('label')
+        if label is not None and (not isinstance(label, str) or not SAFE_ACCOUNT_LABEL_RE.fullmatch(label)):
+            raise LlmAccountPoolStateError(f'LLM 账号池状态 account.quota 非法，已阻止覆盖 {target}')
+        reset_day = q.get('monthlyResetDay')
+        if reset_day is not None and (type(reset_day) is not int or not (1 <= reset_day <= 31)):
+            raise LlmAccountPoolStateError(f'LLM 账号池状态 account.quota 非法，已阻止覆盖 {target}')
+        tz_min = q.get('monthlyResetTzOffsetMin')
+        if tz_min is not None and (type(tz_min) is not int or not (-720 <= tz_min <= 840)):
+            raise LlmAccountPoolStateError(f'LLM 账号池状态 account.quota 非法，已阻止覆盖 {target}')
+        source = q.get('monthlyResetSource')
+        if source is not None and source not in ('manual', 'auto_429'):
+            raise LlmAccountPoolStateError(f'LLM 账号池状态 account.quota 非法，已阻止覆盖 {target}')
+        budget = q.get('monthlyBudgetUsd')
+        if budget is not None and (not _is_non_negative_finite(budget) or budget <= 0):
+            raise LlmAccountPoolStateError(f'LLM 账号池状态 account.quota 非法，已阻止覆盖 {target}')
+        for pct_field in ('monthlyRemainingPct', 'weeklyRemainingPct', 'rolling5hRemainingPct'):
+            val = q.get(pct_field)
+            if val is not None and not _is_percent_value(val):
+                raise LlmAccountPoolStateError(f'LLM 账号池状态 account.quota 非法，已阻止覆盖 {target}')
+        for ts_field in (
+            'monthlyResetAtMs', 'autoMonthlyAnchorMs', 'snapshotAtMs',
+            'monthlySnapshotAtMs', 'weeklySnapshotAtMs', 'rolling5hSnapshotAtMs',
+            'weeklyResetAtMs', 'rolling5hResetAtMs',
+            'monthlySpentAtSnapshotUsd', 'weeklySpentAtSnapshotUsd', 'rolling5hSpentAtSnapshotUsd',
+        ):
+            val = q.get(ts_field)
+            if val is not None and not _is_non_negative_finite(val):
+                raise LlmAccountPoolStateError(f'LLM 账号池状态 account.quota 非法，已阻止覆盖 {target}')
+    if 'usage' in record:
+        u = record['usage']
+        if not isinstance(u, dict):
+            raise LlmAccountPoolStateError(f'LLM 账号池状态 account.usage 非法，已阻止覆盖 {target}')
+        for num_field in ('monthlyCycleStartMs', 'monthlySpentUsd', 'weeklyCycleStartMs', 'weeklySpentUsd', 'lastUpdatedAtMs'):
+            val = u.get(num_field)
+            if val is not None and not _is_non_negative_finite(val):
+                raise LlmAccountPoolStateError(f'LLM 账号池状态 account.usage 非法，已阻止覆盖 {target}')
+        for int_field in ('monthlyTokens', 'monthlyRequests'):
+            if int_field in u:
+                val = u[int_field]
+                if type(val) is not int or not (0 <= val <= MAX_SAFE_INTEGER):
+                    raise LlmAccountPoolStateError(f'LLM 账号池状态 account.usage 非法，已阻止覆盖 {target}')
+        if 'rolling5hBuckets' in u:
+            buckets = u['rolling5hBuckets']
+            if not isinstance(buckets, list):
+                raise LlmAccountPoolStateError(f'LLM 账号池状态 account.usage 非法，已阻止覆盖 {target}')
+            for bucket in buckets:
+                if not isinstance(bucket, dict) \
+                        or not _is_non_negative_finite(bucket.get('bucketMs')) \
+                        or not _is_non_negative_finite(bucket.get('spentUsd')):
+                    raise LlmAccountPoolStateError(f'LLM 账号池状态 account.usage 非法，已阻止覆盖 {target}')
+                if 'tokens' in bucket and (type(bucket['tokens']) is not int or not (0 <= bucket['tokens'] <= MAX_SAFE_INTEGER)):
+                    raise LlmAccountPoolStateError(f'LLM 账号池状态 account.usage 非法，已阻止覆盖 {target}')
+
+
 def read_state_strict(state_file=LLM_ACCOUNT_POOL_STATE_FILE):
     target = Path(state_file)
     try:
@@ -872,6 +963,7 @@ def read_state_strict(state_file=LLM_ACCOUNT_POOL_STATE_FILE):
                 raise LlmAccountPoolStateError(
                     f'LLM 账号池状态 account 非法，已阻止覆盖 {target}'
                 )
+            _validate_account_subrecords(record, target)
         for group in service['groups'].values():
             if not isinstance(group, dict):
                 raise LlmAccountPoolStateError(
@@ -934,9 +1026,336 @@ def _ensure_service(state, identity):
     return service
 
 
+def beijing_date_from_ms(ms):
+    if not isinstance(ms, (int, float)) or isinstance(ms, bool) or not math.isfinite(ms):
+        return None
+    return datetime.fromtimestamp((ms + BEIJING_OFFSET_MS) / 1000, tz=timezone.utc).strftime('%Y-%m-%d')
+
+
+def _days_in_utc_month(year, month_1_to_12):
+    return calendar.monthrange(year, month_1_to_12)[1]
+
+
+def _build_monthly_reset_at_offset(anchor_year, anchor_month, anchor_day, time_parts, tz_offset_min, month_offset):
+    total_months = anchor_year * 12 + (anchor_month - 1) + month_offset
+    year = total_months // 12
+    month_1_to_12 = (total_months % 12) + 1
+    day = min(anchor_day, _days_in_utc_month(year, month_1_to_12))
+    dt = datetime(
+        year, month_1_to_12, day,
+        time_parts['hour'], time_parts['minute'], time_parts['second'],
+        time_parts['ms'] * 1000, tzinfo=timezone.utc,
+    )
+    return int(round(dt.timestamp() * 1000)) - tz_offset_min * 60000
+
+
+def _current_weekly_cycle_start_ms(now_ms):
+    dt = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc)
+    days_since_monday = dt.weekday()
+    start = datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc) - timedelta(days=days_since_monday)
+    return int(round(start.timestamp() * 1000))
+
+
+def _round_pct4(value):
+    return math.floor(value * 10000.0 + 0.5) / 10000.0
+
+
+def resolve_monthly_cycle(record, now_ms):
+    if not isinstance(record, dict):
+        return None
+    quota = record.get('quota') if isinstance(record.get('quota'), dict) else {}
+    windows = record.get('windows') if isinstance(record.get('windows'), dict) else {}
+    anchor_ms = None
+    anchor_day = None
+    tz_offset_min = 0
+    source = None
+
+    if _is_non_negative_finite(quota.get('monthlyResetAtMs')) and quota['monthlyResetAtMs'] > 0:
+        anchor_ms = quota['monthlyResetAtMs']
+        tz_offset_min = quota['monthlyResetTzOffsetMin'] if type(quota.get('monthlyResetTzOffsetMin')) is int else 0
+        local = datetime.fromtimestamp((anchor_ms + tz_offset_min * 60000) / 1000, tz=timezone.utc)
+        anchor_day = quota['monthlyResetDay'] if type(quota.get('monthlyResetDay')) is int else local.day
+        source = quota.get('monthlyResetSource') or 'manual'
+    elif type(quota.get('monthlyResetDay')) is int and 1 <= quota['monthlyResetDay'] <= 31:
+        tz_offset_min = quota['monthlyResetTzOffsetMin'] if type(quota.get('monthlyResetTzOffsetMin')) is int else 480
+        now_local = datetime.fromtimestamp((now_ms + tz_offset_min * 60000) / 1000, tz=timezone.utc)
+        anchor_day = quota['monthlyResetDay']
+        day = min(anchor_day, _days_in_utc_month(now_local.year, now_local.month))
+        dt = datetime(now_local.year, now_local.month, day, 23, 59, 59, 999000, tzinfo=timezone.utc)
+        anchor_ms = int(round(dt.timestamp() * 1000)) - tz_offset_min * 60000
+        source = quota.get('monthlyResetSource') or 'manual'
+    elif _is_non_negative_finite(quota.get('autoMonthlyAnchorMs')) and quota['autoMonthlyAnchorMs'] > 0:
+        anchor_ms = quota['autoMonthlyAnchorMs']
+        tz_offset_min = 0
+        anchor_day = datetime.fromtimestamp(anchor_ms / 1000, tz=timezone.utc).day
+        source = 'auto_429'
+    elif isinstance(windows.get('monthly'), dict) \
+            and _is_non_negative_finite(windows['monthly'].get('blockedUntilMs')) \
+            and windows['monthly']['blockedUntilMs'] > 0:
+        anchor_ms = windows['monthly']['blockedUntilMs']
+        tz_offset_min = 0
+        anchor_day = datetime.fromtimestamp(anchor_ms / 1000, tz=timezone.utc).day
+        source = 'auto_429'
+    elif record.get('limitName') == 'monthly' \
+            and _is_non_negative_finite(record.get('blockedUntilMs')) \
+            and record['blockedUntilMs'] > 0:
+        anchor_ms = record['blockedUntilMs']
+        tz_offset_min = 0
+        anchor_day = datetime.fromtimestamp(anchor_ms / 1000, tz=timezone.utc).day
+        source = 'auto_429'
+
+    if anchor_ms is None:
+        return None
+    anchor_local_ms = int(round(anchor_ms)) + tz_offset_min * 60000
+    anchor_local = datetime.fromtimestamp(anchor_local_ms / 1000, tz=timezone.utc)
+    anchor_year = anchor_local.year
+    anchor_month = anchor_local.month
+    time_parts = {
+        'hour': anchor_local.hour,
+        'minute': anchor_local.minute,
+        'second': anchor_local.second,
+        'ms': anchor_local_ms % 1000,
+    }
+    now_local = datetime.fromtimestamp((now_ms + tz_offset_min * 60000) / 1000, tz=timezone.utc)
+    offset = (now_local.year - anchor_year) * 12 + (now_local.month - anchor_month)
+    candidate = _build_monthly_reset_at_offset(anchor_year, anchor_month, anchor_day, time_parts, tz_offset_min, offset)
+    while candidate <= now_ms:
+        offset += 1
+        candidate = _build_monthly_reset_at_offset(anchor_year, anchor_month, anchor_day, time_parts, tz_offset_min, offset)
+    prev = _build_monthly_reset_at_offset(anchor_year, anchor_month, anchor_day, time_parts, tz_offset_min, offset - 1)
+    while prev > now_ms:
+        offset -= 1
+        candidate = prev
+        prev = _build_monthly_reset_at_offset(anchor_year, anchor_month, anchor_day, time_parts, tz_offset_min, offset - 1)
+    return {
+        'cycle_start_ms': prev,
+        'next_reset_ms': candidate,
+        'expiry_beijing_date': beijing_date_from_ms(candidate),
+        'anchor_day': anchor_day,
+        'source': source,
+    }
+
+
+def _sum_rolling_5h_spend_usd(usage, now_ms, since_ms=0):
+    cutoff = max(now_ms - ROLLING_5H_MS, since_ms or 0)
+    buckets = usage.get('rolling5hBuckets') if isinstance(usage, dict) else None
+    if not isinstance(buckets, list):
+        return 0.0
+    total = 0.0
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        b_ms = bucket.get('bucketMs')
+        spent = bucket.get('spentUsd')
+        if not _is_non_negative_finite(b_ms) or not _is_non_negative_finite(spent):
+            continue
+        if b_ms + ROLLING_5H_BUCKET_MS > cutoff and b_ms <= now_ms + ROLLING_5H_BUCKET_MS:
+            total += float(spent)
+    return total
+
+
+def evaluate_account_quota(record, now_ms):
+    safe_record = record if isinstance(record, dict) else {}
+    windows = safe_record.get('windows') if isinstance(safe_record.get('windows'), dict) else {}
+    quota = safe_record.get('quota') if isinstance(safe_record.get('quota'), dict) else {}
+    usage = safe_record.get('usage') if isinstance(safe_record.get('usage'), dict) else {}
+    monthly_cycle = resolve_monthly_cycle(safe_record, now_ms)
+    week_start_ms = _current_weekly_cycle_start_ms(now_ms)
+    next_week_reset_ms = week_start_ms + 7 * DAY_MS
+
+    def window_blocked_until(name):
+        entry = windows.get(name)
+        val = entry.get('blockedUntilMs') if isinstance(entry, dict) else None
+        return val if _is_non_negative_finite(val) and val > now_ms else 0
+
+    monthly_blocked = window_blocked_until('monthly')
+    weekly_blocked = window_blocked_until('weekly')
+    rolling5h_blocked = window_blocked_until('rolling_5h')
+    balance_blocked = window_blocked_until('balance')
+    unknown_blocked = window_blocked_until('unknown')
+    legacy_val = safe_record.get('blockedUntilMs')
+    legacy_blocked = legacy_val if _is_non_negative_finite(legacy_val) and legacy_val > now_ms else 0
+
+    if legacy_blocked > 0 and not windows:
+        if safe_record.get('limitName') == 'monthly':
+            monthly_blocked = max(monthly_blocked, legacy_blocked)
+        elif safe_record.get('limitName') == 'weekly':
+            weekly_blocked = max(weekly_blocked, legacy_blocked)
+        elif safe_record.get('limitName') == 'rolling_5h':
+            rolling5h_blocked = max(rolling5h_blocked, legacy_blocked)
+
+    fallback_snap = quota['snapshotAtMs'] if _is_non_negative_finite(quota.get('snapshotAtMs')) else 0
+    monthly_snap = quota['monthlySnapshotAtMs'] if _is_non_negative_finite(quota.get('monthlySnapshotAtMs')) else fallback_snap
+    weekly_snap = quota['weeklySnapshotAtMs'] if _is_non_negative_finite(quota.get('weeklySnapshotAtMs')) else fallback_snap
+    rolling5h_snap = quota['rolling5hSnapshotAtMs'] if _is_non_negative_finite(quota.get('rolling5hSnapshotAtMs')) else fallback_snap
+    budget_monthly = float(quota['monthlyBudgetUsd']) if _is_non_negative_finite(quota.get('monthlyBudgetUsd')) and quota['monthlyBudgetUsd'] > 0 else DEFAULT_MONTHLY_BUDGET_USD
+    budget_weekly = budget_monthly * 0.5
+    budget_5h = budget_monthly * 0.2
+
+    monthly_pct_raw = quota.get('monthlyRemainingPct')
+    monthly_snapshot_active = _is_percent_value(monthly_pct_raw) and monthly_snap > 0 and (
+        monthly_snap >= monthly_cycle['cycle_start_ms'] if monthly_cycle is not None else (now_ms - monthly_snap) < 31 * DAY_MS
+    )
+    if monthly_snapshot_active and monthly_pct_raw == 0:
+        until = monthly_cycle['next_reset_ms'] if monthly_cycle is not None else (monthly_snap + 31 * DAY_MS)
+        if until > now_ms:
+            monthly_blocked = max(monthly_blocked, until)
+
+    weekly_reset_raw = quota.get('weeklyResetAtMs')
+    has_explicit_weekly_reset = _is_non_negative_finite(weekly_reset_raw) and weekly_reset_raw > 0
+    weekly_reset_ms = weekly_reset_raw if has_explicit_weekly_reset else next_week_reset_ms
+    weekly_pct_raw = quota.get('weeklyRemainingPct')
+    weekly_snapshot_active = _is_percent_value(weekly_pct_raw) and weekly_snap > 0 and (
+        now_ms < weekly_reset_raw if has_explicit_weekly_reset else weekly_snap >= week_start_ms
+    )
+    if weekly_snapshot_active and weekly_pct_raw == 0 and weekly_reset_ms > now_ms:
+        weekly_blocked = max(weekly_blocked, weekly_reset_ms)
+
+    r5h_reset_raw = quota.get('rolling5hResetAtMs')
+    has_explicit_r5h_reset = _is_non_negative_finite(r5h_reset_raw) and r5h_reset_raw > 0
+    r5h_reset_ms = r5h_reset_raw if has_explicit_r5h_reset else (rolling5h_snap + ROLLING_5H_MS if rolling5h_snap > 0 else 0)
+    r5h_pct_raw = quota.get('rolling5hRemainingPct')
+    r5h_snapshot_active = _is_percent_value(r5h_pct_raw) and rolling5h_snap > 0 and (
+        now_ms < r5h_reset_raw if has_explicit_r5h_reset else now_ms < rolling5h_snap + ROLLING_5H_MS
+    )
+    if r5h_snapshot_active and r5h_pct_raw == 0 and r5h_reset_ms > now_ms:
+        rolling5h_blocked = max(rolling5h_blocked, r5h_reset_ms)
+
+    active_blocked = max(
+        legacy_blocked, monthly_blocked, weekly_blocked,
+        rolling5h_blocked, balance_blocked, unknown_blocked,
+    )
+    has_monthly = monthly_blocked == 0
+    has_weekly = weekly_blocked == 0
+    has_r5h = rolling5h_blocked == 0
+    has_balance = balance_blocked == 0
+    eligible = active_blocked == 0
+
+    usage_month_start = usage.get('monthlyCycleStartMs')
+    current_monthly_spent = float(usage['monthlySpentUsd']) if (
+        _is_non_negative_finite(usage.get('monthlySpentUsd'))
+        and (monthly_cycle is None or not _is_non_negative_finite(usage_month_start) or usage_month_start == monthly_cycle['cycle_start_ms'])
+    ) else 0.0
+    if not has_monthly:
+        eff_monthly = 0.0
+    elif monthly_snapshot_active:
+        spent_at_snap = float(quota['monthlySpentAtSnapshotUsd']) if _is_non_negative_finite(quota.get('monthlySpentAtSnapshotUsd')) else 0.0
+        delta_usd = max(0.0, current_monthly_spent - spent_at_snap)
+        eff_monthly = _round_pct4(max(MIN_ESTIMATED_REMAINING_PCT, min(100.0, float(monthly_pct_raw) - (delta_usd / budget_monthly) * 100.0)))
+    else:
+        eff_monthly = _round_pct4(max(MIN_ESTIMATED_REMAINING_PCT, min(100.0, 100.0 - (current_monthly_spent / budget_monthly) * 100.0)))
+
+    current_weekly_spent = float(usage['weeklySpentUsd']) if (
+        _is_non_negative_finite(usage.get('weeklySpentUsd'))
+        and _is_non_negative_finite(usage.get('weeklyCycleStartMs'))
+        and usage['weeklyCycleStartMs'] == week_start_ms
+    ) else 0.0
+    if not has_weekly:
+        eff_weekly = 0.0
+    elif weekly_snapshot_active:
+        spent_at_snap = float(quota['weeklySpentAtSnapshotUsd']) if _is_non_negative_finite(quota.get('weeklySpentAtSnapshotUsd')) else 0.0
+        delta_usd = max(0.0, current_weekly_spent - spent_at_snap)
+        eff_weekly = _round_pct4(max(MIN_ESTIMATED_REMAINING_PCT, min(100.0, float(weekly_pct_raw) - (delta_usd / budget_weekly) * 100.0)))
+    else:
+        eff_weekly = _round_pct4(max(MIN_ESTIMATED_REMAINING_PCT, min(100.0, 100.0 - (current_weekly_spent / budget_weekly) * 100.0)))
+
+    current_5h_spent = _sum_rolling_5h_spend_usd(usage, now_ms, 0)
+    if not has_r5h:
+        eff_5h = 0.0
+    elif r5h_snapshot_active:
+        spent_at_snap = float(quota['rolling5hSpentAtSnapshotUsd']) if _is_non_negative_finite(quota.get('rolling5hSpentAtSnapshotUsd')) else 0.0
+        delta_usd = max(0.0, current_5h_spent - spent_at_snap)
+        eff_5h = _round_pct4(max(MIN_ESTIMATED_REMAINING_PCT, min(100.0, float(r5h_pct_raw) - (delta_usd / budget_5h) * 100.0)))
+    else:
+        eff_5h = _round_pct4(max(MIN_ESTIMATED_REMAINING_PCT, min(100.0, 100.0 - (current_5h_spent / budget_5h) * 100.0)))
+
+    return {
+        'eligible': eligible,
+        'active_blocked_until_ms': active_blocked,
+        'has_monthly_quota': has_monthly,
+        'has_weekly_quota': has_weekly,
+        'has_rolling5h_quota': has_r5h,
+        'has_balance_quota': has_balance,
+        'monthly_cycle': monthly_cycle,
+        'monthly_budget_usd': budget_monthly,
+        'monthly_remaining_source': 'manual_snapshot' if monthly_snapshot_active else 'cycle_estimate',
+        'effective_monthly_remaining_pct': eff_monthly,
+        'effective_weekly_remaining_pct': eff_weekly,
+        'effective_rolling5h_remaining_pct': eff_5h,
+        'current_monthly_spent_usd': current_monthly_spent,
+        'current_weekly_spent_usd': current_weekly_spent,
+        'current_5h_spent_usd': current_5h_spent,
+        'label': quota.get('label') if isinstance(quota.get('label'), str) else None,
+    }
+
+
 def _account_is_blocked(record, now_ms):
-    value = record.get('blockedUntilMs') if isinstance(record, dict) else None
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > now_ms
+    return not evaluate_account_quota(record, now_ms)['eligible']
+
+
+def _resolve_pool_strategy(strategy=None):
+    raw = str(strategy if strategy is not None else os.environ.get('PD_LLM_ACCOUNT_POOL_STRATEGY', 'expiry_priority')).strip().lower()
+    return 'equal_rotation' if raw == 'equal_rotation' else 'expiry_priority'
+
+
+def _tier1_sort_key(item):
+    ev = item['eval']
+    return (
+        ev['monthly_cycle']['expiry_beijing_date'],
+        -ev['effective_monthly_remaining_pct'],
+        -ev['effective_weekly_remaining_pct'],
+        -ev['effective_rolling5h_remaining_pct'],
+        ev['monthly_cycle']['next_reset_ms'],
+    )
+
+
+def _choose_pool_candidate(service, ordered_account_ids, group, excluded, now_ms, normalized_affinity, strategy):
+    accounts = service.get('accounts') or {}
+    if strategy != 'equal_rotation':
+        tier1 = []
+        for index, account_id in enumerate(ordered_account_ids):
+            if account_id in excluded:
+                continue
+            evaluated = evaluate_account_quota(accounts.get(account_id, {}), now_ms)
+            if not evaluated['eligible']:
+                continue
+            if evaluated['monthly_cycle'] is not None:
+                tier1.append({'index': index, 'account_id': account_id, 'eval': evaluated})
+        if tier1:
+            tier1.sort(key=lambda item: (*_tier1_sort_key(item), item['index']))
+            best = tier1[0]
+            best_key = _tier1_sort_key(best)
+            tied = [item for item in tier1 if _tier1_sort_key(item) == best_key]
+            picked = best
+            if len(tied) > 1 and normalized_affinity:
+                pick_offset = int(_sha256(normalized_affinity)[:8], 16) % len(tied)
+                picked = tied[pick_offset]
+            return {
+                'selected_index': picked['index'],
+                'account_id': picked['account_id'],
+                'selection_mode': 'expiry_priority',
+                'evaluated': picked['eval'],
+            }
+
+    if normalized_affinity:
+        start_index = int(_sha256(normalized_affinity)[:8], 16) % len(ordered_account_ids)
+    else:
+        start_index = _resolve_rotation_cursor(group, ordered_account_ids)
+    for step in range(len(ordered_account_ids)):
+        index = (start_index + step) % len(ordered_account_ids)
+        account_id = ordered_account_ids[index]
+        if account_id in excluded:
+            continue
+        evaluated = evaluate_account_quota(accounts.get(account_id, {}), now_ms)
+        if not evaluated['eligible']:
+            continue
+        return {
+            'selected_index': index,
+            'account_id': account_id,
+            'selection_mode': 'affinity' if normalized_affinity else 'equal_rotation',
+            'evaluated': evaluated,
+        }
+    return None
 
 
 def _group_last_used_at_ms(group):
@@ -967,9 +1386,12 @@ def _prune_stale_groups(service, current_group_id, now_ms):
 
 
 def _build_exhausted_error(service, account_ids, now_ms):
-    blocked = [service['accounts'].get(account_id, {}) for account_id in account_ids]
-    blocked = [record for record in blocked if _account_is_blocked(record, now_ms)]
-    earliest = min((record['blockedUntilMs'] for record in blocked), default=None)
+    blocked_times = [
+        evaluate_account_quota(service['accounts'].get(account_id, {}), now_ms)['active_blocked_until_ms']
+        for account_id in account_ids
+    ]
+    blocked_times = [ms for ms in blocked_times if ms > now_ms]
+    earliest = min(blocked_times, default=None)
     suffix = '' if earliest is None else (
         '，最早恢复时间 '
         + datetime.fromtimestamp(earliest / 1000, tz=timezone.utc).isoformat()
@@ -977,7 +1399,7 @@ def _build_exhausted_error(service, account_ids, now_ms):
     return LlmAccountPoolExhaustedError(
         f'OpenCode Go 账号池没有可用账号（全部冷却中或已被本次逻辑请求排除）；下一逻辑请求会从轮转游标继续{suffix}',
         earliest_retry_at_ms=earliest,
-        blocked_account_count=len(blocked),
+        blocked_account_count=len(blocked_times),
     )
 
 
@@ -1004,20 +1426,21 @@ def _resolve_rotation_cursor(group, ordered_account_ids):
 # 单账号配置（len(api_keys) < 2）不会调用本函数：调用方走各自的单账号
 # 直连分支，因此不写账号池状态（既有行为，测试已固化）。
 def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *,
-                   now_ms=None, exclude_account_ids=(), affinity_key=None):
+                   now_ms=None, exclude_account_ids=(), affinity_key=None, strategy=None, force_write=False):
     keys = normalize_api_keys(api_keys)
     identity = get_pool_identity(keys, endpoint)
     ordered_account_ids = _ordered_account_ids(identity)
     now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
     excluded = set(exclude_account_ids or ())
+    resolved_strategy = _resolve_pool_strategy(strategy)
     normalized_affinity = affinity_key.strip() if isinstance(affinity_key, str) else ''
     if normalized_affinity:
         normalized_affinity = re.sub(r'^arxiv:', '', normalized_affinity, flags=re.IGNORECASE)
         normalized_affinity = re.sub(r'^(\d{4}\.\d{4,5})v\d+$', r'\1', normalized_affinity, flags=re.IGNORECASE)
     keys_by_id = dict(zip(identity['account_ids'], keys))
 
-    # 5 条件只读亲和快路径：与 JS 实现保持一致，减少高并发亲和命中时的同步 fsync。
-    if normalized_affinity:
+    # 只读快路径：与 JS 实现保持一致，减少高并发亲和或同账号 expiry_priority 命中时的同步 fsync。
+    if not force_write:
         try:
             state = read_state_strict(state_file)
             service = (state.get('services') or {}).get(identity['service_id'])
@@ -1032,27 +1455,23 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
             if service and isinstance(group, dict) \
                     and (type(stored_cursor) is int and 0 <= stored_cursor <= MAX_SAFE_INTEGER) \
                     and not stale_prune_needed:
-                start_index = int(_sha256(normalized_affinity)[:8], 16) % len(ordered_account_ids)
-                selected_index = None
-                accounts = service.get('accounts') or {}
-                for step in range(len(ordered_account_ids)):
-                    index = (start_index + step) % len(ordered_account_ids)
-                    account_id = ordered_account_ids[index]
-                    if account_id in excluded:
-                        continue
-                    if _account_is_blocked(accounts.get(account_id, {}), now_ms):
-                        continue
-                    selected_index = index
-                    break
-                if selected_index is not None:
-                    next_id = ordered_account_ids[selected_index]
+                candidate = _choose_pool_candidate(
+                    service, ordered_account_ids, group, excluded, now_ms, normalized_affinity, resolved_strategy,
+                )
+                if candidate is not None and candidate['selection_mode'] != 'equal_rotation':
+                    next_id = candidate['account_id']
+                    accounts = service.get('accounts') or {}
                     acct_status = (accounts.get(next_id) or {}).get('status')
                     last_selected = int(group.get('lastSelectedAtMs') or 0)
-                    if acct_status != 'quota_blocked' and last_selected > 0 \
+                    same_active_or_affinity = (
+                        candidate['selection_mode'] == 'affinity' or group.get('activeAccountId') == next_id
+                    )
+                    if same_active_or_affinity and acct_status != 'quota_blocked' and last_selected > 0 \
                             and now_ms >= last_selected and (now_ms - last_selected) < 60_000:
                         return {
                             'api_key': keys_by_id[next_id],
                             'account_id': next_id,
+                            'selection_mode': candidate['selection_mode'],
                             **identity,
                         }
         except Exception:
@@ -1062,8 +1481,6 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
 
     def updater(state):
         service = _ensure_service(state, identity)
-        # 成员集合变化会产生新的 group_id（新组 cursor=0）；顺手清理同一
-        # service 下已经不再使用的旧分组，当前分组始终保留。
         _prune_stale_groups(service, identity['group_id'], now_ms)
         group = service['groups'].get(identity['group_id'])
         if group is None:
@@ -1072,34 +1489,18 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
                 'switchedAt': None,
             }
         service['groups'][identity['group_id']] = group
-        if normalized_affinity:
-            start_index = int(_sha256(normalized_affinity)[:8], 16) % len(ordered_account_ids)
-        else:
-            start_index = _resolve_rotation_cursor(group, ordered_account_ids)
-        # 从起点扫描一圈：跳过本次逻辑请求已试过的账号（excluded）和
-        # 仍在冷却中的账号（blockedUntilMs 未到）；冷却到期的账号自然重新
-        # 加入轮转。整圈都不可用时按最早恢复时间报错。
-        selected_index = None
-        for step in range(len(ordered_account_ids)):
-            index = (start_index + step) % len(ordered_account_ids)
-            account_id = ordered_account_ids[index]
-            if account_id in excluded:
-                continue
-            if _account_is_blocked(service['accounts'].get(account_id, {}), now_ms):
-                continue
-            selected_index = index
-            break
-        if selected_index is None:
+        candidate = _choose_pool_candidate(
+            service, ordered_account_ids, group, excluded, now_ms, normalized_affinity, resolved_strategy,
+        )
+        if candidate is None:
             raise _build_exhausted_error(service, ordered_account_ids, now_ms)
-        next_id = ordered_account_ids[selected_index]
-        if normalized_affinity:
-            # 新建分组首次以 affinity_key 选槽时，显式锚定 rotationCursor，
-            # 避免后续非亲和轮转回退到 activeAccountId 所在槽位而漂移。
+        next_id = candidate['account_id']
+        if candidate['selection_mode'] == 'equal_rotation':
+            group['rotationCursor'] = (candidate['selected_index'] + 1) % len(ordered_account_ids)
+        else:
             stored_cursor = group.get('rotationCursor')
             if not (type(stored_cursor) is int and 0 <= stored_cursor <= MAX_SAFE_INTEGER):
                 group['rotationCursor'] = _resolve_rotation_cursor(group, ordered_account_ids)
-        else:
-            group['rotationCursor'] = (selected_index + 1) % len(ordered_account_ids)
         group['activeAccountId'] = next_id
         group['lastSelectedAtMs'] = now_ms
         group['switchedAt'] = datetime.fromtimestamp(
@@ -1110,11 +1511,9 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
         selection.update({
             'api_key': keys_by_id[next_id],
             'account_id': next_id,
+            'selection_mode': candidate['selection_mode'],
             **identity,
         })
-        # 写放大说明：等权轮转下每次选择都会推进游标，跨进程/跨请求的公平
-        # 依赖持久化的 rotationCursor，所以这里必须每次写状态（一次原子写
-        # 加已有的文件锁），不能按“选择结果是否变化”跳过写入。
         return state
 
     _update_state(state_file, updater)
@@ -1128,31 +1527,198 @@ def mark_quota_exhausted(selection, quota, state_file=LLM_ACCOUNT_POOL_STATE_FIL
             or not math.isfinite(requested_until):
         requested_until = now_ms + UNKNOWN_QUOTA_BLOCK_MS
     blocked_until_ms = min(now_ms + MAX_BLOCK_MS, max(now_ms + 1000, int(requested_until)))
+    raw_limit_class = str((quota or {}).get('limit_class') or '')
+    limit_class = raw_limit_class if raw_limit_class in QUOTA_WINDOWS else 'unknown'
     effective_until_box = [blocked_until_ms]
 
     def updater(state):
         service = _ensure_service(state, selection)
-        previous = service['accounts'].get(selection['account_id']) or {}
-        effective_until = max(int(previous.get('blockedUntilMs') or 0), blocked_until_ms)
-        effective_until_box[0] = effective_until
-        service['accounts'][selection['account_id']] = {
+        previous = service['accounts'].get(selection['account_id'])
+        previous = dict(previous) if isinstance(previous, dict) else {}
+        prev_windows = dict(previous.get('windows')) if isinstance(previous.get('windows'), dict) else {}
+        prev_window_entry = prev_windows.get(limit_class)
+        prev_window_until = (
+            prev_window_entry.get('blockedUntilMs')
+            if isinstance(prev_window_entry, dict) and _is_non_negative_finite(prev_window_entry.get('blockedUntilMs'))
+            else 0
+        )
+        window_until_ms = max(int(prev_window_until), blocked_until_ms)
+        prev_windows[limit_class] = {
+            'blockedUntilMs': window_until_ms,
+            'blockedUntil': datetime.fromtimestamp(window_until_ms / 1000, tz=timezone.utc).isoformat(),
+            'lastExhaustedAt': datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat(),
+        }
+
+        max_window_until = max(int(previous.get('blockedUntilMs') or 0), window_until_ms)
+        for entry in prev_windows.values():
+            if isinstance(entry, dict) and _is_non_negative_finite(entry.get('blockedUntilMs')):
+                max_window_until = max(max_window_until, int(entry['blockedUntilMs']))
+        effective_until_box[0] = max_window_until
+
+        next_quota = dict(previous.get('quota')) if isinstance(previous.get('quota'), dict) else {}
+        if limit_class == 'monthly':
+            next_quota['autoMonthlyAnchorMs'] = window_until_ms
+            if next_quota.get('monthlyResetSource') != 'manual':
+                next_quota['monthlyResetAtMs'] = window_until_ms
+                next_quota['monthlyResetTzOffsetMin'] = 0
+                next_quota['monthlyResetDay'] = datetime.fromtimestamp(window_until_ms / 1000, tz=timezone.utc).day
+                next_quota['monthlyResetSource'] = 'auto_429'
+            next_quota['monthlyRemainingPct'] = 0
+            next_quota['monthlySnapshotAtMs'] = now_ms
+        elif limit_class == 'weekly':
+            next_quota['weeklyRemainingPct'] = 0
+            next_quota['weeklyResetAtMs'] = window_until_ms
+            next_quota['weeklySnapshotAtMs'] = now_ms
+        elif limit_class == 'rolling_5h':
+            next_quota['rolling5hRemainingPct'] = 0
+            next_quota['rolling5hResetAtMs'] = window_until_ms
+            next_quota['rolling5hSnapshotAtMs'] = now_ms
+
+        next_record = {
             **previous,
             'status': 'quota_blocked',
             'reason': (quota or {}).get('type') or 'GoUsageLimitError',
-            'limitName': str((quota or {}).get('limit_class') or 'unknown'),
-            'blockedUntilMs': effective_until,
+            'limitName': limit_class,
+            'blockedUntilMs': max_window_until,
             'blockedUntil': datetime.fromtimestamp(
-                effective_until / 1000, tz=timezone.utc
+                max_window_until / 1000, tz=timezone.utc
             ).isoformat(),
             'lastFailureAt': datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat(),
             'lastFailureStatus': 401 if (quota or {}).get('type') == 'InsufficientBalanceError' else 429,
+            'windows': prev_windows,
         }
-        # 冷却只影响账号可用性，不移动轮转游标：该账号在 select_api_key 里已被
-        # 明确排除，下一次选择会从游标继续，冷却到期后自动重新加入轮转。
+        if next_quota:
+            next_record['quota'] = next_quota
+        service['accounts'][selection['account_id']] = next_record
         return state
 
     _update_state(state_file, updater)
     return effective_until_box[0]
+
+
+def _estimate_usage_spend_usd(usage_info):
+    if not isinstance(usage_info, dict):
+        return 0.0, 0
+    explicit_cost = None
+    for cost_key in ('costUsd', 'cost_usd', 'estimatedCostUsd', 'estimated_cost_usd', 'cost'):
+        if cost_key in usage_info and usage_info[cost_key] is not None:
+            explicit_cost = usage_info[cost_key]
+            break
+    raw_usage = usage_info.get('usage') if isinstance(usage_info.get('usage'), dict) else usage_info
+
+    def _as_num(val):
+        return float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) else 0.0
+
+    inp = _as_num(raw_usage.get('inputTokens') if 'inputTokens' in raw_usage else (
+        raw_usage.get('input_tokens') if 'input_tokens' in raw_usage else raw_usage.get('prompt_tokens')
+    ))
+    input_details = raw_usage.get('input_tokens_details') if isinstance(raw_usage.get('input_tokens_details'), dict) else {}
+    prompt_details = raw_usage.get('prompt_tokens_details') if isinstance(raw_usage.get('prompt_tokens_details'), dict) else {}
+    cached = _as_num(
+        raw_usage.get('cachedInputTokens') if 'cachedInputTokens' in raw_usage else (
+            input_details.get('cached_tokens') if 'cached_tokens' in input_details else (
+                prompt_details.get('cached_tokens') if 'cached_tokens' in prompt_details else raw_usage.get('cache_read_input_tokens')
+            )
+        )
+    )
+    out = _as_num(raw_usage.get('outputTokens') if 'outputTokens' in raw_usage else (
+        raw_usage.get('output_tokens') if 'output_tokens' in raw_usage else raw_usage.get('completion_tokens')
+    ))
+    total_raw = raw_usage.get('totalTokens') if 'totalTokens' in raw_usage else raw_usage.get('total_tokens')
+    total_tokens = max(0, int(round(_as_num(total_raw) if total_raw is not None else (inp + out))))
+    if isinstance(explicit_cost, (int, float)) and not isinstance(explicit_cost, bool) \
+            and math.isfinite(explicit_cost) and explicit_cost >= 0:
+        return float(explicit_cost), total_tokens
+    if inp <= 0 and out <= 0 and total_tokens <= 0:
+        return 0.0, 0
+    safe_cached = max(0.0, min(inp, cached))
+    uncached_in = max(0.0, inp - safe_cached)
+    safe_out = max(0.0, out)
+    spent_usd = (
+        uncached_in * DEFAULT_INPUT_USD_PER_M
+        + safe_cached * DEFAULT_CACHED_INPUT_USD_PER_M
+        + safe_out * DEFAULT_OUTPUT_USD_PER_M
+    ) / 1_000_000.0
+    spent_usd = math.floor(spent_usd * 1e6 + 0.5) / 1e6 if math.isfinite(spent_usd) and spent_usd >= 0 else 0.0
+    return spent_usd, total_tokens
+
+
+def record_account_usage(selection, usage_info, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *, now_ms=None):
+    if not isinstance(selection, dict) or not selection.get('service_id') or not selection.get('account_id'):
+        return None
+    now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    spent_usd, total_tokens = _estimate_usage_spend_usd(usage_info)
+    if spent_usd <= 0 and total_tokens <= 0:
+        return None
+    recorded = [None]
+
+    def updater(state):
+        service = _ensure_service(state, selection)
+        previous = service['accounts'].get(selection['account_id'])
+        previous = dict(previous) if isinstance(previous, dict) else {}
+        monthly_cycle = resolve_monthly_cycle(previous, now_ms)
+        monthly_cycle_start = monthly_cycle['cycle_start_ms'] if monthly_cycle is not None else None
+        week_start_ms = _current_weekly_cycle_start_ms(now_ms)
+        prev_usage = previous.get('usage') if isinstance(previous.get('usage'), dict) else {}
+
+        same_month = (
+            prev_usage.get('monthlyCycleStartMs') == monthly_cycle_start
+            if monthly_cycle_start is not None
+            else prev_usage.get('monthlyCycleStartMs') is None
+        )
+        same_week = prev_usage.get('weeklyCycleStartMs') == week_start_ms
+
+        bucket_ms = (now_ms // ROLLING_5H_BUCKET_MS) * ROLLING_5H_BUCKET_MS
+        cutoff_ms = now_ms - ROLLING_5H_MS
+        next_buckets = []
+        merged = False
+        for bucket in (prev_usage.get('rolling5hBuckets') if isinstance(prev_usage.get('rolling5hBuckets'), list) else []):
+            if not isinstance(bucket, dict):
+                continue
+            b_ms = bucket.get('bucketMs')
+            b_spent = bucket.get('spentUsd')
+            if not _is_non_negative_finite(b_ms) or not _is_non_negative_finite(b_spent):
+                continue
+            if b_ms + ROLLING_5H_BUCKET_MS <= cutoff_ms:
+                continue
+            b_tokens = bucket.get('tokens') if type(bucket.get('tokens')) is int else 0
+            if b_ms == bucket_ms:
+                next_buckets.append({
+                    'bucketMs': bucket_ms,
+                    'spentUsd': math.floor((float(b_spent) + spent_usd) * 1e6 + 0.5) / 1e6,
+                    'tokens': b_tokens + total_tokens,
+                })
+                merged = True
+            else:
+                next_buckets.append({'bucketMs': b_ms, 'spentUsd': float(b_spent), 'tokens': b_tokens})
+        if not merged:
+            next_buckets.append({'bucketMs': bucket_ms, 'spentUsd': spent_usd, 'tokens': total_tokens})
+        next_buckets.sort(key=lambda item: item['bucketMs'])
+
+        prev_m_spent = float(prev_usage['monthlySpentUsd']) if same_month and _is_non_negative_finite(prev_usage.get('monthlySpentUsd')) else 0.0
+        prev_m_tokens = prev_usage['monthlyTokens'] if same_month and type(prev_usage.get('monthlyTokens')) is int else 0
+        prev_m_reqs = prev_usage['monthlyRequests'] if same_month and type(prev_usage.get('monthlyRequests')) is int else 0
+        prev_w_spent = float(prev_usage['weeklySpentUsd']) if same_week and _is_non_negative_finite(prev_usage.get('weeklySpentUsd')) else 0.0
+
+        next_usage = {
+            'monthlyCycleStartMs': monthly_cycle_start,
+            'monthlySpentUsd': math.floor((prev_m_spent + spent_usd) * 1e6 + 0.5) / 1e6,
+            'monthlyTokens': prev_m_tokens + total_tokens,
+            'monthlyRequests': prev_m_reqs + 1,
+            'weeklyCycleStartMs': week_start_ms,
+            'weeklySpentUsd': math.floor((prev_w_spent + spent_usd) * 1e6 + 0.5) / 1e6,
+            'rolling5hBuckets': next_buckets,
+            'lastUpdatedAtMs': now_ms,
+        }
+        service['accounts'][selection['account_id']] = {
+            **previous,
+            'usage': next_usage,
+        }
+        recorded[0] = next_usage
+        return state
+
+    _update_state(state_file, updater)
+    return recorded[0]
 
 
 def _header_values(headers, name):
@@ -1429,7 +1995,8 @@ __all__ = [
     'LlmAccountPoolLockTimeoutError',
     'normalize_api_keys', 'parse_fallback_api_keys', 'resolve_api_key_pool', 'resolve_primary_api_key_pool',
     'normalize_opencode_go_service', 'is_opencode_go_endpoint', 'get_account_id',
-    'get_pool_identity', 'select_api_key', 'mark_quota_exhausted',
+    'get_pool_identity', 'select_api_key', 'mark_quota_exhausted', 'record_account_usage',
+    'evaluate_account_quota', 'resolve_monthly_cycle', 'beijing_date_from_ms',
     'classify_opencode_go_quota_response', 'read_state_strict',
 ]
 

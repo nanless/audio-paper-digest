@@ -53,13 +53,18 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 ### 账号池
 
-同一路由下配置的所有密钥（`PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_FALLBACK_API_KEYS`、`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 及副模型对应配置）合并成同一个等权账号池，顺序不代表优先级。传入 `affinityKey`（如 `paperId`）时按稳定哈希固定映射到槽位以提升前缀缓存命中；未传 `affinityKey` 时按账号指纹的稳定排序轮转，跳过本次已排除或冷却未到期的账号；冷却到期后自动回到可用池。
+同一路由下配置的所有密钥（`PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_FALLBACK_API_KEYS`、`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 及副模型对应配置）合并成同一个共享账号池，配置顺序不代表优先级。默认启用到期优先调度（`PD_LLM_ACCOUNT_POOL_STRATEGY=expiry_priority`，可设为 `equal_rotation` 恢复纯等权轮转）：
+
+1. **三窗口硬门槛**：每次选号只从月额度、周额度、5 小时滚动额度（及余额）全部未冷却且未标为 `0%` 的可用账号里选择；任一窗口触发限额 429 只冷却该对应窗口，窗口重置后自动回到可用池。
+2. **月到期最先优先**：在所有三窗口均有额度的账号里，优先选择下一次月额度到期日最早的账号（按北京时间 `Asia/Shanghai` 日期 `YYYY-MM-DD` 比较）。
+3. **同天到期选剩余最多**：若多个账号月额度在同一北京时间自然日到期，优先选择有效剩余月额度百分比最高的账号；月剩余并列时再依次比较周剩余、5 小时剩余与更早的精确重置时间。每次请求成功后，Node 与 Python 都会按实际响应消耗动态扣减对应账号的月/周/5 小时本地估算剩余（估算保底 `0.01%`，不会在未收到真实 429 前锁死账号）。
+4. **到期日来源与自动学习**：可通过 `npm run llm:accounts:quota` 查看优先级队列、批量导入或手工配置各账号的月到期日与初始剩余额度，也可用 `npm run llm:accounts:quota -- init-from-history` 从历史 `monthly` 429 记录一键初始化；运行中首次触发月限额 429 时会自动学习该账号的月续期锚点并按月滚动。未知到期日的账号（Tier 2）排在已知到期日账号（Tier 1）之后，并回退为原有 `affinityKey`（如 `paperId`）亲和哈希与等权轮转。
 
 只有 OpenCode Go 返回 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，才允许在同一逻辑请求内切换账号，且每个账号至多尝试一次。普通认证 401 会停止本次运行；普通 429、5xx、网络或代理故障、响应截断和内容校验失败都不触发切换。全部账号不可用时，程序停止派发并保存进度。
 
-生产任务与外部工具（如 Codex/其他 agent）建议隔离：为工具单独准备一份项目副本/工作区与 `.env`，不要把同一批 key 同时配进生产池和工具池；共用同一池会互相消耗额度。`npm run llm:accounts` 可查看冷却与最早恢复。
+生产任务与外部工具（如 Codex/其他 agent）建议隔离：为工具单独准备一份项目副本/工作区与 `.env`，不要把同一批 key 同时配进生产池和工具池；共用同一池会互相消耗额度。`npm run llm:accounts` 可查看冷却与当前调度优先级，`npm run llm:accounts:quota` 可管理各账号到期日与三窗口额度。
 
-账号选择与冷却时间保存在 `data/runtime/llm-account-pool.json`，供 Node、Python 和后续日期的运行共同使用；两边共享同一轮转游标，配置顺序不同也不会改变选择序列。
+账号选择、各窗口冷却、到期日与本地消耗保存在 `data/runtime/llm-account-pool.json`，供 Node、Python 和后续日期的运行共同使用；两边共享同一状态文件与一致的调度规则，配置顺序不同也不会改变选择序列。
 
 发布/验收相关变量：`PAPER_DIGEST_BLOG_REPO` 指定 Hugo 仓库；`PAPER_DIGEST_BLOG_URL` 指定站点 posts 根地址（verify:web 用它拼页面 URL）；`PAPER_DIGEST_BLOG_REPO_RUN` 可选，指定 Pages 部署 workflow 所属仓库（默认 `nanless/audio-research-portal`）；`PAPER_DIGEST_BLOG_BASE_PATH` 为站点子路径。
 

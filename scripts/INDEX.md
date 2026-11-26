@@ -3,9 +3,9 @@
 本文件由 `node scripts/generate-scripts-index.js` 根据 `scripts/` 目录自动生成，列出全部受版本控制的 `.js` 与 `.py` 运行时文件。
 架构分工与常用入口见 [脚本指南](README.md)（[English](README.en.md)）；旧记录兼容与独立人工审查位于 `manual/scripts/`。
 
-总计：**473** 个运行时文件（顶层 Node 89 · 顶层 Python 97 · `lib/` 内部库 287）。
+总计：**474** 个运行时文件（顶层 Node 90 · 顶层 Python 97 · `lib/` 内部库 287）。
 
-## 顶层 Node 入口与共享模块（89）
+## 顶层 Node 入口与共享模块（90）
 
 | 文件 | 职责摘要 |
 |---|---|
@@ -66,6 +66,7 @@
 | `history-resume.js` | 旧运行的唯一恢复入口。只读取已保存运行，不创建新来源或重置尝试预算。 |
 | `impact.js` | 静态反向依赖图、协议/渲染指纹闭包识别与受影响单测执行器（默认只读；--run-tests 串行跑受影响单测）。 |
 | `llm-account-pool.js` | OpenCode Go 账号池的共享状态实现。 |
+| `llm-accounts-quota.js` | OpenCode Go 多账号月/周/5小时额度与到期日管理 CLI。 |
 | `llm-accounts-report.js` | 只读区分当前配置与历史观察；不发请求、不刷新额度、不改状态。 |
 | `llm-usage-report.js` | Node 流程入口或共享模块 |
 | `locks.js` | 有界只读观测；--recover 仅预览。此结果不授予持锁、发布或回收权限。 |

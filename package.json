@@ -92,6 +92,7 @@
     "doctor": "node scripts/doctor.js",
     "source:probe": "node scripts/source-probe.js",
     "llm:accounts": "node scripts/llm-accounts-report.js",
+    "llm:accounts:quota": "node scripts/llm-accounts-quota.js",
     "config:check": "node scripts/config-check.js",
     "recover": "node scripts/recover.js",
     "manifest:new": "node scripts/manifest-new.js",

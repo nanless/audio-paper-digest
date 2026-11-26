@@ -40,7 +40,7 @@ npm run digest:prepare -- YYYY-MM-DD
 0. `npm run workspace:role -- status`：当前目录角色须为 `daily` 且真实路径匹配；缺失或不符时先停止，确认后再 `set daily|history [--force]`。
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`；Python 满足 `3.11+` 与 OpenSSL（`scripts/python-runtime.sh` 优先 `.venv`）。
 2. 项目根 `.env` 存在（加载器自动收紧权限至 `0600`），且 `npm run config:check` 无失败。
-3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；主模型及启用的副模型使用配置指定型号（2026-11-16 起为 `muse-spark-1.3-contributor`，推理上限 `xhigh`；受支持清单见 `scripts/lib/env-schema.js` 的 `SUPPORTED_MODELS`）。备用账号与主账号合并为等权账号池，顺序不代表优先级，不能代替副模型配置。
+3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；主模型及启用的副模型使用配置指定型号（2026-11-16 起为 `muse-spark-1.3-contributor`，推理上限 `xhigh`；受支持清单见 `scripts/lib/env-schema.js` 的 `SUPPORTED_MODELS`）。备用账号与主账号合并为共享账号池（默认按月到期优先、同天选剩余最多且三窗口有额调度），顺序不代表优先级，不能代替副模型配置。
 4. `HTTPS_PROXY` 或 `HTTP_PROXY` 为项目 `.env` 内的 HTTP CONNECT 地址；`muse-spark-*` 与 arXiv 缺代理立即失败。
 5. `PAPER_DIGEST_BLOG_REPO` 指向真实 Hugo 仓库，工作区没有与目标日期重叠的人工修改。
 
@@ -74,7 +74,7 @@ npm run digest:prepare -- YYYY-MM-DD
 `muse-spark-*` 走 OpenAI Responses（`/v1` 自动转为 `/v1/responses`）；兼容 `mimo-v2.6-flash` 走直连 OpenAI Chat Completions。Node 请求统一经 `requestLlmJson()`，Python 发布请求统一经 `call_publish_llm_api()`。
 
 - **代理与超时**：Muse 与 arXiv 强制走项目 HTTP CONNECT 代理，每次请求建独立连接对象并用后销毁，禁止静默直连；Node CONNECT+TLS 握手共用 60 秒有效预算（不含长时间系统挂起），arXiv 源站通过 `arxiv-origin-gate.js` 限制并发（默认 `PD_ARXIV_MAX_CONCURRENCY=3`）并共享 `Retry-After` 退避。外部图片/Demo 仅允许 HTTPS，每次重定向拒绝私网/保留地址并固定已核验公网 IP。
-- **等权账号池与认证排障**：OpenCode Go 同池所有 key 等权，按 `affinityKey`（如 `paperId`）稳定哈希映射槽位提升前缀缓存命中；仅 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 允许同请求内换号并落盘冷却。普通 401 立即停止生产并保存在途结果，随后在独立诊断中逐号探测完整账号池，禁止因单号 401 要求用户更换全部密钥，且严禁展示密钥或稳定凭据指纹。
+- **账号池调度与认证排障**：OpenCode Go 同池所有 key 默认按月到期优先调度（`PD_LLM_ACCOUNT_POOL_STRATEGY=expiry_priority`，可改 `equal_rotation`）：在月/周/5小时三窗口均有额度的账号中，优先选北京时间月到期日最早者，同天到期选有效剩余月额度最多者（月并列再比周/5小时），未配置到期日账号排后并回退 `affinityKey`（如 `paperId`）亲和轮转；支持本地消耗扣减、月 429 自动学习到期日及 `npm run llm:accounts:quota` 管理。仅 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 允许同请求内换号并按窗口落盘冷却。普通 401 立即停止生产并保存在途结果，随后在独立诊断中逐号探测完整账号池，禁止因单号 401 要求用户更换全部密钥，且严禁展示密钥或稳定凭据指纹。
 - **留账与保存故障**：请求开始与终态以同一 `eventId` 落盘，支持按北京时间 `YYYY-MM-DD/` 目录分片（`PD_LLM_USAGE_SHARD_BY_DATE=1`）并同步维护日索引；终态或采用记录保存失败须停止新派发并保全真实响应，不返还已发次数。
 - **分级推理与缓存**：`PD_OPENAI_RESPONSES_STREAM=1` 启用 SSE 并开启阶段稳定 `prompt_cache_key`（`PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=0` 可关）。按用户 2026-11-24 与 2026-11-26 授权，默认启用按阶段分级推理（`PD_TIERED_REASONING_EFFORT=0` 可关），且不超过环境上限：
   - `xhigh`：主分析（`primaryAnalysis`）、API Reader 长文（`apiReaderArticle`）

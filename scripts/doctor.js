@@ -28,7 +28,9 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const {
-    hasAccountPoolHeader
+    hasAccountPoolHeader,
+    evaluateAccountQuota,
+    validateAccountSubrecords
 } = require('./llm-account-pool.js');
 const {
     isIpLiteral,
@@ -1155,11 +1157,17 @@ function readAccountPoolState(stateFile, nowMs = Date.now()) {
                     && (!Number.isFinite(record.blockedUntilMs) || record.blockedUntilMs < 0))) {
                 return { exists: true, valid: false, error: 'account 记录非法', mode };
             }
+            try {
+                validateAccountSubrecords(record, stateFile);
+            } catch (_error) {
+                return { exists: true, valid: false, error: 'account 记录非法', mode };
+            }
             accounts += 1;
-            if (Number.isFinite(record.blockedUntilMs) && record.blockedUntilMs > nowMs) {
+            const evaluated = evaluateAccountQuota(record, nowMs);
+            if (!evaluated.eligible && Number.isFinite(evaluated.activeBlockedUntilMs) && evaluated.activeBlockedUntilMs > nowMs) {
                 blocked += 1;
-                if (earliestRecoveryMs === null || record.blockedUntilMs < earliestRecoveryMs) {
-                    earliestRecoveryMs = record.blockedUntilMs;
+                if (earliestRecoveryMs === null || evaluated.activeBlockedUntilMs < earliestRecoveryMs) {
+                    earliestRecoveryMs = evaluated.activeBlockedUntilMs;
                 }
             }
         }

@@ -64,6 +64,7 @@ from llm_account_pool import (
     is_opencode_go_endpoint,
     mark_quota_exhausted,
     normalize_opencode_go_service,
+    record_account_usage,
     resolve_api_key_pool,
     resolve_primary_api_key_pool,
     select_api_key,
@@ -7638,6 +7639,15 @@ def _open_publish_json_with_account_pool(
                     if streamed is None:
                         raise
                     usage_body = streamed
+                if selection is not None and isinstance(usage_body, dict) and isinstance(usage_body.get('usage'), dict):
+                    try:
+                        record_account_usage(
+                            selection,
+                            {'usage': usage_body.get('usage'), 'costUsd': usage_body.get('cost')},
+                            state_file,
+                        )
+                    except Exception as usage_exc:
+                        print(f'  [llm-account-pool] 记录账号用量失败（不影响本次成功响应）: {usage_exc}')
                 return status, usage_body
         except urllib.error.HTTPError as exc:
             raw_text, parsed = _read_publish_http_error(exc)

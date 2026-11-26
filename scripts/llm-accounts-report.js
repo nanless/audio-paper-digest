@@ -58,14 +58,17 @@ function historyRecords(state, atMs) {
         if (!object(service) || !object(service.accounts) || !object(service.groups)) return null;
         for (const [accountId, record] of Object.entries(service.accounts)) {
             if (!object(record) || (record.blockedUntilMs !== undefined && !timestamp(record.blockedUntilMs))) return null;
-            const blocked = record.blockedUntilMs > atMs;
+            try { pool.validateAccountSubrecords(record, 'state'); } catch (_) { return null; }
+            const evaluated = pool.evaluateAccountQuota(record, atMs);
+            const blocked = !evaluated.eligible;
+            const blockedUntilMs = evaluated.activeBlockedUntilMs > atMs ? evaluated.activeBlockedUntilMs : 0;
             const selected = Object.values(service.groups).filter(object)
                 .filter(group => group.activeAccountId === accountId && timestamp(group.lastSelectedAtMs))
                 .map(group => group.lastSelectedAtMs);
             records.push({ serviceId, accountId, row: {
                 account: `账号 ${records.length + 1}`,
                 status: blocked ? 'quota_blocked' : 'previously_observed',
-                blockedUntil: blocked ? new Date(record.blockedUntilMs).toISOString() : null,
+                blockedUntil: blocked && blockedUntilMs ? new Date(blockedUntilMs).toISOString() : null,
                 lastSelectedAt: selected.length ? new Date(Math.max(...selected)).toISOString() : null
             } });
         }
@@ -123,19 +126,55 @@ function describeConfigured(env, state, atMs, options = {}) {
                     && (route.role !== 'primary' || primaryKey)),
                 accountCount: route.keys.length };
         });
-        const currentRows = [...credentials.values()].map((item, index) => {
+        const primaryPriority = (primaryKeys.length > 0 && pool.isOpenCodeGoEndpoint(primaryEndpoint))
+            ? pool.describePoolPriorities(primaryKeys, primaryEndpoint, stateStatus === 'present' ? state : null, {
+                nowMs: atMs,
+                strategy: env.PD_LLM_ACCOUNT_POOL_STRATEGY
+            })
+            : null;
+        const priorityByAccountId = new Map();
+        if (primaryPriority) {
+            primaryPriority.rows.forEach((pRow, idx) => {
+                priorityByAccountId.set(pool.getAccountId(primaryKeys[idx]), pRow);
+            });
+        }
+        const currentRows = [...credentials.entries()].map(([accountId, item], index) => {
             const blocked = item.observations.map(row => row.blockedUntil).filter(Boolean).sort();
             const selected = item.observations.map(row => row.lastSelectedAt).filter(Boolean).sort();
-            return { account: `账号 ${index + 1}`, routes: item.roles,
+            const pRow = priorityByAccountId.get(accountId) || null;
+            const row = {
+                account: `账号 ${index + 1}`,
+                routes: item.roles,
                 status: blocked.length ? 'quota_blocked' : item.observations.length ? 'previously_observed' : 'unobserved',
-                blockedUntil: blocked.at(-1) || null, lastSelectedAt: selected.at(-1) || null };
+                blockedUntil: blocked.at(-1) || null,
+                lastSelectedAt: selected.at(-1) || null
+            };
+            if (pRow) {
+                row.priorityRank = pRow.priorityRank;
+                if (pRow.label) row.label = pRow.label;
+                row.nextMonthlyExpiryBeijing = pRow.nextMonthlyExpiryBeijing;
+                row.monthlyResetSource = pRow.monthlyResetSource;
+                row.monthlyRemainingPct = pRow.monthlyRemainingPct;
+                row.weeklyRemainingPct = pRow.weeklyRemainingPct;
+                row.rolling5hRemainingPct = pRow.rolling5hRemainingPct;
+            }
+            return row;
         });
         configured = { status: routes[0].enabled && (!secondaryModel || routes[1].enabled) ? 'configured' : 'incomplete',
             countBasis: 'distinct_configured_credentials', accountCount: currentRows.length, routes,
             observedCount: currentRows.filter(row => row.status !== 'unobserved').length,
             unobservedCount: currentRows.filter(row => row.status === 'unobserved').length,
             cooling: currentRows.filter(row => row.status === 'quota_blocked').length,
-            earliest: currentRows.map(row => row.blockedUntil).filter(Boolean).sort()[0] || null, rows: currentRows };
+            earliest: currentRows.map(row => row.blockedUntil).filter(Boolean).sort()[0] || null,
+            scheduling: primaryPriority ? {
+                strategy: primaryPriority.strategy,
+                nextAccount: primaryPriority.nextSlot ? `账号 ${primaryPriority.nextSlot}` : null,
+                nextMode: primaryPriority.nextMode,
+                tier1Count: primaryPriority.tier1Count,
+                eligibleCount: primaryPriority.eligibleCount,
+                blockedCount: primaryPriority.blockedCount
+            } : null,
+            rows: currentRows };
     } catch (_) {
         // Config errors can include private routes; this reporting boundary emits fixed text only.
         configured = { status: 'invalid', countBasis: 'distinct_configured_credentials', accountCount: null,
@@ -175,9 +214,19 @@ function main(argv = process.argv.slice(2)) {
     else {
         console.log(`当前配置：${report.configured.accountCount ?? '未知'} 个不同凭据（${report.configured.status}）；历史观察：${report.observedHistory.accountCount ?? '未知'} 条（${report.observedHistory.state}）。`);
         console.log(`当前配置的已存冷却：${report.configured.cooling ?? '未知'}；未观察：${report.configured.unobservedCount ?? '未知'}。未探测实时余额或可用性。`);
+        if (report.configured.scheduling) {
+            const sched = report.configured.scheduling;
+            console.log(`调度策略：${sched.strategy}；当前首选：${sched.nextAccount || '无（全部冷却）'}（已定月到期日 ${sched.tier1Count} 个；用 npm run llm:accounts:quota 管理到期日与剩余额度）。`);
+        }
         for (const route of report.configured.routes) console.log(`- ${route.role}：${route.accountCount} 个配置凭据，${route.enabled ? '已配置' : '未启用或不完整'}`);
         for (const row of report.configured.rows) {
-            console.log(`- ${row.account}  ${row.status}${row.blockedUntil ? `（至 ${row.blockedUntil}）` : ''}${row.lastSelectedAt ? ` 最近 ${row.lastSelectedAt}` : ''}`);
+            const rankPart = Number.isInteger(row.priorityRank) ? ` [优先 #${row.priorityRank}]` : '';
+            const labelPart = row.label ? ` (${row.label})` : '';
+            const expiryPart = row.nextMonthlyExpiryBeijing ? ` 月到期 ${row.nextMonthlyExpiryBeijing}` : '';
+            const pctPart = Number.isFinite(row.monthlyRemainingPct)
+                ? ` 剩余 月${Number(row.monthlyRemainingPct.toFixed(1))}%/周${Number(row.weeklyRemainingPct.toFixed(1))}%/5h${Number(row.rolling5hRemainingPct.toFixed(1))}%`
+                : '';
+            console.log(`- ${row.account}${labelPart}${rankPart}  ${row.status}${row.blockedUntil ? `（至 ${row.blockedUntil}）` : ''}${expiryPart}${pctPart}${row.lastSelectedAt ? ` 最近 ${row.lastSelectedAt}` : ''}`);
         }
     }
     return error || ['invalid', 'unreadable'].includes(report.observedHistory.state)

@@ -29,6 +29,18 @@ const LOCK_TIMEOUT_MS = 3000;
 const LOCK_STALE_MS = 120000;
 const MAX_BLOCK_MS = 370 * 24 * 60 * 60 * 1000;
 const UNKNOWN_QUOTA_BLOCK_MS = 30 * 60 * 1000;
+const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const ROLLING_5H_MS = 5 * HOUR_MS;
+const ROLLING_5H_BUCKET_MS = 15 * 60 * 1000;
+const DEFAULT_MONTHLY_BUDGET_USD = 30;
+const DEFAULT_INPUT_USD_PER_M = 0.60;
+const DEFAULT_CACHED_INPUT_USD_PER_M = 0.15;
+const DEFAULT_OUTPUT_USD_PER_M = 2.40;
+const MIN_ESTIMATED_REMAINING_PCT = 0.01;
+const QUOTA_WINDOWS = Object.freeze(['monthly', 'weekly', 'rolling_5h', 'balance', 'unknown']);
+const SAFE_ACCOUNT_LABEL_RE = /^[A-Za-z0-9._\u4e00-\u9fff-]{1,40}$/;
 // 成员集合变化会生成新的 groupId（新组 cursor 从 0 开始）。同一 service
 // 下超过这段时间没有被任何选择使用的其他分组会被清理，避免状态文件随历次
 // key 变更无限增长；仍在并行使用的不同 key 集合（例如主/副模型各自的池）
@@ -854,6 +866,75 @@ function hasAccountPoolHeader(state) {
     return formats.hasValidHeader(state, ACCOUNT_POOL_CONTRACT, current ? 'contract' : 'policyVersion');
 }
 
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isNonNegativeFinite(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isPercentValue(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+function validateAccountSubrecords(record, stateFile) {
+    if (record.windows !== undefined) {
+        if (!isPlainObject(record.windows)) {
+            throw new LlmAccountPoolStateError(`LLM 账号池状态 account.windows 非法，已阻止覆盖 ${stateFile}`);
+        }
+        for (const [windowName, entry] of Object.entries(record.windows)) {
+            if (!QUOTA_WINDOWS.includes(windowName) || !isPlainObject(entry)
+                || (entry.blockedUntilMs !== undefined && !isNonNegativeFinite(entry.blockedUntilMs))) {
+                throw new LlmAccountPoolStateError(`LLM 账号池状态 account.windows.${windowName} 非法，已阻止覆盖 ${stateFile}`);
+            }
+        }
+    }
+    if (record.quota !== undefined) {
+        const q = record.quota;
+        if (!isPlainObject(q)
+            || (q.label !== undefined && q.label !== null && (typeof q.label !== 'string' || !SAFE_ACCOUNT_LABEL_RE.test(q.label)))
+            || (q.monthlyResetDay !== undefined && q.monthlyResetDay !== null && (!Number.isInteger(q.monthlyResetDay) || q.monthlyResetDay < 1 || q.monthlyResetDay > 31))
+            || (q.monthlyResetAtMs !== undefined && q.monthlyResetAtMs !== null && !isNonNegativeFinite(q.monthlyResetAtMs))
+            || (q.monthlyResetTzOffsetMin !== undefined && q.monthlyResetTzOffsetMin !== null
+                && (!Number.isInteger(q.monthlyResetTzOffsetMin) || q.monthlyResetTzOffsetMin < -720 || q.monthlyResetTzOffsetMin > 840))
+            || (q.monthlyResetSource !== undefined && q.monthlyResetSource !== null && !['manual', 'auto_429'].includes(q.monthlyResetSource))
+            || (q.autoMonthlyAnchorMs !== undefined && q.autoMonthlyAnchorMs !== null && !isNonNegativeFinite(q.autoMonthlyAnchorMs))
+            || (q.monthlyBudgetUsd !== undefined && q.monthlyBudgetUsd !== null && (!isNonNegativeFinite(q.monthlyBudgetUsd) || q.monthlyBudgetUsd <= 0))
+            || (q.monthlyRemainingPct !== undefined && q.monthlyRemainingPct !== null && !isPercentValue(q.monthlyRemainingPct))
+            || (q.weeklyRemainingPct !== undefined && q.weeklyRemainingPct !== null && !isPercentValue(q.weeklyRemainingPct))
+            || (q.rolling5hRemainingPct !== undefined && q.rolling5hRemainingPct !== null && !isPercentValue(q.rolling5hRemainingPct))
+            || (q.snapshotAtMs !== undefined && q.snapshotAtMs !== null && !isNonNegativeFinite(q.snapshotAtMs))
+            || (q.monthlySnapshotAtMs !== undefined && q.monthlySnapshotAtMs !== null && !isNonNegativeFinite(q.monthlySnapshotAtMs))
+            || (q.weeklySnapshotAtMs !== undefined && q.weeklySnapshotAtMs !== null && !isNonNegativeFinite(q.weeklySnapshotAtMs))
+            || (q.rolling5hSnapshotAtMs !== undefined && q.rolling5hSnapshotAtMs !== null && !isNonNegativeFinite(q.rolling5hSnapshotAtMs))
+            || (q.weeklyResetAtMs !== undefined && q.weeklyResetAtMs !== null && !isNonNegativeFinite(q.weeklyResetAtMs))
+            || (q.rolling5hResetAtMs !== undefined && q.rolling5hResetAtMs !== null && !isNonNegativeFinite(q.rolling5hResetAtMs))
+            || (q.monthlySpentAtSnapshotUsd !== undefined && q.monthlySpentAtSnapshotUsd !== null && !isNonNegativeFinite(q.monthlySpentAtSnapshotUsd))
+            || (q.weeklySpentAtSnapshotUsd !== undefined && q.weeklySpentAtSnapshotUsd !== null && !isNonNegativeFinite(q.weeklySpentAtSnapshotUsd))
+            || (q.rolling5hSpentAtSnapshotUsd !== undefined && q.rolling5hSpentAtSnapshotUsd !== null && !isNonNegativeFinite(q.rolling5hSpentAtSnapshotUsd))) {
+            throw new LlmAccountPoolStateError(`LLM 账号池状态 account.quota 非法，已阻止覆盖 ${stateFile}`);
+        }
+    }
+    if (record.usage !== undefined) {
+        const u = record.usage;
+        if (!isPlainObject(u)
+            || (u.monthlyCycleStartMs !== undefined && u.monthlyCycleStartMs !== null && !isNonNegativeFinite(u.monthlyCycleStartMs))
+            || (u.monthlySpentUsd !== undefined && !isNonNegativeFinite(u.monthlySpentUsd))
+            || (u.monthlyTokens !== undefined && (!Number.isSafeInteger(u.monthlyTokens) || u.monthlyTokens < 0))
+            || (u.monthlyRequests !== undefined && (!Number.isSafeInteger(u.monthlyRequests) || u.monthlyRequests < 0))
+            || (u.weeklyCycleStartMs !== undefined && u.weeklyCycleStartMs !== null && !isNonNegativeFinite(u.weeklyCycleStartMs))
+            || (u.weeklySpentUsd !== undefined && !isNonNegativeFinite(u.weeklySpentUsd))
+            || (u.lastUpdatedAtMs !== undefined && !isNonNegativeFinite(u.lastUpdatedAtMs))
+            || (u.rolling5hBuckets !== undefined && (!Array.isArray(u.rolling5hBuckets) || u.rolling5hBuckets.some(
+                b => !isPlainObject(b) || !isNonNegativeFinite(b.bucketMs) || !isNonNegativeFinite(b.spentUsd)
+                    || (b.tokens !== undefined && (!Number.isSafeInteger(b.tokens) || b.tokens < 0))
+            )))) {
+            throw new LlmAccountPoolStateError(`LLM 账号池状态 account.usage 非法，已阻止覆盖 ${stateFile}`);
+        }
+    }
+}
+
 function readStateStrict(stateFile) {
     let state;
     try {
@@ -886,6 +967,7 @@ function readStateStrict(stateFile) {
                         && (!Number.isFinite(record.blockedUntilMs) || record.blockedUntilMs < 0))) {
                 throw new LlmAccountPoolStateError(`LLM 账号池状态 account 非法，已阻止覆盖 ${stateFile}`);
             }
+            validateAccountSubrecords(record, stateFile);
         }
         for (const group of Object.values(service.groups)) {
             // rotationCursor / lastSelectedAtMs 是等权轮转新增的可选字段。
@@ -942,8 +1024,353 @@ function ensureService(state, identity) {
     return service;
 }
 
+function beijingDateFromMs(ms) {
+    if (!Number.isFinite(ms)) return null;
+    return new Date(ms + BEIJING_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+function daysInUtcMonth(year, month1To12) {
+    return new Date(Date.UTC(year, month1To12, 0)).getUTCDate();
+}
+
+function buildMonthlyResetAtOffset(anchorYear, anchorMonth1To12, anchorDay, timeParts, tzOffsetMin, monthOffset) {
+    const totalMonths = anchorYear * 12 + (anchorMonth1To12 - 1) + monthOffset;
+    const year = Math.floor(totalMonths / 12);
+    const month1To12 = ((totalMonths % 12) + 12) % 12 + 1;
+    const day = Math.min(anchorDay, daysInUtcMonth(year, month1To12));
+    return Date.UTC(
+        year, month1To12 - 1, day,
+        timeParts.hour, timeParts.minute, timeParts.second, timeParts.ms
+    ) - tzOffsetMin * 60000;
+}
+
+function currentWeeklyCycleStartMs(nowMs) {
+    const d = new Date(nowMs);
+    const daysSinceMonday = (d.getUTCDay() + 6) % 7;
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysSinceMonday, 0, 0, 0, 0);
+}
+
+function resolveMonthlyCycle(record, nowMs) {
+    if (!isPlainObject(record)) return null;
+    const quota = isPlainObject(record.quota) ? record.quota : {};
+    let anchorMs = null;
+    let anchorDay = null;
+    let tzOffsetMin = 0;
+    let source = null;
+
+    if (isNonNegativeFinite(quota.monthlyResetAtMs) && quota.monthlyResetAtMs > 0) {
+        anchorMs = quota.monthlyResetAtMs;
+        tzOffsetMin = Number.isInteger(quota.monthlyResetTzOffsetMin) ? quota.monthlyResetTzOffsetMin : 0;
+        const local = new Date(anchorMs + tzOffsetMin * 60000);
+        anchorDay = Number.isInteger(quota.monthlyResetDay) ? quota.monthlyResetDay : local.getUTCDate();
+        source = quota.monthlyResetSource || 'manual';
+    } else if (Number.isInteger(quota.monthlyResetDay) && quota.monthlyResetDay >= 1 && quota.monthlyResetDay <= 31) {
+        tzOffsetMin = Number.isInteger(quota.monthlyResetTzOffsetMin) ? quota.monthlyResetTzOffsetMin : 480;
+        const nowLocal = new Date(nowMs + tzOffsetMin * 60000);
+        anchorDay = quota.monthlyResetDay;
+        const day = Math.min(anchorDay, daysInUtcMonth(nowLocal.getUTCFullYear(), nowLocal.getUTCMonth() + 1));
+        anchorMs = Date.UTC(nowLocal.getUTCFullYear(), nowLocal.getUTCMonth(), day, 23, 59, 59, 999) - tzOffsetMin * 60000;
+        source = quota.monthlyResetSource || 'manual';
+    } else if (isNonNegativeFinite(quota.autoMonthlyAnchorMs) && quota.autoMonthlyAnchorMs > 0) {
+        anchorMs = quota.autoMonthlyAnchorMs;
+        tzOffsetMin = 0;
+        anchorDay = new Date(anchorMs).getUTCDate();
+        source = 'auto_429';
+    } else if (record.windows?.monthly && isNonNegativeFinite(record.windows.monthly.blockedUntilMs) && record.windows.monthly.blockedUntilMs > 0) {
+        anchorMs = record.windows.monthly.blockedUntilMs;
+        tzOffsetMin = 0;
+        anchorDay = new Date(anchorMs).getUTCDate();
+        source = 'auto_429';
+    } else if (record.limitName === 'monthly' && isNonNegativeFinite(record.blockedUntilMs) && record.blockedUntilMs > 0) {
+        anchorMs = record.blockedUntilMs;
+        tzOffsetMin = 0;
+        anchorDay = new Date(anchorMs).getUTCDate();
+        source = 'auto_429';
+    }
+
+    if (anchorMs === null) return null;
+    const anchorLocal = new Date(anchorMs + tzOffsetMin * 60000);
+    const anchorYear = anchorLocal.getUTCFullYear();
+    const anchorMonth = anchorLocal.getUTCMonth() + 1;
+    const timeParts = {
+        hour: anchorLocal.getUTCHours(),
+        minute: anchorLocal.getUTCMinutes(),
+        second: anchorLocal.getUTCSeconds(),
+        ms: anchorLocal.getUTCMilliseconds()
+    };
+    const nowLocal = new Date(nowMs + tzOffsetMin * 60000);
+    let offset = (nowLocal.getUTCFullYear() - anchorYear) * 12 + ((nowLocal.getUTCMonth() + 1) - anchorMonth);
+    let candidate = buildMonthlyResetAtOffset(anchorYear, anchorMonth, anchorDay, timeParts, tzOffsetMin, offset);
+    while (candidate <= nowMs) {
+        offset += 1;
+        candidate = buildMonthlyResetAtOffset(anchorYear, anchorMonth, anchorDay, timeParts, tzOffsetMin, offset);
+    }
+    let prev = buildMonthlyResetAtOffset(anchorYear, anchorMonth, anchorDay, timeParts, tzOffsetMin, offset - 1);
+    while (prev > nowMs) {
+        offset -= 1;
+        candidate = prev;
+        prev = buildMonthlyResetAtOffset(anchorYear, anchorMonth, anchorDay, timeParts, tzOffsetMin, offset - 1);
+    }
+    return {
+        cycleStartMs: prev,
+        nextResetMs: candidate,
+        expiryBeijingDate: beijingDateFromMs(candidate),
+        anchorDay,
+        source
+    };
+}
+
+function sumRolling5hSpendUsd(usage, nowMs, sinceMs = 0) {
+    const cutoff = Math.max(nowMs - ROLLING_5H_MS, sinceMs || 0);
+    const buckets = Array.isArray(usage?.rolling5hBuckets) ? usage.rolling5hBuckets : [];
+    let total = 0;
+    for (const bucket of buckets) {
+        if (!isPlainObject(bucket) || !isNonNegativeFinite(bucket.bucketMs) || !isNonNegativeFinite(bucket.spentUsd)) continue;
+        // 仅累计时间窗内的分桶（分桶末端 > cutoff）
+        if (bucket.bucketMs + ROLLING_5H_BUCKET_MS > cutoff && bucket.bucketMs <= nowMs + ROLLING_5H_BUCKET_MS) {
+            total += bucket.spentUsd;
+        }
+    }
+    return total;
+}
+
+function roundPct4(value) {
+    return Math.round(value * 10000) / 10000;
+}
+
+function evaluateAccountQuota(record, nowMs) {
+    const safeRecord = isPlainObject(record) ? record : {};
+    const windows = isPlainObject(safeRecord.windows) ? safeRecord.windows : {};
+    const quota = isPlainObject(safeRecord.quota) ? safeRecord.quota : {};
+    const usage = isPlainObject(safeRecord.usage) ? safeRecord.usage : {};
+    const monthlyCycle = resolveMonthlyCycle(safeRecord, nowMs);
+    const weekStartMs = currentWeeklyCycleStartMs(nowMs);
+    const nextWeekResetMs = weekStartMs + 7 * DAY_MS;
+
+    const windowBlockedUntil = name => {
+        const value = windows[name]?.blockedUntilMs;
+        return isNonNegativeFinite(value) && value > nowMs ? value : 0;
+    };
+
+    let monthlyBlockedUntil = windowBlockedUntil('monthly');
+    let weeklyBlockedUntil = windowBlockedUntil('weekly');
+    let rolling5hBlockedUntil = windowBlockedUntil('rolling_5h');
+    const balanceBlockedUntil = windowBlockedUntil('balance');
+    const unknownBlockedUntil = windowBlockedUntil('unknown');
+    const legacyBlockedUntil = isNonNegativeFinite(safeRecord.blockedUntilMs) && safeRecord.blockedUntilMs > nowMs
+        ? safeRecord.blockedUntilMs : 0;
+
+    // 兼容旧状态：只有顶层 blockedUntilMs 和 limitName、没有 windows 分桶时，按 limitName 归属对应窗口
+    if (legacyBlockedUntil > 0 && Object.keys(windows).length === 0) {
+        if (safeRecord.limitName === 'monthly') monthlyBlockedUntil = Math.max(monthlyBlockedUntil, legacyBlockedUntil);
+        else if (safeRecord.limitName === 'weekly') weeklyBlockedUntil = Math.max(weeklyBlockedUntil, legacyBlockedUntil);
+        else if (safeRecord.limitName === 'rolling_5h') rolling5hBlockedUntil = Math.max(rolling5hBlockedUntil, legacyBlockedUntil);
+    }
+
+    const fallbackSnapMs = isNonNegativeFinite(quota.snapshotAtMs) ? quota.snapshotAtMs : 0;
+    const monthlySnapMs = isNonNegativeFinite(quota.monthlySnapshotAtMs) ? quota.monthlySnapshotAtMs : fallbackSnapMs;
+    const weeklySnapMs = isNonNegativeFinite(quota.weeklySnapshotAtMs) ? quota.weeklySnapshotAtMs : fallbackSnapMs;
+    const rolling5hSnapMs = isNonNegativeFinite(quota.rolling5hSnapshotAtMs) ? quota.rolling5hSnapshotAtMs : fallbackSnapMs;
+    const budgetMonthly = isNonNegativeFinite(quota.monthlyBudgetUsd) && quota.monthlyBudgetUsd > 0
+        ? quota.monthlyBudgetUsd : DEFAULT_MONTHLY_BUDGET_USD;
+    const budgetWeekly = budgetMonthly * 0.5;
+    const budget5h = budgetMonthly * 0.2;
+
+    const monthlySnapshotActive = isPercentValue(quota.monthlyRemainingPct) && monthlySnapMs > 0 && (
+        monthlyCycle ? monthlySnapMs >= monthlyCycle.cycleStartMs : (nowMs - monthlySnapMs) < 31 * DAY_MS
+    );
+    if (monthlySnapshotActive && quota.monthlyRemainingPct === 0) {
+        const until = monthlyCycle ? monthlyCycle.nextResetMs : (monthlySnapMs + 31 * DAY_MS);
+        if (until > nowMs) monthlyBlockedUntil = Math.max(monthlyBlockedUntil, until);
+    }
+
+    const weeklyResetMs = isNonNegativeFinite(quota.weeklyResetAtMs) && quota.weeklyResetAtMs > 0
+        ? quota.weeklyResetAtMs : nextWeekResetMs;
+    const weeklySnapshotActive = isPercentValue(quota.weeklyRemainingPct) && weeklySnapMs > 0 && (
+        isNonNegativeFinite(quota.weeklyResetAtMs) && quota.weeklyResetAtMs > 0
+            ? nowMs < quota.weeklyResetAtMs
+            : weeklySnapMs >= weekStartMs
+    );
+    if (weeklySnapshotActive && quota.weeklyRemainingPct === 0 && weeklyResetMs > nowMs) {
+        weeklyBlockedUntil = Math.max(weeklyBlockedUntil, weeklyResetMs);
+    }
+
+    const rolling5hResetMs = isNonNegativeFinite(quota.rolling5hResetAtMs) && quota.rolling5hResetAtMs > 0
+        ? quota.rolling5hResetAtMs : (rolling5hSnapMs > 0 ? rolling5hSnapMs + ROLLING_5H_MS : 0);
+    const rolling5hSnapshotActive = isPercentValue(quota.rolling5hRemainingPct) && rolling5hSnapMs > 0 && (
+        isNonNegativeFinite(quota.rolling5hResetAtMs) && quota.rolling5hResetAtMs > 0
+            ? nowMs < quota.rolling5hResetAtMs
+            : nowMs < rolling5hSnapMs + ROLLING_5H_MS
+    );
+    if (rolling5hSnapshotActive && quota.rolling5hRemainingPct === 0 && rolling5hResetMs > nowMs) {
+        rolling5hBlockedUntil = Math.max(rolling5hBlockedUntil, rolling5hResetMs);
+    }
+
+    const activeBlockedUntilMs = Math.max(
+        legacyBlockedUntil, monthlyBlockedUntil, weeklyBlockedUntil,
+        rolling5hBlockedUntil, balanceBlockedUntil, unknownBlockedUntil
+    );
+    const hasMonthlyQuota = monthlyBlockedUntil === 0;
+    const hasWeeklyQuota = weeklyBlockedUntil === 0;
+    const hasRolling5hQuota = rolling5hBlockedUntil === 0;
+    const hasBalanceQuota = balanceBlockedUntil === 0;
+    const eligible = activeBlockedUntilMs === 0;
+
+    // 计算三窗口有效估算剩余百分比（同一天到期按月剩余最多优先，月剩余相同再比周/5h）
+    const currentMonthlySpentUsd = (
+        isNonNegativeFinite(usage.monthlySpentUsd)
+        && (!monthlyCycle || !isNonNegativeFinite(usage.monthlyCycleStartMs) || usage.monthlyCycleStartMs === monthlyCycle.cycleStartMs)
+    ) ? usage.monthlySpentUsd : 0;
+    let effectiveMonthlyRemainingPct;
+    if (!hasMonthlyQuota) {
+        effectiveMonthlyRemainingPct = 0;
+    } else if (monthlySnapshotActive) {
+        const spentAtSnap = isNonNegativeFinite(quota.monthlySpentAtSnapshotUsd) ? quota.monthlySpentAtSnapshotUsd : 0;
+        const deltaUsd = Math.max(0, currentMonthlySpentUsd - spentAtSnap);
+        effectiveMonthlyRemainingPct = roundPct4(
+            Math.max(MIN_ESTIMATED_REMAINING_PCT, Math.min(100, quota.monthlyRemainingPct - (deltaUsd / budgetMonthly) * 100))
+        );
+    } else {
+        effectiveMonthlyRemainingPct = roundPct4(
+            Math.max(MIN_ESTIMATED_REMAINING_PCT, Math.min(100, 100 - (currentMonthlySpentUsd / budgetMonthly) * 100))
+        );
+    }
+
+    const currentWeeklySpentUsd = (
+        isNonNegativeFinite(usage.weeklySpentUsd)
+        && isNonNegativeFinite(usage.weeklyCycleStartMs) && usage.weeklyCycleStartMs === weekStartMs
+    ) ? usage.weeklySpentUsd : 0;
+    let effectiveWeeklyRemainingPct;
+    if (!hasWeeklyQuota) {
+        effectiveWeeklyRemainingPct = 0;
+    } else if (weeklySnapshotActive) {
+        const spentAtSnap = isNonNegativeFinite(quota.weeklySpentAtSnapshotUsd) ? quota.weeklySpentAtSnapshotUsd : 0;
+        const deltaUsd = Math.max(0, currentWeeklySpentUsd - spentAtSnap);
+        effectiveWeeklyRemainingPct = roundPct4(
+            Math.max(MIN_ESTIMATED_REMAINING_PCT, Math.min(100, quota.weeklyRemainingPct - (deltaUsd / budgetWeekly) * 100))
+        );
+    } else {
+        effectiveWeeklyRemainingPct = roundPct4(
+            Math.max(MIN_ESTIMATED_REMAINING_PCT, Math.min(100, 100 - (currentWeeklySpentUsd / budgetWeekly) * 100))
+        );
+    }
+
+    const current5hSpentUsd = sumRolling5hSpendUsd(usage, nowMs, 0);
+    let effectiveRolling5hRemainingPct;
+    if (!hasRolling5hQuota) {
+        effectiveRolling5hRemainingPct = 0;
+    } else if (rolling5hSnapshotActive) {
+        const spentAtSnap = isNonNegativeFinite(quota.rolling5hSpentAtSnapshotUsd) ? quota.rolling5hSpentAtSnapshotUsd : 0;
+        const deltaUsd = Math.max(0, current5hSpentUsd - spentAtSnap);
+        effectiveRolling5hRemainingPct = roundPct4(
+            Math.max(MIN_ESTIMATED_REMAINING_PCT, Math.min(100, quota.rolling5hRemainingPct - (deltaUsd / budget5h) * 100))
+        );
+    } else {
+        effectiveRolling5hRemainingPct = roundPct4(
+            Math.max(MIN_ESTIMATED_REMAINING_PCT, Math.min(100, 100 - (current5hSpentUsd / budget5h) * 100))
+        );
+    }
+
+    return {
+        eligible,
+        activeBlockedUntilMs,
+        hasMonthlyQuota,
+        hasWeeklyQuota,
+        hasRolling5hQuota,
+        hasBalanceQuota,
+        monthlyBlockedUntil,
+        weeklyBlockedUntil,
+        rolling5hBlockedUntil,
+        balanceBlockedUntil,
+        unknownBlockedUntil,
+        monthlyCycle,
+        monthlyBudgetUsd: budgetMonthly,
+        monthlyRemainingSource: monthlySnapshotActive ? 'manual_snapshot' : 'cycle_estimate',
+        effectiveMonthlyRemainingPct,
+        effectiveWeeklyRemainingPct,
+        effectiveRolling5hRemainingPct,
+        currentMonthlySpentUsd,
+        currentWeeklySpentUsd,
+        current5hSpentUsd,
+        label: typeof quota.label === 'string' ? quota.label : null
+    };
+}
+
 function accountIsBlocked(record, nowMs) {
-    return Number.isFinite(record?.blockedUntilMs) && record.blockedUntilMs > nowMs;
+    return !evaluateAccountQuota(record, nowMs).eligible;
+}
+
+function resolvePoolStrategy(options = {}) {
+    const raw = String(options.strategy || process.env.PD_LLM_ACCOUNT_POOL_STRATEGY || 'expiry_priority').trim().toLowerCase();
+    return raw === 'equal_rotation' ? 'equal_rotation' : 'expiry_priority';
+}
+
+function comparePriorityTier1(left, right) {
+    // 1. 北京时间月额度到期自然日越早越优先
+    if (left.eval.monthlyCycle.expiryBeijingDate !== right.eval.monthlyCycle.expiryBeijingDate) {
+        return left.eval.monthlyCycle.expiryBeijingDate < right.eval.monthlyCycle.expiryBeijingDate ? -1 : 1;
+    }
+    // 2. 同一天到期：月剩余额度最多优先
+    if (left.eval.effectiveMonthlyRemainingPct !== right.eval.effectiveMonthlyRemainingPct) {
+        return right.eval.effectiveMonthlyRemainingPct - left.eval.effectiveMonthlyRemainingPct;
+    }
+    // 3. 月剩余相同：依次比较周剩余、5h 剩余（均取最大）
+    if (left.eval.effectiveWeeklyRemainingPct !== right.eval.effectiveWeeklyRemainingPct) {
+        return right.eval.effectiveWeeklyRemainingPct - left.eval.effectiveWeeklyRemainingPct;
+    }
+    if (left.eval.effectiveRolling5hRemainingPct !== right.eval.effectiveRolling5hRemainingPct) {
+        return right.eval.effectiveRolling5hRemainingPct - left.eval.effectiveRolling5hRemainingPct;
+    }
+    // 4. 三窗口剩余均相同：同日内更早到期的精确时间戳优先
+    if (left.eval.monthlyCycle.nextResetMs !== right.eval.monthlyCycle.nextResetMs) {
+        return left.eval.monthlyCycle.nextResetMs - right.eval.monthlyCycle.nextResetMs;
+    }
+    return 0;
+}
+
+function choosePoolCandidate(service, orderedAccountIds, group, excluded, nowMs, affinityKey, strategy) {
+    const accounts = service?.accounts || {};
+    if (strategy !== 'equal_rotation') {
+        const tier1 = [];
+        for (let index = 0; index < orderedAccountIds.length; index += 1) {
+            const accountId = orderedAccountIds[index];
+            if (excluded.has(accountId)) continue;
+            const evaluated = evaluateAccountQuota(accounts[accountId], nowMs);
+            if (!evaluated.eligible) continue;
+            if (evaluated.monthlyCycle !== null) {
+                tier1.push({ index, accountId, eval: evaluated });
+            }
+        }
+        if (tier1.length > 0) {
+            tier1.sort((a, b) => comparePriorityTier1(a, b) || (a.index - b.index));
+            const best = tier1[0];
+            const tied = tier1.filter(item => comparePriorityTier1(item, best) === 0);
+            let picked = best;
+            if (tied.length > 1 && affinityKey) {
+                const pickOffset = parseInt(sha256(affinityKey).slice(0, 8), 16) % tied.length;
+                picked = tied[pickOffset];
+            }
+            return { selectedIndex: picked.index, accountId: picked.accountId, selectionMode: 'expiry_priority', evaluated: picked.eval };
+        }
+    }
+
+    const startIndex = affinityKey
+        ? (parseInt(sha256(affinityKey).slice(0, 8), 16) % orderedAccountIds.length)
+        : resolveRotationCursor(group, orderedAccountIds);
+    for (let step = 0; step < orderedAccountIds.length; step += 1) {
+        const index = (startIndex + step) % orderedAccountIds.length;
+        const accountId = orderedAccountIds[index];
+        if (excluded.has(accountId)) continue;
+        const evaluated = evaluateAccountQuota(accounts[accountId], nowMs);
+        if (!evaluated.eligible) continue;
+        return {
+            selectedIndex: index,
+            accountId,
+            selectionMode: affinityKey ? 'affinity' : 'equal_rotation',
+            evaluated
+        };
+    }
+    return null;
 }
 
 function groupLastUsedAtMs(group) {
@@ -966,17 +1393,17 @@ function pruneStaleGroups(service, currentGroupId, nowMs) {
 }
 
 function buildExhaustedError(service, accountIds, nowMs) {
-    const blocked = accountIds.map(id => service.accounts[id]).filter(record => accountIsBlocked(record, nowMs));
-    const earliestRetryAtMs = blocked.length > 0
-        ? Math.min(...blocked.map(record => record.blockedUntilMs))
-        : null;
+    const blockedTimes = accountIds
+        .map(id => evaluateAccountQuota(service.accounts[id], nowMs).activeBlockedUntilMs)
+        .filter(ms => ms > nowMs);
+    const earliestRetryAtMs = blockedTimes.length > 0 ? Math.min(...blockedTimes) : null;
     const suffix = earliestRetryAtMs
         ? `，最早恢复时间 ${new Date(earliestRetryAtMs).toISOString()}`
         : '';
     return new LlmAccountPoolExhaustedError(
         `OpenCode Go 账号池没有可用账号（全部冷却中或已被本次逻辑请求排除）；下一逻辑请求会从轮转游标继续${suffix}`, {
             earliestRetryAtMs,
-            blockedAccountCount: blocked.length
+            blockedAccountCount: blockedTimes.length
         });
 }
 
@@ -1009,15 +1436,16 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
     const orderedAccountIds = getOrderedAccountIds(identity);
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
     const excluded = new Set(options.excludeAccountIds || []);
+    const strategy = resolvePoolStrategy(options);
     const rawAffinity = typeof options.affinityKey === 'string' ? options.affinityKey.trim() : '';
     const affinityKey = rawAffinity
         .replace(/^arxiv:/i, '')
         .replace(/^(\d{4}\.\d{4,5})v\d+$/i, '$1');
     const byId = new Map(keys.map(key => [getAccountId(key), key]));
 
-    // 5 条件只读亲和快路径：affinityKey 不推进 rotationCursor，若现有组已锚定且无需清理旧组、
-    // 命中账号未冷却且无需状态跃迁、且 60s 内已有活跃时间戳，则免锁免 fsync 直接返回。
-    if (affinityKey && options.forceWrite !== true) {
+    // 只读快路径：affinity 与同账号 expiry_priority 不推进 rotationCursor，若现有组已锚定且无需清理旧组、
+    // 命中账号可用且无需状态跃迁、且 60s 内已有活跃时间戳，则免锁免 fsync 直接返回。
+    if (options.forceWrite !== true) {
         try {
             const state = readStateStrict(stateFile);
             const service = state?.services?.[identity.serviceId];
@@ -1027,22 +1455,20 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
                 ([gid, g]) => gid !== identity.groupId && (nowMs - Number(g?.lastSelectedAtMs || 0)) > STALE_GROUP_MS
             );
             if (service && group && Number.isSafeInteger(group.rotationCursor) && !stalePruneNeeded) {
-                const startIndex = parseInt(sha256(affinityKey).slice(0, 8), 16) % orderedAccountIds.length;
-                let selectedIndex = -1;
-                for (let step = 0; step < orderedAccountIds.length; step += 1) {
-                    const index = (startIndex + step) % orderedAccountIds.length;
-                    const accountId = orderedAccountIds[index];
-                    if (excluded.has(accountId)) continue;
-                    if (accountIsBlocked(service.accounts?.[accountId], nowMs)) continue;
-                    selectedIndex = index;
-                    break;
-                }
-                if (selectedIndex >= 0) {
-                    const nextId = orderedAccountIds[selectedIndex];
+                const candidate = choosePoolCandidate(service, orderedAccountIds, group, excluded, nowMs, affinityKey, strategy);
+                if (candidate && candidate.selectionMode !== 'equal_rotation') {
+                    const nextId = candidate.accountId;
                     const acctStatus = service.accounts?.[nextId]?.status;
                     const lastSelected = Number(group.lastSelectedAtMs || 0);
-                    if (acctStatus !== 'quota_blocked' && lastSelected > 0 && nowMs >= lastSelected && (nowMs - lastSelected) < 60_000) {
-                        return { apiKey: byId.get(nextId), accountId: nextId, ...identity };
+                    const sameActiveOrAffinity = candidate.selectionMode === 'affinity' || group.activeAccountId === nextId;
+                    if (sameActiveOrAffinity && acctStatus !== 'quota_blocked'
+                        && lastSelected > 0 && nowMs >= lastSelected && (nowMs - lastSelected) < 60_000) {
+                        return {
+                            apiKey: byId.get(nextId),
+                            accountId: nextId,
+                            selectionMode: candidate.selectionMode,
+                            ...identity
+                        };
                     }
                 }
             }
@@ -1059,34 +1485,17 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
         pruneStaleGroups(service, identity.groupId, nowMs);
         const group = service.groups[identity.groupId] || { activeAccountId: null, switchedAt: null };
         service.groups[identity.groupId] = group;
-        // 论文级等权粘性路由：对同一 affinityKey（如 paperId）用 sha256 均匀映射到
-        // 稳定排序后的等权账号槽位，提高同篇多阶段/重试的 KV 前缀缓存命中率；
-        // 槽位冷却或已排除时按环形顺序平稳降级，全部账号仍严格等权。
-        const startIndex = affinityKey
-            ? (parseInt(sha256(affinityKey).slice(0, 8), 16) % orderedAccountIds.length)
-            : resolveRotationCursor(group, orderedAccountIds);
-        // 从起点扫描一圈：跳过本次逻辑请求已试过的账号（excluded）和
-        // 仍在冷却中的账号（blockedUntilMs 未到）；冷却到期的账号自然重新
-        // 加入轮转。整圈都不可用时按最早恢复时间报错。
-        let selectedIndex = -1;
-        for (let step = 0; step < orderedAccountIds.length; step += 1) {
-            const index = (startIndex + step) % orderedAccountIds.length;
-            const accountId = orderedAccountIds[index];
-            if (excluded.has(accountId)) continue;
-            if (accountIsBlocked(service.accounts[accountId], nowMs)) continue;
-            selectedIndex = index;
-            break;
-        }
-        if (selectedIndex < 0) throw buildExhaustedError(service, orderedAccountIds, nowMs);
-        const nextId = orderedAccountIds[selectedIndex];
-        if (affinityKey) {
-            // 新建分组首次以 affinityKey 选槽时，显式锚定 rotationCursor=0，
-            // 避免后续非亲和轮转回退到 activeAccountId 所在槽位而漂移。
-            if (!Number.isSafeInteger(group.rotationCursor)) {
-                group.rotationCursor = resolveRotationCursor(group, orderedAccountIds);
-            }
-        } else {
-            group.rotationCursor = (selectedIndex + 1) % orderedAccountIds.length;
+
+        const candidate = choosePoolCandidate(service, orderedAccountIds, group, excluded, nowMs, affinityKey, strategy);
+        if (!candidate) throw buildExhaustedError(service, orderedAccountIds, nowMs);
+
+        const nextId = candidate.accountId;
+        if (candidate.selectionMode === 'equal_rotation') {
+            group.rotationCursor = (candidate.selectedIndex + 1) % orderedAccountIds.length;
+        } else if (!Number.isSafeInteger(group.rotationCursor)) {
+            // 首次以 expiry_priority 或 affinity 选槽时显式锚定 rotationCursor，
+            // 避免后续回退等权轮转时漂移。
+            group.rotationCursor = resolveRotationCursor(group, orderedAccountIds);
         }
         group.activeAccountId = nextId;
         group.lastSelectedAtMs = nowMs;
@@ -1094,10 +1503,12 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
         if (service.accounts[nextId]?.status === 'quota_blocked') {
             service.accounts[nextId].status = 'eligible_after_reset';
         }
-        selection = { apiKey: byId.get(nextId), accountId: nextId, ...identity };
-        // 写放大说明：等权轮转下每次选择都会推进游标，跨进程/跨请求的公平
-        // 依赖持久化的 rotationCursor，所以这里必须每次写状态（一次原子写
-        // 加已有的文件锁），不能按“选择结果是否变化”跳过写入。
+        selection = {
+            apiKey: byId.get(nextId),
+            accountId: nextId,
+            selectionMode: candidate.selectionMode,
+            ...identity
+        };
         return state;
     });
     return selection;
@@ -1109,26 +1520,503 @@ function markQuotaExhausted(selection, quota, stateFile, options = {}) {
         nowMs + MAX_BLOCK_MS,
         Math.max(nowMs + 1000, Number(quota?.blockedUntilMs) || nowMs + UNKNOWN_QUOTA_BLOCK_MS)
     );
+    const limitClass = QUOTA_WINDOWS.includes(String(quota?.limitClass || ''))
+        ? String(quota.limitClass)
+        : 'unknown';
     let effectiveUntilMs = blockedUntilMs;
     updateState(stateFile, state => {
         const service = ensureService(state, selection);
-        const previous = service.accounts[selection.accountId] || {};
-        effectiveUntilMs = Math.max(Number(previous.blockedUntilMs) || 0, blockedUntilMs);
-        service.accounts[selection.accountId] = {
+        const previous = isPlainObject(service.accounts[selection.accountId]) ? service.accounts[selection.accountId] : {};
+        const prevWindows = isPlainObject(previous.windows) ? { ...previous.windows } : {};
+        const prevWindowUntil = isNonNegativeFinite(prevWindows[limitClass]?.blockedUntilMs)
+            ? prevWindows[limitClass].blockedUntilMs : 0;
+        const windowUntilMs = Math.max(prevWindowUntil, blockedUntilMs);
+        prevWindows[limitClass] = {
+            blockedUntilMs: windowUntilMs,
+            blockedUntil: new Date(windowUntilMs).toISOString(),
+            lastExhaustedAt: new Date(nowMs).toISOString()
+        };
+
+        // 顶层 blockedUntilMs 同步为单调不减的最大冷却时间，确保既有监控（doctor/status/report）一致
+        let maxWindowUntil = Math.max(Number(previous.blockedUntilMs) || 0, windowUntilMs);
+        for (const entry of Object.values(prevWindows)) {
+            if (isNonNegativeFinite(entry?.blockedUntilMs) && entry.blockedUntilMs > maxWindowUntil) {
+                maxWindowUntil = entry.blockedUntilMs;
+            }
+        }
+        effectiveUntilMs = maxWindowUntil;
+
+        const nextQuota = isPlainObject(previous.quota) ? { ...previous.quota } : {};
+        if (limitClass === 'monthly') {
+            // 自动从真实 monthly 429 学习并校准月账单重置锚点；仅当用户未手动覆盖时同步主锚点
+            nextQuota.autoMonthlyAnchorMs = windowUntilMs;
+            if (nextQuota.monthlyResetSource !== 'manual') {
+                nextQuota.monthlyResetAtMs = windowUntilMs;
+                nextQuota.monthlyResetTzOffsetMin = 0;
+                nextQuota.monthlyResetDay = new Date(windowUntilMs).getUTCDate();
+                nextQuota.monthlyResetSource = 'auto_429';
+            }
+            nextQuota.monthlyRemainingPct = 0;
+            nextQuota.monthlySnapshotAtMs = nowMs;
+        } else if (limitClass === 'weekly') {
+            nextQuota.weeklyRemainingPct = 0;
+            nextQuota.weeklyResetAtMs = windowUntilMs;
+            nextQuota.weeklySnapshotAtMs = nowMs;
+        } else if (limitClass === 'rolling_5h') {
+            nextQuota.rolling5hRemainingPct = 0;
+            nextQuota.rolling5hResetAtMs = windowUntilMs;
+            nextQuota.rolling5hSnapshotAtMs = nowMs;
+        }
+
+        const nextRecord = {
             ...previous,
             status: 'quota_blocked',
             reason: quota?.type || 'GoUsageLimitError',
-            limitName: String(quota?.limitClass || 'unknown'),
+            limitName: limitClass,
             blockedUntilMs: effectiveUntilMs,
             blockedUntil: new Date(effectiveUntilMs).toISOString(),
             lastFailureAt: new Date(nowMs).toISOString(),
-            lastFailureStatus: quota?.type === 'InsufficientBalanceError' ? 401 : 429
+            lastFailureStatus: quota?.type === 'InsufficientBalanceError' ? 401 : 429,
+            windows: prevWindows
         };
-        // 冷却只影响账号可用性，不移动轮转游标：该账号在 selectApiKey 里已被
-        // 明确排除，下一次选择会从游标继续，冷却到期后自动重新加入轮转。
+        if (Object.keys(nextQuota).length > 0) {
+            nextRecord.quota = nextQuota;
+        }
+        service.accounts[selection.accountId] = nextRecord;
         return state;
     });
     return effectiveUntilMs;
+}
+
+function estimateUsageSpendUsd(usageInfo = {}) {
+    if (!isPlainObject(usageInfo)) return { spentUsd: 0, totalTokens: 0 };
+    const explicitCost = usageInfo.costUsd ?? usageInfo.cost_usd
+        ?? usageInfo.estimatedCostUsd ?? usageInfo.estimated_cost_usd ?? usageInfo.cost;
+    const rawUsage = isPlainObject(usageInfo.usage) ? usageInfo.usage : usageInfo;
+    const input = Number(rawUsage.inputTokens ?? rawUsage.input_tokens ?? rawUsage.prompt_tokens ?? 0) || 0;
+    const cached = Number(
+        rawUsage.cachedInputTokens
+        ?? rawUsage.input_tokens_details?.cached_tokens
+        ?? rawUsage.prompt_tokens_details?.cached_tokens
+        ?? rawUsage.cache_read_input_tokens
+        ?? 0
+    ) || 0;
+    const output = Number(rawUsage.outputTokens ?? rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0) || 0;
+    const totalTokens = Math.max(
+        0,
+        Math.round(Number(rawUsage.totalTokens ?? rawUsage.total_tokens ?? (input + output)) || 0)
+    );
+    if (typeof explicitCost === 'number' && Number.isFinite(explicitCost) && explicitCost >= 0) {
+        return { spentUsd: explicitCost, totalTokens };
+    }
+    if (input <= 0 && output <= 0 && totalTokens <= 0) {
+        return { spentUsd: 0, totalTokens: 0 };
+    }
+    const uncachedInput = Math.max(0, input - Math.min(input, Math.max(0, cached)));
+    const safeCached = Math.max(0, Math.min(input, cached));
+    const safeOutput = Math.max(0, output);
+    const spentUsd = (
+        uncachedInput * DEFAULT_INPUT_USD_PER_M
+        + safeCached * DEFAULT_CACHED_INPUT_USD_PER_M
+        + safeOutput * DEFAULT_OUTPUT_USD_PER_M
+    ) / 1_000_000;
+    return {
+        spentUsd: Number.isFinite(spentUsd) && spentUsd >= 0 ? Math.round(spentUsd * 1e6) / 1e6 : 0,
+        totalTokens
+    };
+}
+
+function recordAccountUsage(selection, usageInfo, stateFile, options = {}) {
+    if (!selection?.serviceId || !selection?.accountId) return null;
+    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const { spentUsd, totalTokens } = estimateUsageSpendUsd(usageInfo);
+    if (spentUsd <= 0 && totalTokens <= 0) return null;
+    let recorded = null;
+    updateState(stateFile, state => {
+        const service = ensureService(state, selection);
+        const previous = isPlainObject(service.accounts[selection.accountId]) ? service.accounts[selection.accountId] : {};
+        const monthlyCycle = resolveMonthlyCycle(previous, nowMs);
+        const monthlyCycleStartMs = monthlyCycle ? monthlyCycle.cycleStartMs : null;
+        const weekStartMs = currentWeeklyCycleStartMs(nowMs);
+        const prevUsage = isPlainObject(previous.usage) ? previous.usage : {};
+
+        const sameMonth = monthlyCycleStartMs !== null
+            ? prevUsage.monthlyCycleStartMs === monthlyCycleStartMs
+            : (prevUsage.monthlyCycleStartMs === null || prevUsage.monthlyCycleStartMs === undefined);
+        const sameWeek = prevUsage.weeklyCycleStartMs === weekStartMs;
+
+        const bucketMs = Math.floor(nowMs / ROLLING_5H_BUCKET_MS) * ROLLING_5H_BUCKET_MS;
+        const cutoffMs = nowMs - ROLLING_5H_MS;
+        const nextBuckets = [];
+        let mergedBucket = false;
+        for (const bucket of (Array.isArray(prevUsage.rolling5hBuckets) ? prevUsage.rolling5hBuckets : [])) {
+            if (!isPlainObject(bucket) || !isNonNegativeFinite(bucket.bucketMs) || !isNonNegativeFinite(bucket.spentUsd)) continue;
+            if (bucket.bucketMs + ROLLING_5H_BUCKET_MS <= cutoffMs) continue;
+            if (bucket.bucketMs === bucketMs) {
+                nextBuckets.push({
+                    bucketMs,
+                    spentUsd: Math.round((bucket.spentUsd + spentUsd) * 1e6) / 1e6,
+                    tokens: (Number.isSafeInteger(bucket.tokens) ? bucket.tokens : 0) + totalTokens
+                });
+                mergedBucket = true;
+            } else {
+                nextBuckets.push({
+                    bucketMs: bucket.bucketMs,
+                    spentUsd: bucket.spentUsd,
+                    tokens: Number.isSafeInteger(bucket.tokens) ? bucket.tokens : 0
+                });
+            }
+        }
+        if (!mergedBucket) {
+            nextBuckets.push({ bucketMs, spentUsd, tokens: totalTokens });
+        }
+        nextBuckets.sort((a, b) => a.bucketMs - b.bucketMs);
+
+        const nextUsage = {
+            monthlyCycleStartMs,
+            monthlySpentUsd: Math.round(((sameMonth && isNonNegativeFinite(prevUsage.monthlySpentUsd) ? prevUsage.monthlySpentUsd : 0) + spentUsd) * 1e6) / 1e6,
+            monthlyTokens: (sameMonth && Number.isSafeInteger(prevUsage.monthlyTokens) ? prevUsage.monthlyTokens : 0) + totalTokens,
+            monthlyRequests: (sameMonth && Number.isSafeInteger(prevUsage.monthlyRequests) ? prevUsage.monthlyRequests : 0) + 1,
+            weeklyCycleStartMs: weekStartMs,
+            weeklySpentUsd: Math.round(((sameWeek && isNonNegativeFinite(prevUsage.weeklySpentUsd) ? prevUsage.weeklySpentUsd : 0) + spentUsd) * 1e6) / 1e6,
+            rolling5hBuckets: nextBuckets,
+            lastUpdatedAtMs: nowMs
+        };
+        service.accounts[selection.accountId] = {
+            ...previous,
+            usage: nextUsage
+        };
+        recorded = nextUsage;
+        return state;
+    });
+    return recorded;
+}
+
+function parseMonthlyExpiryInput(value) {
+    const raw = String(value || '').trim();
+    if (!raw) throw new LlmAccountPoolConfigError('月到期日不能为空');
+    const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    if (dateOnly) {
+        const year = Number(dateOnly[1]);
+        const month = Number(dateOnly[2]);
+        const day = Number(dateOnly[3]);
+        const checkMs = buildStrictUtcMs(year, month, day, 23, 59, 59, 999, 480);
+        if (!Number.isFinite(checkMs)) {
+            throw new LlmAccountPoolConfigError(`非法月到期日期: ${raw}`);
+        }
+        return {
+            monthlyResetAtMs: checkMs,
+            monthlyResetDay: day,
+            monthlyResetTzOffsetMin: 480
+        };
+    }
+    const isoMs = parseHttpDateMs(raw);
+    if (!Number.isFinite(isoMs)) {
+        throw new LlmAccountPoolConfigError(`无法解析月到期时间（请使用 YYYY-MM-DD 或 ISO-8601）: ${raw}`);
+    }
+    const tzMatch = /([+-](?:[01]\d|2[0-3]):?[0-5]\d|Z)$/i.exec(raw);
+    const tzOffsetMin = tzMatch && tzMatch[1].toUpperCase() !== 'Z' ? parseHttpTzOffsetMinutes(tzMatch[1]) : 0;
+    const local = new Date(isoMs + (tzOffsetMin || 0) * 60000);
+    return {
+        monthlyResetAtMs: isoMs,
+        monthlyResetDay: local.getUTCDate(),
+        monthlyResetTzOffsetMin: tzOffsetMin || 0
+    };
+}
+
+function setAccountQuota(apiKey, endpoint, patch, stateFile, options = {}) {
+    if (!isPlainObject(patch)) throw new LlmAccountPoolConfigError('额度配置必须为对象');
+    const identity = getPoolIdentity([apiKey], endpoint);
+    const accountId = identity.accountIds[0];
+    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    let evaluatedAfter = null;
+
+    updateState(stateFile, state => {
+        const service = ensureService(state, identity);
+        const previous = isPlainObject(service.accounts[accountId]) ? { ...service.accounts[accountId] } : {};
+        const nextQuota = isPlainObject(previous.quota) ? { ...previous.quota } : {};
+        const nextWindows = isPlainObject(previous.windows) ? { ...previous.windows } : {};
+
+        if (patch.label !== undefined) {
+            if (patch.label === null || patch.label === '') {
+                delete nextQuota.label;
+            } else {
+                const label = String(patch.label).trim();
+                if (!SAFE_ACCOUNT_LABEL_RE.test(label) || /^sk-/i.test(label) || /^[a-f0-9]{32,}$/i.test(label)) {
+                    throw new LlmAccountPoolConfigError(`账号备注非法（仅允许 1-40 位字母/数字/中文/._-，且不能类似密钥）: ${label}`);
+                }
+                nextQuota.label = label;
+            }
+        }
+        if (patch.monthlyBudgetUsd !== undefined && patch.monthlyBudgetUsd !== null) {
+            const budget = Number(patch.monthlyBudgetUsd);
+            if (!Number.isFinite(budget) || budget <= 0) {
+                throw new LlmAccountPoolConfigError(`monthlyBudgetUsd 必须为正数: ${patch.monthlyBudgetUsd}`);
+            }
+            nextQuota.monthlyBudgetUsd = budget;
+        }
+        if (patch.monthlyExpiry !== undefined && patch.monthlyExpiry !== null && patch.monthlyExpiry !== '') {
+            const parsed = parseMonthlyExpiryInput(patch.monthlyExpiry);
+            nextQuota.monthlyResetAtMs = parsed.monthlyResetAtMs;
+            nextQuota.monthlyResetDay = parsed.monthlyResetDay;
+            nextQuota.monthlyResetTzOffsetMin = parsed.monthlyResetTzOffsetMin;
+            nextQuota.monthlyResetSource = 'manual';
+        } else if (patch.monthlyResetDay !== undefined && patch.monthlyResetDay !== null) {
+            const day = Number(patch.monthlyResetDay);
+            if (!Number.isInteger(day) || day < 1 || day > 31) {
+                throw new LlmAccountPoolConfigError(`monthlyResetDay 必须为 1-31 整数: ${patch.monthlyResetDay}`);
+            }
+            delete nextQuota.monthlyResetAtMs;
+            nextQuota.monthlyResetDay = day;
+            nextQuota.monthlyResetTzOffsetMin = 480;
+            nextQuota.monthlyResetSource = 'manual';
+        }
+
+        const effectiveBudget = isNonNegativeFinite(nextQuota.monthlyBudgetUsd) && nextQuota.monthlyBudgetUsd > 0
+            ? nextQuota.monthlyBudgetUsd : DEFAULT_MONTHLY_BUDGET_USD;
+        let monthlyPct = patch.monthlyRemainingPct;
+        if (monthlyPct === undefined && patch.monthlyRemainingUsd !== undefined && patch.monthlyRemainingUsd !== null) {
+            const usd = Number(patch.monthlyRemainingUsd);
+            if (!Number.isFinite(usd) || usd < 0) {
+                throw new LlmAccountPoolConfigError(`monthlyRemainingUsd 不能为负数: ${patch.monthlyRemainingUsd}`);
+            }
+            monthlyPct = Math.min(100, roundPct4((usd / effectiveBudget) * 100));
+        }
+
+        const preRecord = { ...previous, quota: nextQuota, windows: nextWindows };
+        const preEval = evaluateAccountQuota(preRecord, nowMs);
+
+        let touchedSnapshot = false;
+        if (monthlyPct !== undefined && monthlyPct !== null) {
+            const pct = Number(monthlyPct);
+            if (!isPercentValue(pct)) throw new LlmAccountPoolConfigError(`monthlyRemainingPct 必须在 0-100 之间: ${monthlyPct}`);
+            nextQuota.monthlyRemainingPct = roundPct4(pct);
+            nextQuota.monthlySpentAtSnapshotUsd = preEval.currentMonthlySpentUsd;
+            nextQuota.monthlySnapshotAtMs = nowMs;
+            touchedSnapshot = true;
+            if (pct > 0 && nextWindows.monthly && nextWindows.monthly.blockedUntilMs > nowMs) {
+                delete nextWindows.monthly;
+            }
+        }
+        if (patch.weeklyRemainingPct !== undefined && patch.weeklyRemainingPct !== null) {
+            const pct = Number(patch.weeklyRemainingPct);
+            if (!isPercentValue(pct)) throw new LlmAccountPoolConfigError(`weeklyRemainingPct 必须在 0-100 之间: ${patch.weeklyRemainingPct}`);
+            nextQuota.weeklyRemainingPct = roundPct4(pct);
+            nextQuota.weeklySpentAtSnapshotUsd = preEval.currentWeeklySpentUsd;
+            nextQuota.weeklySnapshotAtMs = nowMs;
+            delete nextQuota.weeklyResetAtMs;
+            touchedSnapshot = true;
+            if (pct > 0 && nextWindows.weekly && nextWindows.weekly.blockedUntilMs > nowMs) {
+                delete nextWindows.weekly;
+            }
+        }
+        if (patch.rolling5hRemainingPct !== undefined && patch.rolling5hRemainingPct !== null) {
+            const pct = Number(patch.rolling5hRemainingPct);
+            if (!isPercentValue(pct)) throw new LlmAccountPoolConfigError(`rolling5hRemainingPct 必须在 0-100 之间: ${patch.rolling5hRemainingPct}`);
+            nextQuota.rolling5hRemainingPct = roundPct4(pct);
+            nextQuota.rolling5hSpentAtSnapshotUsd = preEval.current5hSpentUsd;
+            nextQuota.rolling5hSnapshotAtMs = nowMs;
+            delete nextQuota.rolling5hResetAtMs;
+            touchedSnapshot = true;
+            if (pct > 0 && nextWindows.rolling_5h && nextWindows.rolling_5h.blockedUntilMs > nowMs) {
+                delete nextWindows.rolling_5h;
+            }
+        }
+        if (touchedSnapshot) {
+            nextQuota.snapshotAtMs = nowMs;
+        }
+        const previousHadActiveWindows = isPlainObject(previous.windows)
+            && Object.values(previous.windows).some(entry => isNonNegativeFinite(entry?.blockedUntilMs) && entry.blockedUntilMs > nowMs);
+        if (patch.clearCooldown === true) {
+            for (const key of Object.keys(nextWindows)) delete nextWindows[key];
+            previous.blockedUntilMs = 0;
+            delete previous.blockedUntil;
+            if (previous.status === 'quota_blocked') previous.status = 'eligible';
+        } else if (Object.keys(nextWindows).length > 0 || previous.blockedUntilMs > nowMs) {
+            let activeMax = 0;
+            for (const entry of Object.values(nextWindows)) {
+                if (isNonNegativeFinite(entry?.blockedUntilMs) && entry.blockedUntilMs > nowMs) {
+                    activeMax = Math.max(activeMax, entry.blockedUntilMs);
+                }
+            }
+            if (previousHadActiveWindows) {
+                if (activeMax === 0) {
+                    previous.blockedUntilMs = 0;
+                    delete previous.blockedUntil;
+                    if (previous.status === 'quota_blocked') previous.status = 'eligible';
+                } else if (previous.blockedUntilMs > activeMax) {
+                    previous.blockedUntilMs = activeMax;
+                    previous.blockedUntil = new Date(activeMax).toISOString();
+                }
+            } else if (previous.blockedUntilMs > nowMs) {
+                const legacyMatchesClearedWindow = (
+                    (previous.limitName === 'monthly' && Number(monthlyPct) > 0)
+                    || (previous.limitName === 'weekly' && Number(patch.weeklyRemainingPct) > 0)
+                    || (previous.limitName === 'rolling_5h' && Number(patch.rolling5hRemainingPct) > 0)
+                );
+                if (legacyMatchesClearedWindow) {
+                    previous.blockedUntilMs = activeMax;
+                    if (activeMax === 0) {
+                        delete previous.blockedUntil;
+                        if (previous.status === 'quota_blocked') previous.status = 'eligible';
+                    } else {
+                        previous.blockedUntil = new Date(activeMax).toISOString();
+                    }
+                }
+            }
+        }
+
+        const nextRecord = {
+            ...previous,
+            quota: nextQuota
+        };
+        if (Object.keys(nextWindows).length > 0) nextRecord.windows = nextWindows;
+        else delete nextRecord.windows;
+        service.accounts[accountId] = nextRecord;
+        evaluatedAfter = evaluateAccountQuota(nextRecord, nowMs);
+        return state;
+    });
+    return evaluatedAfter;
+}
+
+function clearAccountQuota(apiKey, endpoint, stateFile) {
+    const identity = getPoolIdentity([apiKey], endpoint);
+    const accountId = identity.accountIds[0];
+    let cleared = false;
+    updateState(stateFile, state => {
+        const service = ensureService(state, identity);
+        const previous = service.accounts[accountId];
+        if (!isPlainObject(previous) || !previous.quota) return undefined;
+        const next = { ...previous };
+        delete next.quota;
+        service.accounts[accountId] = next;
+        cleared = true;
+        return state;
+    });
+    return cleared;
+}
+
+function initQuotasFromHistory(apiKeys, endpoint, stateFile, options = {}) {
+    const keys = normalizeApiKeys(apiKeys);
+    const identity = getPoolIdentity(keys, endpoint);
+    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const initialized = [];
+    const skipped = [];
+    updateState(stateFile, state => {
+        const service = ensureService(state, identity);
+        let changed = false;
+        keys.forEach((key, idx) => {
+            const accountId = getAccountId(key);
+            const record = service.accounts[accountId];
+            if (!isPlainObject(record)) {
+                skipped.push({ slot: idx + 1, reason: 'unobserved' });
+                return;
+            }
+            if (record.quota?.monthlyResetSource === 'manual') {
+                skipped.push({ slot: idx + 1, reason: 'already_manual' });
+                return;
+            }
+            const monthlyAnchor = (record.windows?.monthly && isNonNegativeFinite(record.windows.monthly.blockedUntilMs) && record.windows.monthly.blockedUntilMs > 0)
+                ? record.windows.monthly.blockedUntilMs
+                : (record.limitName === 'monthly' && isNonNegativeFinite(record.blockedUntilMs) && record.blockedUntilMs > 0
+                    ? record.blockedUntilMs
+                    : null);
+            if (!monthlyAnchor) {
+                skipped.push({ slot: idx + 1, reason: 'no_monthly_429_history' });
+                return;
+            }
+            const nextQuota = isPlainObject(record.quota) ? { ...record.quota } : {};
+            nextQuota.autoMonthlyAnchorMs = monthlyAnchor;
+            nextQuota.monthlyResetAtMs = monthlyAnchor;
+            nextQuota.monthlyResetTzOffsetMin = 0;
+            nextQuota.monthlyResetDay = new Date(monthlyAnchor).getUTCDate();
+            nextQuota.monthlyResetSource = 'auto_429';
+            const nextRecord = { ...record, quota: nextQuota };
+            service.accounts[accountId] = nextRecord;
+            const cycle = resolveMonthlyCycle(nextRecord, nowMs);
+            initialized.push({
+                slot: idx + 1,
+                nextMonthlyExpiryBeijing: cycle ? cycle.expiryBeijingDate : null,
+                nextMonthlyResetIso: cycle ? new Date(cycle.nextResetMs).toISOString() : null
+            });
+            changed = true;
+        });
+        return changed ? state : undefined;
+    });
+    return { initialized, skipped };
+}
+
+function describePoolPriorities(apiKeys, endpoint, state, options = {}) {
+    const keys = normalizeApiKeys(apiKeys);
+    const identity = getPoolIdentity(keys, endpoint);
+    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const strategy = resolvePoolStrategy(options);
+    const service = state?.services?.[identity.serviceId] || { accounts: {}, groups: {} };
+    const orderedAccountIds = getOrderedAccountIds(identity);
+    const slotById = new Map(keys.map((key, idx) => [getAccountId(key), idx + 1]));
+    const rows = keys.map((key, idx) => {
+        const accountId = getAccountId(key);
+        const record = service.accounts?.[accountId] || null;
+        const evaluated = evaluateAccountQuota(record, nowMs);
+        return {
+            slot: idx + 1,
+            accountId,
+            label: evaluated.label,
+            eligible: evaluated.eligible,
+            tier: evaluated.monthlyCycle ? 1 : 2,
+            nextMonthlyExpiryBeijing: evaluated.monthlyCycle ? evaluated.monthlyCycle.expiryBeijingDate : null,
+            nextMonthlyResetIso: evaluated.monthlyCycle ? new Date(evaluated.monthlyCycle.nextResetMs).toISOString() : null,
+            monthlyResetSource: evaluated.monthlyCycle ? evaluated.monthlyCycle.source : null,
+            monthlyRemainingPct: evaluated.effectiveMonthlyRemainingPct,
+            monthlyRemainingSource: evaluated.monthlyRemainingSource,
+            weeklyRemainingPct: evaluated.effectiveWeeklyRemainingPct,
+            rolling5hRemainingPct: evaluated.effectiveRolling5hRemainingPct,
+            monthlyBudgetUsd: evaluated.monthlyBudgetUsd,
+            monthlySpentUsd: evaluated.currentMonthlySpentUsd,
+            weeklySpentUsd: evaluated.currentWeeklySpentUsd,
+            rolling5hSpentUsd: evaluated.current5hSpentUsd,
+            hasMonthlyQuota: evaluated.hasMonthlyQuota,
+            hasWeeklyQuota: evaluated.hasWeeklyQuota,
+            hasRolling5hQuota: evaluated.hasRolling5hQuota,
+            hasBalanceQuota: evaluated.hasBalanceQuota,
+            blockedUntil: evaluated.activeBlockedUntilMs > nowMs ? new Date(evaluated.activeBlockedUntilMs).toISOString() : null,
+            eval: evaluated
+        };
+    });
+
+    const eligibleTier1 = rows.filter(r => r.eligible && r.tier === 1)
+        .sort((a, b) => comparePriorityTier1(a, b) || (orderedAccountIds.indexOf(a.accountId) - orderedAccountIds.indexOf(b.accountId)));
+    const eligibleTier2 = rows.filter(r => r.eligible && r.tier === 2)
+        .sort((a, b) => orderedAccountIds.indexOf(a.accountId) - orderedAccountIds.indexOf(b.accountId));
+    const blockedRows = rows.filter(r => !r.eligible)
+        .sort((a, b) => (a.eval.activeBlockedUntilMs - b.eval.activeBlockedUntilMs) || (a.slot - b.slot));
+
+    const rankBySlot = new Map();
+    const ordered = strategy === 'equal_rotation'
+        ? [...rows.filter(r => r.eligible).sort((a, b) => orderedAccountIds.indexOf(a.accountId) - orderedAccountIds.indexOf(b.accountId)), ...blockedRows]
+        : [...eligibleTier1, ...eligibleTier2, ...blockedRows];
+    ordered.forEach((row, idx) => {
+        rankBySlot.set(row.slot, row.eligible ? idx + 1 : null);
+    });
+
+    const nextCandidate = choosePoolCandidate(
+        service, orderedAccountIds, service.groups?.[identity.groupId] || {}, new Set(), nowMs, '', strategy
+    );
+    const nextSlot = nextCandidate ? slotById.get(nextCandidate.accountId) : null;
+    const nextMode = nextCandidate ? nextCandidate.selectionMode : null;
+
+    return {
+        strategy,
+        nextSlot,
+        nextMode,
+        eligibleCount: rows.filter(r => r.eligible).length,
+        tier1Count: eligibleTier1.length,
+        blockedCount: blockedRows.length,
+        rows: rows.map(({ accountId: _hidden, eval: _eval, ...publicRow }) => ({
+            ...publicRow,
+            priorityRank: rankBySlot.get(publicRow.slot)
+        }))
+    };
 }
 
 function headerValues(headers, name) {
@@ -1421,6 +2309,15 @@ module.exports = {
     acquireStateLock,
     selectApiKey,
     markQuotaExhausted,
+    recordAccountUsage,
+    setAccountQuota,
+    clearAccountQuota,
+    initQuotasFromHistory,
+    evaluateAccountQuota,
+    resolveMonthlyCycle,
+    describePoolPriorities,
+    beijingDateFromMs,
+    validateAccountSubrecords,
     readStateStrict
 };
 
