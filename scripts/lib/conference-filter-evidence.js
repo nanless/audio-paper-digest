@@ -9,7 +9,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const analysisEngine = require('../analysis-engine.js');
 const { spawnSync } = require('node:child_process');
-const { buildChildProcessEnv } = require('../env-loader.js');
 const discoveryApi = require('./conference-discovery.js');
 const ledgerApi = require('./conference-source-ledger.js');
 const paperIdentity = require('./paper-identity.js');
@@ -390,6 +389,7 @@ const EXTRACTOR_ALLOWED_ENV_KEYS = Object.freeze([
     'PD_WORKSPACE_ALLOW_CROSS_ROLE'
 ]);
 function runExtractorHelper(itemRoot, mode) {
+    const { buildChildProcessEnv } = require('../env-loader.js');
     const runtime = path.resolve(__dirname, '..', 'python-runtime.sh');
     const script = path.resolve(__dirname, '..', 'conference-filter-evidence-extract.py');
     const child = spawnSync('bash', [runtime, script, `--${mode}`, '--manifest', 'request.json', '--source-root', itemRoot], {

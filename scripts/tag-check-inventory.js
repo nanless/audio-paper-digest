@@ -102,8 +102,8 @@ function collectTagStageRecords(value, fallbackPaperId) {
         const tagStageRecord = readTagStageRecord(paper?.analysisManifest, paper?.analysisStageCheckpoints).stage;
         if (tagStageRecord) {
             found += 1;
-            // 优先使用执行或批次记录的 paperId，缺少时才使用逐篇论文的 ID。
-            push(tagStageRecord, fallbackPaperId || paper.paperId || paper.id);
+            // 优先使用执行或批次记录的 paperId，缺少时才使用逐篇论文的 ID（含日更 arxivId）。
+            push(tagStageRecord, fallbackPaperId || paper.paperId || paper.id || paper.arxivId);
         }
     }
     if (!found) push(readTagStageRecord(value, value?.analysisStageCheckpoints).stage, fallbackPaperId);

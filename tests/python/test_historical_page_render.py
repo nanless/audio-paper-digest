@@ -175,8 +175,15 @@ else:
         result = renderer.render_packet({
             'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-04',
         })
+        self.assertIn('paper_digest_paper_id: "conference:icassp:2026:icassp-arnumber:100"', result['markdown'])
         self.assertIn('paper_digest_direct_paper_id:', result['markdown'])
+        self.assertIn('hiddenInHomeList: true', result['markdown'])
+        self.assertIn('description:', result['markdown'])
         self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags"', result['markdown'])
+        self.assertIn('paper_digest_tags_schema_fingerprint:', result['markdown'])
+        self.assertIn('paper_digest_api_reader_contract:', result['markdown'])
+        self.assertIn('paper_digest_api_reader_article_sha256:', result['markdown'])
+        self.assertIn('paper_digest_api_reader_plan_sha256:', result['markdown'])
         self.assertIn('paper_digest_primary_method: "Transformer"', result['markdown'])
         self.assertIn('音频研究日报', result['markdown'])
         self.assertNotIn('语音/音乐/音频论文速递', result['markdown'])
@@ -184,15 +191,29 @@ else:
         self.assertIn('**研究分类**', result['markdown'])
         self.assertIn('/papers/?concept=task.asr', result['markdown'])
         self.assertNotRegex(result['markdown'], r'(?m)^标签：')
-        self.assertIn('## 🧭 深度解读', result['markdown'])
         self.assertIn('## 👥 作者与机构', result['markdown'])
         self.assertIn('Researcher A', result['markdown'])
         self.assertIn('Institute A', result['markdown'])
-        self.assertIn('## 🔗 论文资源', result['markdown'])
+        self.assertIn('## 📌 核心摘要', result['markdown'])
+        self.assertIn('## 🔗 开源与复现资源', result['markdown'])
         self.assertIn('github.com', result['markdown'])
-        self.assertIn('## 📊 评分说明', result['markdown'])
+        self.assertIn('## 🧭 深度解读', result['markdown'])
+        self.assertIn('## ⚖️ 评分明细', result['markdown'])
+        # 校验现代 Studio Monograph 2.0 章节顺序
+        md = result['markdown']
+        self.assertLess(md.index('## 👥 作者与机构'), md.index('## 📌 核心摘要'))
+        self.assertLess(md.index('## 📌 核心摘要'), md.index('## 🔗 开源与复现资源'))
+        self.assertLess(md.index('## 🔗 开源与复现资源'), md.index('## 🧭 深度解读'))
+        self.assertLess(md.index('## 🧭 深度解读'), md.index('## ⚖️ 评分明细'))
         self.assertIn('评分：**6.1/10**', result['markdown'])
         self.assertNotIn('paper_digest_arxiv_id:', result['markdown'])
+        # 带会议 scope 时生成会议返回链接与会议分类
+        scoped = renderer.render_packet({
+            'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-04',
+            'scope': {'type': 'conference', 'key': 'icassp-2026'},
+        })
+        self.assertIn('categories: ["icassp-2026 论文"]', scoped['markdown'])
+        self.assertIn('[← 返回 icassp-2026 论文汇总](/audio-research-portal/posts/icassp-2026/)', scoped['markdown'])
         self.assertEqual(len(result['assets']), 4)
         self.assertEqual({Path(asset['path']).name for asset in result['assets']},
                          {'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json'})
@@ -382,6 +403,22 @@ else:
         }
         result = renderer.inject_direct_publication_source(dict(paper), proof)
         self.assertEqual(result['abstract'], abstract)
+        enriched = {
+            **proof,
+            'comment': 'Accepted at ICASSP 2026',
+            'journalRef': 'Proc. ICASSP 2026',
+            'doi': '10.1109/ICASSP.2026.00001',
+            'venueBadge': 'ICASSP 2026',
+        }
+        enriched_result = renderer.inject_direct_publication_source(dict(paper), enriched)
+        self.assertEqual(enriched_result['comment'], 'Accepted at ICASSP 2026')
+        self.assertEqual(enriched_result['journalRef'], 'Proc. ICASSP 2026')
+        self.assertEqual(enriched_result['doi'], '10.1109/ICASSP.2026.00001')
+        self.assertEqual(enriched_result['venueBadge'], 'ICASSP 2026')
+        conflicting = dict(paper)
+        conflicting['doi'] = '10.1109/OTHER.2026.99999'
+        with self.assertRaisesRegex(ValueError, 'doi 与分析记录不一致'):
+            renderer.inject_direct_publication_source(conflicting, enriched)
         for changed in (
                 {**sidecar, 'abstractSha256': '0' * 64},
                 {**sidecar, 'sourceManifestSha256': '0' * 64},

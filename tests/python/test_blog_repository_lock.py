@@ -5,6 +5,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -315,6 +316,67 @@ class SharedBlogRepositoryLockTest(unittest.TestCase):
                         mod._renew(snap)
                 # Keep holder snapshot synced after the on-disk atomic replace succeeded before the mocked second snapshot
                 mod._holder_stack()[-1]['state']['snapshot'] = real_snapshot(active_path)
+
+    def test_assert_blog_lock_held_serializes_with_concurrent_heartbeat_renewal(self):
+        import blog_repository_lock as mod
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(tmp)
+
+            # 1) Deterministic mutual exclusion check: _renew() on heartbeat thread and
+            # _snapshot() inside assert_blog_lock_held() must never overlap in time.
+            real_renew = mod._renew
+            real_snapshot = mod._snapshot
+            main_thread_id = threading.get_ident()
+            state_lock = threading.Lock()
+            probe = {'in_renew': False, 'overlaps': 0, 'renewals': 0}
+
+            def instrumented_renew(snapshot):
+                with state_lock:
+                    probe['in_renew'] = True
+                try:
+                    renewed = real_renew(snapshot)
+                    # Hold guard briefly across real renewal so main-thread fence calls contend on it.
+                    time.sleep(0.015)
+                    with state_lock:
+                        probe['renewals'] += 1
+                    return renewed
+                finally:
+                    with state_lock:
+                        probe['in_renew'] = False
+
+            def instrumented_snapshot(path, *, allow_invalid_owner=False):
+                if threading.get_ident() == main_thread_id:
+                    with state_lock:
+                        if probe['in_renew']:
+                            probe['overlaps'] += 1
+                return real_snapshot(path, allow_invalid_owner=allow_invalid_owner)
+
+            observed_inodes = set()
+            with patch.object(mod, '_renew', side_effect=instrumented_renew), \
+                    patch.object(mod, '_snapshot', side_effect=instrumented_snapshot):
+                with shared_blog_repository_lock(repo, owner='fence-race', stale_seconds=0.15) as lock_path:
+                    deadline = time.monotonic() + 2.0
+                    while time.monotonic() < deadline:
+                        snap = mod.assert_blog_lock_held(lock_path, require_active=True)
+                        observed_inodes.add(snap['owner']['identity'])
+                        if probe['renewals'] >= 3:
+                            break
+                        time.sleep(0.002)
+            self.assertGreaterEqual(probe['renewals'], 3)
+            self.assertGreaterEqual(len(observed_inodes), 3)
+            self.assertEqual(probe['overlaps'], 0, 'assert_blog_lock_held must serialize against heartbeat _renew')
+
+            # 2) Unmocked tight fence loop across live heartbeat renewals must never fail spuriously.
+            live_inodes = set()
+            checks = 0
+            with shared_blog_repository_lock(repo, owner='fence-stress', stale_seconds=0.15) as lock_path:
+                deadline = time.monotonic() + 0.35
+                while time.monotonic() < deadline:
+                    snap = mod.assert_blog_lock_held(lock_path, require_active=True)
+                    live_inodes.add(snap['owner']['identity'])
+                    checks += 1
+            self.assertGreater(checks, 10)
+            self.assertGreaterEqual(len(live_inodes), 2)
 
 
 if __name__ == '__main__':

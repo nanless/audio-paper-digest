@@ -612,3 +612,55 @@ test('旧运行的官方 Atom 文件是 FIFO 时，复用索引及时跳过它�
         fs.writeFileSync(atomFile, result.rawBytes, { mode: 0o600 });
         assert.deepEqual(sidecars.reusableOfficialAtomIndex(options), expected);
     });
+
+test('G6: 提取并传递可选 comment/journalRef/doi/venueBadge，同时 100% 冷重放不含这些字段的旧侧车', async t => {
+    const f = await fixture(t, 'venue-doi');
+    const richAtom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"><opensearch:totalResults>1</opensearch:totalResults><opensearch:startIndex>0</opensearch:startIndex><opensearch:itemsPerPage>1</opensearch:itemsPerPage><entry><id>http://arxiv.org/abs/${ID}v1</id><updated>2026-01-02T00:00:00Z</updated><published>2026-01-01T00:00:00Z</published><title>Official title</title><summary>Official source abstract with enough exact words for publication.</summary><author><name>Author One</name></author><arxiv:comment>Accepted at ICASSP 2026</arxiv:comment><arxiv:journal_ref>Proc. ICASSP 2026</arxiv:journal_ref><arxiv:doi>10.1109/ICASSP.2026.12345</arxiv:doi><category term="cs.SD"/></entry></feed>`;
+    const parsed = metadataApi.parseOfficialArxivMetadataResponse(ID, richAtom, { querySourceId: ID });
+    assert.equal(parsed.metadata.comment, 'Accepted at ICASSP 2026');
+    assert.equal(parsed.metadata.journalRef, 'Proc. ICASSP 2026');
+    assert.equal(parsed.metadata.doi, '10.1109/ICASSP.2026.12345');
+    assert.equal(parsed.metadata.venueBadge, 'ICASSP 2026');
+
+    const sealed = sidecars.sealPublicationMetadata({
+        rootDir: f.sidecarRoot,
+        sourceRoot: f.sourceRoot,
+        arxivId: ID,
+        generation: 1,
+        officialResult: { ...parsed, proof: { ...parsed.proof, observedAt: '2026-01-04T00:00:00.000Z' } },
+        now: '2026-01-04T00:00:00.000Z'
+    });
+    assert.equal(sealed.venueBadge, 'ICASSP 2026');
+    assert.equal(sealed.doi, '10.1109/ICASSP.2026.12345');
+    assert.equal(sealed.comment, 'Accepted at ICASSP 2026');
+    assert.equal(sealed.journalRef, 'Proc. ICASSP 2026');
+
+    // 模拟旧版封存侧车：metadata.json 与 manifest.metadata.recordSha256 不含 4 个可选字段
+    const legacyFixture = await fixture(t, 'venue-doi-legacy');
+    const legacyMetadata = metadataApi.stripOptionalPublicationMetadata(parsed.metadata);
+    const legacyRecordSha = freshRun.stableHash(legacyMetadata);
+    const legacyOfficial = {
+        ...parsed,
+        metadata: legacyMetadata,
+        proof: { ...parsed.proof, recordSha256: legacyRecordSha, observedAt: '2026-01-04T00:00:00.000Z' }
+    };
+    const sealedLegacy = sidecars.sealPublicationMetadata({
+        rootDir: legacyFixture.sidecarRoot,
+        sourceRoot: legacyFixture.sourceRoot,
+        arxivId: ID,
+        generation: 1,
+        officialResult: legacyOfficial,
+        now: '2026-01-04T00:00:00.000Z'
+    });
+    assert.deepEqual(sealedLegacy.metadata, legacyMetadata);
+    assert.equal(sealedLegacy.proof.metadataRecordSha256, legacyRecordSha);
+    // 读取旧侧车不修改磁盘字节，但能在返回视图中提取到可选 venueBadge/doi
+    const replayed = sidecars.readPublicationMetadata({
+        rootDir: legacyFixture.sidecarRoot,
+        sourceRoot: legacyFixture.sourceRoot,
+        arxivId: ID,
+        generation: 1
+    });
+    assert.equal(replayed.venueBadge, 'ICASSP 2026');
+    assert.equal(replayed.doi, '10.1109/ICASSP.2026.12345');
+});

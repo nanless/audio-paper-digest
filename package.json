@@ -45,6 +45,7 @@
     "conference:queue": "AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE=1 node scripts/workspace-role.js exec daily -- node scripts/conference-queue.js",
     "conference:workspace": "node scripts/workspace-role.js exec daily -- node scripts/conference-workspace.js",
     "history:inventory": "node scripts/workspace-role.js exec history -- bash scripts/python-runtime.sh scripts/history-inventory.py",
+    "history:outdated": "node scripts/workspace-role.js exec history -- node scripts/historical-outdated-audit.js",
     "history:inputs": "node scripts/workspace-role.js exec history -- node scripts/historical-direct-rewrite-inputs.js",
     "history:conference-projections": "node scripts/workspace-role.js exec history -- node scripts/historical-conference-page-projections.js",
     "history:plan": "node scripts/workspace-role.js exec history -- node scripts/historical-direct-rewrite-plan.js",

@@ -3,7 +3,6 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { buildChildProcessEnv } = require('../env-loader.js');
 
 const RENDERER_ALLOWED_ENV_KEYS = Object.freeze([
     'PLAYWRIGHT_BROWSERS_PATH',
@@ -88,6 +87,7 @@ async function renderOfficialInlineSvg(resource, _deps = {}) {
             path.join(projectRoot, 'scripts/reader_inline_svg.py')];
         if (deps.hidpi !== false) args.push('--hidpi');
         if (deps.deterministicV2 !== false) args.push('--v2');
+        const { buildChildProcessEnv } = require('../env-loader.js');
         const child = spawnFn('bash', args, {
             cwd: projectRoot,
             env: buildChildProcessEnv({}, RENDERER_ALLOWED_ENV_KEYS),

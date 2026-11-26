@@ -42,9 +42,7 @@ function deriveBundle(expectation, quotes = [], operation = null, requested = fo
         : originalHeader(SCIENTIFIC_CONTRACT, 'font-and-position-authenticated-atoms');
     require('../env-loader').requireExternalRuntime('reader-sealed-pdf-quote-evidence');
     require('../workspace-role').requireWorkspaceRole('daily', root);
-    const sources = path.resolve(expectation.rootDir || ''), run = path.basename(path.dirname(sources));
-    if (path.basename(sources) !== 'sources' || path.dirname(path.dirname(sources)) !== path.resolve(require('../config').FILES.dailyFreshSourceRunsDir)
-        || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(run)) throw new Error('Expected current daily sealed source root');
+    require('./fresh-analysis-context').assertSealedFourFileArxivRoot(expectation.rootDir, 'Expected current daily sealed source root');
     if (!Array.isArray(quotes) || quotes.length > 64 || quotes.some(q => typeof q !== 'string')) throw new Error('Expected bounded PDF quote requests');
     return require('./fresh-analysis-context').withVerifiedBundleReaderAuthorFiles(expectation, source => {
         const api = require('./fresh-arxiv-rewrite-source'), before = api.readFreshArxivRewriteSource(expectation);
@@ -82,17 +80,17 @@ function deriveBundle(expectation, quotes = [], operation = null, requested = fo
 }
 
 function withArtifacts(artifacts, paperId, callback) {
-    const fresh = require('./fresh-analysis-context'), context = fresh.getFreshAnalysisContext();
-    if (!context || !fresh.isDailyFreshSourceScope()) return callback();
-    const source = fresh.readFreshSource(context.runDir, paperId, context), d = source.freshSourceDescriptor;
-    // Older text-only sources cannot acquire the new four-file PDF capability.
-    if (!fresh.isBundleDescriptor(d)) return callback();
+    const fresh = require('./fresh-analysis-context');
+    if (!fresh.isSealedFourFileArxivScope()) return callback();
+    const bundle = fresh.resolveActiveSealedFourFileArxivBundle(paperId);
+    // Older text-only sources or mock contexts without physical four-file bundles cannot acquire the PDF capability.
+    if (!bundle) return callback();
+    const source = bundle.source;
     if (!isDeepStrictEqual(source.structuredArtifacts, artifacts)) throw new Error('PDF quotation artifacts differ from sealed source');
     const active = scope.getStore();
     const header = format.header(CONTRACT);
     if (active?.artifacts === artifacts && isDeepStrictEqual(active.header, header)) return callback();
-    const expectation = { rootDir: path.join(context.runDir, 'sources'), arxivId: d.paperId,
-        generation: d.sourceGeneration, sourceManifestSha256: d.sourceManifestSha256, sourceSnapshotSha256: d.sourceSnapshotSha256 };
+    const expectation = bundle.expectation;
     const response = deriveBundle(expectation, [], null, header);
     return scope.run({ artifacts, expectation, sourceText: source.text, document: response.document, header }, callback);
 }
@@ -221,17 +219,54 @@ function withSavedPaper(paper, callback) {
     const fresh = require('./fresh-analysis-context'), proof = paper.freshRewriteProvenance;
     if (!proof || !isFreshSourceProvenance(proof) || !isDeepStrictEqual(proof, paper.analysisManifest?.freshRewriteProvenance)
         || !/^[a-f0-9-]{36}$/.test(proof.runId || '')) throw new Error('PDF quotation lacks the actual daily provenance');
-    const runDir = path.join(require('../config').FILES.dailyFreshSourceRunsDir, proof.runId);
-    const run = require('./reader-proof-read-scope').readReaderProofJson(path.join(runDir, 'run.json')).value;
-    if (!fresh.isDailySourceRun(run)) throw new Error('PDF quotation run contract differs');
-    const source = fresh.readFreshSource(runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
-    const d = source.freshSourceDescriptor, acquisition = paper.analysisManifest?.sourceAcquisition;
-    if (paper.sourceSha256 !== d.sourceSha256 || acquisition?.sourceSha256 !== d.sourceSha256
-        || acquisition.structuredArtifactsSha256 !== d.structuredArtifactsSha256
-        || ['runId','sourceSha256','structuredArtifactsSha256','sourceSnapshotSha256','sourceGeneration','sourceManifestSha256'].some(k => proof[k] !== d[k])
-        || paper.apiReaderPlan.structuredSourcePayload !== require('../deep-analyzer').readerStructuredSourcePayload(source.structuredArtifacts)) throw new Error('PDF quotation saved four-source payload differs');
-    const expectation = { rootDir: path.join(runDir, 'sources'), arxivId: d.paperId, generation: d.sourceGeneration,
-        sourceManifestSha256: d.sourceManifestSha256, sourceSnapshotSha256: d.sourceSnapshotSha256 };
+    const configFiles = require('../config').FILES;
+    const runDir = path.join(configFiles.dailyFreshSourceRunsDir, proof.runId);
+    const runJsonPath = path.join(runDir, 'run.json');
+    let source;
+    let expectation;
+    const acquisition = paper.analysisManifest?.sourceAcquisition;
+    if (fs.existsSync(runJsonPath)) {
+        const run = require('./reader-proof-read-scope').readReaderProofJson(runJsonPath).value;
+        if (!fresh.isDailySourceRun(run)) throw new Error('PDF quotation run contract differs');
+        source = fresh.readFreshSource(runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
+        const d = source.freshSourceDescriptor;
+        if (paper.sourceSha256 !== d.sourceSha256 || acquisition?.sourceSha256 !== d.sourceSha256
+            || acquisition.structuredArtifactsSha256 !== d.structuredArtifactsSha256
+            || ['runId','sourceSha256','structuredArtifactsSha256','sourceSnapshotSha256','sourceGeneration','sourceManifestSha256'].some(k => proof[k] !== d[k])
+            || paper.apiReaderPlan.structuredSourcePayload !== require('../deep-analyzer').readerStructuredSourcePayload(source.structuredArtifacts)) throw new Error('PDF quotation saved four-source payload differs');
+        expectation = { rootDir: path.join(runDir, 'sources'), arxivId: d.paperId, generation: d.sourceGeneration,
+            sourceManifestSha256: d.sourceManifestSha256, sourceSnapshotSha256: d.sourceSnapshotSha256 };
+    } else {
+        const arxivId = String(paper?.arxivId || paper?.directPaperId || '').replace(/^arxiv:/i, '').replace(/v\d+$/i, '');
+        const activeBundle = fresh.isSealedFourFileArxivScope() ? fresh.resolveActiveSealedFourFileArxivBundle(arxivId) : null;
+        const historicalRoot = (activeBundle && activeBundle.kind === 'historical' && activeBundle.generation === proof.sourceGeneration
+            && activeBundle.sourceManifestSha256 === proof.sourceManifestSha256)
+            ? activeBundle.rootDir
+            : configFiles.freshArxivFetchedSourcesDir;
+        if (!historicalRoot || !/^\d{4}\.\d{4,5}$/.test(arxivId)
+            || !Number.isSafeInteger(proof.sourceGeneration) || proof.sourceGeneration < 1
+            || !require('./fresh-arxiv-rewrite-source').generationExists(historicalRoot, arxivId, proof.sourceGeneration)) {
+            throw new Error('PDF quotation lacks the actual daily provenance');
+        }
+        const stored = require('./fresh-arxiv-rewrite-source').readFreshArxivRewriteSource({
+            rootDir: historicalRoot, arxivId, generation: proof.sourceGeneration
+        });
+        const historicalSnapshotSha = fresh.historicalSourceSnapshotSha(stored.runtimeDetails);
+        const runtime = stored.runtimeDetails;
+        if (stored.sourceManifestSha256 !== proof.sourceManifestSha256
+            || stored.manifest.text.responseSha256 !== proof.sourceSha256
+            || runtime?.structuredArtifacts?.payloadSha256 !== proof.structuredArtifactsSha256
+            || historicalSnapshotSha !== proof.sourceSnapshotSha256
+            || paper.sourceSha256 !== proof.sourceSha256
+            || acquisition?.sourceSha256 !== proof.sourceSha256
+            || acquisition?.structuredArtifactsSha256 !== proof.structuredArtifactsSha256
+            || paper.apiReaderPlan.structuredSourcePayload !== require('../deep-analyzer').readerStructuredSourcePayload(runtime.structuredArtifacts)) {
+            throw new Error('PDF quotation saved four-source payload differs');
+        }
+        source = { text: runtime.text, structuredArtifacts: runtime.structuredArtifacts };
+        expectation = { rootDir: path.resolve(historicalRoot), arxivId, generation: proof.sourceGeneration,
+            sourceManifestSha256: stored.sourceManifestSha256, sourceSnapshotSha256: proof.sourceSnapshotSha256 };
+    }
     const all = marked.flatMap(binding => {
         if (binding.sourceType !== 'source_quotes' || !Array.isArray(binding.sealedPdfQuoteEvidence) || !binding.sealedPdfQuoteEvidence.length) throw new Error('PDF quotations only authorize source_quotes bindings');
         if (!Array.isArray(binding.sourceQuotes) || binding.sourceQuotes.some(item =>

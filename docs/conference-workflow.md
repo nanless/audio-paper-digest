@@ -1,8 +1,6 @@
 # 会议论文的来源获取、分析与发布
 
-> **当前状态（2026-11-11）：官方会议线已搁置。** 用户决定暂停官方会议（当前现场为 INTERSPEECH 2026）的获取、分析、发布与维护，重启时间未定。本页的命令与实现保留；重启前先处理已知卡点：`figurePublicationView.manifestPath` 指向的目录已缺失，重新 generate 会因出版图片视图清单无法重放而停住，需要先按原路径补回该目录，或让实现容忍空目录并补测试。日更线不受影响。
-
-会议从官方目录和 PDF 开始，完成筛选后使用统一的 `process` 入口，再生成、审查和发布博客。分析、Reader、评分、标签及发布展示共享日更实现；官方 PDF 的身份与能力核验保留会议适配。已有博客的批量更新使用历史流程，保留已有 URL。
+官方会议线与日更、历史更新三条流程保持齐平维护，从官方目录和 PDF 开始，完成筛选后使用统一的 `process` 入口，再生成、审查和发布博客。分析、Reader、评分、标签及发布展示共享日更实现；官方 PDF 的身份与能力核验保留会议适配。已有博客的批量更新使用历史流程，保留已有 URL。
 
 标签统一使用新版400项九维词表：单篇及汇总成员只呈现实际选项及祖先路径，父级不算直接命中，总目录保持完整。生成和审查/推送须核验站点已有本批SHA的双份原快照，缺失先完成受控词表同步，不能借会议图片或sidecar通道写入未审目录资产；见[统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
 
@@ -17,7 +15,7 @@ npm run workspace:role -- status
 
 | 任务 | 工作区与入口 |
 |---|---|
-| 获取、筛选和处理 2026 年新会议 | 已绑定 `daily` 的日更目录，使用 `conference:*`。 |
+| 获取、筛选和处理新会议（2025/2026/2027+ 各届） | 已绑定 `daily` 的工作区目录，使用 `conference:*`。 |
 | 重写和发布历史会议页面，保留已有 URL 和任务页 | 当前目录，使用[全历史重写](history-rewrite.md)及[历史直接发布](history-direct-publication.md)。 |
 
 新会议的 npm 包装入口会设置并校验所需运行模式；不要自行伪造 `AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE` 或跳过角色检查。旧历史工作区已废弃；日更、会议和历史任务不能同时生成、审查、推送同一博客，或修改同一远端 `main`，执行者负责错峰。命令示例中的 `UUID`、`NAME.json`、`C.json` 等是占位符，执行前须替换为对应入口接受的真实任务 ID 和安全文件名。
@@ -35,7 +33,7 @@ npm run workspace:role -- status
 
 后文的冷核，是重新打开保存的来源、稿件及凭证，执行同一组检查；重放则按原请求、响应和处理规则重新构建结果。它们不能仅靠 JSON 自报通过。“闭合”要求相关材料的来源、字节 SHA、父子身份及数量关系全部对应；具体需要哪些材料，仍以各条条件为准。
 
-会议来源与 arXiv 日更不同，分析仍复用 `analysis-engine.js`、正式分析的 13 个解析标题、类型感知八维评分、`beginner-researcher` 解读及 `api-reader-source-bindings` 来源核验；两者分别按登记的结构指纹核对。单篇页面和 `reader-facing-page` 会议汇总使用现行标签体系，包含中英文题目、分档、文档类型、评分、作者机构、资源状态及官方记录和 PDF 链接，不能沿用旧标签或另造会议标签。旧的 `beginner-researcher-v3`、`api-reader-source-bindings-v4` 和 `reader-facing-v3` 头只用于读取原记录。
+会议来源与 arXiv 日更不同，分析仍复用 `analysis-engine.js`、正式分析的 13 个解析标题（含 `700–1,400` 汉字全景导读 `核心摘要`）、`type-aware-v2` 类型感知八维评分、400 项九维标签词表、`structured-pipeline-v5` 契约的 `beginner-researcher` 解读及 `api-reader-source-bindings` 来源核验；两者分别按登记的结构指纹核对。所有模型阶段同步启用按阶段分级推理（`PD_TIERED_REASONING_EFFORT=1`）与阶段稳定前缀缓存键（`PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=1`）。单篇页面经 9 步 Reader 显示归一化与 `_nest_reader_headings` 层级嵌套，和 `reader-facing-page` 会议汇总一起按 **Studio Monograph 2.0** 样式呈现，包含中英文题目、分档、文档类型、评分、作者机构、资源状态及官方记录和 PDF 链接，不能沿用旧标签或另造会议标签。旧的 `beginner-researcher-v3`、`api-reader-source-bindings-v4` 和 `reader-facing-v3` 头只用于读取原记录。
 
 会议汇总只读取已通过来源、解读和分类检查的单篇结果，不再让模型总结整批，因此不会为了汇总重复生成每篇深度解读。队列入口只协调已筛选会议的处理和发布，不负责获取或筛选。
 
@@ -58,12 +56,15 @@ npm run workspace:role -- status
 
 ## 获取官方目录和 PDF
 
-当前实现支持以下固定来源：
+当前实现通过两个隔离模块支持 **22 个官方会议提供方**（v1 保持逐字节冻结以保全历史冷重放，新增会议一律接入 v2 伴生模块）：
 
-| 类别 | 来源代号 |
+| 模块与类别 | 来源代号 |
 |---|---|
-| 语音、音频和音乐 | `odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、`interspeech-2026`、`iwslt-2026`、`eusipco-2026`、`nime-2026`、`dafx-2026`、`icmc-2026`。 |
-| AI、机器学习、视觉和语言 | `aaai-2026`（OJS 第 40 卷）、`aistats-2026`（PMLR v300）、`uai-2026`（PMLR v337）、`cvpr-2026`（CVF 主会）、`acl-2026`、`eacl-2026`。 |
+| v1 语音、音频和音乐（10 项，`official-conference-acquisition.js`） | `odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、`interspeech-2026`、`iwslt-2026`、`eusipco-2026`、`nime-2026`、`dafx-2026`、`icmc-2026`。 |
+| v1 AI、机器学习、视觉和语言（6 项，`official-conference-acquisition.js`） | `aaai-2026`（OJS 第 40 卷）、`aistats-2026`（PMLR v300）、`uai-2026`（PMLR v337）、`cvpr-2026`（CVF 主会）、`acl-2026`、`eacl-2026`。 |
+| v2 扩展提供方（6 项，`official-conference-acquisition-v2.js`） | `emnlp-2026`（ACL Anthology Main/Short/Findings）、`ismir-2026`（Zenodo REST API v1）、`dcase-2026`（Zenodo REST API v1）、`neurips-2026`（`proceedings.neurips.cc`）、`waspaa-2025` 与 `asru-2025`（IEEE 本地 `proceedings.json` 清单与 PDF 封存）。 |
+
+筛选阶段对核心音频会议家族支持动态年份匹配（`2025+`）：`scripts/lib/conference-filter.js` 中的 `CORE_AUDIO_CONFERENCE_FAMILY_LABELS` 覆盖 `asru`、`chime`、`dafx`、`dcase`、`icmc`、`interspeech`、`ismir`、`iwslt`、`jep`、`nime`、`odyssey`、`speechprosody`、`waspaa` 共 13 个家族，任意 2025 年及之后的同族会议（如 `interspeech-2027`、`ismir-2027`）自动识别为核心音频会议并放行摘要不足项给 LLM，无需重复硬编码年份；非核心综合会议同时叠加与日更共用的 `daily-filter-prefilter.js` 高召回预筛层。
 
 ACL/EACL 只纳入主会 `long`、`short` 和 `findings`，排除卷首、全集 PDF、workshop 和非论文演讲；Odyssey keynote 摘要页也不作为单篇论文。CHiME、JEP、Speech Prosody 和 Interspeech 使用各自官方 ISCA Archive 目录。
 
@@ -1176,6 +1177,74 @@ npm run conference:validate-run -- --run NAME.json --ledger NAME.json
 ```
 
 `validate-ledger` 检查台账结构、自哈希和成员身份；`verify-ledger` 还会逐个读取成员文件，核对 PDF、文本、元数据和 artifacts 文件的 SHA，并要求所有成员已 verified，耗时取决于文件数量。`validate-run` 只核对 run 与传入台账的会议身份、台账 SHA、成员 membership/identity 及 run 结构，不替代 `verify-ledger` 的文件核验。三者都只报告校验结果，不授予来源、发布或模型请求资格。
+
+## 新会议全流程接入指南（2026/2027+）
+
+新增一届官方会议（例如 2026 下半年或 2027 年的新届次）时，按下面五步接入，既与现行日更内容标准完全对齐，又不触碰任何历史冻结哈希。
+
+### 第 1 步：在 v2 获取模块注册提供方
+
+在 `scripts/lib/official-conference-acquisition-v2.js` 的 `PROVIDERS_V2` 中新增会议条目（**绝不修改**受历史 SHA 逐字节锁死的 `scripts/lib/official-conference-acquisition.js`）。可直接复用已内置的四种解析器之一：`acl-anthology-html`、`zenodo-json`、`neurips-proceedings-html` 或 `ieee-local-manifest`，按实际官方域名设置 `allowedHosts`、`recordPath` 和 `pdfPath`。若是新的核心音频会议家族（不在现有 13 个 `CORE_AUDIO_CONFERENCE_FAMILY_LABELS` 家族中），同步在 `scripts/lib/conference-filter.js` 登记家族标签；属于已有 13 个家族的 `2025+` 新年份会自动匹配。
+
+### 第 2 步：确定性 PDF 抽取（默认 `v2`）
+
+新会议批次默认使用 `scripts/conference_extractor_v2.py`（环境变量 `PD_CONFERENCE_EXTRACTOR_VERSION` 默认为 `v2`，历史冷重放自动识别并保留冻结的 `v1` 抽取器 `scripts/conference_extractor.py`）。`v2` 相对 `v1` 补齐了与日更一致的版面与证据能力：
+
+- **双栏感知文本重排**：消除 IEEE、ISCA 等双栏排版中左右栏文本交错。
+- **288 DPI 高清自适应插图裁切**：兼容图注位于图上或图下、跨栏图与旋转页，并保持单图 2 MiB / 整篇 24 MiB 安全上限。
+- **结构化表格与首页作者机构抽取**：覆盖 Booktabs 横线表、严格网格表、旋转 `sidewaystable`、跨页续表拼接与音频指标无框表回退，同时接入 `pdf_author_extract.py` v2 首页几何作者抽取并保留官方元数据机构字段。
+
+如需回退旧抽取器验证，可显式设置 `PD_CONFERENCE_EXTRACTOR_VERSION=v1` 或向 `conference:extract` 传入 `--extractor v1`。
+
+### 第 3 步：依次运行获取、筛选、处理与发布
+
+```bash
+# 1. 官方目录与 PDF 获取（以 neurips-2026 为例）
+npm run conference:acquire -- catalog --provider neurips-2026 --conference-id neurips-2026 --year 2026 --apply
+npm run conference:acquire -- download --provider neurips-2026 --conference-id neurips-2026 --year 2026 --apply --concurrency 4 --retries 3
+npm run conference:acquire -- verify --provider neurips-2026 --conference-id neurips-2026 --year 2026
+
+# 2. Discovery 与全集离线摘要取证
+npm run conference:discover -- --apply --adapter official-proceedings --conference-id neurips-2026 --year 2026 \
+  --metadata "$PWD/data/runtime/official-conference-acquisitions/neurips-2026/metadata.json" \
+  --pdf-root "$PWD/data/runtime/official-conference-acquisitions/neurips-2026" \
+  --acquisition-root "$PWD/data/runtime/official-conference-acquisitions/neurips-2026" \
+  --candidate-output neurips-2026.json --report-output neurips-2026-report.json
+npm run conference:evidence -- plan --catalog neurips-2026.json --report neurips-2026-report.json --run EVIDENCE_UUID
+npm run conference:evidence -- apply --catalog neurips-2026.json --report neurips-2026-report.json --run EVIDENCE_UUID --all --expected-total N
+
+# 3. 会议筛选（含 Wave 11C 高召回关键词预筛叠加层）
+npm run conference:filter -- spec --catalog neurips-2026.json --report neurips-2026-report.json --evidence-run EVIDENCE_UUID --output neurips-2026-filter.json
+npm run conference:filter -- prepare --catalog neurips-2026.json --report neurips-2026-report.json --evidence-run EVIDENCE_UUID --spec neurips-2026-filter.json
+npm run conference:filter:run -- --apply --catalog neurips-2026.json --report neurips-2026-report.json --evidence-run EVIDENCE_UUID --spec neurips-2026-filter.json --filter FILTER_UUID --owner filter.worker
+
+# 4. 统一分析、评分、Reader 与页面暂存（也可用 conference:queue 配合 PD_CONFERENCE_QUEUE_CONCURRENCY 编排多会）
+npm run conference:process -- --apply --catalog neurips-2026.json --report neurips-2026-report.json --filter FILTER_UUID --concurrency 3
+
+# 5. 生成、三层审查、预演推送、正式推送与线上验收
+npm run conference:publish:generate -- --conference-id neurips-2026 --process-id PROCESS_UUID
+npm run conference:publish:review -- --conference-id neurips-2026 --process-id PROCESS_UUID
+npm run conference:publish:push -- --conference-id neurips-2026 --process-id PROCESS_UUID --dry-run
+npm run conference:publish:push -- --conference-id neurips-2026 --process-id PROCESS_UUID
+npm run conference:publish:verify -- --conference-id neurips-2026 --process-id PROCESS_UUID
+```
+
+- `review` 阶段自动复用 `passed_image_registry`，避免重审未变页面的已通过图片。
+- `push` 阶段支持 `--dry-run`（仅校验索引与差异，不创建提交或推送）；正式推送完成后默认按 `PD_PAGES_DEPLOY_POLL_SECONDS`（默认 `10` 秒）与 `PD_PAGES_DEPLOY_TIMEOUT_SECONDS`（默认 `600` 秒）自动等待 GitHub Pages 部署完成（如需立即返回可传 `--no-wait-deploy`）。
+
+### 第 4 步：可选批后相对分校准与运行记分卡
+
+```bash
+# 对已完成会议做只读批后瑞士轮 Bradley-Terry 相对分校准（--dry-run 离线排程，--live 执行比较）
+npm run digest:calibrate -- --conference-process PROCESS_UUID --dry-run
+
+# 查看会议流程的阶段耗时、KV 前缀缓存命中率与推理 token 占比
+npm run digest:scorecard -- --workflow conference --date YYYY-MM-DD
+```
+
+### 第 5 步：在门户登记会议目录
+
+在门户仓库 `audio-research-portal/data/conference-directory.json` 的 `entries` 中新增该会议元数据（`id`、`venueId`、`name`、`fullName`、`year`、`summaryPath` 等），确保门户会议目录页与客户端离线会议筛选同步识别。若尚未登记，`conference:publish:generate` 会向 stderr 发出非阻断软提示。
 
 ## 与全历史重写的衔接
 

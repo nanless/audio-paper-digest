@@ -6,11 +6,11 @@
 
 | 文件 | 说明什么 | 引用位置 |
 |---|---|---|
-| `hero-workbench.zh.svg` | 音频研究工作台（Audio Research Workbench）Studio Monograph 深岩青声谱旗舰封面：展示核心定位、9,300+ 篇中文精读（8,650+ 篇论文）、400 项九维分类与 8 大 SOTA 专题、每日播客及 Mac/Android 1.5.0 核心指标。 | `README.md` |
+| `hero-workbench.zh.svg` | 音频研究工作台（Audio Research Workbench）Studio Monograph 深岩青声谱旗舰封面：展示核心定位、9,300+ 篇中文精读（8,650+ 篇论文）、400 项九维分类与 8 大 SOTA 专题、三条齐平产线、每日播客及 Mac/Android 1.5.x 核心指标。 | `README.md` |
 | `hero-workbench.en.svg` | 上一张的英文版，内容与结构相同。 | `README.en.md` |
 | `portal-home-preview.png` | 音频研究门户 Studio Monograph 2.0 暖纸版首页本地真实渲染 2× 截图：包含 `最新一期 2026.11.26` 声谱封面与本期选读、`⌘K` 快捷检索栏及下方 8 大音频研究专题榜单卡片。 | `README.md`、`README.en.md` |
 | `portal-paper-preview.png` | 音频研究门户单篇深度精读页本地真实渲染 2× 截图：同屏呈现左侧跟随目录、正文 KaTeX 数学公式与带“反色 / 放大查看”工具栏的已核验论文原图，以及右侧悬浮的八维评分环/分项条与来源信息卡。 | `README.md`、`README.en.md` |
-| `workbench-architecture.zh.svg` | Studio Monograph 暖纸三层架构图：内容生产引擎（日更持续运行、会议/历史备存）、音频研究门户（Studio Monograph 2.0）与 Mac / Android 1.5.0 双端原生工作台的单向推送、只读同步与凭据隔离关系。 | `README.md` |
+| `workbench-architecture.zh.svg` | Studio Monograph 暖纸三层架构图：内容生产引擎（日更、会议、历史三线齐平）、音频研究门户（Studio Monograph 2.0）与 Mac / Android 1.5.x 双端原生工作台的单向推送、只读同步与凭据隔离关系。 | `README.md` |
 | `workbench-architecture.en.svg` | 上一张的英文版，内容与结构相同。 | `README.en.md` |
 | `daily-digest-flow.zh.svg` | Studio Monograph 暖纸六阶段日更流程图：从 arXiv / HuggingFace 边界补抓与去重、预筛与模型筛选、四文件来源封存，到深度分析与 Reader 长文、生成与三层审查、推送部署与逐页核验。 | `README.md` |
 | `daily-digest-flow.en.svg` | 上一张的英文版，内容与结构相同。 | `README.en.md` |

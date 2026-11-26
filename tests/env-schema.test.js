@@ -366,3 +366,47 @@ test('严格 0/1 布尔开关、5 项超时上限、PAPER_DIGEST_IMAGE_HOST 废�
     ], { cwd: ROOT, encoding: 'utf8' });
     assert.notStrictEqual(upperReject.status, 0);
 });
+
+test('会议抽取器版本、队列并发与 Pages 部署轮询/超时变量在 env-schema 中登记且边界有效', () => {
+    const base = {
+        PAPER_ANALYZER_API_KEY: 'fixture',
+        PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor',
+        PAPER_ANALYZER_ENDPOINT: 'https://example.com/v1',
+        HTTPS_PROXY: 'http://127.0.0.1:7897'
+    };
+    const valid = schema.validateEntries({
+        ...base,
+        PD_CONFERENCE_EXTRACTOR_VERSION: 'v2',
+        PD_CONFERENCE_QUEUE_CONCURRENCY: '3',
+        PD_PAGES_DEPLOY_POLL_SECONDS: '10',
+        PD_PAGES_DEPLOY_TIMEOUT_SECONDS: '600'
+    });
+    assert.strictEqual(valid.unknown.length, 0);
+    assert.strictEqual(valid.items.some(item => item.ok === 'fail'), false);
+
+    const v1Valid = schema.validateEntries({
+        ...base,
+        PD_CONFERENCE_EXTRACTOR_VERSION: 'v1',
+        PD_CONFERENCE_QUEUE_CONCURRENCY: '32',
+        PD_PAGES_DEPLOY_POLL_SECONDS: '120',
+        PD_PAGES_DEPLOY_TIMEOUT_SECONDS: '1800'
+    });
+    assert.strictEqual(v1Valid.items.some(item => item.ok === 'fail'), false);
+
+    const invalid = schema.validateEntries({
+        ...base,
+        PD_CONFERENCE_EXTRACTOR_VERSION: 'v3',
+        PD_CONFERENCE_QUEUE_CONCURRENCY: '33',
+        PD_PAGES_DEPLOY_POLL_SECONDS: '121',
+        PD_PAGES_DEPLOY_TIMEOUT_SECONDS: '9'
+    });
+    const failed = invalid.items.filter(item => item.ok === 'fail').map(item => item.name);
+    for (const name of [
+        'PD_CONFERENCE_EXTRACTOR_VERSION',
+        'PD_CONFERENCE_QUEUE_CONCURRENCY',
+        'PD_PAGES_DEPLOY_POLL_SECONDS',
+        'PD_PAGES_DEPLOY_TIMEOUT_SECONDS'
+    ]) {
+        assert.ok(failed.includes(name), `${name} 越界/非法值应被拒绝`);
+    }
+});

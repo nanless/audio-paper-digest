@@ -26,9 +26,7 @@ function literalUnitColumnAllowed(proof, view, item) {
 function deriveBundle(expectation, view, quotes) {
     require('../env-loader').requireExternalRuntime('reader-sealed-pdf-column-units');
     require('../workspace-role').requireWorkspaceRole('daily', root);
-    const sources = path.resolve(expectation.rootDir || ''), run = path.basename(path.dirname(sources));
-    if (path.basename(sources) !== 'sources' || path.dirname(path.dirname(sources)) !== path.resolve(require('../config').FILES.dailyFreshSourceRunsDir)
-        || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(run)) throw new Error('Column units require the actual daily sealed source root');
+    require('./fresh-analysis-context').assertSealedFourFileArxivRoot(expectation.rootDir, 'Column units require the actual daily sealed source root');
     return require('./fresh-analysis-context').withVerifiedBundleReaderAuthorFiles(expectation, source => {
         const api = require('./fresh-arxiv-rewrite-source'), before = api.readFreshArxivRewriteSource(expectation);
         const files = [domProgram, quoteProgram, literalProgram, geometryProgram], implementation = files.map(file => sha(fs.readFileSync(file)));

@@ -3394,6 +3394,29 @@ function resolveAuthenticatedConferenceSource(details, explicitPdfBytes = null, 
     } catch (_) {
         // Outside authenticated conference context or mock fixture without PDF handle.
     }
+    if (!activeProvider) {
+        try {
+            const directContext = require('./direct-rewrite-analysis-context.js');
+            const activeDirect = directContext.getDirectRewriteAnalysisContext();
+            if (activeDirect?.route === 'conference-local-pdf' && activeDirect.readerPdfSourceHandle) {
+                const provider = require('./historical-direct-rewrite-runner.js').readVerifiedHistoricalReaderPdfSource(
+                    activeDirect.readerPdfSourceHandle
+                );
+                const expectedArtSha = recoverySha256(details?.structuredArtifacts?.payloadSha256)
+                    ? details.structuredArtifacts.payloadSha256 : null;
+                if (provider && provider.paperId === details?.sourceId
+                    && provider.sourceText === details?.text
+                    && (!expectedArtSha || provider.structuredArtifactsSha256 === expectedArtSha)) {
+                    const provPdfSha = recoverySha256(provider.pdfSha256) ? provider.pdfSha256 : null;
+                    if (!expectedPdfSha || !provPdfSha || expectedPdfSha === provPdfSha) {
+                        activeProvider = provider;
+                    }
+                }
+            }
+        } catch (_) {
+            // Outside authenticated historical direct conference context or mock fixture without PDF handle.
+        }
+    }
     const providerPdfSha = recoverySha256(activeProvider?.pdfSha256) ? activeProvider.pdfSha256 : null;
     const distinctPins = new Set([expectedPdfSha, providerPdfSha, callerPdfSha].filter(Boolean));
     if (distinctPins.size > 1) {

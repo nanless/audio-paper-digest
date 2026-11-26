@@ -1,8 +1,6 @@
 # 历史重写结果的审查与发布
 
-> **当前状态（2026-11-11）：历史博客线已搁置。** 用户决定暂停全历史发布与维护，重启时间未定；本页依赖的[全历史重写](history-rewrite.md)同样已搁置。命令与实现保留；重启前先解决该线的来源覆盖卡点：4,185 个冻结论文页中有 1,277 页没有 arXiv 线索，完整发布的页面覆盖要求这些页面先有可核验的来源对应关系。日更线不受影响。
-
-历史更新与日更、会议共用400项九维词表和多级路径展示。文章只列实际所选概念及祖先导航，祖先不写入直接标签，总目录保留完整。`history:publication` 在规划、生成、审查、激活和推送前核对站点双份词表目录及原快照；缺少本批SHA时先完成受控同步，不能让旧来源记录被重签或新标签被静默隐藏。详见[统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
+历史发布线与日更、官方会议保持齐平维护，共用 400 项九维词表、Studio Monograph 2.0 呈现、分级推理审查及 `markdown_hugo_gate` HTML 门禁。文章只列实际所选概念及祖先导航，祖先不写入直接标签，总目录保留完整。`history:publication` 在规划、生成、审查、激活和推送前核对站点双份词表目录及原快照；缺少本批SHA时先完成受控同步，不能让旧来源记录被重签或新标签被静默隐藏。详见[统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
 
 `history:publication` 发布[全历史重写流程](history-rewrite.md)生成的页面。程序读取冻结的重写计划、对应执行记录、汇总范围证明、完整单篇暂存页和汇总，逐项核对保存的文件。历史和日更各有独立的输入与发布凭证。读到已经签发的旧记录时，程序按该记录的原格式复验。
 
@@ -37,13 +35,13 @@
 
 缺页、未暂存论文、缺汇总、生成文件 SHA 与原记录不同，或博客基线已经前进，都会拒绝发布。一个完成布尔值不能代替这些实际文件检查。
 
-## 明确视觉范围
+## 明确视觉范围与持续不生图豁免
 
-本入口要求先记录本次视觉处置。只有用户明确限定本次是正文发布、不包含视觉任务时，才可使用 `excluded`；只有用户明确豁免视觉时，才可使用 `waived`。单说“重写全历史”不自动授予其中任何一种处置。若没有相应范围或豁免，应先落实任务要求，不能照下面示例自行排除视觉。
+按用户 2026-11-02 起持续有效的不生图要求，历史发布支持直接在 `plan` 与 `generate` 阶段传入 `--waive-visuals`，由程序按统一契约生成与当前计划绑定的 `mode: waived` 视觉豁免记录（`--waive-visuals` 与 `--visual-disposition` 互斥，不可同时指定）。
 
-两种状态都不表示图片已完成。程序将 `requestedBy` 记录为 `system-contract` 或 `user`，这只是范围声明，不能代替实际用户授权。最终事务状态会显示 `published-with-visual-excluded` 或 `published-with-visual-waived`，视觉仍为 `complete:false`。
+如需自定义视觉处置文件（例如显式使用 `excluded` 声明仅发布正文范围），则按下面方式预先生成不可变记录。两种状态都不表示图片已完成；最终事务状态会显示 `published-with-visual-excluded` 或 `published-with-visual-waived`，视觉仍为 `complete:false`。
 
-下面示例仅适用于用户已经明确确认“本次只发布历史正文，视觉不在本次范围内”。`--reason` 必须替换为真实范围说明，不能把示例文字当授权；若用户明确豁免，应改用 `--mode waived` 并记录实际豁免。
+下面示例仅适用于需要独立记录文件的场景。`--reason` 必须替换为真实范围说明，不能把示例文字当授权；若用户明确豁免，应改用 `--mode waived` 并记录实际豁免，或直接使用 `--waive-visuals`。
 
 ```bash
 npm run history:publication -- visual-disposition --apply \
@@ -81,7 +79,7 @@ npm run history:publication -- status --publication-id UUID
 
 所有路径和 UUID 应使用该轮实际值。上述四个阶段都有 `--dry-run`，用于预览对应阶段；审查预览只执行程序检查与 Hugo 构建，不运行语义模型，不能当作正式审查通过。`--blog-repo ABS` 可显式指定博客仓库；review/publish 支持可选 `--message TEXT`，其中提交说明由发布阶段使用。
 
-只有用户明确选择部分论文时，plan/generate 才传 `--paper-ids ID,ID,...`。此时视觉文件必须使用 `--scope selected-sample-publication`，且只能证明所选单篇的发布，不能冒充全部历史页面及汇总已覆盖。完整发布不传该参数，使用 `full-history-publication`。
+只有用户明确选择部分论文时，plan/generate 才传 `--paper-ids ID,ID,...`。此时若用独立视觉文件须设 `--scope selected-sample-publication`（或直接传 `--waive-visuals`），且只证明所选范围的发布，不能冒充全部历史页面已覆盖。当选定的 `--paper-ids` 恰好完整覆盖某个历史日期的全部论文、且对应日期汇总已按同源生成在 `aggregateRoot` 中时，程序会自动把当日全部单篇与 `YYYY-MM-DD.md` 汇总页纳入同一次发布计划原子同步更新。完整发布不传 `--paper-ids`，使用 `full-history-publication`。
 
 ## 审查内容和续跑
 
@@ -89,7 +87,11 @@ npm run history:publication -- status --publication-id UUID
 
 正常 Reader 若保存 `authenticatedPdfTableEvidence`，生成与发布须通过共用的只读来源桥重放原 PDF、原表引文和行列单位证明。历史的 arXiv 与保留会议 PDF 都使用本次真实直改来源身份，不伪装日更封存目录或官方会议执行。来源文件、快照、稿件或表绑定变化会使原证明失效；不从页面提交的 PDF 路径或布尔声明授予能力，详见[表绑定数据协议](data-format.md)。
 
-历史审查生成独立的图文审查凭证：审查模式（reviewMode）是 `historical-semantic-multimodal`，凭证本身的合同名是 `historical-direct-semantic-review`，两者不是同一个标识。模型审查前，程序先核对逐文件 SHA、front matter、标签协议、链接协议及特殊来源的非会议终稿披露；之后执行真实 Hugo 构建检查，再由独立 Python 协调器通过发布公共模型接口审查逐页文本分块及存在图片时的图文关系。审查结果只适用于本次历史发布。
+历史审查生成独立的图文审查凭证：审查模式（reviewMode）是 `historical-semantic-multimodal`，凭证本身的合同名是 `historical-direct-semantic-review`，两者不是同一个标识。模型审查前，程序先执行三组与日更对齐的确定性门禁：
+
+1. 核对逐文件 SHA、front matter、标签协议、链接协议及特殊来源的非会议终稿披露。
+2. 运行与日更一致的确定性 Markdown 发布检查（UTF-8 乱码 `U+FFFD`、内部评分证据锚点泄漏、完全重复长段、未转义裸 HTML/HTML-like 标签、裸 `$...$`/`$$...$$` 公式定界符及 Markdown 表格列数对齐）。
+3. 执行真实 Hugo 构建并调用 `markdown_hugo_gate` 检查渲染后的 HTML 输出，再由独立 Python 协调器（`historical-direct-review.py`）通过发布公共模型接口审查逐页文本分块（带 `stage: publish.text`，自动套用 `low` 推理档与稳定 `prompt_cache_key`）及存在图片时的图文关系（带 `stage: publish.figure`，自动套用 `medium` 推理档）。审查结果只适用于本次历史发布。
 
 `PD_HISTORY_REVIEW_CONCURRENCY` 默认 5，范围 1–16。历史 Python 审查只保留一个不超过并发数的活动页面窗口，读完本轮已结束结果后再补新页；普通内容拒稿继续其余页面，最后汇总为 blocked，不能签通过凭证。结构化 `scope=run` 错误先保存失败记录，再抛出异常并停止补新页，等待已经开始的页面结束。历史、日更和会议共享普通拒稿保留审计、运行级故障停止新派发的原则，具体异常分类由各发布适配器核验。
 
@@ -123,6 +125,12 @@ npm run history:publication -- status --publication-id UUID
 
 状态输出的 `planSha256` 和 `publicationPlanSha256` 都指本次独立发布计划；`rewritePlanSha256` 指该计划绑定的历史重写计划。`history:status` 使用后者核对当前历史计划，不能直接比较两个不同用途的 SHA。重写身份缺失、无效或不匹配时仍阻断完成；新增状态字段不改写旧计划或发布凭证。
 
-Git 发布状态 `complete` 不表示网站已上线，也不把视觉标成完成。向用户确认本次任务完成前，仍须人工检查发布提交（或保留本批已审页面字节的后续提交）对应的 GitHub Pages 构建和部署均成功，并逐页核验全部已发布单篇、每日、会议及任务汇总的 HTTP 200、正式地址和标题，保存部署与页面核验记录。当前历史 status 没有自动执行这些检查；部署失败时须读取日志、修复并继续验收。
+Git 发布状态 `complete` 不表示网站已上线，也不把视觉标成完成。向用户确认本次任务完成前，必须核验发布提交（或保留本批已审页面字节的后续提交）对应的 GitHub Pages 构建和部署均成功，并逐页核验全部已发布单篇、每日、会议及任务汇总的 HTTP 200、正式地址和标题，保存部署与页面核验记录。现在可直接调用 `verify:web` 执行自动化部署等待与逐页线上验收：
+
+```bash
+npm run verify:web -- --historical-publication-id UUID --wait
+```
+
+部署失败时须读取 workflow 日志、修复并继续验收；`history:publication -- status` 本身不替代 `verify:web` 的线上核验。
 
 视觉仅按用户实际确认的本次范围或有效豁免处理；它不豁免来源、审查、远端、部署或网页检查。任何后续发布改变状态后，都应重新查询并按最新字节核验。

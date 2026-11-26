@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="432" viewBox="0 0 960 432" role="img" aria-labelledby="title desc">
   <title id="title">音频研究工作台三层全景架构</title>
-  <desc id="desc">Studio Monograph 三层结构图：左侧内容生产引擎运行日更及备存的会议与历史产线，经三层审查按凭证推送至中间的 Studio Monograph 2.0 音频研究门户；右侧 Mac 与 Android 1.5.0 原生工作台只读同步门户与每日播客，并与个人模型、Zotero 及 WebDAV 同步隔离。</desc>
+  <desc id="desc">Studio Monograph 三层结构图：左侧内容生产引擎运行日更、官方会议与历史更新三条齐平产线，经三层审查按凭证推送至中间的 Studio Monograph 2.0 音频研究门户；右侧 Mac 与 Android 1.5.x 原生工作台只读同步门户与每日播客，并与个人模型、Zotero 及 WebDAV 同步隔离。</desc>
   <defs>
     <style>
       text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; fill: #182120; }
@@ -35,7 +35,7 @@
 
   <rect x="46" y="146" width="228" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
   <text x="58" y="168" class="t-badge" fill="#0f5c58">三条独立产线</text>
-  <text x="58" y="191" class="t-item">日更持续运行 · 会议/历史备存</text>
+  <text x="58" y="191" class="t-item">日更 · 会议 · 历史三线齐平</text>
 
   <rect x="46" y="218" width="228" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
   <text x="58" y="240" class="t-badge" fill="#0f5c58">共享 LLM/API 管线</text>
@@ -75,7 +75,7 @@
   <rect x="672" y="88" width="256" height="282" rx="14" fill="#ffffff" stroke="#e4bfa8" stroke-width="1.6"/>
   <rect x="672" y="88" width="256" height="44" rx="14" fill="#b85a34"/>
   <rect x="672" y="118" width="256" height="14" fill="#b85a34"/>
-  <text x="688" y="115" class="t-card">③ 双端工作台（v1.5.0）</text>
+  <text x="688" y="115" class="t-card">③ 双端工作台（v1.5.x）</text>
 
   <rect x="686" y="146" width="228" height="62" rx="9" fill="#fdf8f4" stroke="#ead6c9" stroke-width="1.2"/>
   <text x="698" y="168" class="t-badge" fill="#a64d2a">开箱即用 · 无需 .env</text>

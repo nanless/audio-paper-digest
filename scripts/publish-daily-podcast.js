@@ -20,6 +20,10 @@ const {
     DEFAULT_PODCAST_GITHUB_REPO,
     DEFAULT_RELEASE_TAG_PREFIX,
     DEFAULT_TAG_GROUPING,
+    resolvePodcastGitHubRepo,
+    buildReleaseTag,
+    validateAssetFileName,
+    buildReleaseDownloadUrl,
     publishPodcastToGitHubRelease,
     buildPodcastEpisodeMetadata,
     buildClientPodcastFeedJson,
@@ -468,23 +472,6 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     }
     const audioManifest = JSON.parse(fs.readFileSync(audioManifestPath, 'utf8'));
 
-    const ghEnv = pickAllowedChildEnv(env, GH_ALLOWED_ENV_KEYS);
-    const releaseResult = publishPodcastToGitHubRelease({
-        date: dateStr,
-        assetPath: audioManifest.audioPath,
-        expectedSha256: audioManifest.audioSha256,
-        repo: options.repo || env.PD_PODCAST_GITHUB_REPO || DEFAULT_PODCAST_GITHUB_REPO,
-        tagPrefix,
-        tagGrouping,
-        allowWav: audioManifest.format === 'wav',
-        dryRun: options.dryRun === true,
-        localOnly: options.localOnly === true,
-        cwd: PROJECT_ROOT,
-        env,
-        ghEnv,
-        execFileSyncFn: ghExecFileSyncFn
-    });
-
     const chaptersFileName = `${tagPrefix}-${dateStr}.chapters.json`;
     const chaptersUrl = options.chaptersBaseUrl
         ? `${String(options.chaptersBaseUrl).replace(/\/+$/, '')}/${chaptersFileName}`
@@ -497,6 +484,65 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     const description = topThemesLabel
         ? `${dateStr} 共深度分析 ${script.paperCount} 篇语音/音乐/音频论文，热点方向：${topThemesLabel}。`
         : `${dateStr} 共深度分析 ${script.paperCount} 篇语音/音乐/音频论文。`;
+    const publishedAt = options.publishedAt || `${dateStr}T08:00:00+08:00`;
+    const feedGeneratedAt = options.generatedAt || publishedAt;
+    const requestedRepo = options.repo || env.PD_PODCAST_GITHUB_REPO || DEFAULT_PODCAST_GITHUB_REPO;
+
+    // Pre-validate today's MP3 episode metadata against strict client feed invariants BEFORE uploading
+    // to GitHub Releases so a corrupted MP3 fails fast without stranding a broken remote asset.
+    if (audioManifest.format === 'mp3') {
+        const previewRepo = resolvePodcastGitHubRepo({ repo: requestedRepo, env });
+        const previewTag = buildReleaseTag(dateStr, { tagPrefix, tagGrouping, env });
+        const previewAssetName = validateAssetFileName(
+            audioManifest.audioPath ? path.basename(path.resolve(String(audioManifest.audioPath))) : '',
+            { date: dateStr, tagPrefix, allowedExtensions: ['mp3'] }
+        );
+        const previewAudioUrl = buildReleaseDownloadUrl({
+            repo: previewRepo,
+            tag: previewTag,
+            assetFileName: previewAssetName
+        });
+        const preflightMetadata = buildPodcastEpisodeMetadata({
+            date: dateStr,
+            title: script.title,
+            description,
+            audioUrl: previewAudioUrl,
+            audioBytes: audioManifest.audioBytes,
+            audioSha256: audioManifest.audioSha256,
+            durationSeconds: audioManifest.durationSeconds,
+            mimeType: audioManifest.mimeType,
+            ttsEngine: audioManifest.ttsEngine,
+            chapters: audioManifest.chapters,
+            episodePageUrl: script.digestUrl,
+            chaptersUrl,
+            publishedAt,
+            releaseTag: previewTag,
+            githubRepo: previewRepo,
+            scriptSha256: script.scriptSha256,
+            publishStatus: 'dry-run'
+        });
+        buildClientPodcastFeedJson([preflightMetadata], {
+            generatedAt: feedGeneratedAt,
+            skipIncompatible: false
+        });
+    }
+
+    const ghEnv = pickAllowedChildEnv(env, GH_ALLOWED_ENV_KEYS);
+    const releaseResult = publishPodcastToGitHubRelease({
+        date: dateStr,
+        assetPath: audioManifest.audioPath,
+        expectedSha256: audioManifest.audioSha256,
+        repo: requestedRepo,
+        tagPrefix,
+        tagGrouping,
+        allowWav: audioManifest.format === 'wav',
+        dryRun: options.dryRun === true,
+        localOnly: options.localOnly === true,
+        cwd: PROJECT_ROOT,
+        env,
+        ghEnv,
+        execFileSyncFn: ghExecFileSyncFn
+    });
 
     const episodeMetadata = buildPodcastEpisodeMetadata({
         date: dateStr,
@@ -511,7 +557,7 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
         chapters: audioManifest.chapters,
         episodePageUrl: script.digestUrl,
         chaptersUrl,
-        publishedAt: options.publishedAt || `${dateStr}T08:00:00+08:00`,
+        publishedAt,
         releaseTag: releaseResult.tag,
         githubRepo: releaseResult.repo,
         scriptSha256: script.scriptSha256,
@@ -535,9 +581,15 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     });
     writeFileAtomic(rssPath, rssXml);
 
+    if (audioManifest.format === 'mp3') {
+        buildClientPodcastFeedJson([episodeMetadata], {
+            generatedAt: feedGeneratedAt,
+            skipIncompatible: false
+        });
+    }
     const clientFeed = buildClientPodcastFeedJson(allEpisodes, {
-        generatedAt: options.generatedAt || episodeMetadata.publishedAt,
-        skipIncompatible: audioManifest.format !== 'mp3'
+        generatedAt: feedGeneratedAt,
+        skipIncompatible: true
     });
     writeFileAtomic(clientFeedPath, `${JSON.stringify(clientFeed, null, 2)}\n`);
 

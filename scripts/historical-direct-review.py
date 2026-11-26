@@ -15,6 +15,7 @@ from pathlib import Path
 
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
+import publish_common
 from publish_common import (classify_review_failure,
                             unchanged_content_rejection_blocks_retry,
                             interpret_readonly_text_unit)
@@ -234,15 +235,39 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
         chunk_limit = protocol_chunk_chars
     else:
         chunk_limit = module.get_blog_review_chunk_chars()
+    page_identity = str(page.get('paperId') or relative)
+    source_figure_note = page.get('sourceFigureNote')
+    page_paper = page.get('paper')
+    publication_figure_contexts = page.get('publicationFigureContexts')
+    verified_paper_images = page.get('verifiedPaperImages')
     chunks = module.split_review_content(content, chunk_limit)
     chunk_results = []
     for index, chunk in enumerate(chunks):
         chunk_sha = hashlib.sha256(chunk.encode()).hexdigest()
-        result = checkpoint(checkpoint_root, relative, 'text', index, chunk_sha, protocol,
-            lambda chunk=chunk, index=index: dict(zip(('passed', 'issues'),
-                interpret_readonly_text_unit(chunk,
-                    module._llm_review_post_chunk(chunk, title, required=True,
-                                                  chunk_label=f'{index + 1}/{len(chunks)}'))[:2])))
+
+        def run_text_chunk(chunk=chunk, index=index):
+            chunk_kwargs = {
+                'required': True,
+                'chunk_label': f'{index + 1}/{len(chunks)}',
+            }
+            if isinstance(source_figure_note, str) and source_figure_note:
+                chunk_kwargs['source_figure_note'] = source_figure_note
+            with publish_common.with_llm_usage_context({
+                'stage': 'publish.text',
+                'paperId': page_identity,
+            }):
+                return dict(zip(
+                    ('passed', 'issues'),
+                    interpret_readonly_text_unit(
+                        chunk,
+                        module._llm_review_post_chunk(chunk, title, **chunk_kwargs),
+                    )[:2],
+                ))
+
+        result = checkpoint(
+            checkpoint_root, relative, 'text', index, chunk_sha, protocol,
+            run_text_chunk,
+        )
         chunk_results.append(result)
     image_matches = module.parse_markdown_images(content)
     # 审查器拿到的是全文，不只是图片链接。周围说法变了，
@@ -251,9 +276,27 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
                              'images': [{'alt': item['alt'], 'url': item['url']}
                                         for item in image_matches]})
     if image_matches:
-        image_result = checkpoint(checkpoint_root, relative, 'images', 0, image_input_sha, protocol,
-            lambda: dict(zip(('passed', 'issues'),
-                             module.multimodal_review_images(content, title, required=True))))
+        def run_image_review():
+            image_kwargs = {'required': True, 'image_concurrency': 2}
+            if isinstance(page_paper, dict):
+                image_kwargs['paper'] = page_paper
+            if isinstance(publication_figure_contexts, dict):
+                image_kwargs['publication_figure_contexts'] = publication_figure_contexts
+            if isinstance(verified_paper_images, dict):
+                image_kwargs['verified_paper_images'] = verified_paper_images
+            with publish_common.with_llm_usage_context({
+                'stage': 'publish.figure',
+                'paperId': page_identity,
+            }):
+                return dict(zip(
+                    ('passed', 'issues'),
+                    module.multimodal_review_images(content, title, **image_kwargs),
+                ))
+
+        image_result = checkpoint(
+            checkpoint_root, relative, 'images', 0, image_input_sha, protocol,
+            run_image_review,
+        )
     else:
         image_result = {'passed': True, 'issues': []}
     issues = [issue for result in [*chunk_results, image_result]

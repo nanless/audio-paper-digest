@@ -17,6 +17,14 @@ const { recordHeaderFor } = require('./workflow-record-format');
 const CONTRACT = codec.contract('conference-queue');
 const PLAN_CONTRACT = codec.contract('conference-queue-plan');
 const MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY_CEILING = 32;
+function resolveMaxConcurrency() {
+    const raw = process.env.PD_CONFERENCE_QUEUE_CONCURRENCY;
+    if (raw === undefined || String(raw).trim() === '') return MAX_CONCURRENCY;
+    const parsed = Number.parseInt(String(raw).trim(), 10);
+    if (!Number.isInteger(parsed) || parsed < 1) return MAX_CONCURRENCY;
+    return Math.min(parsed, MAX_CONCURRENCY_CEILING);
+}
 const STAGES = Object.freeze(['process', 'generate', 'review', 'push', 'verify']);
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
@@ -100,6 +108,7 @@ function normalizePlan(input) {
     }
     const allowedPlanKeys = new Set([...Object.keys(recordHeaderFor(body, PLAN_CONTRACT)), 'conferences']);
     if (Object.keys(body).some(key => !allowedPlanKeys.has(key))) fail('会议队列计划含有未知字段');
+    const maxConcurrency = resolveMaxConcurrency();
     const conferences = body.conferences.map((raw, index) => {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`会议计划条目 ${index} 无效`);
         const entry = {
@@ -107,7 +116,7 @@ function normalizePlan(input) {
             catalogName: raw.catalogName,
             reportName: raw.reportName,
             filterId: raw.filterId,
-            concurrency: raw.concurrency === undefined ? MAX_CONCURRENCY : raw.concurrency
+            concurrency: raw.concurrency === undefined ? Math.min(MAX_CONCURRENCY, maxConcurrency) : raw.concurrency
         };
         if (Object.keys(raw).some(key => !Object.hasOwn(entry, key))) {
             fail(`会议计划条目 ${index} 含有未知字段`);
@@ -116,7 +125,7 @@ function normalizePlan(input) {
             || !NAME_RE.test(String(entry.catalogName || ''))
             || !NAME_RE.test(String(entry.reportName || ''))
             || !UUID_RE.test(String(entry.filterId || ''))
-            || !Number.isInteger(entry.concurrency) || entry.concurrency < 1 || entry.concurrency > MAX_CONCURRENCY) {
+            || !Number.isInteger(entry.concurrency) || entry.concurrency < 1 || entry.concurrency > maxConcurrency) {
             fail(`会议计划条目 ${index} 中的已选会议无效`);
         }
         return entry;

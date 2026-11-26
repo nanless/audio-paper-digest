@@ -2556,3 +2556,79 @@ test('历史新资源声明仍拒绝普通JSON、克隆owner、错成员、来�
     }
     assert.equal(context.getDirectRewriteAnalysisContext(), null);
 }));
+
+test('G4 & G5 & G6 & G8: 历史 arXiv 启用 figureCache 共享、isSealedFourFileArxivScope 与 Author v3 封存作用域', async t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-figure-cache-scope-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const figureCache = new Map();
+    let fetchCalls = 0;
+    const figureUrl = 'https://arxiv.org/html/2601.00001/fig1.png';
+    const pngBytes = Buffer.from('fake-png-bytes-for-cache-test');
+    const deps = {
+        freshArxivSourceRoot: path.join(root, 'sources'),
+        temporaryRoot: root,
+        persistentRoots: [],
+        figureCache,
+        fetchFigure: async () => {
+            fetchCalls += 1;
+            return { bytes: pngBytes, mediaType: 'image/png' };
+        }
+    };
+    const primary = await runner.ephemeralArxivPrimaryImageDownloader('2601.00001', figureUrl, deps);
+    assert.equal(fetchCalls, 1);
+    assert.equal(primary.cacheHit, false);
+    const materialized = await runner.ephemeralArxivMaterializer('2601.00001', [{ ordinal: 1, url: figureUrl }], deps);
+    assert.equal(fetchCalls, 1, 'Reader 图片物化应直接命中主分析填入的同篇 figureCache，避免重复下载');
+    assert.equal(materialized.length, 1);
+    assert.equal(materialized[0].assetSha256, primary.sha256);
+
+    const freshContext = require('../scripts/lib/fresh-analysis-context.js');
+    assert.equal(freshContext.isSealedFourFileArxivScope(), false);
+    // 验证物理 4 文件历史 arXiv 跑批期间开启 isSealedFourFileArxivScope 与 hasVerifiedBundleAuthorSource
+    const { f, roots, id, capture } = correctionRateHistoricalFixture(t);
+    let sawSealedScope = false;
+    let sawAuthorBundleScope = false;
+    await runner.runDirectRewrite({
+        apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1, paperIds: [`arxiv:${id}`]
+    }, {
+        captureFreshArxivRewriteSource: capture,
+        renderDirectPage,
+        analyze: input => {
+            sawSealedScope = freshContext.isSealedFourFileArxivScope();
+            sawAuthorBundleScope = freshContext.hasVerifiedBundleAuthorSource(input.sourceDetails);
+            return historicalResourceClaimsPaper(input);
+        }
+    });
+    assert.equal(sawSealedScope, true, '历史 arXiv 四文件分析应开启 isSealedFourFileArxivScope()');
+    assert.equal(sawAuthorBundleScope, true, '历史 arXiv 四文件分析应包在 withVerifiedBundleReaderAuthorSource 中');
+});
+
+test('G9: resolveAuthenticatedConferenceSource 识别 direct-rewrite-analysis-context 会议本地 PDF 来源', async t => {
+    const authorParser = require('../scripts/lib/reader-author-parser.js');
+    const f = fixture(t);
+    const roots = files(f.root);
+    const item = f.plan.queue.find(entry => entry.route.kind === 'conference-local-pdf');
+    const pdfBytes = fs.readFileSync(item.route.writerInputs[0].pdf.absolutePath);
+    const pdfSha = sha(pdfBytes);
+    const text = 'Conference Author Paper\nAlice Smith1, Bob Lee2\n1 Acoustic Lab\n2 Speech Lab\nAbstract\n' + 'Body text. '.repeat(25);
+    let resolved = null;
+    let outside = null;
+    const res = await runner.runDirectRewrite({
+        apply: true, plan: f.plan, ...roots, queue: 'conference', paperIds: [item.paperId]
+    }, {
+        extractPdfText: async () => text,
+        materializeConferenceFigures: async () => [],
+        analyze: async ({ sourceDetails }) => {
+            resolved = authorParser.resolveAuthenticatedConferencePdfBytes(sourceDetails);
+            outside = sourceDetails;
+            throw Object.assign(new Error('intentional stop after conference author source check'), { retryable: false });
+        }
+    });
+    assert.ok(resolved, JSON.stringify(res));
+    assert.equal(resolved.expectedPdfSha, pdfSha);
+    assert.ok(Buffer.isBuffer(resolved.pdfBytes));
+    assert.equal(sha(resolved.pdfBytes), pdfSha);
+    const outsideResolved = authorParser.resolveAuthenticatedConferencePdfBytes(outside);
+    assert.equal(outsideResolved.pdfBytes, null);
+    assert.equal(outsideResolved.expectedPdfSha, null);
+});

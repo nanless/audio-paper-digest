@@ -296,7 +296,7 @@ class PublicationFigureViewTests(unittest.TestCase):
              patch.object(pub,'run_bounded_llm_tasks',side_effect=dispatch_pages), \
              patch.object(pub,'target_bytes',side_effect=lambda repo,record:Path(record['sourcePath']).read_bytes()), \
              patch.object(pub,'run_hugo',return_value={'status':'passed'}),patch.object(pub,'rewrite_unpublished_receipt') as seal, \
-             patch.dict(os.environ,{'PAPER_ANALYZER_MODEL':'offline-mock-no-requests'}):
+             patch.dict(os.environ,{'PAPER_ANALYZER_MODEL':'offline-mock-no-requests','PD_BLOG_REVIEW_CONCURRENCY':''}):
             pub.review(CONFERENCE,PROCESS)
         self.assertEqual(dispatch,[(['aggregate','paper'],5)])
         sealed=json.loads(seal.call_args.args[1]);self.assertEqual([r['path'] for r in sealed['contentReview']['pages']],[r['path'] for r in pub.publication_page_files(g)])

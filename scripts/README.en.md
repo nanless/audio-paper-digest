@@ -10,7 +10,7 @@ This repository maintains three default LLM/API content workflows: daily digests
 |---|---|---|
 | Daily digest | `full-fetch.js`, `deep-analysis-only.js`, `batch-analyze.js`, `refresh-api-reader.js`, `reanalyze.js`, `reanalyze-selected.js` | `analysis-engine.js`, `deep-analyzer.js`, `analysis-contract.js` |
 | Official conferences | `official-conference-acquire.js`, `conference-discover.js`, `conference-filter-run.js`, `conference-process.js`, `migrate-conference-process.js` | Same engine, Reader, 8-dim rubric (`scoring-rubric-v2.js`), 9-facet taxonomy |
-| Historical updates | `historical-direct-rewrite-inputs.js`, `historical-direct-rewrite-plan.js`, `historical-direct-rewrite-run.js`, `history-resume.js` | Same engine with isolated historical scope and provenance adapters |
+| Historical updates | `historical-outdated-audit.js`, `historical-direct-rewrite-inputs.js`, `historical-direct-rewrite-plan.js`, `historical-direct-rewrite-run.js`, `history-resume.js` | Same engine with isolated historical scope and provenance adapters |
 | Page rendering | `generate-blog.py`, `conference-page-render.py`, `historical-page-render.py`, `lib/historical-direct-aggregate.js` | `publish-to-blog.py`, `paper_reader_presentation.py`, `tag_presentation.py` |
 | Review & push | `review-blog.py`, `push-blog.py`, `publish-conference.py`, `lib/historical-direct-publication.js`, `verify-web.js` | `publish_common.py`, `blog_reader_binding_verifier.py`, `markdown_hugo_gate.py` |
 | Infrastructure | `env-loader.js`, `project_env.py`, `workspace-role.js`, `runtime_guard.py`, `utils.js`, `llm-account-pool.js`, `llm_account_pool.py` | `config/workspace-roles.json`, `lib/env-schema.js`, `lib/arxiv-origin-gate.js`, `publish_node_replay_client.py` |
@@ -23,7 +23,8 @@ This repository maintains three default LLM/API content workflows: daily digests
 | `npm run config:check` | `config-check.js` | Validate `.env` required keys, ranges, reasoning tiers, and spelling against `lib/env-schema.js` |
 | `npm run source:probe -- --date YYYY-MM-DD` | `source-probe.js` | Read-only probe of arXiv Atom, official OAI, and RSS announcement freshness |
 | `npm run llm:accounts` / `llm:accounts:quota` | `llm-accounts-report.js` / `llm-accounts-quota.js` | Inspect shared pool schedule/cooldowns; sync or manage OpenCode Go `/zen/go/v1/usage` quotas and monthly reset dates |
-| `npm run digest:status` / `digest:scorecard` | `digest-run-report.js` / `digest-scorecard.js` | Cold-verify full batch status and inspect per-stage latency, cache hits, and reasoning share |
+| `npm run digest:status` / `digest:scorecard` | `digest-run-report.js` / `digest-scorecard.js` | Cold-verify full batch status and inspect per-stage latency, cache hits, and reasoning share (`--workflow daily\|conference\|history`) |
+| `npm run history:outdated` | `historical-outdated-audit.js` | Read-only audit of outdated historical blog pages under `content/posts/` with ready-to-run rewrite commands |
 | `npm run locks` | `locks.js` | Bounded read-only view of local and shared-blog locks plus stale-lock preview |
 | `npm run recover` / `manifest:new` | `recover.js` / `manifest-new.js` | Summarize failure causes & next actions; prepare source-bound manual correction manifests |
 | `npm run table:check` / `review:overrides` | `table-check.js` / `review-overrides-cli.js` | Offline table precheck; validate strict-schema review false-positive override notes |
@@ -37,7 +38,7 @@ This repository maintains three default LLM/API content workflows: daily digests
 
 ### Opt-in / Standalone Evolution Modules
 
-- `conference_extractor_v2.py`: PyMuPDF4LLM / layout-aware conference PDF extractor (opt-in; `conference_extractor.py` remains byte-frozen for historical receipts).
+- `conference_extractor_v2.py`: layout-aware conference PDF extractor (now default `v2` for new conference runs with two-column reflow, structured tables, and 288 DPI crops; `conference_extractor.py` remains byte-frozen for historical receipts).
 - `lib/arxiv-tex-source.js`, `arxiv_tex_extract.py`: on-demand arXiv `/src/<id>` LaTeX source AST sidecar fetcher and safe parser.
 - `generate-scripts-index.js`: regenerate or `--check` [scripts/INDEX.md](INDEX.md).
 

@@ -19,6 +19,24 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
 const MTIME_SLACK_MS = 12 * 60 * 60 * 1000;
 const MAX_EVENT_BYTES = 512 * 1024;
+const VALID_WORKFLOWS = Object.freeze(['daily', 'conference', 'history']);
+
+function classifyEventWorkflow(event) {
+    if (!event || typeof event !== 'object') return 'daily';
+    if (typeof event.workflow === 'string') {
+        const normalized = event.workflow.trim().toLowerCase();
+        if (VALID_WORKFLOWS.includes(normalized)) return normalized;
+    }
+    const paperId = String(event.paperId || '').trim();
+    const stage = String(event.stage || '').trim();
+    if (paperId.startsWith('conference:') || /^conference(?:[-_.]|$)/i.test(stage)) {
+        return 'conference';
+    }
+    if (paperId.startsWith('history:') || /^(?:history|historical)(?:[-_.]|$)/i.test(stage)) {
+        return 'history';
+    }
+    return 'daily';
+}
 
 function beijingDateFromMs(ms) {
     return new Date(ms + BEIJING_OFFSET_MS).toISOString().slice(0, 10);
@@ -258,6 +276,9 @@ function filterEventsByRunAndBatch(events, options = {}) {
                 : parseEventDate(ev.at) === options.batchDate
         ));
     }
+    if (options.workflow) {
+        out = out.filter(ev => ev && classifyEventWorkflow(ev) === options.workflow);
+    }
     return out;
 }
 
@@ -339,7 +360,7 @@ function finalizeBucket(bucket) {
     };
 }
 
-function buildScorecard(events, { dates, source }) {
+function buildScorecard(events, { dates, source, workflow = null }) {
     const overall = emptyMetricBucket();
     const byStage = new Map();
     const byDate = new Map();
@@ -371,6 +392,7 @@ function buildScorecard(events, { dates, source }) {
         contract: 'digest-scorecard-v1',
         dates,
         source,
+        ...(workflow ? { workflow } : {}),
         totals: finalizeBucket(overall),
         byStage: Object.fromEntries(
             [...byStage.entries()]
@@ -390,8 +412,9 @@ function formatTextScorecard(card) {
     const t = card.totals;
     const fmtPct = v => (v === null ? 'N/A' : `${v.toFixed(1)}%`);
     const fmtMs = v => (v === null ? 'N/A' : `${(v / 1000).toFixed(1)}s`);
+    const workflowLabel = card.workflow ? ` | workflow=${card.workflow}` : '';
     const lines = [
-        `📊 LLM 运行记分卡（${card.dates[0]}${card.dates.length > 1 ? ` ~ ${card.dates[card.dates.length - 1]}` : ''} | source=${card.source}）`,
+        `📊 LLM 运行记分卡（${card.dates[0]}${card.dates.length > 1 ? ` ~ ${card.dates[card.dates.length - 1]}` : ''} | source=${card.source}${workflowLabel}）`,
         `总请求: ${t.requests} | 成功: ${t.completed} (${fmtPct(t.successRatePct)}) | 截断: ${t.incomplete} | 传输错: ${t.transportErrors} (ECONNRESET=${t.econnresetErrors}) | HTTP错: ${t.httpErrors} | 服务商错: ${t.providerErrors} | 本地拦截: ${t.blockedBeforeTransport}`,
         `输入 Token: ${t.inputTokens.toLocaleString('en-US')} | 缓存命中: ${t.cachedInputTokens.toLocaleString('en-US')} (${fmtPct(t.cacheHitRatePct)})`,
         `输出 Token: ${t.outputTokens.toLocaleString('en-US')} | 思考占比: ${t.reasoningTokens.toLocaleString('en-US')} (${fmtPct(t.reasoningSharePct)}) | P50=${fmtMs(t.p50DurationMs)} P95=${fmtMs(t.p95DurationMs)}`
@@ -439,8 +462,15 @@ function parseArgs(argv) {
             if (!isValidDate(bd)) throw new Error(`--batch-date 必须是有效的北京日期 YYYY-MM-DD：${bd}`);
             options.batchDate = bd;
             if (!options.date) options.date = bd;
+        } else if (arg === '--workflow' || arg.startsWith('--workflow=')) {
+            const rawWf = arg === '--workflow' ? argv[++i] : arg.slice('--workflow='.length);
+            const wf = String(rawWf || '').trim().toLowerCase();
+            if (!VALID_WORKFLOWS.includes(wf)) {
+                throw new Error(`--workflow 必须是 ${VALID_WORKFLOWS.join('|')} 之一：${String(rawWf || '')}`);
+            }
+            options.workflow = wf;
         } else {
-            throw new Error('用法：digest:scorecard [--date YYYY-MM-DD] [--days N] [--run-id UUID] [--batch-date YYYY-MM-DD] [--dir DIR] [--fast|--canonical] [--json]');
+            throw new Error('用法：digest:scorecard [--date YYYY-MM-DD] [--days N] [--run-id UUID] [--batch-date YYYY-MM-DD] [--workflow daily|conference|history] [--dir DIR] [--fast|--canonical] [--json]');
         }
     }
     return options;
@@ -454,9 +484,10 @@ function main(argv = process.argv.slice(2)) {
         canonical: options.canonical,
         fast: options.fast,
         runId: options.runId,
-        batchDate: options.batchDate
+        batchDate: options.batchDate,
+        workflow: options.workflow
     });
-    const card = buildScorecard(events, { dates, source });
+    const card = buildScorecard(events, { dates, source, workflow: options.workflow || null });
     if (options.json) {
         console.log(JSON.stringify(card, null, 2));
     } else {
@@ -476,6 +507,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+    VALID_WORKFLOWS,
+    classifyEventWorkflow,
     main,
     parseArgs,
     resolveTargetDates,

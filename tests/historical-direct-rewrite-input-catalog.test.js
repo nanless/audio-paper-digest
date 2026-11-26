@@ -280,3 +280,49 @@ test('当前目录指针的保留名不能写入不可变目录，也不能产�
     assert.deepEqual(fs.readFileSync(normal.filename), original);
     assert.deepEqual(JSON.parse(fs.readFileSync(normal.currentCatalogPointer, 'utf8')), pointer);
 });
+
+test('G2: --arxiv-only 模式无需会议 manifest 即可构建 arXiv 专属目录并生成直改计划', t => {
+    const f = fixture(t);
+    const inventory = JSON.parse(fs.readFileSync(f.inventoryFile, 'utf8'));
+    const dailyOnlyPages = inventory.pages.filter(page => page.scope.type === 'daily');
+    const dailyInventory = {
+        ...inventory,
+        pages: dailyOnlyPages,
+        pageSetSha256: catalog.stableHash(dailyOnlyPages)
+    };
+    const dailyInventoryFile = path.join(f.root, 'daily-inventory.json');
+    write(dailyInventoryFile, dailyInventory);
+
+    const built = catalog.buildScopedCatalog({
+        arxivOnly: true,
+        inventoryFile: dailyInventoryFile,
+        blogRoot: f.blog
+    });
+    assert.deepEqual(built.inputs, []);
+    assert.equal(built.summary.conferencePapers, 0);
+    assert.equal(built.summary.arxivPapers, 1);
+    assert.deepEqual(built.entries, [{ paperId: 'arxiv:2601.00001', sources: [] }]);
+    assert.deepEqual(catalog.normalizeCatalog(built), built);
+
+    const written = catalog.buildAndWrite({
+        arxivOnly: true,
+        apply: true,
+        name: 'arxiv-only.json',
+        inventoryFile: dailyInventoryFile,
+        blogRoot: f.blog
+    }, { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
+    assert.equal(written.status, 'created');
+    assert.equal(written.arxivPaperCount, 1);
+    assert.equal(written.conferencePaperCount, 0);
+
+    const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
+    const plan = planApi.buildFromFiles({
+        catalogFile: written.filename,
+        inventoryFile: dailyInventoryFile,
+        blogRoot: f.blog
+    });
+    assert.equal(plan.queue.length, 1);
+    assert.equal(plan.queue[0].paperId, 'arxiv:2601.00001');
+    assert.equal(plan.queue[0].route.kind, 'arxiv-fresh-fetch');
+    assert.deepEqual(planApi.normalizePlan(plan), plan);
+});

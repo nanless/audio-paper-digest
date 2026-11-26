@@ -723,3 +723,72 @@ test('直接汇总并发出现不同文件时保留胜者，不覆盖或清理',
         assert.deepEqual(fs.readdirSync(path.dirname(scenario.target)), [path.basename(scenario.target)]);
     }
 });
+
+test('历史汇总页面满足 Studio Monograph 2.0 渲染规范（日更与会议区分分类、三档分级、焦点卡片、8 列榜单与条形图）', () => {
+    const yaml = require('yaml');
+    const rules = require('../scripts/lib/tag-rules.js').getDefaultTagRules();
+    const memberHigh = {
+        rank: 1,
+        item: { paperId: 'arxiv:2608.00001', route: { kind: 'arxiv-fresh-fetch', arxivId: '2608.00001' } },
+        source: {},
+        sourceText: 'display-only synthetic source',
+        renderedPages: [{ primaryUrl: 'https://example.test/paper-high/' }],
+        canonical: {
+            analysis: displayOnlyPaper(),
+            labels: ['语音识别', 'Transformer', '鲁棒性'],
+            primaryTaskLabel: '语音识别',
+            primaryMethodLabel: 'Transformer',
+            tagMetadata: { selectionContract: rules.selectionContract, registryVersion: rules.registryVersion, registrySha256: rules.registrySha256 },
+            readerTitle: '高分精读论文',
+            title: 'High Score Paper',
+            score: 8.6,
+            scoreDimensions: [
+                { label: '创新性', value: 9.0 },
+                { label: '技术严谨性', value: 8.5 },
+                { label: '实验充分性', value: 8.2 }
+            ],
+            authors: [{ name: 'Alice', affiliations: ['Lab A'] }],
+            resources: [
+                { type: 'code', availability: 'available', url: 'https://github.com/example/code' },
+                { type: 'demo', availability: 'available', url: 'https://example.org/demo' }
+            ],
+            rankBucket: '前10%',
+            documentType: '方法研究',
+            summary: '高分论文核心摘要。'
+        }
+    };
+    const memberMid = {
+        ...structuredClone(memberHigh),
+        rank: 2,
+        item: { paperId: 'arxiv:2608.00002', route: { kind: 'arxiv-fresh-fetch', arxivId: '2608.00002' } },
+        renderedPages: [{ primaryUrl: 'https://example.test/paper-mid/' }],
+        canonical: {
+            ...structuredClone(memberHigh.canonical),
+            readerTitle: '中分关注论文',
+            title: 'Mid Score Paper',
+            score: 7.4,
+            resources: [{ type: 'model', availability: 'available', url: 'https://huggingface.co/example/model' }]
+        }
+    };
+    const dailyMd = direct.renderAggregate('daily', '2026-10-15', [memberHigh, memberMid]);
+    const dailyFm = yaml.parse(dailyMd.split('---\n')[1]);
+    assert.equal(dailyFm.date, '2026-10-15');
+    assert.equal(dailyFm.layout, 'posts');
+    assert.deepEqual(dailyFm.categories, ['论文速递']);
+    assert.match(dailyFm.description, /共分析 2 篇/);
+    assert.match(dailyFm.paper_digest_tags_schema_fingerprint, /^[a-f0-9]{64}$/);
+    assert.match(dailyMd, /### 🧭 今日研究脉络/);
+    assert.match(dailyMd, /### 🏷️ 热门方向[\s\S]*\/audio-research-portal\/papers\/\?concept=task\.asr[\s\S]*██/);
+    assert.match(dailyMd, /\| 排名 \| 论文 \| 中文导览 \| 总分 \| 分档 \| 文档类型 \| 主任务 \| 资源 \|/);
+    assert.match(dailyMd, /\| 🥇 \| \[High Score Paper\]\(\/paper-high\/\) \| 高分精读论文 \| 8\.6 \| 前10% \| 方法研究 \| .* \| 💻 🔊 \|/);
+    assert.match(dailyMd, /\| 🥈 \| \[Mid Score Paper\]\(\/paper-mid\/\) \| 中分关注论文 \| 7\.4 \| .* \| 🤗 \|/);
+    assert.match(dailyMd, /### 🎯 三档阅读分级[\s\S]*精读必看（8\.0 分及以上）[\s\S]*重点关注（7\.0–7\.9 分）/);
+    assert.match(dailyMd, /### 🌟 今日精选焦点[\s\S]*🥇 \*\*\[高分精读论文\]\(\/paper-high\/\)\*\* · 总分 \*\*8\.6\*\*\/10/);
+
+    const confMd = direct.renderAggregate('conference', 'icassp-2026', [memberHigh], { cohortDate: '2026-05-01' });
+    const confFm = yaml.parse(confMd.split('---\n')[1]);
+    assert.equal(confFm.date, '2026-05-01');
+    assert.deepEqual(confFm.categories, ['ICASSP-2026 论文']);
+    assert.match(confMd, /### 🧭 会议研究脉络/);
+    assert.match(confMd, /### 🌟 会议精选焦点/);
+});

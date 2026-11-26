@@ -21,7 +21,7 @@
 Dozens of new speech, music, acoustics, and Audio LLM papers arrive on arXiv and top venues every week—skimming abstracts hides critical trade-offs, while reading every full PDF eats your entire morning. **Audio Research Workbench (`音频研究工作台`)** breaks that workflow into three isolated open-source layers where every metric, equation, and original figure traces back to sealed source bytes:
 
 - **Public Knowledge Portal ([Audio Research Portal / 音频研究门户](https://nanless.github.io/audio-research-portal/))**: Built with **Studio Monograph 2.0**, hosting **9,300+ verified Chinese paper guides (8,650+ unique papers)**, daily digests, 19 venue collections, and 8 audio SOTA domain hubs with `⌘K` search, zoomable figure inspection, sortable tables, and one-click Obsidian / BibTeX / RIS export.
-- **Native Desktop & Mobile Workbenches (macOS & Android v1.5.0)**: Subscribe read-only to portal snapshots and daily audio podcasts for side-by-side PDF reading, offline multi-word search, opt-in personal LLM study, Zotero archiving, and one-click bidirectional WebDAV sync.
+- **Native Desktop & Mobile Workbenches (macOS & Android 1.5.x)**: Subscribe read-only to portal snapshots and daily audio podcasts for side-by-side PDF reading, offline multi-word search, opt-in personal LLM study, Zotero archiving, and one-click bidirectional WebDAV sync.
 - **Content Production Engine (this repo)**: Runs an LLM/API pipeline by default—handling fetch deduplication, screening, four-file source sealing, deep analysis, eight-dimension scoring, nine-facet classification, and long-form Chinese guides (**Reader** in code)—and pushes only after a strict three-layer review gate.
 
 > **Language note**: Published articles and portal pages are in Chinese. This README guides English-speaking readers and maintainers through the architecture, apps, and CLI workflows; linked operational docs are in Chinese unless stated otherwise.
@@ -68,15 +68,15 @@ Dozens of new speech, music, acoustics, and Audio LLM papers arrive on arXiv and
 
 ---
 
-## Three-Layer Architecture & Native 1.5.0 Workbenches
+## Three-Layer Architecture & Native 1.5.x Workbenches
 
 ![Audio Research Workbench three-layer architecture: content engine, Studio Monograph 2.0 portal, and native Mac & Android workbenches](docs/images/workbench-architecture.en.svg)
 
 Production, publishing, and personal reading stay isolated: this repository pushes reviewed diffs into the Hugo portal (serving `client/details/*` content-addressed snapshots and the podcast feed), while the Mac and Android clients consume those static files read-only without ever calling a production LLM.
 
-![Mac and Android v1.5.0 Workbench public feeds vs. personal sync boundaries](docs/images/client-experience.en.svg)
+![Mac and Android 1.5.x Workbench public feeds vs. personal sync boundaries](docs/images/client-experience.en.svg)
 
-| Capability | Audio Research Portal (Web) | macOS Workbench (1.5.0) | Android Workbench (1.5.0) |
+| Capability | Audio Research Portal (Web) | macOS Workbench (1.5.x) | Android Workbench (1.5.x) |
 |---|:---:|:---:|:---:|
 | 9,300+ guides, 400-concept taxonomy & score/OSS filters | Instant browse + `⌘K` palette | Offline snapshots + NFKC search | Offline snapshots + idle preload |
 | Guide + side-by-side PDF with physical page anchors | Direct source links | AppKit + PDFKit split view | Phone 1-col / Tablet 2-col |
@@ -86,8 +86,8 @@ Production, publishing, and personal reading stay isolated: this repository push
 | Zotero Archiving (metadata + guide + PDF + notes) | BibTeX / RIS / Obsidian | Local Zotero Desktop API | Official Zotero Web API v3 |
 | Nutstore WebDAV sync & full-space backups | — | One-click bidirectional sync + lossless merge / snapshots | One-click bidirectional sync + lossless merge / snapshots |
 
-- **Current public release**: **1.5.0 (build 24)** on both macOS and Android (published 26 Nov 2026, commit `5b5a8e79`), adding the native daily audio podcast player (`150 MiB / 5-episode` LRU cache excluded from backups and sync), Wave 12 / Track 13.3 card styling, aligned NFKC multi-word offline search/filters, and rebranding to Audio Research Workbench / Audio Research Portal (retaining `/audio-paper-digest-blog/` transitional compatibility). See [GitHub Release v1.5.0](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0), [1.5.0 release record](docs/workbench-1.5.0-review.md), and [client release verification](docs/client-release-verification.md).
-- **Upgrade notes**: Upgrading macOS from 1.4.x renames the bundle to `音频研究工作台.app` while keeping `com.nanless.PaperDigest`, data directories, and Keychain entries (local ad-hoc signature, macOS 15+ Apple silicon)—quit and remove the old bundle after installing. Android keeps the 1.4.4+ signing certificate so 1.4.4–1.4.7 upgrade in place; 1.4.3 requires backing up and uninstalling first.
+- **Source & public release**: Current source version is **1.5.1 (build 25) (not yet published)** (see the [1.5.1 pre-release record](docs/workbench-1.5.1-review.md)). The latest published release on both macOS and Android is **1.5.0 / build 24** (published 26 Nov 2026, commit `5b5a8e79`); see [GitHub Release v1.5.0](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0), [1.5.0 release record](docs/workbench-1.5.0-review.md), and [client release verification](docs/client-release-verification.md).
+- **Upgrade notes**: Upgrading macOS from 1.4.x renames the bundle to `音频研究工作台.app` while keeping `com.nanless.PaperDigest`, data directories, and Keychain entries (local ad-hoc signature, macOS 15+ Apple silicon)—quit and remove the old bundle after installing. Android keeps the 1.4.4+ signing certificate so 1.4.4–1.5.0 upgrade in place; 1.4.3 requires backing up and uninstalling first.
 
 ---
 
@@ -95,13 +95,13 @@ Production, publishing, and personal reading stay isolated: this repository push
 
 ![Daily digest end-to-end pipeline: boundary fetch, screening, four-file sealing, analysis, three-layer review, and live web checks](docs/images/daily-digest-flow.en.svg)
 
-Content production runs an **LLM/API pipeline by default** across three isolated workflows:
+Content production runs an **LLM/API pipeline by default** across three active, parity-aligned workflows:
 
 | Workflow | Status | Purpose & Source Boundary | Guide |
 |---|---|---|---|
 | **Daily digest** | **Active** | Tracks daily arXiv & HuggingFace audio preprints; syncs portal remote, deduplicates published pages only, seals official HTML + PDF | [Daily procedure](SKILL.md#1-日更) · [Fetch boundary](docs/daily-fetch-boundary.md) |
-| **Official conference** | **Paused (since 2026-11-11)** | Processes ICML / Interspeech / ICASSP proceedings and verified PDFs; implementation remains maintained | [Conference workflow](docs/conference-workflow.md) |
-| **Historical update** | **Paused (since 2026-11-11)** | Rewrites older posts from original papers while preserving URLs; implementation remains maintained | [Historical updates](docs/history-rewrite.md) · [Publication](docs/history-direct-publication.md) |
+| **Official conference** | **Active (Daily parity)** | Covers 22 official providers (including v2 & `2025+` core-audio families), default v2 PDF extraction, Studio Monograph 2.0 rendering, and Pages deploy verification | [Conference workflow](docs/conference-workflow.md) · [New conference guide](docs/conference-workflow.md#新会议全流程接入指南20262027) |
+| **Historical update** | **Active (Daily parity)** | Discovers outdated posts via `history:outdated`, rewrites from sealed/local original papers with atomic daily-summary sync, and strictly preserves URLs | [Historical updates](docs/history-rewrite.md) · [Outdated rewrite guide](docs/history-rewrite.md#过时历史博客批量重写指南) · [Publication](docs/history-direct-publication.md) |
 
 Four engineering safeguards keep quality verifiable and cost bounded:
 
@@ -143,9 +143,9 @@ Replace example dates, IDs, and paths with real values before running:
 
 | Task | Command & notes |
 |---|---|
-| **Official conference sweep** (paused) | `conference:acquire` → `conference:discover` → filter → `conference:process`; [conference workflow](docs/conference-workflow.md) |
-| **Rewrite historical pages** (paused) | Lock scope, then `history:inputs` / `plan` / `sources` / `run` / `aggregate`; [historical updates](docs/history-rewrite.md) |
-| **Publish historical output** (paused) | `npm run history:publication -- plan\|generate\|review\|publish\|status`; [historical publication](docs/history-direct-publication.md) |
+| **Official conference sweep** | `conference:acquire` → `conference:discover` → filter → `conference:process` → `conference:publish:*`; [conference workflow](docs/conference-workflow.md) |
+| **Audit & rewrite historical pages** | Run `npm run history:outdated`, then `history:inputs --arxiv-only` / `plan` / `sources` / `run` / `aggregate`; [historical updates](docs/history-rewrite.md) |
+| **Publish & verify historical output** | `npm run history:publication -- plan\|generate\|review\|publish\|status` (supports `--waive-visuals`), then `verify:web -- --historical-publication-id UUID`; [historical publication](docs/history-direct-publication.md) |
 | **Republish a daily presentation** | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`, then `blog:review` → `blog:push` |
 | **Register earlier fetch witness** | `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD` |
 | **Impact check & review overrides** | `npm run impact -- --git`, `npm run review:overrides -- --date DATE --file F.json` |

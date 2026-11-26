@@ -487,13 +487,22 @@ test('汇总会复核每个选中的阶段，只有显式选择全部完成时�
         'paper_digest_tags_concepts: [{"facet":"task","id":"task.asr","label":"语音识别"}]');
     assert.match(result.manifest.markdown,
         /paper_digest_tags_concepts: .*?\npaper_digest_tags_scope: "aggregate-primary-task-counts"/);
+    assert.match(result.manifest.markdown, /^layout: "posts"$/m);
+    assert.match(result.manifest.markdown, new RegExp(`^paper_digest_tags_schema_fingerprint: "${codec.schemaFingerprint('paper-tag-flat-tags')}"$`, 'm'));
     assert.match(result.manifest.markdown, /paper_digest_reader_quality: "reader-facing-page"/);
     assert.match(result.manifest.markdown, /paper_digest_page_type: index/);
     assert.match(result.manifest.markdown, /^date: 2026-09-07$/m);
-    assert.match(result.manifest.markdown, /## ⚡ 今日概览/);
+    assert.match(result.manifest.markdown, /## ⚡ 会议概览/);
+    assert.doesNotMatch(result.manifest.markdown, /## ⚡ 今日概览/);
+    assert.match(result.manifest.markdown, /### 🧭 会议研究脉络/);
+    assert.match(result.manifest.markdown, /### 🎯 三档阅读分级/);
+    assert.match(result.manifest.markdown, /### 🌟 会议精选焦点/);
+    assert.match(result.manifest.markdown, /\| 方向（仅主任务） \| 数量 \| 分布 \|/);
+    assert.match(result.manifest.markdown, /\[#语音识别\]\([^\)]*\/papers\/\?concept=task\.asr\) \| 2 篇 \| ██ \|/);
     assert.match(result.manifest.markdown, /👥 \*\*作者与机构\*\*/);
     assert.match(result.manifest.markdown, /🔗 \*\*开源资源\*\*/);
-    assert.match(result.manifest.markdown, /Reader 中文题目 \| 英文题目 \| 八维评分 \| 分档 \| 文档类型/);
+    assert.match(result.manifest.markdown, /\| 排名 \| 论文 \| 中文导览 \| 总分 \| 分档 \| 文档类型 \| 主任务 \| 资源 \|/);
+    assert.match(result.manifest.markdown, /\| 🥇 \|/);
     assert.doesNotMatch(result.manifest.markdown, /\]\(https:\/\/evil\.invalid\)|\n# heading/);
     assert.doesNotMatch(result.manifest.markdown, /旧会议汇总正文/);
     assert.ok(fs.existsSync(path.join(aggregateRoot, 'icassp-2026', result.manifest.aggregateId, 'manifest.json')));

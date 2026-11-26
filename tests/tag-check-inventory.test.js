@@ -268,3 +268,41 @@ test('默认盘点合并新旧目录且保留出处，自定义目录不附加�
         config.FILES.legacyHistoricalTagAssignmentDir = originalLegacyRoot;
     }
 });
+
+test('日更 deep-analysis-result 仅含 arxivId 字段时保留 paperId 并出现在示例列表', t => {
+    const api = require('../scripts/tag-check-inventory.js');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'seal-inventory-arxiv-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    const deepPayload = {
+        papers: [
+            { arxivId: '2611.01234v1', analysisManifest: { stages: { tagSelection: seal('complete', STALE_ONE) } } },
+            { arxivId: '2611.05678v2', analysisManifest: { stages: { tagSelection: seal('not_needed', CURRENT) } } },
+            { id: 'explicit-id', arxivId: '2611.09999v1', analysisManifest: { stages: { tagSelection: seal('complete', CURRENT) } } }
+        ]
+    };
+    const directEntries = api.collectTagStageRecords(deepPayload, null);
+    assert.deepEqual(directEntries, [
+        { paperId: '2611.01234v1', registrySha256: STALE_ONE, status: 'complete' },
+        { paperId: '2611.05678v2', registrySha256: CURRENT, status: 'not_needed' },
+        { paperId: 'explicit-id', registrySha256: CURRENT, status: 'complete' }
+    ]);
+
+    const deepFile = path.join(root, 'deep-analysis-result.json');
+    const registryFile = path.join(root, 'tag-catalog.json');
+    writeJson(deepFile, deepPayload);
+    fs.writeFileSync(registryFile, 'current-registry-bytes');
+
+    const result = runCli([
+        '--json',
+        '--executions', path.join(root, 'none-executions'),
+        '--deep', deepFile,
+        '--assignments', path.join(root, 'none-assignments'),
+        '--registry', registryFile
+    ]);
+    assert.equal(result.status, 0, result.stderr);
+    const inventory = JSON.parse(result.stdout);
+    const bySha = Object.fromEntries(inventory.groups.map(group => [group.registrySha256, group]));
+    assert.deepEqual(bySha[STALE_ONE].samplePaperIds, ['2611.01234v1']);
+    assert.deepEqual(bySha[CURRENT].samplePaperIds, ['2611.05678v2', 'explicit-id']);
+});

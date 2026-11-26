@@ -553,6 +553,26 @@ test('重新生成前须拒绝原绑定哈希无效或格式声明错误的标�
     }
 });
 
+test('reproject 模式遇到缺失或非对象 analysisStageCheckpoints 时干净返回 binding-refused 而不是抛出 TypeError', () => {
+    for (const mutate of [
+        paper => { delete paper.analysisStageCheckpoints; },
+        paper => { paper.analysisStageCheckpoints = null; },
+        paper => { paper.analysisStageCheckpoints = []; },
+        paper => { paper.analysisStageCheckpoints = 'invalid-checkpoints'; }
+    ]) {
+        const analysis = analysisRecord({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+        mutate(analysis.papers[0]);
+        const before = JSON.stringify(analysis);
+        const result = reproject({ analysis, mode: 'reproject', acknowledgeDestructive: true });
+        assert.equal(result.ok, false);
+        assert.equal(result.analysis, null);
+        assert.equal(result.item.status, 'blocked');
+        assert.equal(result.item.outcome, 'binding-refused');
+        assert.match(result.item.errors.join(''), /检查点缺失|未通过核验/);
+        assert.equal(JSON.stringify(analysis), before);
+    }
+});
+
 
 test('失效报告默认合并明确的新旧根，自定义单根保持独占和原文件', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-stale-roots-'));

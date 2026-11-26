@@ -771,3 +771,84 @@ test('verify() 读取 .env 后将 env 代理配置透传给 fetchPage()', async 
         hostname: 'public.example.com'
     });
 });
+
+test('G16: --historical-publication-id 核验历史发布事务的 Pages 部署与所有上线页面并写出 online-verification.json', async t => {
+    const dir = tempDir(t);
+    const pubRoot = path.join(dir, 'publications');
+    const pubId = '12345678-1234-4123-8123-123456789abc';
+    const commitOid = 'a'.repeat(40);
+    const txDir = path.join(pubRoot, pubId);
+    fs.mkdirSync(txDir, { recursive: true });
+    fs.writeFileSync(path.join(txDir, 'plan.json'), JSON.stringify({
+        publicationId: pubId,
+        planSha256: 'b'.repeat(64),
+        files: [
+            { path: 'content/posts/2026-08-08.md', operation: 'modify', sha256: 'c'.repeat(64) },
+            { path: 'content/posts/2026-08-08-paper-one.md', operation: 'modify', sha256: 'd'.repeat(64) },
+            { path: 'static/client/papers/2026-08-08/2608-00001/citation.json', operation: 'add', sha256: 'e'.repeat(64) }
+        ]
+    }));
+    fs.writeFileSync(path.join(txDir, 'publication.json'), JSON.stringify({
+        publicationId: pubId,
+        publicationCommit: commitOid,
+        remoteVerifiedOid: commitOid
+    }));
+
+    const out = [];
+    const errs = [];
+    const code = await verifyWeb.runVerifyWebCli([
+        '--historical-publication-id', pubId,
+        '--publication-root', pubRoot,
+        '--json'
+    ], {
+        env: { PAPER_DIGEST_BLOG_URL: 'https://nanless.github.io/audio-research-portal/posts' },
+        print: line => out.push(line),
+        printError: line => errs.push(line),
+        spawnSync: (_cmd, args) => {
+            if (args.includes('list')) {
+                return {
+                    status: 0,
+                    stdout: JSON.stringify([{
+                        headSha: commitOid,
+                        status: 'completed',
+                        conclusion: 'success',
+                        url: 'https://github.com/nanless/audio-research-portal/actions/runs/999',
+                        workflowName: 'Deploy Hugo to Pages',
+                        event: 'push',
+                        databaseId: 999
+                    }])
+                };
+            }
+            return {
+                status: 0,
+                stdout: JSON.stringify({
+                    jobs: [
+                        { name: 'build', status: 'completed', conclusion: 'success' },
+                        { name: 'deploy', status: 'completed', conclusion: 'success' }
+                    ]
+                })
+            };
+        },
+        fetchImpl: async url => ({
+            status: 200,
+            url,
+            text: async () => url.endsWith('/2026-08-08/')
+                ? '<html><title>音频研究日报 2026-08-08 | 音频研究门户</title></html>'
+                : '<html><title>Paper One Detail | 音频研究门户</title></html>'
+        })
+    });
+    assert.strictEqual(code, 0, errs.join('\n'));
+    const artifactFile = path.join(txDir, 'online-verification.json');
+    assert.strictEqual(fs.existsSync(artifactFile), true);
+    const saved = JSON.parse(fs.readFileSync(artifactFile, 'utf8'));
+    assert.strictEqual(saved.mode, 'historical-publication');
+    assert.strictEqual(saved.publicationId, pubId);
+    assert.strictEqual(saved.remoteVerifiedOid, commitOid);
+    assert.strictEqual(saved.pagesDeployVerified, true);
+    assert.strictEqual(saved.webVerified, true);
+    assert.strictEqual(saved.expected, 2);
+    assert.strictEqual(saved.ok, 2);
+    assert.strictEqual(saved.failed, 0);
+    assert.strictEqual(out.length >= 1, true);
+    assert.strictEqual(JSON.parse(out[0]).type, 'summary');
+});

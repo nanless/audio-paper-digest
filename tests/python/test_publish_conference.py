@@ -1322,6 +1322,179 @@ class RepoRenameAndHardeningTest(unittest.TestCase):
                     self.assertEqual(held, {same_repo, other_repo})
             self.assertEqual(acquired_log, [(same_repo, 'b-own'), (other_repo, 'i-own')])
 
+    def test_conference_directory_preflight_warns_only_when_missing(self):
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp).resolve()
+            # No conference-directory.json -> silent no-op
+            buf = io.StringIO()
+            with mock.patch('sys.stderr', buf):
+                self.assertFalse(M.warn_if_conference_missing_from_directory(repo, 'icassp-2026'))
+            self.assertEqual(buf.getvalue(), '')
+
+            data_dir = repo / 'data'
+            data_dir.mkdir()
+            (data_dir / 'conference-directory.json').write_text(
+                json.dumps({'conferences': [{'id': 'icassp-2026', 'name': 'ICASSP 2026'}]}),
+                encoding='utf-8',
+            )
+            buf = io.StringIO()
+            with mock.patch('sys.stderr', buf):
+                self.assertFalse(M.warn_if_conference_missing_from_directory(repo, 'icassp-2026'))
+            self.assertEqual(buf.getvalue(), '')
+
+            buf = io.StringIO()
+            with mock.patch('sys.stderr', buf):
+                self.assertTrue(M.warn_if_conference_missing_from_directory(repo, 'ismir-2026'))
+            self.assertIn('ismir-2026', buf.getvalue())
+            self.assertIn('WARNING', buf.getvalue())
+
+    def test_push_dry_run_validates_without_mutating_git_or_writing_receipt(self):
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            repo = root / 'blog'
+            images = root / 'images'
+            pub_dir = root / 'pub'
+            repo.mkdir(); images.mkdir(); pub_dir.mkdir()
+            generation = {
+                'conferenceId': 'icassp-2026',
+                'processId': '11111111-1111-4111-8111-111111111111',
+                'generationSha256': 'a' * 64,
+                'baseHead': 'b' * 40,
+                'imageBaseHead': 'c' * 40,
+                'files': [{'path': 'content/posts/conference-icassp-2026.md'}],
+                'imageFiles': [{'path': 'icassp-2026/abc/figure-1.png'}],
+            }
+            review_receipt = {'reviewSha256': 'd' * 64}
+            buf = io.StringIO()
+            with mock.patch.object(M, 'blog_repo', return_value=repo), \
+                    mock.patch.object(M, 'image_repo', return_value=images), \
+                    mock.patch.object(M, 'publication_dir', return_value=pub_dir), \
+                    mock.patch.object(M, 'shared_publication_repository_locks'), \
+                    mock.patch.object(M, 'validate_generation', return_value=(generation, {}, {})), \
+                    mock.patch.object(M, 'require_publication_figure_view_ready'), \
+                    mock.patch.object(M, 'load_review', return_value=review_receipt), \
+                    mock.patch.object(M, 'validate_review'), \
+                    mock.patch.object(M, 'verify_index') as mock_verify, \
+                    mock.patch.object(M, 'commit_delta') as mock_commit, \
+                    mock.patch.object(M, 'push_delta') as mock_push, \
+                    mock.patch('sys.stdout', buf):
+                result = M.push('icassp-2026', '11111111-1111-4111-8111-111111111111', dry_run=True)
+            self.assertEqual(result['status'], 'dry-run')
+            self.assertTrue(result['dryRun'])
+            self.assertEqual(result['blogFiles'], ['content/posts/conference-icassp-2026.md'])
+            self.assertEqual(result['imageFiles'], ['icassp-2026/abc/figure-1.png'])
+            self.assertEqual(mock_verify.call_count, 2)
+            mock_commit.assert_not_called()
+            mock_push.assert_not_called()
+            self.assertFalse((pub_dir / 'publish.json').exists())
+
+    def test_wait_for_pages_deploy_polls_until_success_and_fails_on_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp).resolve()
+            # Local non-GitHub remote skips cleanly
+            with mock.patch.object(M, '_is_github_pages_portal_remote', return_value=False):
+                skipped = M.wait_for_pages_deploy(repo, 'a' * 40)
+                self.assertEqual(skipped['status'], 'skipped_non_github_remote')
+
+            # GitHub remote polls pending -> success
+            calls = [
+                {'status': 'pending', 'metadataOutcome': 'pending'},
+                {'status': 'metadata_observed', 'metadataOutcome': 'success'},
+            ]
+            with mock.patch.object(M, '_is_github_pages_portal_remote', return_value=True), \
+                    mock.patch.object(M.time, 'sleep'):
+                res = M.wait_for_pages_deploy(
+                    repo, 'a' * 40, timeout_seconds=30, poll_interval_seconds=1,
+                    collect_metadata=lambda _oid: calls.pop(0),
+                )
+                self.assertEqual(res['status'], 'deployed')
+
+            # GitHub remote failure raises ConferencePublicationError
+            with mock.patch.object(M, '_is_github_pages_portal_remote', return_value=True):
+                with self.assertRaisesRegex(M.ConferencePublicationError, '部署失败'):
+                    M.wait_for_pages_deploy(
+                        repo, 'a' * 40, timeout_seconds=30, poll_interval_seconds=1,
+                        collect_metadata=lambda _oid: {'status': 'failed', 'metadataOutcome': 'failure', 'issues': ['boom']},
+                    )
+
+    def test_review_pages_reuses_passed_image_registry_passes_source_figure_note_and_raises_worker_cap(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            repo = root / 'blog'
+            (repo / 'content' / 'posts').mkdir(parents=True)
+            pub_root = root / 'pub'
+            pub_root.mkdir()
+            img_url = 'https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/icassp-2026/a1b2c3d4e5f6/figure-1.png'
+            page1_rel = 'content/posts/p1.md'
+            page2_rel = 'content/posts/conference-icassp-2026.md'
+            page1_body = (
+                '---\ntitle: "Paper 1"\ndate: 2026-09-07\ndraft: false\n'
+                'paper_digest_conference_structure: pdf-visual-tables-v2\n---\n\n'
+                f'正文内容。\n\n![图1]({img_url})\n'
+            )
+            page2_body = (
+                '---\ntitle: "Summary"\ndate: 2026-09-07\ndraft: false\n---\n\n'
+                f'汇总内容。\n\n![图1]({img_url})\n'
+            )
+            (repo / page1_rel).write_text(page1_body, encoding='utf-8')
+            (repo / page2_rel).write_text(page2_body, encoding='utf-8')
+            records = [
+                {'path': page1_rel, 'kind': 'paper', 'sourceSha256': hashlib.sha256(page1_body.encode()).hexdigest()},
+                {'path': page2_rel, 'kind': 'aggregate', 'sourceSha256': hashlib.sha256(page2_body.encode()).hexdigest()},
+            ]
+            seen_chunk_notes = []
+            seen_verified = []
+            observed_workers = []
+
+            class FakePub:
+                BLOG_REPO = str(repo)
+                CONTENT_DIR = str(repo / 'content' / 'posts')
+                @staticmethod
+                def split_review_content(content, _chars):
+                    return [content]
+                @staticmethod
+                def get_blog_review_chunk_chars():
+                    return 20000
+                @staticmethod
+                def _llm_review_post_chunk(chunk, title='', required=False, chunk_label='1/1', *, source_figure_note=''):
+                    seen_chunk_notes.append((title, source_figure_note))
+                    return True, [], chunk
+                @staticmethod
+                def parse_markdown_images(content):
+                    return [img_url] if img_url in content else []
+                @staticmethod
+                def multimodal_review_images(content, title='', required=False,
+                                             publication_figure_contexts=None,
+                                             verified_paper_images=None,
+                                             passed_image_registry=None):
+                    seen_verified.append((title, dict(verified_paper_images or {})))
+                    if passed_image_registry is not None:
+                        passed_image_registry[img_url] = 'f' * 64
+                    return True, []
+                @staticmethod
+                def count_blocking_review_issues(issues):
+                    return 0
+
+            def fake_bounded(items, fn, max_workers):
+                observed_workers.append(max_workers)
+                # Run paper first then aggregate sequentially so we observe registry propagation
+                ordered = sorted(items, key=lambda r: r['kind'] == 'aggregate')
+                return [fn(r) for r in ordered]
+
+            with mock.patch.object(M, 'PUBLICATION_ROOT', pub_root), \
+                    mock.patch.object(M, 'load_publish_to_blog', return_value=FakePub), \
+                    mock.patch.object(M, 'content_review_protocol', return_value={'contract': 'test', 'protocolSha256': 'e' * 64}), \
+                    mock.patch.object(M, 'run_bounded_llm_tasks', side_effect=fake_bounded), \
+                    mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'muse-spark-1.3-contributor', 'PD_BLOG_REVIEW_CONCURRENCY': '16'}):
+                res = M.review_pages(repo, records)
+            self.assertEqual(res['status'], 'passed')
+            self.assertEqual(observed_workers, [16])
+            self.assertTrue(any(title == 'Paper 1' and '来源图注说明' in note for title, note in seen_chunk_notes))
+            self.assertIn(('Summary', {img_url: 'f' * 64}), seen_verified)
+
 
 if __name__ == '__main__':
     unittest.main()

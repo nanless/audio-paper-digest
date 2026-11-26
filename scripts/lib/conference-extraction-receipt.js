@@ -7,7 +7,6 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { buildChildProcessEnv } = require('../env-loader.js');
 const paperIdentity = require('./paper-identity.js');
 const codec = require('./protocol-codec');
 const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
@@ -24,6 +23,28 @@ const OFFSET_UNIT = 'utf8-byte';
 const EXTRACTOR_NAME = 'audio-paper-digest-conference-structured';
 const EXTRACTOR_IMPLEMENTATION_SHA256 = crypto.createHash('sha256')
     .update(readRegularBytes(path.resolve(__dirname, '../conference_extractor.py'))).digest('hex');
+const EXTRACTOR_V2_NAME = 'audio-paper-digest-conference-structured-v2';
+const EXTRACTOR_V2_CONTRACT = 'conference-pdf-extraction-v2';
+const ARTIFACT_V2_CONTRACT = 'conference-structured-artifacts-v2-enhanced';
+const ARTIFACT_V2_PROFILE = 'conference-pdf-replayable-layout-v2';
+const RECEIPT_V2_CONTRACT = 'conference-pdf-extraction-receipt-v2-enhanced';
+const VERIFICATION_V2_CONTRACT = 'conference-pdf-extraction-verification-v2-enhanced';
+const EXTRACTOR_V2_DEPENDENCY_FILES = Object.freeze([
+    'conference_extractor_v2.py',
+    'conference_extractor.py',
+    'pdf_figure_table_extract.py',
+    'pdf_author_extract.py'
+]);
+const EXTRACTOR_V2_DEPENDENCY_SHA256S = Object.freeze(Object.fromEntries(
+    EXTRACTOR_V2_DEPENDENCY_FILES.map(name => [
+        name,
+        crypto.createHash('sha256').update(readRegularBytes(path.resolve(__dirname, '..', name))).digest('hex')
+    ])
+));
+const EXTRACTOR_V2_IMPLEMENTATION_SHA256 = crypto.createHash('sha256')
+    .update(JSON.stringify(Object.fromEntries(
+        Object.keys(EXTRACTOR_V2_DEPENDENCY_SHA256S).sort().map(key => [key, EXTRACTOR_V2_DEPENDENCY_SHA256S[key]])
+    ))).digest('hex');
 const BACKEND_NAME = 'pymupdf';
 const BACKEND_VERSION = '1.27.2.3';
 const OPTIONS = Object.freeze({ minimumTextCharacters: 5000,
@@ -54,8 +75,24 @@ function headerForRequest(request, family, variant) {
     return codec.isCurrentHeader(request, 'conference-pdf-extraction-request')
         ? codec.recordHeader(codec.contract(family), family) : codec.historicalHeader(family, variant);
 }
-function isReplayableProfile(profile) { return codec.isContract(profile, 'conference-pdf-replayable-layout'); }
+function isV2Receipt(value) { return plain(value) && value.contract === RECEIPT_V2_CONTRACT; }
+function isV2Artifact(value) { return plain(value) && value.contract === ARTIFACT_V2_CONTRACT; }
+function isV2Verification(value) { return plain(value) && value.contract === VERIFICATION_V2_CONTRACT; }
+function isReplayableProfile(profile) {
+    return codec.isContract(profile, 'conference-pdf-replayable-layout') || profile === ARTIFACT_V2_PROFILE;
+}
 function isWeakProfile(profile) { return codec.isContract(profile, 'conference-pdf-weak-layout'); }
+function isCurrentExtractorReceipt(value) {
+    if (!plain(value) || value.status !== 'ready' || value.textReplayable !== true) return false;
+    if (value.extractor?.backend?.version !== BACKEND_VERSION) return false;
+    if (isV2Receipt(value)) {
+        return value.extractor?.contract === EXTRACTOR_V2_CONTRACT
+            && value.extractor?.name === EXTRACTOR_V2_NAME
+            && value.extractor?.implementationSha256 === EXTRACTOR_V2_IMPLEMENTATION_SHA256;
+    }
+    return value.extractor?.implementationSha256 === EXTRACTOR_IMPLEMENTATION_SHA256
+        && codec.isCurrentHeader(value, 'conference-pdf-extraction-receipt');
+}
 // Python 的 str.isspace() 是 Unicode White_Space 加上四个 C0 信息分隔符。ECMAScript
 // 的 \s 不含 U+001C..U+001F 却包含 U+FEFF，所以没法逐字符复现抽取器给出的 receipt
 // 计数。
@@ -381,17 +418,32 @@ function validatePdfFormulaRecord(formula, index, audit, pageCount) {
 }
 
 function validateArtifact(value, textBytes) {
-    const header = recordHeaderFor(value, 'conference-structured-artifacts');
+    const v2 = isV2Artifact(value);
+    const header = v2 ? { contract: ARTIFACT_V2_CONTRACT } : recordHeaderFor(value, 'conference-structured-artifacts');
     const allowed = [...Object.keys(header), 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages',
-        'tables', 'formulas', 'figures', 'payloadSha256'];
-    if (Object.keys(value).sort().join('\0') !== [...allowed, ...(Object.hasOwn(value, 'visualAudit') ? ['visualAudit'] : [])].sort().join('\0')) {
+        'tables', 'formulas', 'figures', 'payloadSha256',
+        ...(v2 ? ['visualAudit', 'authorEvidence', 'extractorProfile'] : [])];
+    const expectedKeys = v2
+        ? allowed
+        : [...allowed, ...(Object.hasOwn(value, 'visualAudit') ? ['visualAudit'] : [])];
+    if (Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')) {
         fail('结构化抽取结果缺少必需字段，或含有额外字段');
     }
-    if ((!isWeakProfile(value.profile) && !isReplayableProfile(value.profile))
-        || value.offsetUnit !== OFFSET_UNIT) fail('结构化抽取结果的格式标识、版本、证据能力配置或偏移单位不受支持');
-    const current = codec.isCurrentHeader(value, 'conference-structured-artifacts');
-    const profileFamily = isReplayableProfile(value.profile) ? 'conference-pdf-replayable-layout' : 'conference-pdf-weak-layout';
-    if ((value.profile === codec.contract(profileFamily)) !== current) fail('抽取结果与能力配置不能混用新旧格式');
+    if (v2) {
+        if (value.profile !== ARTIFACT_V2_PROFILE || value.offsetUnit !== OFFSET_UNIT) {
+            fail('v2 结构化抽取结果的 profile 或偏移单位不受支持');
+        }
+        if (!plain(value.authorEvidence) || !plain(value.extractorProfile)) {
+            fail('v2 结构化抽取结果的 authorEvidence 或 extractorProfile 必须是普通对象');
+        }
+        exact(value.extractorProfile, ['readingOrder', 'figureTargetDpi', 'tableRecovery'], 'extractorProfile');
+    } else {
+        if ((!isWeakProfile(value.profile) && !isReplayableProfile(value.profile))
+            || value.offsetUnit !== OFFSET_UNIT) fail('结构化抽取结果的格式标识、版本、证据能力配置或偏移单位不受支持');
+        const current = codec.isCurrentHeader(value, 'conference-structured-artifacts');
+        const profileFamily = isReplayableProfile(value.profile) ? 'conference-pdf-replayable-layout' : 'conference-pdf-weak-layout';
+        if ((value.profile === codec.contract(profileFamily)) !== current) fail('抽取结果与能力配置不能混用新旧格式');
+    }
     if (assertSha(value.flattenedTextSha256, 'flattenedTextSha256') !== sha256(textBytes)) {
         fail('结构化抽取结果的 flattenedTextSha256 与实际全文字节的 SHA 不同');
     }
@@ -399,7 +451,10 @@ function validateArtifact(value, textBytes) {
     if (assertSha(payloadSha256, 'payloadSha256') !== sha256(JSON.stringify(body))) fail('结构化抽取结果的 payloadSha256 与实际记录内容的 SHA 不同');
     if (Object.hasOwn(value, 'visualAudit')) {
         validateVisualAudit(value.visualAudit);
-        if (codec.isCurrentHeader(value.visualAudit, 'conference-pdf-visual-audit') !== current) fail('抽取结果与页面审计不能混用新旧格式');
+        const expectedCurrent = v2 ? true : codec.isCurrentHeader(value, 'conference-structured-artifacts');
+        if (codec.isCurrentHeader(value.visualAudit, 'conference-pdf-visual-audit') !== expectedCurrent) {
+            fail('抽取结果与页面审计不能混用新旧格式');
+        }
     }
     if (!Array.isArray(value.pages) || !value.pages.length
         || !Array.isArray(value.tables) || !Array.isArray(value.formulas)
@@ -425,6 +480,7 @@ function validateArtifact(value, textBytes) {
             if (typeof item !== 'string' || (!empty && !item.trim()) || item.length > maximum
                 || /[\u0000-\u001f\u007f]/u.test(item)) fail(`${label} 必须是允许长度范围内的文本，不能含控制字符；要求非空时不能只有空白字符`);
         };
+        const maxCellLength = v2 ? 4000 : 500;
         for (const [index, table] of value.tables.entries()) {
             exact(table, ['ordinal', 'page', 'caption', 'cells', 'sourceRef', 'recoveryStatus'], `tables[${index}]`);
             if (!Number.isSafeInteger(table.ordinal) || table.ordinal !== index + 1
@@ -432,8 +488,8 @@ function validateArtifact(value, textBytes) {
                 || table.recoveryStatus !== 'complete') fail('表格记录必须按序编号，页码须有效，恢复状态须为 complete');
             checkText(table.caption, `tables[${index}].caption`, true); checkText(table.sourceRef, `tables[${index}].sourceRef`);
             if (!Array.isArray(table.cells) || !table.cells.length || table.cells.some(row => (
-                !Array.isArray(row) || !row.length || row.some(cell => typeof cell !== 'string' || cell.length > 500)
-            )) || table.cells.some(row => row.length !== table.cells[0].length)) fail('表格必须至少有一行一列，各行列数须相同，单元格须为不超过 500 个字符的字符串');
+                !Array.isArray(row) || !row.length || row.some(cell => typeof cell !== 'string' || cell.length > maxCellLength)
+            )) || table.cells.some(row => row.length !== table.cells[0].length)) fail('表格必须至少有一行一列，各行列数须相同，单元格须为允许长度的字符串');
         }
         for (const [index, formula] of value.formulas.entries()) {
             validatePdfFormulaRecord(formula, index, value.visualAudit, value.pages.length);
@@ -465,7 +521,8 @@ function validateArtifact(value, textBytes) {
     return clone(value);
 }
 function normalizeReceipt(value) {
-    const header = recordHeaderFor(value, 'conference-pdf-extraction-receipt');
+    const v2 = isV2Receipt(value);
+    const header = v2 ? { contract: RECEIPT_V2_CONTRACT } : recordHeaderFor(value, 'conference-pdf-extraction-receipt');
     exact(value, [...Object.keys(header), 'status', 'textReplayable', 'structuredReplayable', 'paperId',
         'sourceIdentity', 'request', 'source', 'extractor', 'options', 'pageCount', 'text', 'artifacts',
         'blockedReason', 'receiptSha256'], 'extraction receipt');
@@ -475,16 +532,30 @@ function normalizeReceipt(value) {
     }
     exact(value.request, ['file', 'sha256'], 'receipt.request');
     exact(value.source, ['metadata', 'pdf'], 'receipt.source');
-    const current = codec.isCurrentHeader(value, 'conference-pdf-extraction-receipt');
-    const extractorHeader = recordHeaderFor(value.extractor, 'conference-pdf-extractor', current ? 'contract' : 'version');
-    exact(value.extractor, [...Object.keys(extractorHeader), 'name', ...(current ? ['implementationSha256'] : []), 'backend'], 'receipt.extractor');
-    exact(value.extractor.backend, ['name', 'version'], 'receipt.extractor.backend');
+    if (v2) {
+        exact(value.extractor, ['contract', 'name', 'implementationSha256', 'dependencySha256s', 'backend'], 'receipt.extractor');
+        exact(value.extractor.backend, ['name', 'version'], 'receipt.extractor.backend');
+        exact(value.extractor.dependencySha256s, EXTRACTOR_V2_DEPENDENCY_FILES, 'receipt.extractor.dependencySha256s');
+        if (value.extractor.contract !== EXTRACTOR_V2_CONTRACT
+            || value.extractor.name !== EXTRACTOR_V2_NAME
+            || value.extractor.implementationSha256 !== EXTRACTOR_V2_IMPLEMENTATION_SHA256
+            || stableHash(value.extractor.dependencySha256s) !== EXTRACTOR_V2_IMPLEMENTATION_SHA256
+            || value.extractor.backend.name !== BACKEND_NAME
+            || value.extractor.backend.version !== BACKEND_VERSION) {
+            fail('v2 抽取器或其依赖实现、底层程序的名称、版本与指定实现不同');
+        }
+    } else {
+        const current = codec.isCurrentHeader(value, 'conference-pdf-extraction-receipt');
+        const extractorHeader = recordHeaderFor(value.extractor, 'conference-pdf-extractor', current ? 'contract' : 'version');
+        exact(value.extractor, [...Object.keys(extractorHeader), 'name', ...(current ? ['implementationSha256'] : []), 'backend'], 'receipt.extractor');
+        exact(value.extractor.backend, ['name', 'version'], 'receipt.extractor.backend');
+        if (value.extractor.name !== EXTRACTOR_NAME || (current && value.extractor.implementationSha256 !== EXTRACTOR_IMPLEMENTATION_SHA256)
+            || value.extractor.backend.name !== BACKEND_NAME || value.extractor.backend.version !== BACKEND_VERSION) {
+            fail('抽取器或其底层程序的名称、版本与指定实现不同');
+        }
+    }
     exact(value.text, ['file', 'sha256', 'utf8Bytes', 'nonWhitespaceCharacters'], 'receipt.text');
     exact(value.artifacts, ['file', 'sha256'], 'receipt.artifacts');
-    if (value.extractor.name !== EXTRACTOR_NAME || (current && value.extractor.implementationSha256 !== EXTRACTOR_IMPLEMENTATION_SHA256)
-        || value.extractor.backend.name !== BACKEND_NAME || value.extractor.backend.version !== BACKEND_VERSION) {
-        fail('抽取器或其底层程序的名称、版本与指定实现不同');
-    }
     if (!Number.isSafeInteger(value.pageCount) || value.pageCount < 1
         || !Number.isSafeInteger(value.text.utf8Bytes) || value.text.utf8Bytes < 1
         || !Number.isSafeInteger(value.text.nonWhitespaceCharacters)
@@ -503,7 +574,8 @@ function normalizeReceipt(value) {
 }
 
 function normalizeVerification(value) {
-    const header = recordHeaderFor(value, 'conference-pdf-extraction-verification');
+    const v2 = isV2Verification(value);
+    const header = v2 ? { contract: VERIFICATION_V2_CONTRACT } : recordHeaderFor(value, 'conference-pdf-extraction-verification');
     exact(value, [...Object.keys(header), 'status', 'paperId', 'sourceIdentity', 'requestSha256',
         'metadataSha256', 'pdfSha256', 'textSha256', 'artifactsSha256', 'receiptFileSha256',
         'receiptSha256', 'verificationSha256'], 'Python extraction verification');
@@ -531,6 +603,7 @@ const EXTRACTOR_ALLOWED_ENV_KEYS = Object.freeze([
 ]);
 
 function verifyWithPinnedPython(sourceRoot, requestName) {
+    const { buildChildProcessEnv } = require('../env-loader.js');
     const runtime = path.resolve(__dirname, '..', 'python-runtime.sh');
     const script = path.resolve(__dirname, '..', 'conference-extract.py');
     let stdout;
@@ -553,8 +626,11 @@ function boundVerification({ request, requestLoaded, metadataLoaded, pdfLoaded, 
     artifactLoaded, receiptLoaded, receipt }) {
     // 调用方已经逐字节核对过每个来源和输出与 receipt 是否一致。重试时如果按设计
     // 跳过 Python 的确定性复算，就在这里重建同一套校验绑定。
+    const verificationHeader = isV2Receipt(receipt)
+        ? { contract: VERIFICATION_V2_CONTRACT }
+        : headerForRequest(request, 'conference-pdf-extraction-verification', 'pinned-replay');
     const body = {
-        ...headerForRequest(request, 'conference-pdf-extraction-verification', 'pinned-replay'), status: 'verified',
+        ...verificationHeader, status: 'verified',
         paperId: request.paperId, sourceIdentity: request.sourceIdentity,
         requestSha256: requestLoaded.sha256, metadataSha256: metadataLoaded.sha256,
         pdfSha256: pdfLoaded.sha256, textSha256: textLoaded.sha256,
@@ -568,13 +644,16 @@ function loadExtractionHandle(sourceRoot, receiptName, { replay = true } = {}) {
     const root = safeRoot(sourceRoot); safeName(receiptName, SAFE_JSON_NAME, 'receiptName');
     const receiptLoaded = readDirect(root, receiptName, SAFE_JSON_NAME, MAX_JSON_BYTES, 'extraction receipt');
     const receipt = normalizeReceipt(strictJson(receiptLoaded.bytes, 'extraction receipt'));
+    const v2 = isV2Receipt(receipt);
     if (receipt.artifacts.file === receiptName || receipt.text.file === receiptName || receipt.request.file === receiptName) {
         fail('凭证文件名与请求、全文或结构化抽取结果的文件名重复');
     }
     const requestLoaded = readDirect(root, receipt.request.file, SAFE_JSON_NAME, MAX_JSON_BYTES, 'extraction request');
     if (requestLoaded.sha256 !== receipt.request.sha256) fail('抽取请求文件的 SHA 与凭证中记录的值不同');
     const request = normalizeRequest(strictJson(requestLoaded.bytes, 'extraction request'), receipt.request.file);
-    if (codec.isCurrentHeader(request, 'conference-pdf-extraction-request') !== codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt')
+    const requestIsCurrent = codec.isCurrentHeader(request, 'conference-pdf-extraction-request');
+    const receiptIsCurrent = v2 ? true : codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt');
+    if (requestIsCurrent !== receiptIsCurrent
         || request.paperId !== receipt.paperId || request.sourceIdentity !== receipt.sourceIdentity
         || stableHash(request.source) !== stableHash(receipt.source)
         || stableHash(request.options) !== stableHash(receipt.options)
@@ -601,14 +680,18 @@ function loadExtractionHandle(sourceRoot, receiptName, { replay = true } = {}) {
     if (textLoaded.bytes.length !== receipt.text.utf8Bytes
         || nonWhitespaceCharacters !== receipt.text.nonWhitespaceCharacters) fail('凭证记录的全文字节数或非空白字符数与实际全文不同');
     const artifact = validateArtifact(strictJson(artifactLoaded.bytes, 'structured artifact'), textLoaded.bytes);
-    if (codec.isCurrentHeader(artifact, 'conference-structured-artifacts') !== codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt')) {
-        fail('抽取凭证与结构化结果不能混用新旧格式');
+    if (v2 !== isV2Artifact(artifact)
+        || (!v2 && codec.isCurrentHeader(artifact, 'conference-structured-artifacts') !== codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt'))) {
+        fail('抽取凭证与结构化结果不能混用新旧或 v1/v2 格式');
     }
     if (artifact.pages.length !== receipt.pageCount) fail('凭证页数与结构化抽取结果的页面数量不同');
     const verification = replay
         ? verifyWithPinnedPython(root, receipt.request.file)
         : boundVerification({ request, requestLoaded, metadataLoaded, pdfLoaded, textLoaded,
             artifactLoaded, receiptLoaded, receipt });
+    if (v2 !== isV2Verification(verification)) {
+        fail('抽取核验结果的 v1/v2 协议版本与凭证不一致');
+    }
     if (verification.paperId !== request.paperId || verification.sourceIdentity !== request.sourceIdentity
         || verification.requestSha256 !== requestLoaded.sha256 || verification.metadataSha256 !== metadataLoaded.sha256
         || verification.pdfSha256 !== pdfLoaded.sha256 || verification.textSha256 !== textLoaded.sha256
@@ -616,11 +699,14 @@ function loadExtractionHandle(sourceRoot, receiptName, { replay = true } = {}) {
         || verification.receiptSha256 !== receipt.receiptSha256) {
         fail('指定 Python 程序返回的论文身份或文件 SHA 与本次读取的抽取资料不同');
     }
-    const provenance = codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt')
-        ? { extractor: EXTRACTOR_NAME, implementationSha256: EXTRACTOR_IMPLEMENTATION_SHA256 }
-        : { extractor: EXTRACTOR_NAME, version: `${receipt.extractor.version}+${BACKEND_NAME}-${BACKEND_VERSION}` };
+    const provenance = v2
+        ? { extractor: EXTRACTOR_V2_NAME, implementationSha256: EXTRACTOR_V2_IMPLEMENTATION_SHA256 }
+        : codec.isCurrentHeader(receipt, 'conference-pdf-extraction-receipt')
+            ? { extractor: EXTRACTOR_NAME, implementationSha256: EXTRACTOR_IMPLEMENTATION_SHA256 }
+            : { extractor: EXTRACTOR_NAME, version: `${receipt.extractor.version}+${BACKEND_NAME}-${BACKEND_VERSION}` };
+    const receiptHeader = v2 ? { contract: RECEIPT_V2_CONTRACT } : recordHeaderFor(receipt, 'conference-pdf-extraction-receipt');
     const snapshot = {
-        ...recordHeaderFor(receipt, 'conference-pdf-extraction-receipt'), paperId: request.paperId,
+        ...receiptHeader, paperId: request.paperId,
         sourceIdentity: request.sourceIdentity, conference: identity.conference, identity: identity.identity,
         metadata: clone(request.source.metadata), pdf: clone(request.source.pdf),
         text: { file: request.outputs.textFile, sha256: textLoaded.sha256,
@@ -642,7 +728,12 @@ function extractionHandleSnapshot(handle) {
 
 module.exports = { REQUEST_CONTRACT, ARTIFACT_CONTRACT, RECEIPT_CONTRACT, VERIFICATION_CONTRACT,
     PROFILE, WEAK_PROFILE, REPLAYABLE_PROFILE, OFFSET_UNIT,
-    EXTRACTOR_NAME, EXTRACTOR_IMPLEMENTATION_SHA256, BACKEND_NAME, BACKEND_VERSION, OPTIONS, SHORT_PROCEEDINGS_OPTIONS,
+    EXTRACTOR_NAME, EXTRACTOR_IMPLEMENTATION_SHA256,
+    EXTRACTOR_V2_NAME, EXTRACTOR_V2_CONTRACT, ARTIFACT_V2_CONTRACT, ARTIFACT_V2_PROFILE,
+    RECEIPT_V2_CONTRACT, VERIFICATION_V2_CONTRACT,
+    EXTRACTOR_V2_DEPENDENCY_FILES, EXTRACTOR_V2_DEPENDENCY_SHA256S, EXTRACTOR_V2_IMPLEMENTATION_SHA256,
+    isCurrentExtractorReceipt,
+    BACKEND_NAME, BACKEND_VERSION, OPTIONS, SHORT_PROCEEDINGS_OPTIONS,
     isShortProceedingsConference: conferenceId => SHORT_PROCEEDINGS_CONFERENCES.has(String(conferenceId || '').trim()),
     optionsForConference, SAFE_JSON_NAME,
     ConferenceExtractionReceiptError, loadExtractionHandle, extractionHandleSnapshot, stableHash,

@@ -1069,6 +1069,8 @@ function deployExitCode(deploy, options = {}) {
 function parseVerifyArgs(argv = []) {
     const options = {
         date: null,
+        historicalPublicationId: null,
+        publicationRoot: null,
         limit: null,
         deploy: null,
         json: false,
@@ -1082,10 +1084,19 @@ function parseVerifyArgs(argv = []) {
         workflowSource: false,
         help: false
     };
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
         if (value === '--date') options.date = argv[++index] || null;
-        else if (value === '--limit') options.limit = Number(argv[++index]);
+        else if (value === '--historical-publication-id') {
+            const pubId = argv[++index] || '';
+            if (!UUID_RE.test(pubId)) throw new Error('--historical-publication-id 必须是合法的 UUID');
+            options.historicalPublicationId = pubId;
+        } else if (value === '--publication-root') {
+            const rootDir = argv[++index] || '';
+            if (!rootDir || !path.isAbsolute(rootDir)) throw new Error('--publication-root 必须是绝对路径');
+            options.publicationRoot = rootDir;
+        } else if (value === '--limit') options.limit = Number(argv[++index]);
         else if (value === '--deploy') { const oid = argv[++index] || ''; if (!/^[0-9a-f]{40}$/i.test(oid)) throw new Error('--deploy 必须是 40 位十六进制 OID'); options.deploy = oid.toLowerCase(); }
         else if (value === '--workflow-source') options.workflowSource = true;
         else if (value === '--json') options.json = true;
@@ -1106,7 +1117,111 @@ function parseVerifyArgs(argv = []) {
     return options;
 }
 
-const USAGE = '用法: node scripts/verify-web.js --date YYYY-MM-DD [--limit N] [--deploy OID] [--workflow-source] [--receipt RECEIPT.json] [--wait] [--wait-seconds N] [--poll-interval-ms N] [--timeout-ms N] [--allow-degraded] [--allow-partial] [--json]';
+const USAGE = '用法: node scripts/verify-web.js (--date YYYY-MM-DD | --historical-publication-id UUID [--publication-root ABS]) [--limit N] [--deploy OID] [--workflow-source] [--receipt RECEIPT.json] [--wait] [--wait-seconds N] [--poll-interval-ms N] [--timeout-ms N] [--allow-degraded] [--allow-partial] [--json]';
+
+function loadHistoricalPublicationContext(publicationId, options = {}) {
+    const pubRoot = options.publicationRoot || require('./config.js').FILES.historicalDirectPublicationDir;
+    const txDir = path.join(path.resolve(pubRoot), publicationId);
+    const planFile = path.join(txDir, 'plan.json');
+    if (!fs.existsSync(planFile)) {
+        throw new Error(`找不到历史发布计划：${planFile}`);
+    }
+    const plan = JSON.parse(fs.readFileSync(planFile, 'utf8'));
+    if (!plan || typeof plan !== 'object' || plan.publicationId !== publicationId || !Array.isArray(plan.files)) {
+        throw new Error(`历史发布计划无效或与 publicationId 不一致：${planFile}`);
+    }
+    const pubFile = path.join(txDir, 'publication.json');
+    const remoteFile = path.join(txDir, 'remote.json');
+    const remotePath = fs.existsSync(pubFile) ? pubFile : (fs.existsSync(remoteFile) ? remoteFile : null);
+    let remote = null;
+    if (remotePath) {
+        remote = JSON.parse(fs.readFileSync(remotePath, 'utf8'));
+        if (!remote || typeof remote !== 'object'
+            || (remote.publicationId && remote.publicationId !== publicationId)) {
+            throw new Error(`历史发布远端凭证无效：${remotePath}`);
+        }
+    }
+    return { txDir, plan, remote, remotePath };
+}
+
+function historicalOnlineVerificationPath(txDir) {
+    return path.join(txDir, 'online-verification.json');
+}
+
+async function verifyHistoricalPublication(publicationId, options = {}) {
+    const env = options.env || readEnv();
+    const { txDir, plan, remote } = loadHistoricalPublicationContext(publicationId, options);
+    const allPages = pageUrls(null, env, { files: plan.files }, options);
+    const expected = allPages.length;
+    let pages = allPages;
+    if (Number.isInteger(options.limit) && options.limit > 0) pages = pages.slice(0, options.limit);
+    const marker = options.siteTitleMarker || SITE_TITLE_MARKER;
+    const concurrency = Number.isInteger(options.concurrency) && options.concurrency > 0
+        ? Math.min(options.concurrency, 16) : DEFAULT_VERIFY_CONCURRENCY;
+    const results = new Array(pages.length);
+    let cursor = 0;
+    const worker = async () => {
+        while (true) {
+            const idx = cursor;
+            cursor += 1;
+            if (idx >= pages.length) return;
+            const page = pages[idx];
+            try {
+                const fetched = await fetchPage(page.url, { ...options, env });
+                const normalize = value => String(value || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
+                const redirectOk = !fetched.finalUrl || normalize(fetched.finalUrl) === normalize(page.url);
+                const slug = path.basename(page.url.replace(/\/$/, ''));
+                const dateSlugMatch = /^(\d{4}-\d{2}-\d{2})$/.exec(slug);
+                const corruptedTitle = titleHasCorruptionArtifacts(fetched.title);
+                const stripped = stripSiteTitleMarker(fetched.title, marker);
+                const titleOk = fetched.status === 200
+                    && titleMatches(fetched.title, marker)
+                    && !corruptedTitle
+                    && (dateSlugMatch
+                        ? (String(fetched.title || '').includes(dateSlugMatch[1]) || stripped.length > 2)
+                        : stripped.length > 2);
+                results[idx] = { ...page, ...fetched, titleOk, redirectOk, ok: titleOk && redirectOk };
+            } catch (error) {
+                results[idx] = { ...page, status: null, title: null, titleOk: false, redirectOk: false, ok: false, error: error.message };
+            }
+        }
+    };
+    const workers = Array.from({ length: Math.min(concurrency, Math.max(1, pages.length)) }, () => worker());
+    await Promise.all(workers);
+    const failed = results.filter(item => !item.ok).length + (results.length === 0 ? 1 : 0);
+    const ok = results.filter(item => item.ok).length;
+    const deploy = options.deploy || null;
+    const deployOid = options.deployOid || remote?.remoteVerifiedOid || remote?.publicationCommit || null;
+    const pagesDeployVerified = Boolean(
+        deploy && deploy.available && deploy.status === 'completed'
+        && deploy.conclusion === 'success' && deploy.jobVerified === true
+        && (!options.workflowSource || deploy.workflowSourceVerified === true)
+    );
+    const webVerified = results.length > 0 && failed === 0 && results.length === expected;
+    const nowIso = new Date().toISOString();
+    const summary = {
+        ...formats.recordHeader(ARTIFACT_FORMAT, ARTIFACT_FORMAT),
+        mode: 'historical-publication',
+        createdAt: nowIso,
+        verifiedAt: nowIso,
+        publicationId,
+        planSha256: plan.planSha256 || null,
+        publicationCommit: remote?.publicationCommit || deployOid || null,
+        remoteVerifiedOid: remote?.remoteVerifiedOid || deployOid || null,
+        pagesDeployVerified,
+        webVerified,
+        partial: !pagesDeployVerified || !webVerified,
+        deploy,
+        expected,
+        checked: results.length,
+        ok,
+        failed,
+        results
+    };
+    const outFile = historicalOnlineVerificationPath(txDir);
+    if (!options.noWrite) atomicWriteJson(outFile, summary);
+    return { summary, outputFile: outFile };
+}
 
 // 可测 CLI：所有副作用（目录、fetch、gh、时钟、输出）都从 deps 注入。
 async function runVerifyWebCli(argv = [], deps = {}) {
@@ -1126,9 +1241,119 @@ async function runVerifyWebCli(argv = [], deps = {}) {
         printError(`[verify-web] ${error.message}`);
         return 2;
     }
-    if (options.help || !options.date) {
+    if (options.help || (!options.date && !options.historicalPublicationId)) {
         print(USAGE);
         return options.help ? 0 : 2;
+    }
+    if (options.date && options.historicalPublicationId) {
+        printError('[verify-web] --date 与 --historical-publication-id 不能同时指定');
+        return 2;
+    }
+    if (options.historicalPublicationId) {
+        try {
+            const pubRoot = options.publicationRoot || deps.publicationRoot;
+            const { remote } = loadHistoricalPublicationContext(options.historicalPublicationId, {
+                publicationRoot: pubRoot
+            });
+            const resolvedDeployOid = options.deploy || remote?.remoteVerifiedOid || remote?.publicationCommit || null;
+            if (options.wait && !resolvedDeployOid) {
+                printError('[verify-web] --wait 需要历史发布远端 OID 或显式 --deploy OID');
+                return 2;
+            }
+            if (options.workflowSource && !resolvedDeployOid) {
+                printError('[verify-web] --workflow-source 需要历史发布远端 OID 或显式 --deploy OID');
+                return 2;
+            }
+            let deploy = null;
+            if (resolvedDeployOid) {
+                if (options.wait) {
+                    const waited = await waitForDeploy(resolvedDeployOid, {
+                        spawnSync: spawnSyncImpl,
+                        repository: options.repository || deployRepository(env),
+                        env,
+                        sleep,
+                        pollIntervalMs: options.pollIntervalMs,
+                        waitSeconds: options.waitSeconds
+                    });
+                    deploy = waited.deploy;
+                    if (options.json) {
+                        for (const snapshot of waited.snapshots) {
+                            print(JSON.stringify({ type: 'deploy', oid: resolvedDeployOid, ...snapshot }));
+                        }
+                    } else {
+                        for (const snapshot of waited.snapshots) {
+                            print(`[verify-web] 部署状态：${snapshot.available
+                                ? `${snapshot.status} ${snapshot.conclusion || ''}`.trim()
+                                : snapshot.message}`);
+                        }
+                    }
+                } else {
+                    deploy = deployStatus(resolvedDeployOid, {
+                        spawnSync: spawnSyncImpl,
+                        repository: options.repository || deployRepository(env),
+                        env
+                    });
+                }
+            }
+            if (options.workflowSource && resolvedDeployOid) {
+                const workflow = verifyWorkflowSource(resolvedDeployOid, {
+                    spawnSync: spawnSyncImpl,
+                    repository: options.repository || deployRepository(env),
+                    env,
+                    run: deploy,
+                    profile: deps.workflowProfile
+                });
+                deploy = {
+                    ...(deploy || {}),
+                    workflowSourceVerified: workflow.verified === true,
+                    workflowSource: workflow.workflowSource || null,
+                    workflowJobs: workflow.jobs || null,
+                    workflowChecks: workflow.checks || null,
+                    workflowError: workflow.verified ? null : {
+                        code: workflow.code || 'workflow_unverified',
+                        message: workflow.message || null,
+                        nextStep: workflow.nextStep || null
+                    }
+                };
+                if (options.json) {
+                    print(JSON.stringify({ type: 'workflow-source', oid: resolvedDeployOid, ...workflow }));
+                }
+            }
+            const allowLoopbackHttp = options.allowLoopbackHttp === true
+                || (Boolean(process.env.NODE_TEST_CONTEXT) && Boolean(deps.env));
+            const { summary, outputFile } = await verifyHistoricalPublication(options.historicalPublicationId, {
+                env,
+                publicationRoot: pubRoot,
+                fetchImpl,
+                timeoutMs: options.timeoutMs,
+                limit: options.limit,
+                deploy,
+                deployOid: resolvedDeployOid,
+                workflowSource: options.workflowSource,
+                allowLoopbackHttp
+            });
+            if (options.json) {
+                print(JSON.stringify({ type: 'summary', ...summary }));
+                if (deploy) {
+                    print(JSON.stringify({ type: 'deploy-final', oid: resolvedDeployOid, deploy }));
+                }
+            } else {
+                for (const result of summary.results) {
+                    print(`${result.ok ? '✅' : '❌'} ${result.status || '-'} ${result.url}  ${result.title || result.error || ''}`);
+                }
+                print(`合计：${summary.ok}/${summary.checked} 通过，${summary.failed} 失败；结果已写入 ${outputFile}`);
+                if (deploy) {
+                    print(`部署：${deploy.available
+                        ? `${deploy.status || ''} ${deploy.conclusion || ''} ${deploy.url || deploy.message || ''}`.trim()
+                        : deploy.message}`);
+                }
+            }
+            const partialFailed = summary.partial && !options.allowPartial;
+            return summary.failed > 0 || deployExitCode(deploy, options) !== 0 || partialFailed ? 1 : 0;
+        } catch (error) {
+            printError(`[verify-web] ${error.message}`);
+            return 2;
+        }
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)) {
         printError('[verify-web] --date 必须是 YYYY-MM-DD');
@@ -1315,6 +1540,9 @@ module.exports = {
     atomicWriteJson,
     writeVerificationArtifact,
     verify,
+    loadHistoricalPublicationContext,
+    historicalOnlineVerificationPath,
+    verifyHistoricalPublication,
     deployRepository,
     parseDeployRuns,
     WORKFLOW_PROFILE,

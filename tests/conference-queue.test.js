@@ -404,6 +404,26 @@ test('命令行要求显式的绝对路径计划，并且只提供只读模式�
     assert.throws(() => cli.parseArgs(['--status', '--plan', 'relative.json']), /用法：/);
 });
 
+test('PD_CONFERENCE_QUEUE_CONCURRENCY 放宽计划并发上限并保留默认边界', () => {
+    const prev = process.env.PD_CONFERENCE_QUEUE_CONCURRENCY;
+    delete process.env.PD_CONFERENCE_QUEUE_CONCURRENCY;
+    try {
+        assert.throws(() => queue.normalizePlan({
+            ...header(queue.PLAN_CONTRACT),
+            conferences: [{ conferenceId: 'odyssey-2026', catalogName: 'c.json', reportName: 'r.json', filterId: UUIDS[0], concurrency: 8 }]
+        }), /已选会议无效/);
+        process.env.PD_CONFERENCE_QUEUE_CONCURRENCY = '8';
+        const allowed = queue.normalizePlan({
+            ...header(queue.PLAN_CONTRACT),
+            conferences: [{ conferenceId: 'odyssey-2026', catalogName: 'c.json', reportName: 'r.json', filterId: UUIDS[0], concurrency: 8 }]
+        });
+        assert.equal(allowed.conferences[0].concurrency, 8);
+    } finally {
+        if (prev === undefined) delete process.env.PD_CONFERENCE_QUEUE_CONCURRENCY;
+        else process.env.PD_CONFERENCE_QUEUE_CONCURRENCY = prev;
+    }
+});
+
 
 for (const change of ['missing', 'changed', 'none']) {
     test(`续跑先核已发布会议的凭证（${change}），不重复发布完整会议`, async t => {

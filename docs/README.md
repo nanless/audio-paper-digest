@@ -23,7 +23,7 @@
 | 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
 | 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
-Mac 与 Android 当前公开发行版本均为 **1.5.0（构建号 24）**（2026-11-26 公开发布，来源提交 `5b5a8e79`）：新增双端原生每日音频播客播放器、Wave 12 / Track 13.3 音频速览与评分审计视觉排版、离线多词检索与筛选对齐，全量更名为“音频研究工作台”并迁移至“音频研究门户”同时兼容旧路径 `/audio-paper-digest-blog/`，详见 [1.5.0 发版记录](workbench-1.5.0-review.md)。
+Mac 与 Android 当前源码版本均为 **1.5.1（构建号 25）（尚未公开发布）**，汇总 Studio Monograph 视觉升级、双端页面与离线修复及会议/历史三线齐平，详见 [1.5.1 预发布记录](workbench-1.5.1-review.md)。最近已公开发行版本为 **1.5.0 / 构建号 24**（2026-11-26 公开发布，来源提交 `5b5a8e79`），详见 [1.5.0 发版记录](workbench-1.5.0-review.md)。
 
 <details>
 <summary>查看 1.4.7–1.3.0 历史版本摘要（每次发版的真实测试与验证范围均以对应记录为准）</summary>
@@ -71,8 +71,8 @@ Mac 与 Android 当前公开发行版本均为 **1.5.0（构建号 24）**（202
 | 任务 | 操作说明 |
 |---|---|
 | 当天日更与阶段恢复 | [日更操作](../SKILL.md#1-日更)、[补抓边界](daily-fetch-boundary.md)、[锁内来源核验](locked-source-validation.md) |
-| 官方会议获取、筛选、分析与发布 | [会议流程](conference-workflow.md) |
-| 从原文更新旧博客并保留地址 | [历史来源与更新](history-rewrite.md) |
+| 官方会议获取、筛选、分析与发布 | [会议流程](conference-workflow.md)、[新会议全流程接入指南（2026/2027+）](conference-workflow.md#新会议全流程接入指南20262027) |
+| 审计并批量重写过时历史博客（保留原 URL） | [过时历史博客批量重写指南](history-rewrite.md#过时历史博客批量重写指南)、[全历史来源与更新](history-rewrite.md) |
 | 历史结果的审查、发布和网页验收 | [历史发布](history-direct-publication.md) |
 | 只更新完整日批的页面呈现 | [同来源同分析的重发布](data-format.md#同来源同分析的日批重发布) |
 
@@ -119,7 +119,7 @@ Mac 与 Android 当前公开发行版本均为 **1.5.0（构建号 24）**（202
 
 历史记录用于理解当时发现的问题、采用的修改和真实验证范围。它们不是另一套现行操作入口。
 
-- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)、[1.4.6](workbench-1.4.6-review.md)、[1.4.7](workbench-1.4.7-review.md)、[1.5.0](workbench-1.5.0-review.md)。
+- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)、[1.4.6](workbench-1.4.6-review.md)、[1.4.7](workbench-1.4.7-review.md)、[1.5.0](workbench-1.5.0-review.md)、[1.5.1（预发布）](workbench-1.5.1-review.md)。
 - Android 修复记录：[1.3.1](android-1.3.1-review.md)、[1.3.2](android-1.3.2-review.md)、[1.3.3](android-1.3.3-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 - 公共流程与维护：[共享流程评审](shared-workflow-review.md)、[仓库维护说明](repository-maintenance-review.md)。

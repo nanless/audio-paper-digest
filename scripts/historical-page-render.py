@@ -48,11 +48,13 @@ def inject_direct_publication_source(projected, publication_source):
         'contract', 'version', 'paperId', 'sourceSnapshotSha256',
         'sourceTextSha256', 'abstract', 'abstractSha256',
     }
+    optional_meta_fields = {'comment', 'journalRef', 'doi', 'venueBadge'}
     has_metadata_sidecar = isinstance(publication_source, dict) \
         and 'metadataSidecar' in publication_source
     fields.add('metadataSidecar')
     if not isinstance(publication_source, dict) \
-            or set(publication_source) != fields:
+            or not fields.issubset(set(publication_source)) \
+            or not set(publication_source).issubset(fields | optional_meta_fields):
         raise ValueError('历史 arXiv 发布来源记录缺失、不是对象，或字段集合不符合要求。')
     abstract = publication_source.get('abstract')
     abstract_sha = publication_source.get('abstractSha256')
@@ -136,6 +138,15 @@ def inject_direct_publication_source(projected, publication_source):
     if projected.get('abstract') not in (None, abstract):
         raise ValueError('历史 arXiv 发布来源中的摘要与分析记录中的摘要不一致。')
     projected['abstract'] = abstract
+    for field in ('comment', 'journalRef', 'doi', 'venueBadge'):
+        if field in publication_source:
+            value = publication_source.get(field)
+            if not isinstance(value, str) or not value or value != value.strip() \
+                    or '\r' in value or '\0' in value or len(value.encode('utf-8')) > 4000:
+                raise ValueError(f'历史 arXiv 发布来源记录的 {field} 字段无效。')
+            if projected.get(field) not in (None, value):
+                raise ValueError(f'历史 arXiv 发布来源中的 {field} 与分析记录不一致。')
+            projected[field] = value
     return projected
 
 
@@ -179,7 +190,7 @@ def render_packet(packet):
         projected = dict(paper)
     publisher = load_publish_to_blog()
     if direct and not projected.get('arxivId'):
-        # 保留真实会议身份和冻结页面路径；共享日更的作者、资源、摘要与评分展示。
+        # 保留真实会议身份和冻结页面路径；对齐日更与会议单篇 Studio Monograph 2.0 渲染。
         # 上游 Node 已先核验来源、Reader 和完整分析；展示函数不赋予发布资格。
         parsed = publisher.parse_analysis(projected.get('analysis', ''))
         if not isinstance(parsed, dict):
@@ -188,8 +199,20 @@ def render_packet(packet):
         title = publisher.plain_title_for_publish(projected.get('title', ''))
         if not title:
             raise ValueError('历史会议论文的标题不能为空。')
-        reader_title = str((projected.get('apiReaderPlan') or {}).get('readerTitle') or title).strip()
-        article = str(projected.get('apiReaderArticle') or '').strip()
+        # 复用 _api_reader_payload 完整校验 Reader 契约、SHA 与来源绑定；
+        # 仅在缺少 arxivId/paper_id 且无图或临时图时用本地副本通过校验，绝不把伪 arXiv ID 写入产物。
+        validation_view = dict(projected)
+        if not validation_view.get('paper_id'):
+            validation_view['paper_id'] = '0000.00000'
+        api_reader_payload = publisher._api_reader_payload(validation_view)
+        plan = (api_reader_payload['plan'] if api_reader_payload
+                else projected.get('apiReaderPlan') or {})
+        reader_title = str(plan.get('readerTitle') or title).strip()
+        one_sentence = str(plan.get('oneSentenceThesis') or '').strip()
+        article = str(
+            (api_reader_payload['article'] if api_reader_payload else projected.get('apiReaderArticle'))
+            or ''
+        ).strip()
         if not article:
             raise ValueError('历史会议论文的解读正文不能为空。')
         article = normalize_repeated_bold_prefixes(article)
@@ -197,13 +220,14 @@ def render_packet(packet):
         article = publisher.render_ephemeral_api_reader_figures(
             article, [] if figures is None else figures
         )
+        article = publisher._nest_reader_headings(article, minimum_level=3)
         tags = [str(item).lstrip('#') for item in parsed.get('tags', []) if str(item).strip()]
         score_line = publisher.format_complete_score_line(parsed)
         with publication_replay_scope(projected, packet.get('sourceText'), publisher=publisher):
             presentation = build_reader_presentation(
                 projected,
                 publisher=publisher, source_text=packet.get('sourceText'),
-                plan=projected.get('apiReaderPlan'),
+                plan=plan,
                 resources=(projected.get('apiReaderResources') or {}).get('resources'),
                 authors=(projected.get('apiReaderAuthors') or {}).get('authors'),
             )
@@ -211,24 +235,125 @@ def render_packet(packet):
             projected, date,
             paper_id=projected['directPaperId'],
             publication=projected.get('conferencePublication'),
-            reader_plan=projected.get('apiReaderPlan'), parsed=parsed,
+            reader_plan=plan, parsed=parsed,
             authors=(projected.get('apiReaderAuthors') or {}).get('authors'),
         )
+        workbench_fm = publisher._researcher_workbench_frontmatter(workbench).rstrip()
         summary = presentation['summary']
+        description = publisher.plain_title_for_publish(
+            workbench.get('oneSentenceThesis') or one_sentence or title
+        )
+        scope_info = packet.get('scope') if isinstance(packet.get('scope'), dict) else {}
+        scope_type = scope_info.get('type') if isinstance(scope_info.get('type'), str) else ''
+        scope_key = scope_info.get('key') if isinstance(scope_info.get('key'), str) else ''
+        aggregate_url = packet.get('aggregateUrl') if isinstance(packet.get('aggregateUrl'), str) else ''
+        conf_match = re.match(r'^conference:([a-z0-9]+(?:-[a-z0-9]+)*):(\d{4}):', projected['directPaperId'])
+        conf_key = scope_key if scope_type == 'conference' and scope_key else (
+            f'{conf_match.group(1)}-{conf_match.group(2)}' if conf_match else ''
+        )
+        is_conference_scope = scope_type == 'conference' or bool(aggregate_url)
+        categories = [f'{conf_key} 论文'] if (is_conference_scope and conf_key) else ['论文速递']
+
         frontmatter = [
-            '---', f'title: "{publisher.yaml_title_for_publish(title)}"', f'date: {date}',
-            'draft: false', f'tags: {json.dumps(tags, ensure_ascii=False)}',
-            'categories: [论文速递]', 'paper_digest_pipeline_owned: true',
-            'paper_digest_page_type: paper', f'paper_digest_direct_paper_id: {json.dumps(projected["directPaperId"], ensure_ascii=False)}',
+            '---',
+            f'title: "{publisher.yaml_title_for_publish(title)}"',
+            f'date: {date}',
+            'draft: false',
+            f'description: {json.dumps(description, ensure_ascii=False)}',
+            'hiddenInHomeList: true',
+            f'tags: {json.dumps(tags, ensure_ascii=False)}',
+            f'categories: {json.dumps(categories, ensure_ascii=False)}',
+            'paper_digest_pipeline_owned: true',
+            'paper_digest_page_type: paper',
+            f'paper_digest_paper_id: {json.dumps(projected["directPaperId"], ensure_ascii=False)}',
+            f'paper_digest_direct_paper_id: {json.dumps(projected["directPaperId"], ensure_ascii=False)}',
             f'paper_digest_tags_contract: {json.dumps(tag_metadata["contract"])}',
+        ]
+        if 'schemaFingerprint' in tag_metadata and 'paper_digest_tags_schema_fingerprint:' not in workbench_fm:
+            frontmatter.append(
+                f'paper_digest_tags_schema_fingerprint: {json.dumps(tag_metadata["schemaFingerprint"])}'
+            )
+        frontmatter.extend([
             f'paper_digest_tags_selection_contract: {json.dumps(tag_metadata["selectionContract"])}',
             f'paper_digest_tags_registry_version: {json.dumps(tag_metadata["registryVersion"])}',
             f'paper_digest_tags_registry_sha256: {json.dumps(tag_metadata["registrySha256"])}',
             f'paper_digest_tags_concepts: {json.dumps(tag_metadata["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}',
             f'paper_digest_primary_method: {json.dumps(tag_metadata["primaryMethod"], ensure_ascii=False)}',
-            publisher._researcher_workbench_frontmatter(workbench).rstrip(),
-            '---', '', f'# 📄 {publisher.markdown_title_for_publish(reader_title)}', '', f'> 会议论文 ID：`{projected["directPaperId"]}`', ''
-        ]
+        ])
+        if api_reader_payload:
+            frontmatter.append(f'paper_digest_api_reader_contract: "{api_reader_payload["contract"]}"')
+            if 'schemaFingerprint' in api_reader_payload:
+                frontmatter.append(
+                    f'paper_digest_api_reader_schema_fingerprint: "{api_reader_payload["schemaFingerprint"]}"'
+                )
+            frontmatter.extend([
+                f'paper_digest_api_reader_article_sha256: "{api_reader_payload["articleSha256"]}"',
+                f'paper_digest_api_reader_plan_sha256: "{api_reader_payload["planSha256"]}"',
+            ])
+            sb = api_reader_payload.get('sourceBindingProof')
+            if isinstance(sb, dict):
+                frontmatter.append(f'paper_digest_api_reader_source_binding_contract: "{sb["contract"]}"')
+                if 'schemaFingerprint' in sb:
+                    frontmatter.append(
+                        f'paper_digest_api_reader_source_binding_schema_fingerprint: "{sb["schemaFingerprint"]}"'
+                    )
+                frontmatter.extend([
+                    f'paper_digest_api_reader_source_bindings_sha256: "{sb["sha256"]}"',
+                    f'paper_digest_api_reader_source_table_count: {sb["tableCount"]}',
+                    f'paper_digest_api_reader_source_formula_count: {sb["formulaCount"]}',
+                    f'paper_digest_api_reader_structured_artifacts_sha256: "{sb["structuredArtifactsSha256"]}"',
+                ])
+            ap = api_reader_payload.get('authorIdentityProof')
+            rp = api_reader_payload.get('resourceIdentityProof')
+            if isinstance(ap, dict) and isinstance(rp, dict):
+                frontmatter.append(f'paper_digest_api_reader_author_identity_contract: "{ap["contract"]}"')
+                if 'schemaFingerprint' in ap:
+                    frontmatter.append(
+                        f'paper_digest_api_reader_author_identity_schema_fingerprint: "{ap["schemaFingerprint"]}"'
+                    )
+                frontmatter.extend([
+                    f'paper_digest_api_reader_author_identity_sha256: "{ap["sha256"]}"',
+                    f'paper_digest_api_reader_author_count: {ap["count"]}',
+                    f'paper_digest_api_reader_resource_identity_contract: "{rp["contract"]}"',
+                ])
+                if 'schemaFingerprint' in rp:
+                    frontmatter.append(
+                        f'paper_digest_api_reader_resource_identity_schema_fingerprint: "{rp["schemaFingerprint"]}"'
+                    )
+                frontmatter.extend([
+                    f'paper_digest_api_reader_resource_identity_sha256: "{rp["sha256"]}"',
+                    f'paper_digest_api_reader_resource_count: {rp["count"]}',
+                ])
+            if api_reader_payload.get('figurePersistence') == publisher.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
+                frontmatter.append(
+                    f'paper_digest_api_reader_figure_persistence: "{publisher.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT}"'
+                )
+            if publisher.reader_formats.is_integrated_contract(api_reader_payload['contract']):
+                frontmatter.extend([
+                    f'paper_digest_api_reader_decision_projection: "{publisher.API_READER_DECISION_PROJECTION_CONTRACT}"',
+                    f'paper_digest_api_reader_decision_projection_schema_fingerprint: "{publisher.API_READER_DECISION_PROJECTION_SCHEMA_FINGERPRINT}"',
+                ])
+        scoring_stage = ((projected.get('analysisManifest') or {}).get('stages') or {}).get('scoringAudit') or {}
+        if isinstance(scoring_stage.get('scoringContract'), str) and scoring_stage['scoringContract']:
+            frontmatter.append(f'paper_digest_scoring_contract: "{scoring_stage["scoringContract"]}"')
+        if isinstance(scoring_stage.get('scoringSchemaFingerprint'), str) and scoring_stage['scoringSchemaFingerprint']:
+            frontmatter.append(
+                f'paper_digest_scoring_schema_fingerprint: "{scoring_stage["scoringSchemaFingerprint"]}"'
+            )
+        rubric_version = parsed.get('scoringRubricVersion') or scoring_stage.get('rubricVersion')
+        if isinstance(rubric_version, str) and rubric_version.strip():
+            frontmatter.append(f'paper_digest_scoring_rubric_version: {json.dumps(rubric_version.strip())}')
+        frontmatter.extend([
+            workbench_fm,
+            '---',
+            '',
+            f'# 📄 {publisher.markdown_title_for_publish(reader_title)}',
+            '',
+            f'> 英文题目：*{publisher.markdown_title_for_publish(title)}*',
+            '',
+            f'> 会议论文 ID：`{projected["directPaperId"]}`',
+            '',
+        ])
         frontmatter.extend([render_tag_hierarchy_markdown(
             tag_metadata, publisher._PAGE_TAG_CATALOG).rstrip(), ''])
         if score_line:
@@ -237,22 +362,26 @@ def render_packet(packet):
             value = str(parsed.get(field) or '').strip()
             if value:
                 frontmatter.extend([f'{label}：{value}', ''])
-        if summary:
-            frontmatter.extend(['## 📌 核心摘要', '', summary, ''])
         if presentation['authorBlock']:
             frontmatter.extend(['## 👥 作者与机构', '', presentation['authorBlock'], ''])
+        if summary:
+            frontmatter.extend(['## 📌 核心摘要', '', summary, ''])
         if presentation['resourceBlock']:
-            frontmatter.extend(['## 🔗 论文资源', '', presentation['resourceBlock'], ''])
-        if presentation['scoringBlock']:
-            frontmatter.extend(['## 📊 评分说明', '', presentation['scoringBlock'], ''])
+            frontmatter.extend(['## 🔗 开源与复现资源', '', presentation['resourceBlock'], ''])
         frontmatter.extend(['## 🧭 深度解读', '', article, ''])
-        implementation_specs_block = publisher._render_api_reader_implementation_specs(
-            projected.get('apiReaderPlan')
-        )
+        implementation_specs_block = publisher._render_api_reader_implementation_specs(plan)
         if implementation_specs_block:
             frontmatter.extend(['## ⚙️ 关键实现与复现规格', '', implementation_specs_block, ''])
-        frontmatter.extend(['---',
-            f'[← 返回 {date} 音频研究日报]({publisher.BASE_PATH}/posts/{date}/)', ''])
+        if presentation['scoringBlock']:
+            frontmatter.extend(['## ⚖️ 评分明细', '', presentation['scoringBlock'], ''])
+        if aggregate_url:
+            back_label = f'{conf_key} 论文汇总' if conf_key else '论文汇总'
+            back_link = f'[← 返回 {back_label}]({aggregate_url})'
+        elif scope_type == 'conference' and conf_key:
+            back_link = f'[← 返回 {conf_key} 论文汇总]({publisher.BASE_PATH}/posts/{conf_key}/)'
+        else:
+            back_link = f'[← 返回 {date} 音频研究日报]({publisher.BASE_PATH}/posts/{date}/)'
+        frontmatter.extend(['---', back_link, ''])
         return {
             'markdown': publisher.sanitize_markdown_for_publish('\n'.join(frontmatter)),
             'assets': [{'path': relative.as_posix(),

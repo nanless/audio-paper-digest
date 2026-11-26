@@ -3,9 +3,9 @@
 本文件由 `node scripts/generate-scripts-index.js` 根据 `scripts/` 目录自动生成，列出全部受版本控制的 `.js` 与 `.py` 运行时文件。
 架构分工与常用入口见 [脚本指南](README.md)（[English](README.en.md)）；旧记录兼容与独立人工审查位于 `manual/scripts/`。
 
-总计：**474** 个运行时文件（顶层 Node 90 · 顶层 Python 97 · `lib/` 内部库 287）。
+总计：**475** 个运行时文件（顶层 Node 91 · 顶层 Python 97 · `lib/` 内部库 287）。
 
-## 顶层 Node 入口与共享模块（90）
+## 顶层 Node 入口与共享模块（91）
 
 | 文件 | 职责摘要 |
 |---|---|
@@ -59,6 +59,7 @@
 | `historical-direct-tag-supplement.js` | Node 流程入口或共享模块 |
 | `historical-icml-alternate-pdf-source.js` | Node 流程入口或共享模块 |
 | `historical-openreview-pdf-source.js` | Node 流程入口或共享模块 |
+| `historical-outdated-audit.js` | 只读扫描博客仓库 content/posts/ 下的历史文章 frontmatter， |
 | `historical-source-identity-supplement.js` | Node 流程入口或共享模块 |
 | `historical-source-tag-assignment.js` | Node 流程入口或共享模块 |
 | `historical-tag-checkpoint-export.js` | Node 流程入口或共享模块 |

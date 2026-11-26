@@ -130,29 +130,47 @@ def markdown_table_count(text):
     """按 Goldmark 的渲染方式统计连续的 Markdown 表格块。
 
     在一段不中断的管道块里重复出现分隔行，在 Hugo 中仍属于同一张表；
-    逐个分隔行计数会高估应有的 HTML。
+    逐个分隔行计数会高估应有的 HTML。围栏代码块内的管道行与缺少表头的
+    孤立分隔行在 Goldmark 中均不渲染为表格，因此不计入。
     """
     count = 0
-    in_table_block = False
+    block_rows = 0
     has_separator = False
+    fence = None
     for line in str(text or '').splitlines():
+        if fence is not None:
+            fence_char, fence_len = fence
+            close_re = rf' {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*$'
+            if re.fullmatch(close_re, line):
+                fence = None
+            continue
+        opened = re.match(r'^ {0,3}(`{3,}|~{3,})([^\r\n]*)$', line)
+        if opened and not (opened.group(1)[0] == '`' and '`' in opened.group(2)):
+            if block_rows >= 1 and has_separator:
+                count += 1
+            block_rows = 0
+            has_separator = False
+            fence = (opened.group(1)[0], len(opened.group(1)))
+            continue
         is_pipe_row = bool(re.match(r'^\s*\|.*\|\s*$', line))
         if not is_pipe_row:
-            if in_table_block and has_separator:
+            if block_rows >= 1 and has_separator:
                 count += 1
-            in_table_block = False
+            block_rows = 0
             has_separator = False
             continue
-        in_table_block = True
         if re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line):
-            has_separator = True
-    if in_table_block and has_separator:
+            if block_rows >= 1:
+                has_separator = True
+        else:
+            block_rows += 1
+    if block_rows >= 1 and has_separator:
         count += 1
     return count
 
 
 def markdown_image_count(text):
-    return len(re.findall(r'(?<!\\)!\[[^\]\n]*\]\([^\)\n]+\)', text))
+    return len(parse_markdown_images(str(text or '')))
 
 
 def heading_figure_table_number_issues(text, label):
@@ -1978,7 +1996,11 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
         if current_tutorial:
             issues.extend(tutorial_score_issues(rendered_text, rendered_label))
         expected_tables = markdown_table_count(artifact['body'])
-        expected_images = markdown_image_count(artifact['body'])
+        try:
+            expected_images = markdown_image_count(artifact['body'])
+        except PublishDataValidationError as exc:
+            issues.append(f'{rendered_label} Markdown 图片语法解析失败: {exc}')
+            expected_images = None
         actual_tables = len(re.findall(
             r'<table\b', reader_html, flags=re.IGNORECASE,
         ))
@@ -1990,7 +2012,7 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
                 f'{rendered_label} Hugo 表格数量不足: '
                 f'Markdown={expected_tables}, HTML={actual_tables}'
             )
-        if actual_images < expected_images:
+        if expected_images is not None and actual_images < expected_images:
             issues.append(
                 f'{rendered_label} Hugo 图片数量不足: '
                 f'Markdown={expected_images}, HTML={actual_images}'

@@ -5,6 +5,7 @@ from project_env import load_project_env
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -12,7 +13,10 @@ import secrets
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 import io
 import tarfile
 from contextlib import contextmanager
@@ -1421,6 +1425,50 @@ def require_publication_figure_view_ready(generation):
             or node.get('unresolvedRoutes') != [] or node.get('publicationPassed') is not False:
         raise ConferencePublicationError('出版图片仍有未解决问题；已保存逐页审查，但拒绝封最终凭证或推送')
 
+def warn_if_conference_missing_from_directory(repo, conference_id):
+    """generate 阶段软提示：若博客仓存在 data/conference-directory.json 且未登记当前会议 ID，向 stderr 发出警告。"""
+    directory_path = Path(repo) / 'data' / 'conference-directory.json'
+    if not directory_path.is_file():
+        return False
+    try:
+        raw = json.loads(directory_path.read_text(encoding='utf-8'))
+    except Exception as exc:
+        print(
+            f'[publish-conference] WARNING: 无法解析 {directory_path}（{exc}），请核对 {conference_id} 是否已登记。',
+            file=sys.stderr,
+        )
+        return True
+    known_ids = set()
+    entries = None
+    if isinstance(raw, list):
+        entries = raw
+    elif isinstance(raw, dict):
+        if isinstance(raw.get('conferences'), list):
+            entries = raw['conferences']
+        elif isinstance(raw.get('items'), list):
+            entries = raw['items']
+        else:
+            known_ids.update(str(key).strip() for key in raw.keys() if str(key).strip())
+            entries = [val for val in raw.values() if isinstance(val, dict)]
+    if isinstance(entries, list):
+        for item in entries:
+            if isinstance(item, str) and item.strip():
+                known_ids.add(item.strip())
+            elif isinstance(item, dict):
+                for field in ('id', 'conferenceId', 'slug'):
+                    value = item.get(field)
+                    if isinstance(value, str) and value.strip():
+                        known_ids.add(value.strip())
+    if conference_id not in known_ids:
+        print(
+            f'[publish-conference] WARNING: 会议 {conference_id} 尚未登记在 {directory_path}，'
+            '请同步补充会议目录条目以便前端导航展示。',
+            file=sys.stderr,
+        )
+        return True
+    return False
+
+
 def generate(conference_id, process_id, *, figure_crop_manifest=None, figure_crop_base_sha=None):
     repo, images = blog_repo(), image_repo()
     with shared_publication_repository_locks(
@@ -1432,6 +1480,7 @@ def generate(conference_id, process_id, *, figure_crop_manifest=None, figure_cro
             result = publication_state(conference_id, process_id)
             print(json.dumps(result, ensure_ascii=False))
             return result
+        warn_if_conference_missing_from_directory(repo, conference_id)
         bundle = process_bundle(conference_id, process_id)
         # Raw source/stage/science qualification always precedes any projection.
         existing = publication_dir(conference_id, process_id) / 'generation.json'
@@ -1966,6 +2015,19 @@ def _content_review_failure_index():
     return index
 
 
+def _conference_source_figure_note(frontmatter, body):
+    structure = str((frontmatter or {}).get('paper_digest_conference_structure') or '').strip()
+    has_conf_images = bool(re.search(r'/images/conference/[^)\s]+/figure-\d+\.png', str(body or '')))
+    if not has_conf_images and structure not in {
+        'pdf-visual-quote-evidence-v1', 'pdf-visual-tables-v2', 'replayable-pdf-layout-v1',
+    }:
+        return ''
+    return (
+        '来源图注说明：本页论文原图来自官方会议 PDF 原页像素裁切，送审位置「图片 K」对应正文中'
+        '该图出现的顺序，不要求与印刷编号 Figure M 或 DOM 序号机械相等。'
+    )
+
+
 def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
     """只复用「路径 + 字节」都通过的证据；确定性检查每次都要重跑。
 
@@ -1978,8 +2040,17 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
     module.CONTENT_DIR = str(repo / 'content' / 'posts')
     protocol = content_review_protocol(module)
     failures_by_page = _content_review_failure_index()
+    chunk_fn = getattr(module, '_llm_review_post_chunk', None)
+    img_fn = getattr(module, 'multimodal_review_images', None)
+    chunk_sig = inspect.signature(chunk_fn).parameters if callable(chunk_fn) else {}
+    img_sig = inspect.signature(img_fn).parameters if callable(img_fn) else {}
+    chunk_accepts_source_note = 'source_figure_note' in chunk_sig
+    img_accepts_passed_registry = 'passed_image_registry' in img_sig
+    img_accepts_verified_images = 'verified_paper_images' in img_sig
+    passed_images_lock = threading.Lock()
+    zero_warning_paper_images = {}
 
-    # 会议页与日更使用相同的 1–5 并发范围，每页自行保存内容审查记录。
+    # 会议页支持与日更一致的 1–32 并发范围，每页自行保存内容审查记录，并跨页复用零警告已审图片。
     def _review_one(record):
         relative = safe_relative(record['path'], 'review 页面')
         raw = target_bytes(repo, record)
@@ -2006,6 +2077,7 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
         if not os.environ.get('PAPER_ANALYZER_MODEL', '').strip():
             raise ConferencePublicationError('内容和多模态 review 必须配置模型，不能跳过')
         title = frontmatter.get('title', relative)
+        source_figure_note = _conference_source_figure_note(frontmatter, body)
         chunks = module.split_review_content(content, module.get_blog_review_chunk_chars())
         if not chunks:
             raise_content_review_failure(record, digest, protocol, 'text', [],
@@ -2029,9 +2101,11 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
             if saved_unit is not None:
                 found.extend(saved_unit['issues'])
                 continue
+            chunk_kwargs = {'required': True, 'chunk_label': f'{index + 1}/{len(chunks)}'}
+            if chunk_accepts_source_note and source_figure_note:
+                chunk_kwargs['source_figure_note'] = source_figure_note
             passed, findings, proposed = interpret_readonly_text_unit(chunk,
-                module._llm_review_post_chunk(
-                    chunk, title, required=True, chunk_label=f'{index + 1}/{len(chunks)}'))
+                module._llm_review_post_chunk(chunk, title, **chunk_kwargs))
             if passed is not True or proposed != chunk:
                 raise_content_review_failure(
                     record, digest, protocol, 'text', findings,
@@ -2052,13 +2126,25 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
             selected_contexts = (review_contexts_for_page(
                 figure_review_contexts, record, content, module.parse_markdown_images)
                 if figure_review_contexts else {})
-            passed, findings = (module.multimodal_review_images(content, title, required=True,
-                publication_figure_contexts=selected_contexts) if selected_contexts else
-                module.multimodal_review_images(content, title, required=True))
+            clean_passed_images = {}
+            img_kwargs = {'required': True}
+            if selected_contexts:
+                img_kwargs['publication_figure_contexts'] = selected_contexts
+            if img_accepts_passed_registry:
+                img_kwargs['passed_image_registry'] = clean_passed_images
+            if img_accepts_verified_images:
+                with passed_images_lock:
+                    known_images = dict(zero_warning_paper_images)
+                if known_images:
+                    img_kwargs['verified_paper_images'] = known_images
+            passed, findings = module.multimodal_review_images(content, title, **img_kwargs)
             if passed is not True:
                 raise_content_review_failure(
                     record, digest, protocol, 'image', findings,
                     f'图片多模态 review 未通过: {relative}', imageCount=len(matches))
+            if not findings and clean_passed_images:
+                with passed_images_lock:
+                    zero_warning_paper_images.update(clean_passed_images)
             found.extend(findings)
         if module.count_blocking_review_issues(found):
             raise_content_review_failure(
@@ -2078,8 +2164,8 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
                       else os.environ.get('PD_BLOG_REVIEW_CONCURRENCY', '5').strip() or '5')
     except (TypeError, ValueError):
         workers = 5
-    # 遵循独立博客页 review 的明确 1–5 并发范围；默认保持 5。
-    workers = max(1, min(int(workers), 5))
+    # 支持 1–32 并发范围（与日更一致），默认保持 5。
+    workers = max(1, min(int(workers), 32))
     def _collect_page(record):
         try:
             return _review_one(record)
@@ -2576,7 +2662,52 @@ def verify(conference_id, process_id):
     return result
 
 
-def push(conference_id, process_id):
+def _is_github_pages_portal_remote(repo):
+    try:
+        remote_url = git(repo, 'remote', 'get-url', 'origin').stdout.strip().lower()
+    except Exception:
+        return False
+    return 'github.com' in remote_url and any(slug in remote_url for slug in PORTAL_REPO_RENAME_PAIR)
+
+
+def wait_for_pages_deploy(repo, commit_oid, *, timeout_seconds=None, poll_interval_seconds=None,
+                          collect_metadata=None):
+    """等待 GitHub Pages 工作流部署完成后再执行线上 URL 验收；本地测试远端自动跳过。"""
+    if not _is_github_pages_portal_remote(repo):
+        return {'status': 'skipped_non_github_remote', 'commit': commit_oid}
+    if timeout_seconds is None:
+        try:
+            timeout_seconds = max(1, int(os.environ.get('PD_PAGES_DEPLOY_TIMEOUT_SECONDS', '600').strip() or '600'))
+        except ValueError:
+            timeout_seconds = 600
+    if poll_interval_seconds is None:
+        try:
+            poll_interval_seconds = max(1, int(os.environ.get('PD_PAGES_DEPLOY_POLL_SECONDS', '10').strip() or '10'))
+        except ValueError:
+            poll_interval_seconds = 10
+    if collect_metadata is None:
+        from github_pages_deployment import collect_github_pages_metadata as collect_metadata
+    deadline = time.monotonic() + timeout_seconds
+    last_metadata = None
+    while True:
+        metadata = collect_metadata(commit_oid)
+        last_metadata = metadata
+        outcome = (metadata or {}).get('metadataOutcome')
+        if outcome == 'success':
+            return {'status': 'deployed', 'commit': commit_oid, 'metadata': metadata}
+        if outcome == 'failure':
+            raise ConferencePublicationError(
+                f'GitHub Pages 部署失败（commit={commit_oid}）：{(metadata or {}).get("issues")}'
+            )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ConferencePublicationError(
+                f'等待 GitHub Pages 部署超时（{timeout_seconds}s，commit={commit_oid}，lastStatus={(last_metadata or {}).get("status")}）'
+            )
+        time.sleep(min(poll_interval_seconds, remaining))
+
+
+def push(conference_id, process_id, *, dry_run=False, wait_deploy=True):
     repo, images = blog_repo(), image_repo()
     if (publication_dir(conference_id, process_id) / 'publish.json').exists():
         # 再次运行 push 时只读取已发布状态；只有显式 verify 才重新发起线上 GET。
@@ -2589,6 +2720,21 @@ def push(conference_id, process_id):
         require_publication_figure_view_ready(generation)
         receipt = load_review(conference_id, process_id)
         validate_review(generation, receipt)
+        if dry_run:
+            verify_index(repo, generation['baseHead'], generation['files'])
+            verify_index(images, generation['imageBaseHead'], generation['imageFiles'])
+            result = {
+                'status': 'dry-run',
+                'dryRun': True,
+                'conferenceId': conference_id,
+                'processId': process_id,
+                'generationSha256': generation['generationSha256'],
+                'reviewSha256': receipt['reviewSha256'],
+                'blogFiles': [record['path'] for record in generation['files']],
+                'imageFiles': [record['path'] for record in generation['imageFiles']],
+            }
+            print(json.dumps(result, ensure_ascii=False))
+            return result
         # 对已经暂存的旧 generation，保留历史上的 v1 事务约定。
         # 新的 v2 generation 一律走下面更严格的 URL 验收路径。
         if not external_image_generation(generation):
@@ -2627,6 +2773,8 @@ def push(conference_id, process_id):
                               generation['remoteIdentitySha256'], f'发布 {conference_id} 会议论文及汇总')
         remote = push_delta(repo, generation['files'], generation['baseHead'],
                             generation['remoteIdentitySha256'], commit)
+        if wait_deploy:
+            wait_for_pages_deploy(repo, commit)
         accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote)
         print(json.dumps({'status': 'complete', 'complete': True, 'publicationCommit': commit,
                           'completionScope': 'mechanical-html+remote-oid+online-urls',
@@ -2647,6 +2795,8 @@ def main():
     parser.add_argument('--process-id', required=True)
     parser.add_argument('--figure-crop-manifest')
     parser.add_argument('--figure-crop-base-sha')
+    parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--no-wait-deploy', action='store_true')
     args = parser.parse_args()
     try:
         safe_uuid(args.process_id, 'processId')
@@ -2654,11 +2804,16 @@ def main():
             raise ConferencePublicationError('conferenceId 不安全')
         if args.action != 'generate' and (args.figure_crop_manifest or args.figure_crop_base_sha):
             raise ConferencePublicationError('出版裁切清单只允许 generate；review/push 从 generation 冷重放')
+        if args.action != 'push' and (args.dry_run or args.no_wait_deploy):
+            raise ConferencePublicationError('--dry-run 与 --no-wait-deploy 仅支持 push 动作')
         if args.action == 'generate':
             result = generate(args.conference_id, args.process_id,
                 figure_crop_manifest=args.figure_crop_manifest, figure_crop_base_sha=args.figure_crop_base_sha)
+        elif args.action == 'push':
+            result = push(args.conference_id, args.process_id,
+                          dry_run=args.dry_run, wait_deploy=not args.no_wait_deploy)
         else:
-            result = {'review': review, 'push': push, 'status': status, 'verify': verify}[args.action](
+            result = {'review': review, 'status': status, 'verify': verify}[args.action](
                 args.conference_id, args.process_id)
         if args.action == 'verify' and not result['complete']:
             raise SystemExit(2)

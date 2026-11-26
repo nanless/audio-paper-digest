@@ -145,6 +145,194 @@ function isDailyFreshSourceScope() {
     return getFreshAnalysisContext()?.runContract === DAILY_SOURCE_RUN_CONTRACT;
 }
 
+function historicalSourceSnapshotSha(details) {
+    return stable({
+        paperId: details.paperId,
+        source: details.source,
+        sourceId: details.sourceId,
+        textSha256: sha(Buffer.from(String(details.text || ''), 'utf8')),
+        structuredArtifacts: details.structuredArtifacts,
+        ...(details.sourceVersion ? { sourceVersion: details.sourceVersion } : {})
+    });
+}
+
+function isSealedFourFileArxivScope() {
+    if (isDailyFreshSourceScope()) return true;
+    const direct = require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
+    return Boolean(direct && direct.route === 'arxiv-fresh-fetch'
+        && direct.runId
+        && Number.isSafeInteger(direct.sourceGeneration) && direct.sourceGeneration >= 1
+        && validSha(direct.sourceManifestSha256)
+        && validSha(direct.sourceSnapshotSha256));
+}
+
+function isDailySealedSourceRoot(rootDir) {
+    const Config = require('../config.js');
+    const dailyRoot = Config.FILES.dailyFreshSourceRunsDir ? path.resolve(Config.FILES.dailyFreshSourceRunsDir) : '';
+    if (!dailyRoot) return false;
+    const sources = path.resolve(rootDir || '');
+    const run = path.basename(path.dirname(sources));
+    return path.basename(sources) === 'sources'
+        && path.dirname(path.dirname(sources)) === dailyRoot
+        && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(run);
+}
+
+function isHistoricalSealedSourceRoot(rootDir) {
+    const Config = require('../config.js');
+    const sources = path.resolve(rootDir || '');
+    const configuredHistorical = Config.FILES.freshArxivFetchedSourcesDir
+        ? path.resolve(Config.FILES.freshArxivFetchedSourcesDir) : '';
+    if (configuredHistorical && sources === configuredHistorical) return true;
+    const activeProof = verifiedBundleAuthorScope.getStore();
+    if (activeProof?.rootDir && path.resolve(activeProof.rootDir) === sources) return true;
+    return false;
+}
+
+function assertSealedFourFileArxivRoot(rootDir, errorMessage = 'Expected current daily sealed source root') {
+    if (isDailySealedSourceRoot(rootDir) || isHistoricalSealedSourceRoot(rootDir)) {
+        return path.resolve(rootDir);
+    }
+    throw new Error(errorMessage);
+}
+
+function prepareVerifiedHistoricalBundleAuthorSource({ rootDir, arxivId, generation, sourceManifestSha256, details }) {
+    if (!details || typeof details !== 'object' || Array.isArray(details)
+        || typeof rootDir !== 'string' || !path.isAbsolute(rootDir)
+        || !validSha(sourceManifestSha256)
+        || !Number.isSafeInteger(generation) || generation < 1) {
+        throw fail('历史封存作者来源核验缺少有效的根目录、代次或清单哈希。');
+    }
+    const id = paperId(arxivId);
+    const resolvedRoot = path.resolve(rootDir);
+    const stored = require('./fresh-arxiv-rewrite-source.js').readFreshArxivRewriteSource({
+        rootDir: resolvedRoot, arxivId: id, generation
+    });
+    const bundleDetails = buildSourceDetailsFromBundle(stored);
+    if (stored.sourceManifestSha256 !== sourceManifestSha256
+        || stored.runtimeDetails.text !== details.text
+        || stored.runtimeDetails.sourceId !== details.sourceId
+        || stable(stored.runtimeDetails.structuredArtifacts) !== stable(details.structuredArtifacts)) {
+        throw fail('历史封存来源详情与四文件公共读取结果不一致。');
+    }
+    verifiedBundleAuthorSources.set(details, {
+        rootDir: resolvedRoot,
+        arxivId: id,
+        generation,
+        sourceManifestSha256: stored.sourceManifestSha256,
+        detailsSha256: stable(details),
+        bundleSnapshotSha256: bundleDetails.freshSourceDescriptor.sourceSnapshotSha256,
+        historicalSnapshotSha256: historicalSourceSnapshotSha(stored.runtimeDetails)
+    });
+    return details;
+}
+
+function resolveActiveSealedFourFileArxivBundle(paper = null) {
+    if (isDailyFreshSourceScope()) {
+        const context = getFreshAnalysisContext();
+        const target = paper || context?.paperId;
+        if (!context || !target) return null;
+        const id = paperId(target);
+        const source = readFreshSource(context.runDir, id, context);
+        if (!source) return null;
+        const d = source.freshSourceDescriptor;
+        if (!isBundleDescriptor(d)) return null;
+        const rootDir = path.join(context.runDir, 'sources');
+        return {
+            kind: 'daily',
+            context,
+            rootDir,
+            arxivId: d.paperId,
+            generation: d.sourceGeneration,
+            sourceManifestSha256: d.sourceManifestSha256,
+            sourceSnapshotSha256: d.sourceSnapshotSha256,
+            sourceSha256: d.sourceSha256,
+            structuredArtifactsSha256: d.structuredArtifactsSha256,
+            source,
+            expectation: {
+                rootDir,
+                arxivId: d.paperId,
+                generation: d.sourceGeneration,
+                sourceManifestSha256: d.sourceManifestSha256,
+                sourceSnapshotSha256: d.sourceSnapshotSha256
+            },
+            provenance: {
+                ...context.sourceProvenanceHeader,
+                runId: d.runId,
+                sourceSha256: d.sourceSha256,
+                structuredArtifactsSha256: d.structuredArtifactsSha256,
+                sourceManifestSha256: d.sourceManifestSha256,
+                sourceGeneration: d.sourceGeneration
+            }
+        };
+    }
+    const direct = require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
+    if (!direct || direct.route !== 'arxiv-fresh-fetch'
+        || !direct.runId
+        || !Number.isSafeInteger(direct.sourceGeneration) || direct.sourceGeneration < 1
+        || !validSha(direct.sourceManifestSha256) || !validSha(direct.sourceSnapshotSha256)) {
+        return null;
+    }
+    const rawTarget = typeof paper === 'string'
+        ? paper.replace(/^arxiv:/i, '')
+        : paper || direct.paperId.replace(/^arxiv:/i, '');
+    const id = paperId(rawTarget);
+    if (direct.paperId !== `arxiv:${id}`) return null;
+    const sourceApi = require('./fresh-arxiv-rewrite-source.js');
+    const activeProof = verifiedBundleAuthorScope.getStore();
+    let rootDir = null;
+    if (activeProof?.rootDir && activeProof.arxivId === id
+        && activeProof.generation === direct.sourceGeneration
+        && activeProof.sourceManifestSha256 === direct.sourceManifestSha256) {
+        rootDir = path.resolve(activeProof.rootDir);
+    } else {
+        const configuredRoot = require('../config.js').FILES.freshArxivFetchedSourcesDir;
+        if (configuredRoot) rootDir = path.resolve(configuredRoot);
+    }
+    if (!rootDir || sourceGenerationAbsent(sourceApi, rootDir, id, direct.sourceGeneration)) {
+        return null;
+    }
+    const stored = sourceApi.readFreshArxivRewriteSource({
+        rootDir, arxivId: id, generation: direct.sourceGeneration
+    });
+    const historicalSnapshotSha256 = historicalSourceSnapshotSha(stored.runtimeDetails);
+    if (stored.sourceManifestSha256 !== direct.sourceManifestSha256
+        || stored.manifest.text.responseSha256 !== direct.sourceSha256
+        || stored.runtimeDetails?.structuredArtifacts?.payloadSha256 !== direct.structuredArtifactsSha256
+        || historicalSnapshotSha256 !== direct.sourceSnapshotSha256) {
+        throw fail('历史封存四文件来源与当前直改运行上下文不一致。');
+    }
+    const source = buildSourceDetailsFromBundle(stored);
+    const bundleSnapshotSha256 = source.freshSourceDescriptor.sourceSnapshotSha256;
+    return {
+        kind: 'historical',
+        context: direct,
+        rootDir,
+        arxivId: id,
+        generation: direct.sourceGeneration,
+        sourceManifestSha256: stored.sourceManifestSha256,
+        sourceSnapshotSha256: bundleSnapshotSha256,
+        historicalSnapshotSha256,
+        sourceSha256: direct.sourceSha256,
+        structuredArtifactsSha256: direct.structuredArtifactsSha256,
+        source,
+        expectation: {
+            rootDir,
+            arxivId: id,
+            generation: direct.sourceGeneration,
+            sourceManifestSha256: stored.sourceManifestSha256,
+            sourceSnapshotSha256: bundleSnapshotSha256
+        },
+        provenance: {
+            ...dailyFormats.originalProvenanceHeader,
+            runId: direct.runId,
+            sourceSha256: direct.sourceSha256,
+            structuredArtifactsSha256: direct.structuredArtifactsSha256,
+            sourceManifestSha256: stored.sourceManifestSha256,
+            sourceGeneration: direct.sourceGeneration
+        }
+    };
+}
+
 function getSavedAnalysisRecoveryPermission(id = getFreshAnalysisContext()?.paperId) {
     const context = getFreshAnalysisContext();
     if (!context || !id) return null;
@@ -254,8 +442,10 @@ function readVerifiedBundleReaderAuthors(details, options = {}) {
     const stored = require('./fresh-arxiv-rewrite-source.js').readFreshArxivRewriteSource(proof);
     const expectedAuthors = stored.runtimeDetails.readerAuthors === null
         ? { authors: [] } : stored.runtimeDetails.readerAuthors;
+    const actualAuthors = details.readerAuthors === null
+        ? { authors: [] } : details.readerAuthors;
     if (stored.sourceManifestSha256 !== proof.sourceManifestSha256
-        || stable(expectedAuthors) !== stable(details.readerAuthors)) {
+        || stable(expectedAuthors) !== stable(actualAuthors)) {
         throw fail('封存作者元数据与当前来源文件不一致。');
     }
     const raw = stored.runtimeDetails.readerAuthors;
@@ -324,8 +514,10 @@ function withVerifiedBundleReaderAuthorFiles({ rootDir, arxivId, generation,
         rootDir, arxivId, generation
     });
     const details = buildSourceDetailsFromBundle(stored);
-    if (stored.sourceManifestSha256 !== sourceManifestSha256
-        || details.freshSourceDescriptor.sourceSnapshotSha256 !== sourceSnapshotSha256) {
+    const matchesSnapshot = details.freshSourceDescriptor.sourceSnapshotSha256 === sourceSnapshotSha256
+        || (isHistoricalSealedSourceRoot(rootDir)
+            && historicalSourceSnapshotSha(stored.runtimeDetails) === sourceSnapshotSha256);
+    if (stored.sourceManifestSha256 !== sourceManifestSha256 || !matchesSnapshot) {
         throw fail('作者发布重放的四文件清单或来源快照不匹配。');
     }
     verifiedBundleAuthorSources.set(details, { rootDir, arxivId, generation,
@@ -506,6 +698,8 @@ function freshReaderAttemptsDirectory(requestedDirectory) {
 
 module.exports = { CONTRACT, DAILY_SOURCE_RUN_CONTRACT, isBundleDescriptor, isOriginalCacheDescriptor, isDailySourceRun, isFreshSourceProvenance, isBundleExpectation,
     withFreshAnalysisContext, getFreshAnalysisContext, isDailyFreshSourceScope,
+    isSealedFourFileArxivScope, isDailySealedSourceRoot, isHistoricalSealedSourceRoot, assertSealedFourFileArxivRoot,
+    historicalSourceSnapshotSha, prepareVerifiedHistoricalBundleAuthorSource, resolveActiveSealedFourFileArxivBundle,
     getSavedAnalysisRecoveryPermission,
     readFreshSource, hasVerifiedBundleAuthorSource, readVerifiedBundleReaderAuthors, withVerifiedBundleReaderAuthorSource, withVerifiedBundleReaderAuthorFiles, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
     withFreshPaperContext, attachFreshSourceRecord, freshReaderAttemptsDirectory };

@@ -10,7 +10,7 @@
 |---|---|---|
 | 日更主链 | `full-fetch.js`、`deep-analysis-only.js`、`batch-analyze.js`、`refresh-api-reader.js`、`reanalyze.js`、`reanalyze-selected.js` | `analysis-engine.js`、`deep-analyzer.js`、`analysis-contract.js` |
 | 官方会议 | `official-conference-acquire.js`、`conference-discover.js`、`conference-filter-run.js`、`conference-process.js`、`migrate-conference-process.js` | 同一分析引擎、Reader、八维评分（`scoring-rubric-v2.js`）与九维词表 |
-| 历史更新 | `historical-direct-rewrite-inputs.js`、`historical-direct-rewrite-plan.js`、`historical-direct-rewrite-run.js`、`history-resume.js` | 同一引擎，来源与断点由历史适配器独立核验 |
+| 历史更新 | `historical-outdated-audit.js`、`historical-direct-rewrite-inputs.js`、`historical-direct-rewrite-plan.js`、`historical-direct-rewrite-run.js`、`history-resume.js` | 同一引擎，来源与断点由历史适配器独立核验 |
 | 页面与引用 | `generate-blog.py`、`conference-page-render.py`、`historical-page-render.py`、`lib/historical-direct-aggregate.js` | `publish-to-blog.py`、`paper_reader_presentation.py`、`tag_presentation.py` |
 | 审查与发布 | `review-blog.py`、`push-blog.py`、`publish-conference.py`、`lib/historical-direct-publication.js`、`verify-web.js` | `publish_common.py`、`blog_reader_binding_verifier.py`、`markdown_hugo_gate.py` |
 | 基础设施 | `env-loader.js`、`project_env.py`、`workspace-role.js`、`runtime_guard.py`、`utils.js`、`llm-account-pool.js`、`llm_account_pool.py` | `config/workspace-roles.json`、`lib/env-schema.js`、`lib/arxiv-origin-gate.js`、`publish_node_replay_client.py` |
@@ -23,7 +23,8 @@
 | `npm run config:check` | `config-check.js` | 按 `lib/env-schema.js` 核对 `.env` 必填项、范围、推理档与拼写 |
 | `npm run source:probe -- --date YYYY-MM-DD` | `source-probe.js` | 只读探测 arXiv Atom/官方 OAI/RSS 三入口与目标日公告状态 |
 | `npm run llm:accounts` / `llm:accounts:quota` | `llm-accounts-report.js` / `llm-accounts-quota.js` | 查看共享账号池调度与冷却；同步或管理 OpenCode Go 官方 `/zen/go/v1/usage` 三窗口额度与月到期日 |
-| `npm run digest:status` / `digest:scorecard` | `digest-run-report.js` / `digest-scorecard.js` | 查完整冷核状态与单日各阶段耗时、缓存命中、推理占比 |
+| `npm run digest:status` / `digest:scorecard` | `digest-run-report.js` / `digest-scorecard.js` | 查完整冷核状态与单日各阶段耗时、缓存命中、推理占比（支持 `--workflow daily\|conference\|history`） |
+| `npm run history:outdated` | `historical-outdated-audit.js` | 只读审计博客 `content/posts/` 中落后于现行规范的过时历史页面并生成重写命令 |
 | `npm run locks` | `locks.js` | 有界只读观测本地与共享博客运行锁及陈旧锁预览 |
 | `npm run recover` / `manifest:new` | `recover.js` / `manifest-new.js` | 汇总失败原因与建议入口；准备来源绑定的人工修正清单 |
 | `npm run table:check` / `review:overrides` | `table-check.js` / `review-overrides-cli.js` | 离线预检表格排版；核对严格 schema 的审查误报说明 |
@@ -37,7 +38,7 @@
 
 ### 独立演进 / 可选实验模块
 
-- `conference_extractor_v2.py`：PyMuPDF4LLM / 布局增强版会议 PDF 提取器（保留作为可选实现；`conference_extractor.py` 因历史凭证哈希保持冻结）。
+- `conference_extractor_v2.py`：布局增强版会议 PDF 提取器（现为新会议批次默认 `v2`，支持双栏重排、结构化表格与 288 DPI 裁切；`conference_extractor.py` 因历史凭证哈希保持冻结供冷重放）。
 - `lib/arxiv-tex-source.js`、`arxiv_tex_extract.py`：按需获取并安全解析 arXiv `/src/<id>` LaTeX 源码 AST sidecar。
 - `generate-scripts-index.js`：重新生成或 `--check` 校验 [scripts/INDEX.md](INDEX.md)。
 

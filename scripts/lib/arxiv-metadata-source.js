@@ -81,6 +81,41 @@ function querySourceId(arxivId, value = arxivId) {
     return query;
 }
 
+const OPTIONAL_METADATA_FIELDS = Object.freeze(['comment', 'journalRef', 'doi', 'venueBadge']);
+
+function decodeXmlEntities(text) {
+    return String(text || '')
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+        .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number.parseInt(dec, 10)))
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, '&');
+}
+
+function rawAtomOptionalFields(responseData) {
+    const entries = [...String(responseData || '').matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
+    if (entries.length !== 1) return { comment: '', journalRef: '', doi: '' };
+    const entry = entries[0][1];
+    const readTag = tag => {
+        const match = entry.match(new RegExp(`<(?:arxiv:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:arxiv:)?${tag}>`, 'i'));
+        return match ? decodeXmlEntities(match[1]).replace(/\s+/g, ' ').trim() : '';
+    };
+    return {
+        comment: readTag('comment'),
+        journalRef: readTag('journal_ref'),
+        doi: readTag('doi')
+    };
+}
+
+function stripOptionalPublicationMetadata(metadata) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return metadata;
+    const copy = { ...metadata };
+    for (const field of OPTIONAL_METADATA_FIELDS) delete copy[field];
+    return copy;
+}
+
 function parseOfficialArxivMetadataResponse(arxivId, responseData, dependencies = {}) {
     if (!/^\d{4}\.\d{4,5}$/.test(String(arxivId || ''))) fail('必须提供不带版本号的 arXiv ID（点号后为四位或五位数字）');
     if (typeof responseData !== 'string') fail('Atom 响应正文必须是字符串');
@@ -101,9 +136,22 @@ function parseOfficialArxivMetadataResponse(arxivId, responseData, dependencies 
         || !Array.isArray(item.authors) || !Array.isArray(item.categories)) {
         fail('Atom 元数据缺少标题、摘要、作者或分类字段，或属于另一篇论文');
     }
+    const cleanOptional = value => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '');
+    const rawOptional = rawAtomOptionalFields(responseData);
+    const comment = cleanOptional(item.comment) || rawOptional.comment;
+    const journalRef = cleanOptional(item.journalRef) || rawOptional.journalRef;
+    const doi = cleanOptional(item.doi) || rawOptional.doi;
+    const extractVenue = dependencies.extractVenueBadgeFromArxivMetadata
+        || fetchPapers.extractVenueBadgeFromArxivMetadata;
+    const venueBadge = cleanOptional(item.venueBadge)
+        || (typeof extractVenue === 'function' ? cleanOptional(extractVenue({ comment, journalRef })) : '');
     const metadata = { arxivId, paper_id: arxivId, title: item.title.trim(), authors: item.authors.slice(),
         abstract: item.abstract.trim(), categories: item.categories.slice(), source: 'arxiv-api', sources: ['arxiv'],
-        fetchedAt: String(item.published || '') };
+        fetchedAt: String(item.published || ''),
+        ...(comment ? { comment } : {}),
+        ...(journalRef ? { journalRef } : {}),
+        ...(doi ? { doi } : {}),
+        ...(venueBadge ? { venueBadge } : {}) };
     if (!metadata.fetchedAt || Number.isNaN(Date.parse(metadata.fetchedAt))) {
         fail('Atom 元数据缺少有效的发表时间');
     }
@@ -162,5 +210,6 @@ async function fetchOfficialArxivMetadata(arxivId, dependencies = {}) {
     return { ...parsed, proof: { ...parsed.proof, observedAt: observedValue } };
 }
 
-module.exports = { CONTRACT, MAX_BYTES, MAX_FETCH_ATTEMPTS, isTransientAtomFetchError, rawAtomEntryIdentity,
+module.exports = { CONTRACT, MAX_BYTES, MAX_FETCH_ATTEMPTS, OPTIONAL_METADATA_FIELDS,
+    stripOptionalPublicationMetadata, isTransientAtomFetchError, rawAtomEntryIdentity,
     parseOfficialArxivMetadataResponse, fetchOfficialArxivMetadata };

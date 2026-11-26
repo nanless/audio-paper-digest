@@ -1,19 +1,19 @@
 # 音频研究工作台 Mac 版：构建与发行
 
-本页说明 1.5.0（构建号 24）的本地准备和联合发行操作。1.5.0 已于 2026-11-26 公开发布，附注标签 `v1.5.0` 指向发行提交 `5b5a8e79`，12 件附件见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0)，签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。上一版 1.4.7 已于 2026-11-23 公开发布（提交 `520e93c3`），见 [1.4.7 记录](workbench-1.4.7-review.md)；1.4.6 已于 2026-11-20 公开发布（提交 `fcf7e05b`），见 [1.4.6 记录](workbench-1.4.6-review.md)；1.4.5 已于 2026-11-12 公开发布（提交 `f9241190`），见 [1.4.5 记录](workbench-1.4.5-review.md)；1.4.4 已于 2026-11-05 公开发布，见 [1.4.4 记录](workbench-1.4.4-review.md)；1.4.3 的发行记录保留在[1.4.3 记录](workbench-1.4.3-review.md#发行状态)。
+本页说明 **1.5.1（构建号 25）（尚未公开发布）** 的本地准备和联合发行操作（预发布改动与验证见 [1.5.1 记录](workbench-1.5.1-review.md)）。最近已公开发行版本为 `1.5.0 / 构建号 24`（2026-11-26 公开发布，附注标签 `v1.5.0` 指向发行提交 `5b5a8e79`，12 件附件见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0)，签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)）。上一版 1.4.7 已于 2026-11-23 公开发布（提交 `520e93c3`），见 [1.4.7 记录](workbench-1.4.7-review.md)；1.4.6 已于 2026-11-20 公开发布（提交 `fcf7e05b`），见 [1.4.6 记录](workbench-1.4.6-review.md)；1.4.5 已于 2026-11-12 公开发布（提交 `f9241190`），见 [1.4.5 记录](workbench-1.4.5-review.md)；1.4.4 已于 2026-11-05 公开发布，见 [1.4.4 记录](workbench-1.4.4-review.md)；1.4.3 的发行记录保留在[1.4.3 记录](workbench-1.4.3-review.md#发行状态)。
 
-## 1.5.0 发行范围
+## 1.5.1 预发布发行目标
 
-1.5.0 在保持既有 `client/details/*` 契约与 Android 权限/依赖零改动的前提下，带来双端原生每日音频播客、品牌更名与站点路径迁移、Wave 12 / Track 13.3 视觉排版及离线检索筛选对齐：
+1.5.1 在保持既有 `client/details/*` 契约与 Android 权限/依赖零改动的前提下，汇总双端 Studio Monograph 视觉升级、桌面详情同步后的站点页与超大图/超多公式阅读修复、官方会议 PDF 白名单扩展及播客并发/缓存加固：
 
-- 双端默认发布站点迁移至 `https://nanless.github.io/audio-research-portal/`，应用更名为“音频研究工作台”（macOS 应用包为 `音频研究工作台.app`，沿用原标识、资料目录与钥匙串），并保留旧路径 `/audio-paper-digest-blog/` 过渡兼容。
-- 双端新增原生每日音频播客播放器（受控四仓库 HTTPS 白名单、SHA-256 与 MP3 魔数校验、150 MiB / 5 期独立 LRU 缓存）、Wave 12 音频速览卡 / Track 13.3 评分审计卡片及 NFKC 多词相关度检索与会议/评分/资源筛选。
-- 两端同时升到 1.5.0（构建号 24）；Android 沿用 1.4.4–1.4.7 的发布签名库，已安装 1.4.4–1.4.7 的用户可以覆盖升级；1.4.3 用户仍需先导出备份、卸载旧版再安装。
+- 双端统一升级 Studio Monograph 暖纸/深黑石板与共振青/工作室铜层次（Android 全组对比度 >= 4.5:1），补齐暗色模式透明图/SVG 衬垫与门户语义卡片，恢复同步桌面详情后的 `about`/`conferences`/`links` 站点页与专题导航入口。
+- 修复双端超 128 图日报与超 32 图会议离线封存、放行 `proceedings.iclr.cc` 与 PMLR `raw.githubusercontent.com/mlresearch` 官方 PDF，并修复 macOS 侧边栏高亮/作者信息/`<del>`+`<ol start>`/toast 遮挡与 Android 聚合图容错/静态 SVG/KaTeX >256/货币 `$`/代理可见性/手机评分徽章。
+- 两端源码同步升至 1.5.1（构建号 25）（尚未公开发布）；Android 正式构建将继续沿用 1.4.4–1.5.0 的发布签名库，已安装 1.4.4–1.5.0 的用户可直接覆盖升级；1.4.3 用户仍需先导出备份、卸载旧版再安装。
 
-| 项目 | 当前发行目标 |
+| 项目 | 当前预发布发行目标 |
 |---|---|
 | 应用 | 音频研究工作台.app（1.5.0 起更名；1.4.x 及之前为旧包名） |
-| 版本、构建号 | 1.5.0、24 |
+| 版本、构建号 | 1.5.1、25（尚未公开发布） |
 | 架构、最低系统 | arm64、macOS 15 |
 | 运行时 | 随包 Node 24.19.0 |
 | 签名 | 本地 ad-hoc 签名，未 Apple 公证 |
@@ -45,17 +45,17 @@ npm --prefix apps/macos run install:app
 apps/macos/release.sh inspect \
   --app 'apps/macos/.build/音频研究工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.5.0
+  --version 1.5.1
 
 apps/macos/release.sh prepare \
   --app 'apps/macos/.build/音频研究工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.5.0 \
-  --output 'apps/macos/.build/releases/1.5.0-arm64' \
+  --version 1.5.1 \
+  --output 'apps/macos/.build/releases/1.5.1-arm64' \
   --dmg
 
 apps/macos/release.sh verify \
-  --prepared 'apps/macos/.build/releases/1.5.0-arm64'
+  --prepared 'apps/macos/.build/releases/1.5.1-arm64'
 ```
 
 `inspect` 只读核对干净工作区、来源、实际输入、版本、签名、架构与最低系统。输出目录必须尚不存在，失败不覆盖原产物。`--dmg` 可省略；要求生成 DMG 时，失败不会自动改交 ZIP。
@@ -64,7 +64,7 @@ apps/macos/release.sh verify \
 
 | 输出 | 核对内容 |
 |---|---|
-| `PaperDigest-macOS-1.5.0-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
+| `PaperDigest-macOS-1.5.1-arm64.zip` | 保留应用结构、资源 fork 与签名；实际解包比对文件、模式、属性及签名 |
 | 同名 DMG | 应用与指向 `/Applications` 的拖入目标；检查映像并只读挂载回读 |
 | `build-info.json` | 版本、架构、时间、来源身份和相对文件摘要，无本机构建路径 |
 | `RELEASE_NOTES.md` | 按真实范围生成的版本、安装、签名与支持说明 |
@@ -86,7 +86,7 @@ Android 正式包按 `prepare → sign → verify` 单独处理，不修改已�
 
 ```sh
 python3 apps/android/release_tools.py --repo "$PWD" prepare \
-  --output "$ANDROID_PREPARED" --version 1.5.0 --code 24
+  --output "$ANDROID_PREPARED" --version 1.5.1 --code 25
 
 python3 apps/android/release_tools.py --repo "$PWD" sign \
   --prepared "$ANDROID_PREPARED" --output "$ANDROID_SIGNED" \
@@ -97,9 +97,9 @@ python3 apps/android/release_tools.py --repo "$PWD" verify \
   --prepared "$ANDROID_SIGNED" --certificate "$ANDROID_CERTIFICATE_SHA256"
 ```
 
-签名入口要求本机终端交互，运行时提示输入签名库密码和密钥密码。1.4.4 重新生成的签名库（1.4.5 至 1.5.0 沿用）的口令取自本机登录钥匙串的 `com.nanless.PaperDigest.android-release-signing.v1` 条目；该条目只保存口令，不保存签名库、私钥或证书。1.4.4 重新生成的签名库在仓库外以 `0600` 权限单独保存，父目录为 `0700`。不要把口令、签名库或私钥写入仓库、Release 或终端历史。
+签名入口要求本机终端交互，运行时提示输入签名库密码和密钥密码。1.4.4 重新生成的签名库（1.4.5 至 1.5.1 沿用）的口令取自本机登录钥匙串的 `com.nanless.PaperDigest.android-release-signing.v1` 条目；该条目只保存口令，不保存签名库、私钥或证书。1.4.4 重新生成的签名库在仓库外以 `0600` 权限单独保存，父目录为 `0700`。不要把口令、签名库或私钥写入仓库、Release 或终端历史。
 
-1.4.4 的证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，公开的 `android-build-info.json` 记录了这一值。1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，两版不同，已安装 1.4.3 的用户不能覆盖升级到 1.4.4 及后续版本：先导出完整备份、卸载旧版，再安装新版、恢复资料并重新配置设备凭据。1.4.4 至 1.4.6 的公开 `android-build-info.json` 记录 `signingOrigin: apksigner-sign`、`buildTools 36.0.0`；1.4.7 与 1.5.0 沿用同一发布签名库，经 `apksigner` 36.0.0 签名（1.4.7 为 APK Signature Scheme v2 + v3，1.5.0 为 v3）并由 `finalize-signed` 封存核验，公开 `android-build-info.json` 记录 `signingOrigin: provided-signed-apk`，签名工具指纹与实际发行包一致；本页只登记这些可复核的来源，签名方案与证书主题以发行机器上 `apksigner verify --print-certs` 的输出为准。Android 来源、版本、四种 ABI、16 KiB 对齐、许可与包体核验必须与 Mac 使用同一发行提交。1.4.5 至 1.5.0 均沿用 1.4.4 的发布签名库与证书，因此已安装 1.4.4–1.4.7 的用户可以直接覆盖升级；1.4.3 用户仍需先导出备份、卸载旧版再安装。
+1.4.4 的证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，公开的 `android-build-info.json` 记录了这一值。1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，两版不同，已安装 1.4.3 的用户不能覆盖升级到 1.4.4 及后续版本：先导出完整备份、卸载旧版，再安装新版、恢复资料并重新配置设备凭据。1.4.4 至 1.4.6 的公开 `android-build-info.json` 记录 `signingOrigin: apksigner-sign`、`buildTools 36.0.0`；1.4.7 与 1.5.0 沿用同一发布签名库，经 `apksigner` 36.0.0 签名（1.4.7 为 APK Signature Scheme v2 + v3，1.5.0 为 v3）并由 `finalize-signed` 封存核验，公开 `android-build-info.json` 记录 `signingOrigin: provided-signed-apk`，签名工具指纹与实际发行包一致；本页只登记这些可复核的来源，签名方案与证书主题以发行机器上 `apksigner verify --print-certs` 的输出为准。Android 来源、版本、四种 ABI、16 KiB 对齐、许可与包体核验必须与 Mac 使用同一发行提交。1.4.5 至 1.5.1 均沿用 1.4.4 的发布签名库与证书，因此已安装 1.4.4–1.5.0 的用户可直接覆盖升级；1.4.3 用户仍需先导出备份、卸载旧版再安装。
 
 ## 5. 私有草稿、下载核验与公开
 

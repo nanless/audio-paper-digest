@@ -230,9 +230,12 @@ function reprojectAnalysis({ analysis, runtime: tagRules, mode = 'reproject', sn
         updatedPaper.analysisManifest.contracts = Object.fromEntries(
             Object.entries(paper.analysisManifest.contracts).map(([key, value]) =>
                 key === tagRecord.contractKey ? ['tagSelectionRecord', tagStageRecordDeclaration()] : [key, value]));
-        updatedPaper.analysisStageCheckpoints = Object.fromEntries(
-            Object.entries(paper.analysisStageCheckpoints).map(([key, value]) =>
-                key === tagRecord.checkpointKey ? ['tagSelection', value] : [key, value]));
+        if (paper.analysisStageCheckpoints && typeof paper.analysisStageCheckpoints === 'object'
+            && !Array.isArray(paper.analysisStageCheckpoints)) {
+            updatedPaper.analysisStageCheckpoints = Object.fromEntries(
+                Object.entries(paper.analysisStageCheckpoints).map(([key, value]) =>
+                    key === tagRecord.checkpointKey ? ['tagSelection', value] : [key, value]));
+        }
     }
     // 注记模式保留缓存的原字段名；显式重新生成时，只把标签校验子对象的字段名改为新名称。
     // 两种模式都只更新该子对象的词表版本和 SHA，保留评分及人工修改。

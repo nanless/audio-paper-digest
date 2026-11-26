@@ -60,14 +60,10 @@ function supported(table) {
 
 function provenanceFor(paperId) {
     const fresh = require('./fresh-analysis-context');
-    const context = fresh.getFreshAnalysisContext();
-    if (!context || !fresh.isDailyFreshSourceScope()) return null;
+    if (!fresh.isSealedFourFileArxivScope()) return null;
     const id = String(paperId || '').replace(/^arxiv:/, '').replace(/v\d+$/, '');
-    const source = fresh.readFreshSource(context.runDir, id, context);
-    const d = source?.freshSourceDescriptor;
-    return d && { ...context.sourceProvenanceHeader, runId: d.runId,
-        sourceSha256: d.sourceSha256, structuredArtifactsSha256: d.structuredArtifactsSha256,
-        sourceManifestSha256: d.sourceManifestSha256, sourceGeneration: d.sourceGeneration };
+    const bundle = fresh.resolveActiveSealedFourFileArxivBundle(id);
+    return bundle?.provenance || null;
 }
 
 function verifiedBytes(filename) {
@@ -148,12 +144,31 @@ function backendInventory(directories) {
 function derive(artifacts, paperId, provenance) {
     const id = String(paperId || '').replace(/^arxiv:/, '').replace(/v\d+$/, '');
     if (!/^\d{4}\.\d{4,5}$/.test(id) || !isFreshSourceProvenance(provenance)
-        || !/^[a-f0-9-]{36}$/i.test(provenance.runId || '') || provenance.sourceGeneration !== 1
+        || !/^[a-f0-9-]{36}$/i.test(provenance.runId || '')
+        || !Number.isSafeInteger(provenance.sourceGeneration) || provenance.sourceGeneration < 1
         || !/^[a-f0-9]{64}$/.test(provenance.sourceManifestSha256 || '')) {
         throw new Error('PDF逐格确认缺少正常日更封存来源身份');
     }
-    const sourceDirectory = path.join(require('../config').FILES.dailyFreshSourceRunsDir,
-        provenance.runId, 'sources', id, 'generation-000001');
+    const genName = `generation-${String(provenance.sourceGeneration).padStart(6, '0')}`;
+    const configFiles = require('../config').FILES;
+    const dailySourceDirectory = path.join(configFiles.dailyFreshSourceRunsDir,
+        provenance.runId, 'sources', id, genName);
+    let sourceDirectory = dailySourceDirectory;
+    if (!fs.existsSync(dailySourceDirectory)) {
+        const fresh = require('./fresh-analysis-context');
+        const activeBundle = fresh.isSealedFourFileArxivScope()
+            ? fresh.resolveActiveSealedFourFileArxivBundle(id) : null;
+        if (activeBundle && activeBundle.kind === 'historical'
+            && activeBundle.generation === provenance.sourceGeneration
+            && activeBundle.sourceManifestSha256 === provenance.sourceManifestSha256) {
+            sourceDirectory = path.join(activeBundle.rootDir, id, genName);
+        } else if (configFiles.freshArxivFetchedSourcesDir) {
+            const historicalCandidate = path.join(configFiles.freshArxivFetchedSourcesDir, id, genName);
+            if (fs.existsSync(historicalCandidate)) {
+                sourceDirectory = historicalCandidate;
+            }
+        }
+    }
     const snapshot = sealedSnapshot(sourceDirectory, provenance);
     const cacheKey = stable({ id, sourceDirectory, provenance, artifacts, snapshot });
     const cached = verifiedCache.get(cacheKey);

@@ -38,6 +38,7 @@ PAPER_ID = re.compile(r'^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$
 WEAK = {'fullText': 'weak', 'tables': 'unavailable', 'formulas': 'unavailable', 'figures': 'unavailable'}
 FULL = {'fullText': 'full', 'tables': 'available', 'formulas': 'available', 'figures': 'available'}
 PDF_VISUAL = {'fullText': 'full', 'tables': 'unavailable', 'formulas': 'unavailable', 'figures': 'available'}
+PDF_VISUAL_TABLES = {'fullText': 'full', 'tables': 'available', 'formulas': 'unavailable', 'figures': 'available'}
 FLAT_TAG_CONTRACT = TAG_FLAT_COMPAT_CONTRACT
 SOURCE_URL_NORMALIZATION_CONTRACT = 'paper-source-repository-url-normalization-v1'
 CONFERENCE_IMAGE_BASE_URL = os.environ.get(
@@ -196,7 +197,7 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
             and plan.get('tableBindings') == [] and plan.get('formulaBindings') == [] \
             and stage.get('figureCount') == 0 and stage.get('tableBindingCount') == 0 \
             and stage.get('formulaBindingCount') == 0 and stage.get('figuresSha256') == stable_sha([])
-    elif capabilities in (FULL, PDF_VISUAL):
+    elif capabilities in (FULL, PDF_VISUAL, PDF_VISUAL_TABLES):
         reader_records_match = common_records_match and isinstance(figures, list) and isinstance(plan.get('figurePlacements'), list) \
             and isinstance(plan.get('tableBindings'), list) and isinstance(plan.get('formulaBindings'), list) \
             and stage.get('figureCount') == len(figures) \
@@ -208,6 +209,8 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
                 isinstance(binding, dict) and binding.get('sourceType') == 'source_quotes'
                 and binding.get('sourceTableOrdinal') is None
                 for binding in plan.get('tableBindings', []))
+        elif capabilities == PDF_VISUAL_TABLES:
+            reader_records_match = reader_records_match and plan.get('formulaBindings') == []
     else:
         reader_records_match = False
     if not reader_records_match:
@@ -4329,14 +4332,23 @@ def render_packet(packet):
             or paper.get('arxivId') is not None or paper.get('paper_id') != paper_id:
         raise ValueError('conference paper must not carry an arXiv alias')
     if assignment.get('status') != 'assigned' or assignment.get('paperId') != paper_id \
-            or capabilities not in (WEAK, FULL, PDF_VISUAL):
+            or capabilities not in (WEAK, FULL, PDF_VISUAL, PDF_VISUAL_TABLES):
         raise ValueError('会议论文的标签记录或来源能力记录无效，标签记录不属于当前论文，或来源能力不在允许范围内。')
     manifest = paper.get('analysisManifest')
     stage = ((manifest or {}).get('stages') or {}).get('apiReaderArticle') or {}
     plan, article, authors, resources = validate_reader_source_records(paper, manifest, stage, capabilities)
+    publisher = load_publish_to_blog()
+    article = publisher._apply_reader_display_fixes(
+        publisher._add_reader_term_heading_spaces(article, plan)
+    )
+    article = publisher._normalize_api_reader_display_artifacts(article)
+    article = publisher._project_bound_source_cell_math_display(article, plan)
+    article = publisher._project_artifact_table_cell_tex_display(article, plan)
+    if r'G.711 μ\mu-law' in article:
+        article = publisher._project_source_quoted_codec_display(article, paper)
     article = normalize_repeated_bold_prefixes(article)
     assets = []
-    if capabilities in (FULL, PDF_VISUAL):
+    if capabilities in (FULL, PDF_VISUAL, PDF_VISUAL_TABLES):
         asset_by_url = {}
         for item in packet.get('figureAssets') or []:
             if not isinstance(item, dict) or not isinstance(item.get('url'), str) \
@@ -4388,6 +4400,9 @@ def render_packet(packet):
             )
             article = re.sub(local_pattern, public_url, article)
             assets.append({'path': path, 'base64': packet_asset['base64']})
+    article = publisher._collapse_mathjax_double_write(article)
+    publisher._assert_rendered_tables_have_no_bare_tex(article)
+    article = publisher._nest_reader_headings(article.strip(), minimum_level=3)
     scoring_stage = ((manifest or {}).get('stages') or {}).get('scoringAudit') or {}
     analysis = paper.get('analysis')
     heading_issue = evaluation_heading_issue(analysis)
@@ -4461,7 +4476,6 @@ def render_packet(packet):
     if any(cid not in concepts for cid in ordered):
         raise ValueError('会议论文的标签记录中，部分主标签或已选概念没有对应的概念记录。')
     labels = [concepts[cid]['preferredLabel']['zh'] for cid in assignment.get('conceptIds', [])]
-    publisher = load_publish_to_blog()
     tag_presentation = render_tag_hierarchy_markdown({
         'registryVersion': assignment['registryVersion'],
         'registrySha256': assignment['registrySha256'],
@@ -4505,15 +4519,24 @@ def render_packet(packet):
     assets.extend({'path': relative.as_posix(), 'base64': base64.b64encode(raw).decode('ascii')}
                   for relative, raw in workbench['sidecars'].items())
     category = f'{conference["id"]} 论文'
+    conference_name = str(conference.get('name') or conference.get('displayName') or conference['id']).strip()
+    raw_doi = str(publication.get('doi') or paper.get('doi') or '').strip()
+    valid_doi = raw_doi if raw_doi and re.fullmatch(r'10\.\d{4,9}/[A-Za-z0-9._;()/:+-]{2,160}', raw_doi) else ''
+    raw_track = str(publication.get('track') or paper.get('conferenceTrack') or paper.get('track') or '').strip()
+    valid_track = raw_track if raw_track and len(raw_track) <= 500 and not re.search(r'[\x00-\x1f\x7f]', raw_track) else ''
     plain_title = publisher.plain_title_for_publish(title)
     plain_one_sentence = publisher.plain_title_for_publish(one_sentence)
     lines = ['---', f'title: {json.dumps(plain_title, ensure_ascii=False)}', f'date: {packet["date"]}', 'draft: false',
              f'description: {json.dumps(plain_one_sentence, ensure_ascii=False)}',
              f'tags: {json.dumps(labels, ensure_ascii=False)}', f'categories: {json.dumps([category], ensure_ascii=False)}',
+             'hiddenInHomeList: true',
              'paper_digest_pipeline_owned: true', 'paper_digest_page_type: paper',
              publisher._researcher_workbench_frontmatter(workbench).rstrip(),
              f'paper_digest_paper_id: {json.dumps(paper_id, ensure_ascii=False)}', 'paper_digest_source_kind: conference',
              f'paper_digest_conference_id: {json.dumps(conference["id"])}',
+             f'paper_digest_conference_name: {json.dumps(conference_name, ensure_ascii=False)}',
+             *([f'paper_digest_doi: {json.dumps(valid_doi, ensure_ascii=False)}',
+                f'paper_digest_conference_doi: {json.dumps(valid_doi, ensure_ascii=False)}'] if valid_doi else []),
              f'paper_digest_conference_record_url: {json.dumps(record_url)}',
              f'paper_digest_conference_pdf_url: {json.dumps(pdf_url)}',
              f'paper_digest_api_reader_contract: "{plan["contract"]}"',
@@ -4544,6 +4567,7 @@ def render_packet(packet):
              *([f'paper_digest_scoring_schema_fingerprint: "{paper["analysisManifest"]["stages"]["scoringAudit"]["scoringSchemaFingerprint"]}"']
                if 'scoringSchemaFingerprint' in paper['analysisManifest']['stages']['scoringAudit'] else []),
              f'paper_digest_tags_contract: "{FLAT_TAG_CONTRACT}"',
+             f'paper_digest_tags_schema_fingerprint: "{protocols.schema_fingerprint(FLAT_TAG_CONTRACT)}"',
              f'paper_digest_tags_selection_contract: "{assignment["selectionContract"]}"',
              f'paper_digest_tags_registry_version: "{assignment["registryVersion"]}"',
              f'paper_digest_tags_registry_sha256: "{assignment["registrySha256"]}"',
@@ -4551,12 +4575,15 @@ def render_packet(packet):
                  {'id': cid, 'facet': concepts[cid]['facet'], 'label': concepts[cid]['preferredLabel']['zh']}
                  for cid in assignment['conceptIds']], ensure_ascii=False, separators=(',', ':'), sort_keys=True),
              f'paper_digest_primary_method: {json.dumps(concepts[assignment["primaryMethodId"]]["preferredLabel"]["zh"], ensure_ascii=False)}',
-             f'paper_digest_conference_structure: {"pdf-visual-quote-evidence-v1" if capabilities == PDF_VISUAL else "replayable-pdf-layout-v1" if capabilities == FULL else "weak-text-only-v1"}', '---', '',
+             f'paper_digest_conference_structure: {"pdf-visual-tables-v2" if capabilities == PDF_VISUAL_TABLES else "pdf-visual-quote-evidence-v1" if capabilities == PDF_VISUAL else "replayable-pdf-layout-v1" if capabilities == FULL else "weak-text-only-v1"}', '---', '',
              f'# 📄 {publisher.markdown_title_for_publish(reader_title)}', '', f'> 英文题目：*{publisher.markdown_title_for_publish(plain_title)}*', '',
-             f'> 会议身份：`{paper_id}`', '',
+             f'> 会议身份：`{paper_id}`',
+             *([f'> DOI：`{valid_doi}`'] if valid_doi else []),
+             *([f'> Track：{publisher.markdown_title_for_publish(valid_track)}'] if valid_track else []), '',
              ('> ⚠️ 来源为会议 PDF 提取的正文；表格、公式和论文图片均不可用，本文不会据此重建这些结构。' if capabilities == WEAK else ''),
              ('> ℹ️ 这是会议论文集中的短篇 PDF；正文较短，但分析使用封存的完整 PDF 文本，未降级为摘要。' if short_proceedings else ''),
              ('> 来源为官方会议 PDF；图片依据原页像素，表格数字依据原文引用。PDF 文字层不视为原始 TeX，未可靠恢复的结构不作推断。' if capabilities == PDF_VISUAL else ''),
+             ('> 来源为官方会议 PDF（v2 增强抽取）；表格结构与图片依据原页抽取与像素核验，PDF 文字层不视为原始 TeX，未可靠恢复的结构不作推断。' if capabilities == PDF_VISUAL_TABLES else ''),
              ('> ✅ 来源为官方会议 PDF；表格和公式来自 PDF 抽取结果，论文图片依据原页像素。PDF 公式以原页区域图片展示，未冒称作者原始 TeX；未成功恢复的结构不作推断。' if capabilities == FULL else ''), '',
              f'> 会议来源：[官方记录]({record_url}) · [官方 PDF]({pdf_url})', '',
              tag_presentation.rstrip(), '', f'评分：{complete_score}', '',
@@ -4565,10 +4592,28 @@ def render_packet(packet):
     implementation_specs_block = publisher._render_api_reader_implementation_specs(paper.get('apiReaderPlan'))
     specs_lines = (['## ⚙️ 关键实现与复现规格', '', implementation_specs_block, '']
                    if implementation_specs_block else [])
+    metadata_lines = [
+        f'- 评分：{complete_score}',
+        f'- 排名：{rank_bucket} | 文档类型：{document_type}',
+        f'- 会议身份：`{paper_id}`',
+        f'- 会议来源：[官方记录]({record_url}) · [官方 PDF]({pdf_url})',
+        *([f'- DOI：`{valid_doi}`'] if valid_doi else []),
+        *([f'- Track：{publisher.markdown_title_for_publish(valid_track)}'] if valid_track else []),
+    ]
+    metadata_details = [
+        '<details>',
+        '<summary>📎 论文与评分元数据</summary>',
+        '',
+        *metadata_lines,
+        '',
+        '</details>',
+        '',
+    ]
     lines.extend(['', '## 📌 核心摘要', '', presentation['summary'], '', '## 🔗 开源与复现资源', '',
                   presentation['resourceBlock'], '', '## 🧭 深度解读', '', article.strip(), '',
                   *formula_lines,
                   *specs_lines,
+                  *metadata_details,
                   '## ⚖️ 评分明细', '', presentation['scoringBlock'], ''])
     lines.extend(['---', '', f'[← 返回 {conference["id"]} 论文汇总]({packet["aggregateUrl"]})', ''])
     lines[-1:] = [hide_arxiv_links(line) for line in lines[-1:]]

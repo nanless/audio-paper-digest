@@ -70,6 +70,7 @@ function formatUsage() {
         '',
         'Options:',
         '  --date YYYY-MM-DD            Target batch date (resolves default input & output paths)',
+        '  --conference-process <uuid>  Aggregate completed analysis.json files from a conference process run (read-only)',
         '  --input <path>               Path to sealed deep-analysis-result.json (read-only)',
         '  --output <path>              Path to write score-calibration-v1.json sidecar',
         '  --rounds <1..6>              Swiss tournament rounds (default: 3, max: 6)',
@@ -102,6 +103,7 @@ function parseStrictCliInt(raw, flagName, min, max) {
 function parseCliArgs(argv = process.argv.slice(2)) {
     const options = {
         date: null,
+        conferenceProcess: null,
         input: null,
         output: null,
         rounds: DEFAULT_SWISS_ROUNDS,
@@ -164,6 +166,11 @@ function parseCliArgs(argv = process.argv.slice(2)) {
             i += 1;
         } else if (arg.startsWith('--date=')) {
             options.date = requireEqualsValue(arg, '--date=');
+        } else if (arg === '--conference-process') {
+            options.conferenceProcess = requireValue(arg, i);
+            i += 1;
+        } else if (arg.startsWith('--conference-process=')) {
+            options.conferenceProcess = requireEqualsValue(arg, '--conference-process=');
         } else if (arg === '--input') {
             options.input = requireValue(arg, i);
             i += 1;
@@ -228,6 +235,16 @@ function parseCliArgs(argv = process.argv.slice(2)) {
     if (options.date !== null && !isValidCalendarDate(options.date)) {
         throw new Error(`--date must be a valid calendar date YYYY-MM-DD, received: ${options.date}`);
     }
+    if (options.conferenceProcess !== null) {
+        const trimmed = options.conferenceProcess.trim().toLowerCase();
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(trimmed)) {
+            throw new Error(`--conference-process must be a valid UUID v4, received: ${options.conferenceProcess}`);
+        }
+        options.conferenceProcess = trimmed;
+        if (options.input || options.date) {
+            throw new Error('--conference-process cannot be combined with --input or --date');
+        }
+    }
     options.rounds = validateSwissRounds(options.rounds);
     options.maxDelta = validateMaxDelta(options.maxDelta);
     options.priorWeight = validatePriorWeight(options.priorWeight);
@@ -287,9 +304,85 @@ function resolveInputPath(options, paths = {}) {
     return path.resolve(currentPath);
 }
 
-function resolveDefaultOutputPath(batchDate) {
+function resolveDefaultOutputPath(batchDate, { conferenceProcessId = null, dataDir = Config.DATA_DIR } = {}) {
+    if (conferenceProcessId) {
+        return path.join(dataDir, 'runtime', 'score-calibrations', 'conference', conferenceProcessId, 'score-calibration-v1.json');
+    }
     const safeBucket = isValidCalendarDate(batchDate) ? batchDate : 'undated';
-    return path.join(Config.DATA_DIR, 'runtime', 'score-calibrations', safeBucket, 'score-calibration-v1.json');
+    return path.join(dataDir, 'runtime', 'score-calibrations', safeBucket, 'score-calibration-v1.json');
+}
+
+function readConferenceProcessBatch(processId, paths = {}) {
+    const processRoot = path.resolve(paths.conferenceProcessDir || Config.FILES.conferenceProcessDir);
+    const analysisRoot = path.resolve(paths.conferenceAnalysisDir || Config.FILES.conferenceAnalysisDir);
+    const stateFile = path.join(processRoot, processId, 'state.json');
+    if (!fs.existsSync(stateFile)) {
+        throw new Error(`Conference process state file not found: ${stateFile}`);
+    }
+    const stateBytes = fs.readFileSync(stateFile);
+    const stateSha256 = sha256Hex(stateBytes);
+    const state = JSON.parse(stateBytes.toString('utf8'));
+    if (!state || typeof state !== 'object' || !state.items || typeof state.items !== 'object' || Array.isArray(state.items)) {
+        throw new Error(`Conference process state file has invalid items map: ${stateFile}`);
+    }
+    const papers = [];
+    const constituentFiles = [];
+    const paperIds = Object.keys(state.items).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    for (const paperId of paperIds) {
+        const item = state.items[paperId];
+        if (!item || item.status !== 'complete' || typeof item.analysisRunId !== 'string' || !item.analysisRunId.trim()) {
+            continue;
+        }
+        const runId = item.analysisRunId.trim();
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)) {
+            continue;
+        }
+        const analysisFile = path.join(analysisRoot, runId, 'analysis.json');
+        if (!fs.existsSync(analysisFile)) {
+            throw new Error(`Completed conference paper ${paperId} is missing analysis file: ${analysisFile}`);
+        }
+        const rawBytes = fs.readFileSync(analysisFile);
+        const fileSha256 = sha256Hex(rawBytes);
+        const parsedAnalysis = JSON.parse(rawBytes.toString('utf8'));
+        if (parsedAnalysis?.status !== 'complete' || !Array.isArray(parsedAnalysis.papers) || !parsedAnalysis.papers.length) {
+            continue;
+        }
+        const paper = parsedAnalysis.papers[0];
+        papers.push(paper);
+        constituentFiles.push({
+            paperId,
+            analysisRunId: runId,
+            analysisFileSha256: fileSha256
+        });
+    }
+    if (!papers.length) {
+        throw new Error(`Conference process ${processId} contains zero completed analysis.json papers`);
+    }
+    const conferenceId = typeof state.authority?.conferenceId === 'string' ? state.authority.conferenceId : null;
+    const completedDates = papers
+        .map(p => (typeof p?.analyzedAt === 'string' ? p.analyzedAt.slice(0, 10) : null))
+        .filter(d => d && isValidCalendarDate(d))
+        .sort();
+    const batchDate = completedDates.at(-1)
+        || (typeof state.updatedAt === 'string' && isValidCalendarDate(state.updatedAt.slice(0, 10)) ? state.updatedAt.slice(0, 10) : null);
+    const sourceFileSha256 = stableJsonSha256({
+        processId,
+        conferenceId,
+        stateSha256,
+        constituentFiles
+    });
+    return {
+        inputPath: stateFile,
+        sourceFileSha256,
+        constituentFiles,
+        parsed: {
+            batchDate,
+            batchId: conferenceId || processId,
+            conferenceId,
+            processId,
+            papers
+        }
+    };
 }
 
 function resolveCanonicalPathWithMissingTail(targetPath) {
@@ -720,11 +813,23 @@ async function runCalibrationCli(argv = process.argv.slice(2), deps = {}) {
         return { help: true, usage: formatUsage(), sidecar: null, outputPath: null };
     }
 
-    const inputPath = resolveInputPath(options, deps.paths);
-    const { parsed: rawBatch, sourceFileSha256 } = readSealedBatchFile(inputPath);
+    let inputPath;
+    let rawBatch;
+    let sourceFileSha256;
+    if (options.conferenceProcess) {
+        const loaded = readConferenceProcessBatch(options.conferenceProcess, deps.paths);
+        inputPath = loaded.inputPath;
+        rawBatch = loaded.parsed;
+        sourceFileSha256 = loaded.sourceFileSha256;
+    } else {
+        inputPath = resolveInputPath(options, deps.paths);
+        ({ parsed: rawBatch, sourceFileSha256 } = readSealedBatchFile(inputPath));
+    }
     const batchDate = options.date || (typeof rawBatch?.batchDate === 'string' ? rawBatch.batchDate : null);
     const batchId = typeof rawBatch?.batchId === 'string' ? rawBatch.batchId : null;
-    const seed = options.seed || (batchDate ? `${DEFAULT_SEED}:${batchDate}` : DEFAULT_SEED);
+    const seed = options.seed || (options.conferenceProcess
+        ? `${DEFAULT_SEED}:conference:${options.conferenceProcess}`
+        : (batchDate ? `${DEFAULT_SEED}:${batchDate}` : DEFAULT_SEED));
 
     const { papers, excludedPapers } = extractCalibratablePapers(rawBatch);
 
@@ -782,7 +887,10 @@ async function runCalibrationCli(argv = process.argv.slice(2), deps = {}) {
     }
 
     // Validate output path BEFORE replay or any paid --live LLM requests!
-    const targetOutput = options.output || resolveDefaultOutputPath(batchDate);
+    const targetOutput = options.output || resolveDefaultOutputPath(batchDate, {
+        conferenceProcessId: options.conferenceProcess,
+        dataDir: deps.paths?.dataDir || Config.DATA_DIR
+    });
     const outputPath = assertSafeOutputPath(inputPath, targetOutput);
 
     // 2. REPLAY MODE: strictly offline deterministic recomputation, 0 LLM requests!
@@ -894,6 +1002,7 @@ module.exports = {
     parseCliArgs,
     resolveInputPath,
     resolveDefaultOutputPath,
+    readConferenceProcessBatch,
     assertSafeOutputPath,
     readSealedBatchFile,
     loadReplayComparisons,

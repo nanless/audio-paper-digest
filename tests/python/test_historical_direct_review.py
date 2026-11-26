@@ -376,6 +376,90 @@ class HistoricalDirectReviewTests(unittest.TestCase):
                 MODULE.main(['--request', '/tmp/r.json', '--output', '/tmp/o.json',
                              '--checkpoint-dir', '/tmp/cp', '--concurrency', '17'])
 
+    def test_text_review_sets_publish_text_stage_low_reasoning_and_prompt_cache_key(self):
+        restore_environment_after(self)
+        import llm_usage
+        import publish_common
+
+        observed_text_contexts = []
+        observed_image_contexts = []
+        observed_text_kwargs = []
+        observed_image_kwargs = []
+        captured_payloads = []
+
+        class RecordingPublisher(FakePublisher):
+            @staticmethod
+            def split_review_content(content, _limit):
+                return [content]
+
+            @staticmethod
+            def parse_markdown_images(_content):
+                return [{'alt': 'Figure 1', 'url': 'https://arxiv.org/html/2601.00001/f1.png'}]
+
+            def _llm_review_post_chunk(self, content, _title, **kwargs):
+                ctx = dict(llm_usage._SCOPE.get() or {})
+                observed_text_contexts.append(ctx)
+                observed_text_kwargs.append(dict(kwargs))
+                stage = ctx.get('stage')
+                model = 'muse-spark-1.3-contributor'
+                # 验证同一 stage='publish.text' 上下文在真实 Responses 载荷构造中产出 low 推理与非空 prompt_cache_key
+                cache_key = f"pd:{stage}:{model[:24]}" if stage else None
+                payload = publish_common.build_publish_payload(
+                    'openai_responses', model, 'review prompt', 4000, 0.1,
+                    stage=stage, prompt_cache_key=cache_key,
+                )
+                captured_payloads.append(payload)
+                return True, [], content
+
+            def multimodal_review_images(self, _content, _title, **kwargs):
+                ctx = dict(llm_usage._SCOPE.get() or {})
+                observed_image_contexts.append(ctx)
+                observed_image_kwargs.append(dict(kwargs))
+                return True, []
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            content = '---\ntitle: "Tiered Review"\n---\n\n![Figure 1](https://arxiv.org/html/2601.00001/f1.png)\n'
+            (root / 'paper.md').write_text(content, encoding='utf-8')
+            page_sha = MODULE.hashlib.sha256(content.encode()).hexdigest()
+            page = {
+                'path': 'paper.md',
+                'sha256': page_sha,
+                'paperId': 'arxiv:2601.00001',
+                'sourceFigureNote': '图号归属提示',
+                'paper': {'arxivId': '2601.00001'},
+                'publicationFigureContexts': {'https://arxiv.org/html/2601.00001/f1.png': {'kind': 'official'}},
+                'verifiedPaperImages': {'https://arxiv.org/html/2601.00001/f1.png': 'a' * 64},
+            }
+            with mock.patch.dict(os.environ, {
+                'PD_TIERED_REASONING_EFFORT': '1',
+                'PD_OPENAI_RESPONSES_REASONING_EFFORT': 'xhigh',
+                'PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY': '1',
+            }, clear=False):
+                res = MODULE.review_page(RecordingPublisher(), page, root, root / 'cp', {})
+            self.assertTrue(res['passed'])
+            self.assertEqual(len(observed_text_contexts), 1)
+            self.assertEqual(observed_text_contexts[0]['stage'], 'publish.text')
+            self.assertEqual(observed_text_contexts[0]['paperId'], 'arxiv:2601.00001')
+            self.assertEqual(observed_text_kwargs[0].get('source_figure_note'), '图号归属提示')
+            self.assertEqual(captured_payloads[0]['reasoning'], {'effort': 'low'})
+            self.assertTrue(captured_payloads[0].get('prompt_cache_key'))
+            self.assertIn('publish.text', captured_payloads[0]['prompt_cache_key'])
+
+            self.assertEqual(len(observed_image_contexts), 1)
+            self.assertEqual(observed_image_contexts[0]['stage'], 'publish.figure')
+            self.assertEqual(observed_image_contexts[0]['paperId'], 'arxiv:2601.00001')
+            self.assertEqual(observed_image_kwargs[0].get('image_concurrency'), 2)
+            self.assertEqual(observed_image_kwargs[0].get('paper'), {'arxivId': '2601.00001'})
+            self.assertEqual(
+                observed_image_kwargs[0].get('publication_figure_contexts'),
+                {'https://arxiv.org/html/2601.00001/f1.png': {'kind': 'official'}},
+            )
+            self.assertEqual(
+                observed_image_kwargs[0].get('verified_paper_images'),
+                {'https://arxiv.org/html/2601.00001/f1.png': 'a' * 64},
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

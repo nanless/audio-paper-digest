@@ -1,8 +1,6 @@
 # 全历史博客重写流程
 
-> **当前状态（2026-11-11）：历史博客线已搁置。** 用户决定暂停全历史重写、发布与维护，重启时间未定。本页的命令与实现保留；重启前先处理已知卡点：冻结清单的 4,185 个论文页中有 1,277 页没有 arXiv 线索，完整重写要求未覆盖页为零，现有资料不足以让全量计划落盘；可先按来源重新归类这些页面，或改用样本范围。日更线不受影响。
-
-本页说明如何从论文原文重新分析全部历史论文，生成单篇页、每日汇总、会议汇总和会议任务页。当前流程称为 `direct-local-first`：会议论文使用通过核验的本地论文信息和 PDF，arXiv 论文在新一轮来源获取时重新保存官方文本和 PDF。正常任务不以旧对照表（`npm run history:crosswalk`）的身份确认或抽样试运行通过为前提。
+历史博客更新线与日更、官方会议三条流程保持齐平维护。本页说明如何审计过时历史文章，以及如何从论文原文重新分析全部或选定范围的历史论文，生成单篇页、每日汇总、会议汇总和会议任务页。当前流程称为 `direct-local-first`：会议论文使用通过核验的本地论文信息和 PDF，arXiv 论文在新一轮来源获取时重新保存官方文本和 PDF。正常任务不以旧对照表（`npm run history:crosswalk`）的身份确认或抽样试运行通过为前提。
 
 全历史任务在当前 `audio-research-workbench` 工作区执行，先按 [AGENTS.md](../AGENTS.md) 核对 `daily` 角色与 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`。旧历史工作区已废弃，不再读取或迁移其中的运行资料。当前进度保存在本项目 `data/runtime/`。执行者须安排日更、会议、历史发布错峰；历史发布前同步代码和博客的最新远端基线，重新生成对应凭证。
 
@@ -18,6 +16,40 @@
 ```
 
 同一论文只进入一个分析任务，再为它对应的全部冻结历史页面生成新稿。以下绝对路径、UUID、日期和文件名须替换为真实任务输出；命令存在不代表历史现场已经完成。实际发布见[历史重写结果的审查与发布](history-direct-publication.md)。
+
+## 过时历史博客批量重写指南
+
+日常维护中，如果想把早期尚未采用 `structured-pipeline-v5`、`type-aware-v2`、400 项九维词表或 Studio Monograph 2.0 汇总结构的旧博客按日期或范围升级到与日更完全一致的标准，可按下面四步执行：
+
+1. **只读扫描过时页面并分组**：先运行 `npm run history:outdated` 审计博客仓库 `content/posts/`，不修改任何文件。支持按日期、范围和完整日批次过滤：
+
+```bash
+# 查看指定日期区间内所有完整日批次的过时单篇与旧汇总
+npm run history:outdated -- --from-date 2026-09-01 --to-date 2026-09-30 --scope daily --complete-days-only
+
+# 输出机器可读 JSON（含每页过时原因：missing-structured-pipeline-v5 / missing-type-aware-v2 /
+# missing-reader-sections / outdated-tag-registry / legacy-short-summary 及可执行命令清单）
+npm run history:outdated -- --scope all --json
+```
+
+2. **纯 arXiv 范围无需会议本地清单**：仅重写日更 arXiv 历史文章时，在 `history:inputs` 传入 `--arxiv-only` 即可直接从冻结清单建立纯 arXiv 来源目录，不再要求准备无关的 `--conference-manifest`：
+
+```bash
+npm run history:inventory -- --apply --ledger scoped-inv.json --receipt scoped-inv.receipt.json
+npm run history:inputs -- --apply --arxiv-only \
+  --inventory /absolute/path/scoped-inv.json \
+  --blog-root /absolute/path/audio-research-portal \
+  --name scoped-arxiv.json
+npm run history:plan -- --apply --catalog /absolute/path/scoped-arxiv.json --inventory /absolute/path/scoped-inv.json
+```
+
+3. **准备来源、分析暂存与日期批次汇总同步**：按审计输出的 `--paper-ids` 依次执行 `history:sources`、`history:metadata`、`history:run` 与 `history:aggregate`。当选定的 `--paper-ids` 恰好完整覆盖某个历史日期的全部论文、且已按同源生成该日汇总时，后续 `history:publication` 会自动把该日全部单篇与 `YYYY-MM-DD.md` 汇总页原子同步写入同一次提交，避免单篇已升级而当日汇总仍是旧版。
+
+4. **遵循不生图政策发布并做线上验收**：历史发布按 2026-11-02 起持续有效的不生图要求支持 `--waive-visuals`（无需手工拼写视觉豁免文件，见[历史发布](history-direct-publication.md)）；推送后直接用 `verify:web` 验证部署和全部目标网页：
+
+```bash
+npm run verify:web -- --historical-publication-id <UUID> --wait
+```
 
 ## 正常执行路线
 
@@ -109,9 +141,13 @@ arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。�
 
 ## 分析、图片和发布用元数据
 
-历史更新与日更共用 `analysis-engine.js` 和 `deep-analyzer.js`，采用同一当前提示词登记表、正式分析、八维评分、标签、`beginner-researcher` Reader 与来源核验。新模型请求使用当前登记版本；已保存阶段继续按其原版本、内容 SHA、来源与费用恢复，不把旧调用冒充新版本。
+历史更新与日更共用 `analysis-engine.js` 和 `deep-analyzer.js`，采用同一当前提示词登记表、正式分析（含 `700–1,400` 汉字全景导读 `核心摘要`）、`type-aware-v2` 八维评分、400 项九维标签、`structured-pipeline-v5` 契约的 `beginner-researcher` Reader 与来源核验，并同步启用按阶段分级推理（`PD_TIERED_REASONING_EFFORT=1`）与稳定 `prompt_cache_key`。新模型请求使用当前登记版本；已保存阶段继续按其原版本、内容 SHA、来源与费用恢复，不把旧调用冒充新版本。
 
-页面渲染通过 `paper-page-staging.js` 使用同一日更发布器；真实会议身份的作者、资源、摘要和评分展示通过 `paper_reader_presentation.py` 复用，保留历史 URL、论文身份与特殊来源披露。渲染实现 SHA 根据实际本地依赖闭包计算，包含共享 Python/Node 校验器；共享修复升级后旧暂存页重新生成。
+在来源证据层面，历史流程现已与日更完全齐平：
+
+- **作者解析 v3**：arXiv 历史四文件来源与本地会议 PDF 来源均接入 `pdfPage1Authors` 首页几何作者机构解析与 `reader-author-parser.js` v3，避免早期页面出现作者或机构空白。
+- **四文件封存 PDF 证据模块全量接入**：`fresh-analysis-context.js` 与 `reader-pdf-cell-evidence.js`、`reader-sealed-figure-alias.js`、`reader-sealed-pdf-column-units.js`、`reader-sealed-pdf-quote-evidence.js`、`reader-sealed-pdf-table-evidence.js` 同步支持历史封存四文件根目录，保持与日更一致的原表单元格、列单位、引文与图号冷核能力。
+- **Studio Monograph 2.0 与扩展元数据**：页面渲染通过 `paper-page-staging.js` 和 `historical-page-render.py` 对齐日更与会议的 Studio Monograph 2.0 单篇及汇总排版（含 9 步 Reader 显示归一化与 `_nest_reader_headings` 层级嵌套），并透传 `venueBadge`、`doi`、`comment` 与 `journalRef` 等扩展元数据；真实会议身份的作者、资源、摘要和评分展示通过 `paper_reader_presentation.py` 复用，保留历史 URL、论文身份与特殊来源披露。渲染实现 SHA 根据实际本地依赖闭包计算，包含共享 Python/Node 校验器；共享修复升级后旧暂存页重新生成。
 
 标签使用当前400项九维词表，单篇与汇总成员均通过 `tag_presentation.py` 呈现所选概念及祖先路径；总目录保留零计数方向，文章不展示空分面或兄弟项，不把祖先写成直接标签。旧阶段只读核验原SHA和原选择，不能为显示升级重签付费记录。新的页面暂存与汇总生成完成后，还须走历史独立审查、发布及上线核验，不能只更新站点目录就宣告旧文章已切换；站点版本目录和本批快照的发布检查见[统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
 

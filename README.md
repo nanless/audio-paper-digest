@@ -23,7 +23,7 @@
 语音、音乐、声学与 Audio LLM 方向每天在 arXiv 和顶会涌出几十篇新作——只扫摘要容易漏掉关键约束，逐篇啃原 PDF 又往往耗掉整个上午。**音频研究工作台（Audio Research Workbench）**把日常追踪拆成三个边界清晰的开源组件，让每一处数字、公式与论文原图都可回溯到封存原文：
 
 - **公开知识门户（[音频研究门户 / Audio Research Portal](https://nanless.github.io/audio-research-portal/)）**：采用 **Studio Monograph 2.0** 排版，归档 **9,300+ 篇中文精读（覆盖 8,650+ 篇已核验论文）**、每日研究汇总、19 届顶会专题与 8 大音频 SOTA 方向榜单，支持 `⌘K` 全文检索、原图缩放、表格排序与 Obsidian / BibTeX / RIS 一键导出。
-- **双端原生工作台（macOS & Android v1.5.0）**：只读订阅门户静态快照与每日音频播客，提供导读与原 PDF 对照、离线多词检索、按需自配模型追问、Zotero 归档以及坚果云一键双向同步 WebDAV。
+- **双端原生工作台（macOS & Android 1.5.x）**：只读订阅门户静态快照与每日音频播客，提供导读与原 PDF 对照、离线多词检索、按需自配模型追问、Zotero 归档以及坚果云一键双向同步 WebDAV。
 - **内容生产引擎（本仓库）**：默认通过语言模型服务（LLM/API）完成抓取去重、筛选、四文件来源封存、深度分析、八维评分、九维分类与面向初学研究者的中文长文（代码中称 **Reader**），全部通过三层审查门禁后才推送发布。
 
 ---
@@ -68,15 +68,15 @@
 
 ---
 
-## 三层架构与 1.5.0 双端原生工作台
+## 三层架构与 1.5.x 双端原生工作台
 
 ![音频研究工作台三层隔离架构：内容生产引擎、Studio Monograph 2.0 门户与双端原生工作台](docs/images/workbench-architecture.zh.svg)
 
 内容生产、公开门户与个人研究彼此隔离：本仓库产出的内容经三层审查按凭证推送至 Hugo 门户（承载 `client/details/*` 内容寻址快照与播客 Feed）；Mac 与 Android 客户端仅只读消费这些静态资产，打开任何论文都不会触发生产模型调用。
 
-![Mac 与 Android 1.5.0 工作台公开订阅与个人同步边界](docs/images/client-experience.zh.svg)
+![Mac 与 Android 1.5.x 工作台公开订阅与个人同步边界](docs/images/client-experience.zh.svg)
 
-| 能力维度 | 音频研究门户（Web） | macOS 工作台（1.5.0） | Android 工作台（1.5.0） |
+| 能力维度 | 音频研究门户（Web） | macOS 工作台（1.5.x） | Android 工作台（1.5.x） |
 |---|:---:|:---:|:---:|
 | 9,300+ 篇精读、400 项九维分类与评分/开源筛选 | 浏览器即开 + `⌘K` 面板 | 离线快照 + NFKC 多词检索 | 离线快照 + 后台预热 |
 | 中文精读与原始 PDF 对照 / 物理页锚定 | 官方原文直达 | AppKit + PDFKit 双栏 | 手机单栏 / 平板并排 |
@@ -86,8 +86,8 @@
 | Zotero 文献归档（书目 + 导读 + PDF + 笔记） | BibTeX / RIS / Obsidian | 本机 Zotero Desktop API | 官方 Zotero Web API v3 |
 | 坚果云 WebDAV 同步与全空间快照备份 | — | 一键双向同步 + 无损合并 / 独立快照 | 一键双向同步 + 无损合并 / 独立快照 |
 
-- **当前公开发行**：Mac 与 Android 均为 **1.5.0（构建号 24）**（2026-11-26 公开发布，来源提交 `5b5a8e79`），新增原生每日音频播客播放器（`150 MiB / 5 期` LRU 缓存，不进备份与同步）、Wave 12 / Track 13.3 视觉排版、NFKC 多词离线检索与筛选对齐，以及“音频研究工作台 / 音频研究门户”品牌迁移（保留 `/audio-paper-digest-blog/` 过渡兼容）。下载与校验见 [GitHub Release v1.5.0](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0)、[1.5.0 发版记录](docs/workbench-1.5.0-review.md) 与 [客户端发行核验](docs/client-release-verification.md)。
-- **升级提示**：macOS 从 1.4.x 升级后应用包更名为 `音频研究工作台.app`，继续共用 `com.nanless.PaperDigest` 标识、原资料目录与钥匙串（本地 ad-hoc 签名，需 macOS 15+ Apple Silicon），安装后退出并移除旧包即可。Android 沿用 1.4.4+ 签名证书，1.4.4–1.4.7 可直接覆盖升级，1.4.3 须先备份并卸载再安装。
+- **源码与公开发行版本**：当前源码版本为 **1.5.1（构建号 25）（尚未公开发布）**（详见 [1.5.1 预发布记录](docs/workbench-1.5.1-review.md)）；最近已公开发行版本为 **1.5.0 / 构建号 24**（2026-11-26 公开发布，来源提交 `5b5a8e79`），下载与校验见 [GitHub Release v1.5.0](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0)、[1.5.0 发版记录](docs/workbench-1.5.0-review.md) 与 [客户端发行核验](docs/client-release-verification.md)。
+- **升级提示**：macOS 从 1.4.x 升级后应用包更名为 `音频研究工作台.app`，继续共用 `com.nanless.PaperDigest` 标识、原资料目录与钥匙串（本地 ad-hoc 签名，需 macOS 15+ Apple Silicon），安装后退出并移除旧包即可。Android 沿用 1.4.4+ 签名证书，1.4.4–1.5.0 可直接覆盖升级，1.4.3 须先备份并卸载再安装。
 
 ---
 
@@ -98,13 +98,13 @@
 
 ![音频研究日报端到端流水线：边界补抓、筛选、四文件封存、分析写作、三层审查与上线核验](docs/images/daily-digest-flow.zh.svg)
 
-内容生产引擎默认使用 **LLM/API 管线**，包含三条独立流程：
+内容生产引擎默认使用 **LLM/API 管线**，三条独立流程全面齐平并持续维护：
 
 | 流程 | 当前状态 | 适用场景与来源边界 | 权威指南 |
 |---|---|---|---|
 | **当天日更** | **持续运行** | 追踪 arXiv 与 HuggingFace 音频新作；同步门户远端仅按已发布页去重，入选后封存官方 HTML 与 PDF 四文件 | [日更步骤](SKILL.md#1-日更) · [补抓边界](docs/daily-fetch-boundary.md) |
-| **官方会议整理** | **暂搁置（2026-11-11 起）** | 梳理 ICML / Interspeech / ICASSP 等官方会议目录与 PDF，实现与测试保持维护 | [会议流程](docs/conference-workflow.md) |
-| **历史博客更新** | **暂搁置（2026-11-11 起）** | 按冻结清单从原论文重写旧文章并严格保留原 URL，实现与测试保持维护 | [历史更新](docs/history-rewrite.md) · [历史发布](docs/history-direct-publication.md) |
+| **官方会议整理** | **持续维护（齐平日更）** | 覆盖 22 个官方提供方（含 v2 扩展与核心音频家族 `2025+` 动态匹配）、默认 v2 PDF 抽取与完整发布验收 | [会议流程](docs/conference-workflow.md) · [新会议接入](docs/conference-workflow.md#新会议全流程接入指南20262027) |
+| **历史博客更新** | **持续维护（齐平日更）** | `history:outdated` 只读审计过时页面，按冻结清单从原论文重写旧文章、原子同步日汇总并严格保留原 URL | [历史更新](docs/history-rewrite.md) · [过时重写](docs/history-rewrite.md#过时历史博客批量重写指南) · [历史发布](docs/history-direct-publication.md) |
 
 四项核心保障控制质量与成本：
 
@@ -153,9 +153,9 @@
 
 | 场景 | 命令与说明 |
 |---|---|
-| **官方会议整理**（暂搁置） | `conference:acquire` → `conference:discover` → 筛选 → `conference:process`；见 [会议流程](docs/conference-workflow.md) |
-| **历史博客原文更新**（暂搁置） | 固定范围后执行 `history:inputs` / `plan` / `sources` / `run` / `aggregate`；见 [历史更新](docs/history-rewrite.md) |
-| **历史成果发布**（暂搁置） | `npm run history:publication -- plan\|generate\|review\|publish\|status`；见 [历史发布](docs/history-direct-publication.md) |
+| **官方会议整理** | `conference:acquire` → `conference:discover` → 筛选 → `conference:process` → `conference:publish:*`；见 [会议流程](docs/conference-workflow.md) |
+| **历史过时审计与重写** | `npm run history:outdated` 审计过时页，再执行 `history:inputs --arxiv-only` / `plan` / `sources` / `run` / `aggregate`；见 [历史更新](docs/history-rewrite.md) |
+| **历史成果发布与验收** | `npm run history:publication -- plan\|generate\|review\|publish\|status`（支持 `--waive-visuals`），随后 `verify:web -- --historical-publication-id UUID`；见 [历史发布](docs/history-direct-publication.md) |
 | **已发布日批仅更新呈现** | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`，随后 `blog:review` → `blog:push` |
 | **早批次抓取见证登记** | `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD` |
 | **影响面预检与误报核对** | `npm run impact -- --git`、`npm run review:overrides -- --date DATE --file F.json` |

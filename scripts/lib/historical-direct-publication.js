@@ -42,6 +42,8 @@ const CLIENT_WORKBENCH_ARTIFACT_RE = /^static\/client\/papers\/\d{4}-\d{2}-\d{2}
 const MAX_ARTIFACT_BYTES = 128 * 1024 * 1024;
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
 const HISTORICAL_VERSION_NOTICE_MARKER = '来源版本说明（当前稿不可用）';
+const STANDING_NO_VISUALS_POLICY_CREATED_AT = '2026-11-02T00:00:00.000Z';
+const STANDING_NO_VISUALS_POLICY_REASON = '依据用户 2026-11-02 持续授权政策（以后均不再生图），本历史发布事务自动豁免论文长图与汇总封面生成；论文原图获取、核验、展示与审查照常执行。';
 
 class HistoricalDirectPublicationError extends Error {
     constructor(message) {
@@ -230,10 +232,26 @@ function historicalSourceVersionProof(item, active, manifest) {
     return { sourceVersion: clone(normalized), sourceVersionIdentitySha256: normalized.identitySha256,
         sourceManifestSha256: active.source.sourceManifestSha256 };
 }
-function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDispositionFile, selectedPaperIds = [],
+function buildStandingWaiveVisualDisposition({ plan, scope = 'full-history-publication' } = {}) {
+    return buildVisualDisposition({
+        plan,
+        mode: 'waived',
+        scope,
+        requestedBy: 'user',
+        reason: STANDING_NO_VISUALS_POLICY_REASON,
+        createdAt: STANDING_NO_VISUALS_POLICY_CREATED_AT
+    });
+}
+
+function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDispositionFile = null,
+    waiveVisuals = false, selectedPaperIds = [],
     stagingRoot, executionRoot, aggregateRoot, freshArxivSourceRoot = null,
     publicationMetadataRoot = null, readPublicationMetadata = null } = {}) {
-    for (const [label, filename] of Object.entries({ planFile, registryFile, projectionFile, visualDispositionFile })) {
+    if (waiveVisuals && visualDispositionFile) {
+        fail('--waive-visuals 不能与 --visual-disposition 同时指定');
+    }
+    for (const [label, filename] of Object.entries({ planFile, registryFile, projectionFile,
+        ...(waiveVisuals ? {} : { visualDispositionFile }) })) {
         if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} 必须是绝对文件路径`);
     }
     const planLoaded = strictJsonFile(planFile, '直接重写计划'); const plan = planApi.normalizePlan(planLoaded.value);
@@ -256,8 +274,18 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
         || projection.conferenceTaskCoverage?.publicationReady !== true)) {
         fail('汇总页面对应记录尚未满足完整页面发布条件');
     }
-    const visualLoaded = strictJsonFile(visualDispositionFile, '图片任务处理记录');
-    const visualDisposition = normalizeVisualDisposition(visualLoaded.value, plan);
+    let visualLoaded;
+    let visualDisposition;
+    if (waiveVisuals) {
+        visualDisposition = buildStandingWaiveVisualDisposition({
+            plan,
+            scope: sample ? 'selected-sample-publication' : 'full-history-publication'
+        });
+        visualLoaded = { fileSha256: sha256(prettyBytes(visualDisposition)), value: visualDisposition };
+    } else {
+        visualLoaded = strictJsonFile(visualDispositionFile, '图片任务处理记录');
+        visualDisposition = normalizeVisualDisposition(visualLoaded.value, plan);
+    }
     if (visualDisposition.scope !== (sample ? 'selected-sample-publication' : 'full-history-publication')) {
         fail('图片任务处理范围与发布范围不同');
     }
@@ -285,26 +313,46 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
     }
     stageProofs.sort((a, b) => a.paperId.localeCompare(b.paperId));
     const aggregateProofs = [];
+    const absorbExpectedAggregate = (expected, stored) => {
+        const loaded = stored.get(aggregateKey(expected));
+        if (!loaded || stableHash(loaded.value) !== stableHash(expected)) fail(`${aggregateKey(expected)} 不是按当前来源记录重新生成的汇总结果`);
+        const sourcePath = path.join(aggregateRoot, loaded.runId, expected.outputPage.stagedPath);
+        if (readRegular(sourcePath).sha256 !== expected.outputPage.contentSha256) fail(`${aggregateKey(expected)} 的暂存页面内容已变化`);
+        const producer = { kind: 'direct-aggregate', scope: expected.scope, key: expected.key,
+            runId: loaded.runId, manifestSha256: expected.manifestSha256 };
+        absorbArtifact(byPath, { path: expected.outputPage.path, sha256: expected.outputPage.contentSha256,
+            baselineSha256: expected.outputPage.contentSha256 === expected.outputPage.previousContentSha256
+                ? expected.outputPage.contentSha256 : expected.outputPage.previousContentSha256,
+            producers: [producer], source: { kind: 'direct-aggregate-page', runId: loaded.runId,
+                stagedPath: expected.outputPage.stagedPath } });
+        aggregateProofs.push({ scope: expected.scope, key: expected.key, runId: loaded.runId,
+            manifestSha256: expected.manifestSha256, fileSha256: loaded.fileSha256,
+            pageSha256: expected.outputPage.contentSha256 });
+    };
     if (!sample) {
         const inputs = aggregateApi.loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot,
             freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
         const rebuilt = aggregateApi.buildDirectAggregates({ inputs }); const stored = scanDirectAggregates(aggregateRoot, plan);
         if (stored.size !== rebuilt.length) fail(`直接重写汇总记录不完整：${stored.size}/${rebuilt.length}`);
-        for (const expected of rebuilt) {
-            const loaded = stored.get(aggregateKey(expected));
-            if (!loaded || stableHash(loaded.value) !== stableHash(expected)) fail(`${aggregateKey(expected)} 不是按当前来源记录重新生成的汇总结果`);
-            const sourcePath = path.join(aggregateRoot, loaded.runId, expected.outputPage.stagedPath);
-            if (readRegular(sourcePath).sha256 !== expected.outputPage.contentSha256) fail(`${aggregateKey(expected)} 的暂存页面内容已变化`);
-            const producer = { kind: 'direct-aggregate', scope: expected.scope, key: expected.key,
-                runId: loaded.runId, manifestSha256: expected.manifestSha256 };
-            absorbArtifact(byPath, { path: expected.outputPage.path, sha256: expected.outputPage.contentSha256,
-                baselineSha256: expected.outputPage.contentSha256 === expected.outputPage.previousContentSha256
-                    ? expected.outputPage.contentSha256 : expected.outputPage.previousContentSha256,
-                producers: [producer], source: { kind: 'direct-aggregate-page', runId: loaded.runId,
-                    stagedPath: expected.outputPage.stagedPath } });
-            aggregateProofs.push({ scope: expected.scope, key: expected.key, runId: loaded.runId,
-                manifestSha256: expected.manifestSha256, fileSha256: loaded.fileSha256,
-                pageSha256: expected.outputPage.contentSha256 });
+        for (const expected of rebuilt) absorbExpectedAggregate(expected, stored);
+    } else if (typeof aggregateRoot === 'string' && path.isAbsolute(aggregateRoot) && fs.existsSync(aggregateRoot)) {
+        // 日期批次汇总同步：当按范围重写恰好完整覆盖某个历史日期的全部论文，
+        // 且对应汇总已在 aggregateRoot 中按同源生成时，原子同步更新单篇和 YYYY-MM-DD.md 汇总页。
+        const completeDailyCohorts = (projection.daily || []).filter(cohort => (
+            Array.isArray(cohort.requiredPaperIds) && cohort.requiredPaperIds.length > 0
+            && cohort.requiredPaperIds.every(paperId => selectedSet.has(paperId))
+        ));
+        if (completeDailyCohorts.length > 0) {
+            const stored = scanDirectAggregates(aggregateRoot, plan);
+            const matchedCohorts = completeDailyCohorts.filter(cohort => stored.has(`daily:${cohort.key}`));
+            if (matchedCohorts.length > 0) {
+                const inputs = aggregateApi.loadDirectAggregateInputs({ planFile, registryFile, projectionFile,
+                    stagingRoot, executionRoot, freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
+                for (const cohort of matchedCohorts) {
+                    const [expected] = aggregateApi.buildDirectAggregates({ inputs, daily: cohort.key });
+                    absorbExpectedAggregate(expected, stored);
+                }
+            }
         }
     }
     aggregateProofs.sort((a, b) => `${a.scope}:${a.key}`.localeCompare(`${b.scope}:${b.key}`));
@@ -656,6 +704,100 @@ function defaultHugoVersion() {
     if (result.error || result.status !== 0) fail('Hugo 程序无法运行');
     return result.stdout.trim();
 }
+function stripCodeForDeterministicScan(markdown) {
+    let text = String(markdown || '');
+    text = text.replace(/```[\s\S]*?```/g, match => match.replace(/[^\n]/g, ' '));
+    text = text.replace(/~~~[\s\S]*?~~~/g, match => match.replace(/[^\n]/g, ' '));
+    text = text.replace(/`[^`\n]+`/g, match => ' '.repeat(match.length));
+    return text;
+}
+
+function deterministicPublishMarkdownIssues(markdown) {
+    const text = String(markdown || '');
+    const issues = [];
+    // 1. UTF-8 乱码字符（U+FFFD）
+    if (text.includes('\ufffd')) {
+        issues.push('包含 UTF-8 乱码字符 (U+FFFD)');
+    }
+    // 2. 内部评分证据锚点泄漏（[A_...] / [SCORING_SOURCE_...]）
+    const anchorMatches = text.match(/\[(?:A|SCORING_SOURCE)_[A-Z0-9_/-]+\]/g);
+    if (anchorMatches && anchorMatches.length > 0) {
+        issues.push(`包含 ${anchorMatches.length} 个未清理的内部评分证据锚点`);
+    }
+    // 3. 完全重复的长正文段落（与 publish-to-blog.py#review_and_fix_post 保护边界一致）
+    const fmMatch = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+    const body = fmMatch ? text.slice(fmMatch[0].length) : text;
+    const paragraphs = body.split(/\n{2,}/);
+    const seenProse = new Set();
+    let duplicateParagraphs = 0;
+    for (const block of paragraphs) {
+        const normalized = block.replace(/\s+/g, ' ').trim();
+        const isProtected = normalized.length < 80
+            || /^(?:---|#|\||-|\*|>|```|~~~|!\[|评分：)/.test(normalized)
+            || block.includes('\n|')
+            || /!\[[^\]]*\]\([^)]+\)/.test(block);
+        if (isProtected) continue;
+        const fp = normalized.normalize('NFKC').toLowerCase();
+        if (seenProse.has(fp)) duplicateParagraphs += 1;
+        else seenProse.add(fp);
+    }
+    if (duplicateParagraphs > 0) {
+        issues.push(`包含 ${duplicateParagraphs} 个完全重复的长正文段落`);
+    }
+    // 4. 未转义的裸 HTML 样式标签与 HTML-like 标签（跳过代码块与行内代码）
+    const scannableBody = stripCodeForDeterministicScan(body);
+    if (/<(b|i|u)(?:\s+[^>\n]*)?>([^\n]*?)<\/\1>/i.test(scannableBody)) {
+        issues.push('包含未转义的裸 HTML 样式标签 (<b>/<i>/<u>)');
+    }
+    if (/(?<![a-zA-Z0-9`])<(\/?)(?:[SE]|task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code)(?![a-zA-Z0-9`])>/i.test(scannableBody)) {
+        issues.push('包含未转义的 HTML-like 标签');
+    }
+    // 5. 未转换的裸 $...$ / $$...$$ LaTeX 分隔符（排除 URL、货币金额与代码）
+    const withoutUrls = scannableBody.replace(/https?:\/\/[^\s)>\]]+/gi, ' ');
+    const hasBlockDollar = /(^|\n)[ \t]*\$\$[^\n]*\$\$[ \t]*(?=\n|$)/.test(withoutUrls)
+        || /(^|\n)[ \t]*\$\$[ \t]*\n[\s\S]+?\n[ \t]*\$\$[ \t]*(?=\n|$)/.test(withoutUrls);
+    const hasInlineLatexDollar = /(?:^|[^\\$])\$(?!\s)(?!\d+(?:[.,]\d+)?(?:\s*[kKmMbB%]|\b))([^$\n]*?(?:\\[A-Za-z]+|[_^]\{?[A-Za-z0-9]+\}?|[=<>+\-*/][^$\n]*[A-Za-z]|[A-Za-z][^$\n]*[=<>])[^$\n]*?)(?<!\s)\$(?!\$)/.test(withoutUrls);
+    if (hasBlockDollar || hasInlineLatexDollar) {
+        issues.push('包含未转换为 \\(...\\)/\\[...\\] 的裸 $ LaTeX 公式');
+    }
+    // 6. Markdown 表格列数对齐检查（跳过代码块）
+    const lines = scannableBody.split(/\r?\n/);
+    const splitRow = line => {
+        const trimmed = line.trim();
+        const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+        return inner.split(/(?<!\\)\|/);
+    };
+    const isSeparatorRow = line => {
+        const trimmed = line.trim();
+        if (!trimmed.includes('|')) return false;
+        const cells = splitRow(trimmed);
+        return cells.length >= 2 && cells.every(cell => /^\s*:?-{3,}:?\s*$/.test(cell));
+    };
+    for (let idx = 0; idx < lines.length - 1; idx += 1) {
+        if (!lines[idx].trim().startsWith('|') || !isSeparatorRow(lines[idx + 1])) continue;
+        const expectedCols = splitRow(lines[idx + 1]).length;
+        const headerCols = splitRow(lines[idx]).length;
+        if (headerCols !== expectedCols) {
+            issues.push(`Markdown 表格表头列数不对齐（第 ${idx + 1} 行：${headerCols} vs ${expectedCols}）`);
+            break;
+        }
+        let cursor = idx + 2;
+        let badRow = false;
+        while (cursor < lines.length && lines[cursor].trim().startsWith('|')) {
+            const rowCols = splitRow(lines[cursor]).length;
+            if (rowCols !== expectedCols) {
+                issues.push(`Markdown 表格数据行列数不对齐（第 ${cursor + 1} 行：${rowCols} vs ${expectedCols}）`);
+                badRow = true;
+                break;
+            }
+            cursor += 1;
+        }
+        if (badRow) break;
+        idx = cursor - 1;
+    }
+    return issues;
+}
+
 function deterministicReview(record, bytes) {
     if (sha256(bytes) !== record.sha256) fail(`待审查文件的内容已变化：${record.path}`);
     if (record.path.endsWith('.md')) {
@@ -664,6 +806,10 @@ function deterministicReview(record, bytes) {
             || !/\npaper_digest_page_type:\s*(?:paper|index)\s*\n/.test(text)
             || !hasPageTagMetadata(bytes)
             || /\ndraft:\s*true\s*\n/.test(text)) fail(`历史 Markdown 页面的固定格式检查失败：${record.path}`);
+        const mdIssues = deterministicPublishMarkdownIssues(text);
+        if (mdIssues.length > 0) {
+            fail(`历史 Markdown 页面确定性发布检查失败（${record.path}）：${mdIssues.join('；')}`);
+        }
         for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
             const target = match[1].trim();
             if (!target.startsWith('/') && !target.startsWith('https://') && !target.startsWith('#')) {
@@ -717,10 +863,56 @@ function deterministicReview(record, bytes) {
     }
     return { path: record.path, sha256: record.sha256, gate: 'deterministic-pass' };
 }
+function runHugoRenderedHtmlGate({ publicDir, sourceDir, modifiedMarkdownPaths }) {
+    if (!Array.isArray(modifiedMarkdownPaths) || modifiedMarkdownPaths.length === 0) return [];
+    const scriptsDir = path.resolve(__dirname, '..');
+    const pythonScript = [
+        'import json, sys',
+        'from pathlib import Path',
+        'sys.path.insert(0, sys.argv[1])',
+        'import markdown_hugo_gate as gate',
+        'payload = json.loads(sys.stdin.read())',
+        'public_dir = Path(payload["publicDir"])',
+        'source_dir = Path(payload["sourceDir"])',
+        'artifacts = []',
+        'other_pages = []',
+        'for rel in payload["paths"]:',
+        '    md_path = source_dir / rel',
+        '    fm, body = gate.load_frontmatter(md_path)',
+        '    artifact = {"path": str(md_path), "frontmatter": fm, "body": body}',
+        '    artifacts.append(artifact)',
+        '    if not gate.format_gate_is_current_tutorial(fm) and not gate.format_gate_is_current_api_reader(fm):',
+        '        other_pages.append(artifact)',
+        'issues = list(gate.validate_hugo_rendered_html_gate(public_dir, artifacts))',
+        'for artifact in other_pages:',
+        '    candidates = gate.rendered_page_candidates(public_dir, artifact["frontmatter"].get("title"), artifact["path"])',
+        '    for rendered_path, rendered in candidates:',
+        '        reader_html = gate.rendered_article_fragment(rendered)',
+        '        label = f"{Path(artifact[\'path\']).name} -> {rendered_path.name}"',
+        '        issues.extend(gate._rendered_math_error_issues(reader_html, label))',
+        '        issues.extend(gate.math_and_emphasis_issues(reader_html, label, rendered_html=True))',
+        'sys.stdout.write(json.dumps({"issues": issues}, ensure_ascii=False))'
+    ].join('\n');
+    const gateResult = spawnSync('bash', [path.join(scriptsDir, 'python-runtime.sh'), '-c', pythonScript, scriptsDir], {
+        cwd: path.resolve(scriptsDir, '..'),
+        input: JSON.stringify({ publicDir, sourceDir, paths: modifiedMarkdownPaths }),
+        encoding: 'utf8',
+        timeout: 180_000,
+        env: buildChildProcessEnv({ LANG: 'C', LC_ALL: 'C' }),
+        maxBuffer: 32 * 1024 * 1024
+    });
+    if (gateResult.error || gateResult.status !== 0) {
+        fail(`Hugo 渲染 HTML 门禁执行失败：${String(gateResult.stderr || gateResult.error?.message || gateResult.status).slice(-1500)}`);
+    }
+    const parsed = JSON.parse(gateResult.stdout || '{}');
+    return Array.isArray(parsed.issues) ? parsed.issues : [];
+}
+
 function defaultHugoGate({ blogRepo, generation }) {
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'historical-direct-review-'));
     try {
         const source = path.join(temporary, 'site');
+        const publicDir = path.join(temporary, 'public');
         fs.cpSync(blogRepo, source, { recursive: true, filter: filename => !['.git', 'public', 'resources'].includes(path.basename(filename)) });
         // Hugo 站点启用了 GitInfo，但临时检查目录不复制真实仓库的 Git 元数据。
         // 在临时副本里建一个一次性的本地提交，让 Hugo 校验同一套配置和模板，
@@ -747,11 +939,18 @@ function defaultHugoGate({ blogRepo, generation }) {
             const target = inside(source, record.path, 'Hugo 暂存目标文件'); fs.mkdirSync(path.dirname(target), { recursive: true });
             fs.writeFileSync(target, readRegular(inside(generation.root, path.posix.join('bundle', record.path), '生成文件集合')).bytes);
         }
-        const result = spawnSync('hugo', ['--source', source, '--destination', path.join(temporary, 'public')], {
+        const result = spawnSync('hugo', ['--source', source, '--destination', publicDir], {
             encoding: 'utf8', timeout: 300_000,
             env: buildChildProcessEnv({ LANG: 'C', LC_ALL: 'C' }), maxBuffer: 32 * 1024 * 1024
         });
         if (result.error || result.status !== 0) fail(`Hugo 构建检查失败：${String(result.stderr || result.error?.message || '').slice(-2000)}`);
+        const modifiedMarkdownPaths = generation.manifest.files
+            .filter(record => record.path.startsWith('content/posts/') && record.path.endsWith('.md'))
+            .map(record => record.path);
+        const htmlIssues = runHugoRenderedHtmlGate({ publicDir, sourceDir: source, modifiedMarkdownPaths });
+        if (htmlIssues.length > 0) {
+            fail(`Hugo 渲染 HTML 门禁失败：${htmlIssues.slice(0, 10).join('；')}`);
+        }
         return { status: 'passed', engine: 'hugo', version: defaultHugoVersion() };
     } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
@@ -1369,6 +1568,33 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
         }
         return { sha256: publication.publicationSha256, remoteVerifiedOid: publication.remoteVerifiedOid, liveVerified: Boolean(liveRemote) };
     }, 'publication-incomplete');
+    let pagesDeployVerified = false;
+    let webVerified = false;
+    const onlinePath = path.join(loaded.directory, 'online-verification.json');
+    if (fs.existsSync(onlinePath)) {
+        try {
+            const online = strictJsonFile(onlinePath, '在线网页核验记录').value;
+            const matchesPublication = online.publicationId === loaded.plan.publicationId
+                && (!publication || !online.remoteVerifiedOid || online.remoteVerifiedOid === publication.remoteVerifiedOid);
+            if (matchesPublication) {
+                pagesDeployVerified = online.pagesDeployVerified === true;
+                webVerified = online.webVerified === true;
+                stages.onlineVerification = {
+                    complete: pagesDeployVerified && webVerified,
+                    pagesDeployVerified,
+                    webVerified,
+                    checked: Number.isInteger(online.checked) ? online.checked : 0,
+                    ok: Number.isInteger(online.ok) ? online.ok : 0,
+                    failed: Number.isInteger(online.failed) ? online.failed : 0,
+                    verifiedAt: online.verifiedAt || online.createdAt || null
+                };
+            } else {
+                stages.onlineVerification = { complete: false, error: '在线核验记录与当前发布事务或远端 OID 不一致' };
+            }
+        } catch (error) {
+            stages.onlineVerification = { complete: false, error: error.message };
+        }
+    }
     const visual = { status: loaded.plan.visualDisposition.mode, complete: false, audited: true,
         dispositionSha256: loaded.plan.visualDisposition.dispositionSha256,
         reason: loaded.plan.visualDisposition.reason };
@@ -1379,7 +1605,8 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
     const phase = complete ? `published-with-visual-${visual.status}` : !generationOk ? 'planned'
         : !reviewOk ? 'generated' : !activationOk ? 'reviewed' : !publicationOk ? 'activated'
             : !liveRemote ? 'awaiting-live-remote-verification' : 'awaiting-visual-disposition';
-    return { ...protocols.recordHeader(STATUS_CONTRACT, STATUS_CONTRACT), publicationId, phase, complete, planSha256: loaded.plan.planSha256,
+    return { ...protocols.recordHeader(STATUS_CONTRACT, STATUS_CONTRACT), publicationId, phase, complete,
+        pagesDeployVerified, webVerified, planSha256: loaded.plan.planSha256,
         publicationPlanSha256: loaded.plan.planSha256, rewritePlanSha256: loaded.plan.authorityProof.plan.planSha256,
         retainedPages: { status: 'retained-unchanged', count: loaded.plan.retainedPages.length,
             setSha256: loaded.plan.retainedPageSetSha256 }, visual, stages, blockers };
@@ -1388,10 +1615,13 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
 module.exports = {
     PLAN_CONTRACT, GENERATION_CONTRACT, REVIEW_CONTRACT, ACTIVATION_INTENT_CONTRACT, ACTIVATION_CONTRACT,
     COMMIT_CONTRACT, PUBLICATION_CONTRACT, VISUAL_DISPOSITION_CONTRACT, STATUS_CONTRACT,
+    STANDING_NO_VISUALS_POLICY_REASON, STANDING_NO_VISUALS_POLICY_CREATED_AT,
     UUID_RE, HistoricalDirectPublicationError, stableHash, safeRelative, validatePublishedTagCatalogs,
-    normalizeVisualDisposition, buildVisualDisposition, historicalSourceVersionProof, loadDirectAuthority,
+    normalizeVisualDisposition, buildVisualDisposition, buildStandingWaiveVisualDisposition,
+    historicalSourceVersionProof, loadDirectAuthority,
     buildPlan, validatePlan, writePlan, loadPlan, generate, loadGeneration, reviewProtocolImplementationFiles, reviewProtocolFingerprint,
     semanticReviewProtocol, historicalReviewConcurrency, defaultSemanticReview,
+    deterministicPublishMarkdownIssues, runHugoRenderedHtmlGate,
     deterministicReview, review, loadReview, activate, loadActivation, publish, loadPublication, status,
     defaultBlogState, defaultGitBlob, defaultValidateActivatedWorktree, defaultValidateActivationRecovery,
     blogCommonDirectory, withBlogPublicationLock, defaultPrePublishRemote,

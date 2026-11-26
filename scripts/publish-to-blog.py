@@ -4142,7 +4142,7 @@ def build_verified_conference_workbench_bundle(paper, date_str, *, paper_id,
         raise PublishDataValidationError('会议研究工作区不能删除保存的公开来源记录。')
     urls = {'recordUrl': None, 'pdfUrl': None}
     if publication is not None:
-        if not isinstance(publication, dict) or publication.get('contract') != 'conference-official-publication-v1':
+        if not isinstance(publication, dict) or not public_protocols.has_valid_header(publication, 'conference-official-publication'):
             raise PublishDataValidationError('会议研究工作区公开来源格式不受支持。')
         for field in urls:
             urls[field] = _validated_https_identity_url(publication.get(field), '会议工作区 ' + field)

@@ -1187,11 +1187,21 @@ def _fold_reader_tex_cell_duplicate(value):
         squeezed_core = squeeze(core)
         if len(canonical_plain) >= 2 and squeezed_core and squeeze(prefix).endswith(squeezed_core):
             head = prefix.rstrip()
-            last = core.strip()[-1:]
-            at = head.rfind(last) if last else -1
-            before = head[:at] if at > 0 else ''
-            if not before or not re.search(r'[A-Za-z0-9\u4e00-\u9fff]$', before):
-                return prefix + trailing
+            i = len(head) - 1
+            j = len(squeezed_core) - 1
+            while j >= 0 and i >= 0:
+                if head[i].isspace():
+                    i -= 1
+                    continue
+                if head[i] != squeezed_core[j]:
+                    break
+                i -= 1
+                j -= 1
+            at = i + 1 if j < 0 else -1
+            if at >= 0:
+                before = head[:at] if at > 0 else ''
+                if not before or not re.search(r'[A-Za-z0-9\u4e00-\u9fff]$', before):
+                    return prefix + trailing
         # 前缀可能带「+ 」「· 「」这类装饰符号，TeX 副本只复制了实体部分；
         # 去掉开头非字母数字后再比一次（n∼𝒰0,1n\sim\mathcal{U}_{0,1}）。
         stripped_prefix = re.sub(r'^[^0-9A-Za-z\u4e00-\u9fff]+', '', canonical_prefix)

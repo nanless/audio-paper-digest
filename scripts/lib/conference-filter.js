@@ -12,6 +12,7 @@ const discoveryApi = require('./conference-discovery.js');
 const evidenceApi = require('./conference-filter-evidence.js');
 const paperIdentity = require('./paper-identity.js');
 const keywordPrefilter = require('./keyword-prefilter.js');
+const dailyFilterPrefilter = require('./daily-filter-prefilter.js');
 const decisionApi = require('./filter-decision.js');
 const { renderFilterPrompt } = require('./filter-prompt.js');
 const Config = require('../config.js');
@@ -64,7 +65,7 @@ const LLM_FILTER_PROMPT = renderFilterPrompt({
 }, LLM_FILTER_PROMPT_PATH);
 const DAILY_DECISION_PARSER_CONTRACT = decisionApi.FILTER_DECISION_CONTRACT;
 const CORE_CONFERENCE_FALLBACK_CONTRACT = codec.contract('core-audio-conferences-2026');
-const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
+const PRIOR_V1_CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
     'chime-2026': 'CHiME Speech Separation and Recognition',
     'dafx-2026': 'Digital Audio Effects',
     'icmc-2026': 'International Computer Music Conference',
@@ -75,8 +76,48 @@ const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
     'odyssey-2026': 'Speaker and Language Recognition',
     'speechprosody-2026': 'Speech Prosody'
 });
+const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
+    'asru-2025': 'IEEE Automatic Speech Recognition and Understanding Workshop',
+    ...PRIOR_V1_CORE_AUDIO_CONFERENCE_LABELS,
+    'dcase-2026': 'Detection and Classification of Acoustic Scenes and Events',
+    'ismir-2026': 'International Society for Music Information Retrieval',
+    'waspaa-2025': 'IEEE Workshop on Applications of Signal Processing to Audio and Acoustics'
+});
+const CORE_AUDIO_CONFERENCE_FAMILY_LABELS = Object.freeze({
+    asru: 'IEEE Automatic Speech Recognition and Understanding Workshop',
+    chime: 'CHiME Speech Separation and Recognition',
+    dafx: 'Digital Audio Effects',
+    dcase: 'Detection and Classification of Acoustic Scenes and Events',
+    icmc: 'International Computer Music Conference',
+    interspeech: 'Interspeech',
+    ismir: 'International Society for Music Information Retrieval',
+    iwslt: 'Spoken Language Translation',
+    jep: 'Speech Studies (Journées d’Études sur la Parole)',
+    nime: 'New Interfaces for Musical Expression',
+    odyssey: 'Speaker and Language Recognition',
+    speechprosody: 'Speech Prosody',
+    waspaa: 'IEEE Workshop on Applications of Signal Processing to Audio and Acoustics'
+});
 const CORE_AUDIO_CONFERENCE_IDS = Object.freeze(Object.keys(CORE_AUDIO_CONFERENCE_LABELS).sort());
-const FILTER_CONFIG_BINDING = Object.freeze({
+function resolveCoreAudioConferenceLabel(conferenceId) {
+    const id = String(conferenceId || '').trim().toLowerCase();
+    if (!id) return null;
+    if (Object.prototype.hasOwnProperty.call(CORE_AUDIO_CONFERENCE_LABELS, id)) {
+        return CORE_AUDIO_CONFERENCE_LABELS[id];
+    }
+    const match = /^([a-z]+)-(\d{4})$/.exec(id);
+    if (!match) return null;
+    const [, family, yearText] = match;
+    const year = Number(yearText);
+    if (year >= 2025 && Object.prototype.hasOwnProperty.call(CORE_AUDIO_CONFERENCE_FAMILY_LABELS, family)) {
+        return CORE_AUDIO_CONFERENCE_FAMILY_LABELS[family];
+    }
+    return null;
+}
+function isCoreAudioConference(conferenceId) {
+    return resolveCoreAudioConferenceLabel(conferenceId) !== null;
+}
+const FILTER_CONFIG_BINDING_BASE = Object.freeze({
     decisionContractProfile: Config.FILTER_CONFIG.decisionContractProfile,
     keywordPrefilterProfile: keywordPrefilter.KEYWORD_PREFILTER_PROFILE,
     coreConferenceFallbackContract: CORE_CONFERENCE_FALLBACK_CONTRACT,
@@ -91,6 +132,17 @@ const FILTER_CONFIG_BINDING = Object.freeze({
     maxTokens: Config.FILTER_CONFIG.maxTokens,
     evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
     evidenceLocatorContract: evidenceApi.LOCATOR_CONTRACT
+});
+const FILTER_CONFIG_BINDING = Object.freeze({
+    ...FILTER_CONFIG_BINDING_BASE,
+    coreAudioConferenceFamilyLabels: CORE_AUDIO_CONFERENCE_FAMILY_LABELS,
+    dailyFilterPrefilterSha256: dailyFilterPrefilter.DAILY_FILTER_PREFILTER_SHA256
+});
+const PRIOR_V1_LLM_FILTER_POLICY = JSON.stringify({
+    prompt: 'filter:first-fenced-block',
+    parser: DAILY_DECISION_PARSER_CONTRACT,
+    ...FILTER_CONFIG_BINDING_BASE,
+    coreAudioConferenceLabels: PRIOR_V1_CORE_AUDIO_CONFERENCE_LABELS
 });
 const LLM_FILTER_POLICY = JSON.stringify({
     prompt: 'filter:first-fenced-block',
@@ -126,6 +178,7 @@ function exact(value, fields, label) {
 }
 function sha256(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
 const LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(LLM_FILTER_POLICY, 'utf8'));
+const PRIOR_V1_LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(PRIOR_V1_LLM_FILTER_POLICY, 'utf8'));
 const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
 // 核心音频会议及其标签也参与筛选策略的 SHA 计算。恢复时保留下列旧策略 SHA，
 // 因为已保存的状态和请求记录仍对应标签扩充前的策略。
@@ -133,8 +186,14 @@ const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
 // '382af440…' = interspeech-2026 加入 core-audio 标签之前的策略；
 // '11b277a5…' = 最初的 2026 会议标签之前的策略。
 // 只兼容同一运行预算与会议身份下的固定旧 v4、v5 词表策略，不接受任意外来版本。
-const LEGACY_KEYWORD_FILTER_POLICY_SHA256 = new Set(historicalWorkflows.previousKeywordPolicyHashes());
-const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze(historicalWorkflows.filterPolicyHashes());
+const LEGACY_KEYWORD_FILTER_POLICY_SHA256 = new Set([
+    ...historicalWorkflows.previousKeywordPolicyHashes(),
+    PRIOR_V1_LLM_FILTER_POLICY_SHA256
+]);
+const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
+    ...historicalWorkflows.filterPolicyHashes(),
+    PRIOR_V1_LLM_FILTER_POLICY_SHA256
+]);
 const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, ...LEGACY_FILTER_POLICY_SHA256_LIST]);
 // 筛选提示词的兼容窗口。会议路径按「渲染占位符之后的首块」算 SHA，改一个字就会让
 // 旧 spec 的 promptSha256 对不上，所以提示词换版本时必须先在这里登记旧值。
@@ -1401,7 +1460,7 @@ function parseLlmDecisionText(source) {
 }
 
 function conferencePromptCategories(record, conferenceId) {
-    const values = [conferenceId, CORE_AUDIO_CONFERENCE_LABELS[conferenceId], record.track,
+    const values = [conferenceId, resolveCoreAudioConferenceLabel(conferenceId), record.track,
         ...(Array.isArray(record.categories) ? record.categories : [record.categories || record.category])]
         .filter(Boolean).map(String);
     return [...new Set(values)];
@@ -1468,9 +1527,14 @@ function dailyFilterPromptMatches(prompt, envelope) {
     return Boolean(resolved && prompt === resolved.rendered);
 }
 
-function evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus = 'ready') {
-    const base = keywordPrefilter.evaluateKeywordPrefilter(record);
-    const conferenceCategoryFallback = CORE_AUDIO_CONFERENCE_IDS.includes(conferenceId);
+function evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus = 'ready', { legacy = false } = {}) {
+    const base = legacy
+        ? keywordPrefilter.evaluateKeywordPrefilter(record)
+        : dailyFilterPrefilter.evaluateDailyFilterPrefilter(record);
+    const conferenceCategoryLabel = legacy
+        ? (PRIOR_V1_CORE_AUDIO_CONFERENCE_LABELS[conferenceId] || null)
+        : resolveCoreAudioConferenceLabel(conferenceId);
+    const conferenceCategoryFallback = Boolean(conferenceCategoryLabel);
     const evidenceFailOpen = evidenceStatus !== 'ready';
     return {
         ...base,
@@ -1481,7 +1545,7 @@ function evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus
             ? `核心音频会议兜底：${conferenceId}`
             : base.reason,
         conferenceId,
-        conferenceCategoryLabel: CORE_AUDIO_CONFERENCE_LABELS[conferenceId] || null,
+        conferenceCategoryLabel,
         conferenceCategories: conferencePromptCategories(record, conferenceId),
         conferenceCategoryFallback,
         evidenceStatus,
@@ -1492,10 +1556,12 @@ function evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus
 
 function evaluateKeywordForCheckedState(state, record, conferenceId, evidenceStatus) {
     recordHeaderFor(state, 'conference-filter');
-    const current = evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus);
-    if (codec.isCurrentHeader(state, 'conference-filter')) return current;
+    if (codec.isCurrentHeader(state, 'conference-filter')) {
+        return evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus);
+    }
+    const legacyEval = evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus, { legacy: true });
     const original = historicalWorkflows.originalKeywordMetadata();
-    const { conferenceFallbackProfile, ...base } = current;
+    const { conferenceFallbackProfile, ...base } = legacyEval;
     return { ...historicalWorkflows.keywordResultForHistoricalPolicy(base, state.input.filterPolicySha256),
         conferenceFallbackVersion: original.conferenceFallbackVersion };
 }
@@ -1548,7 +1614,7 @@ function requestEnvelopeFromReplay({ state, paperId, discovery, replay, evidence
             ...(codec.isCurrentHeader(state, 'conference-filter')
                 ? { coreConferenceFallbackProfile: codec.recordHeader(CORE_CONFERENCE_FALLBACK_CONTRACT, 'core-audio-conferences-2026') }
                 : { coreConferenceFallbackVersion: codec.historicalContract('core-audio-conferences-2026', 'official-audio-scope') }),
-            conferenceCategoryLabel: CORE_AUDIO_CONFERENCE_LABELS[replay.conference.id] || null },
+            conferenceCategoryLabel: resolveCoreAudioConferenceLabel(replay.conference.id) },
         metadataRecord: projected.metadataRecord };
     return { ...body, requestSha256: stableHash(body) };
 }
@@ -1884,6 +1950,7 @@ function buildTransportReceipt({ intent, response = null, error = null, apiType,
     let usage; let errorCode = null;
     const usageLedgerBindings = usageEvents.map(entry => ({ eventId: entry.event.eventId,
         eventSha256: stableHash(entry.event), contextSha256: stableHash({ stage: entry.event.stage,
+            ...(entry.event.paperId ? { paperId: entry.event.paperId } : {}),
             unitId: entry.event.unitId }), persistence: entry.persisted ? 'written' : 'unavailable' }));
     if (response && Number.isInteger(response.statusCode) && typeof response.raw === 'string' && response.raw.length) {
         const body = strictTransportBody(response.raw);
@@ -2000,6 +2067,7 @@ function createIntent({ directory, state, paperId, owner, discoveryHandle, evide
     const operationId = crypto.randomUUID();
     const usageContext = {
         stage: 'conference-filter',
+        paperId,
         unitId: stableHash({
             filterId: state.filterId,
             paperId,
@@ -2361,7 +2429,8 @@ module.exports = {
     LLM_FILTER_POLICY_SHA256, LLM_FILTER_PROMPT_SHA256, FILTER_CONFIG_BINDING, FILTER_CONFIG_SHA256,
     LEGACY_LLM_FILTER_PROMPT_SHA256_LIST, ACCEPTED_LLM_FILTER_PROMPT_SHA256,
     DAILY_DECISION_PARSER_CONTRACT, CORE_CONFERENCE_FALLBACK_CONTRACT, CORE_AUDIO_CONFERENCE_IDS,
-    CORE_AUDIO_CONFERENCE_LABELS,
+    CORE_AUDIO_CONFERENCE_LABELS, CORE_AUDIO_CONFERENCE_FAMILY_LABELS,
+    resolveCoreAudioConferenceLabel, isCoreAudioConference,
     MAX_DECISION_PAYLOAD_BYTES, MAX_LLM_REQUEST_BYTES,
     UUID_RE, SAFE_JSON_NAME, PROTOCOLS, stableHash,
     normalizeCatalog, normalizeSpec, tagCatalogSha256ForSpec, normalizeLocatorBinding, normalizeEvidenceBinding,

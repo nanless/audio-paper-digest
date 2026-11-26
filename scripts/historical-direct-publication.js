@@ -9,18 +9,26 @@ const api = require('./lib/historical-direct-publication.js');
 
 const USAGE = [
     'visual-disposition --apply --plan-file ABS --mode excluded|waived --scope full-history-publication|selected-sample-publication --reason TEXT --output ABS.json',
-    'plan --dry-run|--apply --publication-id UUID --plan-file ABS --registry-file ABS --projection-file ABS --visual-disposition ABS [--paper-ids ID,ID,...] [--blog-repo ABS]',
-    'generate --dry-run|--apply --publication-id UUID --plan-file ABS --registry-file ABS --projection-file ABS --visual-disposition ABS [--paper-ids ID,ID,...] [--blog-repo ABS]',
+    'plan --dry-run|--apply --publication-id UUID --plan-file ABS --registry-file ABS --projection-file ABS (--visual-disposition ABS | --waive-visuals) [--paper-ids ID,ID,...] [--blog-repo ABS]',
+    'generate --dry-run|--apply --publication-id UUID --plan-file ABS --registry-file ABS --projection-file ABS (--visual-disposition ABS | --waive-visuals) [--paper-ids ID,ID,...] [--blog-repo ABS]',
     'review|activate|publish --dry-run|--apply --publication-id UUID [--message TEXT] [--blog-repo ABS]',
     'status --publication-id UUID [--live-remote true] [--blog-repo ABS]'
 ].join(' | ');
 
-function parsePairs(argv, allowed) {
+function parsePairs(argv, allowed, booleanFlags = []) {
     const values = {};
-    for (let index = 0; index < argv.length; index += 2) {
-        const flag = argv[index]; const value = argv[index + 1];
+    for (let index = 0; index < argv.length;) {
+        const flag = argv[index];
+        if (booleanFlags.includes(flag)) {
+            if (Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
+            values[flag] = true;
+            index += 1;
+            continue;
+        }
+        const value = argv[index + 1];
         if (!allowed.includes(flag) || value === undefined || Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
         values[flag] = value;
+        index += 2;
     }
     return values;
 }
@@ -56,14 +64,26 @@ function parseArgs(argv) {
     const stageNeedsAuthority = ['plan', 'generate'].includes(action);
     const values = parsePairs(rest, stageNeedsAuthority
         ? ['--publication-id', '--plan-file', '--registry-file', '--projection-file', '--visual-disposition', '--paper-ids', '--blog-repo']
-        : ['--publication-id', '--message', '--blog-repo']);
+        : ['--publication-id', '--message', '--blog-repo'],
+        stageNeedsAuthority ? ['--waive-visuals'] : []);
     if (!api.UUID_RE.test(values['--publication-id'] || '')) throw new Error(`命令写法不对，用法：${USAGE}`);
-    if (stageNeedsAuthority && ['--plan-file', '--registry-file', '--projection-file', '--visual-disposition']
-        .some(flag => !absolute(values[flag]))) throw new Error(`命令写法不对，用法：${USAGE}`);
+    const waiveVisuals = values['--waive-visuals'] === true;
+    if (stageNeedsAuthority) {
+        if (['--plan-file', '--registry-file', '--projection-file'].some(flag => !absolute(values[flag]))) {
+            throw new Error(`命令写法不对，用法：${USAGE}`);
+        }
+        if (waiveVisuals && values['--visual-disposition'] !== undefined) {
+            throw new Error(`命令写法不对，用法：${USAGE}`);
+        }
+        if (!waiveVisuals && !absolute(values['--visual-disposition'])) {
+            throw new Error(`命令写法不对，用法：${USAGE}`);
+        }
+    }
     if (values['--blog-repo'] !== undefined && !absolute(values['--blog-repo'])) throw new Error(`命令写法不对，用法：${USAGE}`);
     return { action, apply: mode === '--apply', publicationId: values['--publication-id'], planFile: values['--plan-file'],
         registryFile: values['--registry-file'], projectionFile: values['--projection-file'],
         visualDispositionFile: values['--visual-disposition'],
+        ...(waiveVisuals ? { waiveVisuals: true } : {}),
         paperIds: parsePaperIds(values['--paper-ids']),
         blogRepo: values['--blog-repo'] || null,
         message: values['--message'] || null };
@@ -77,7 +97,8 @@ function roots(Config) {
 }
 function buildPublicationInputOptions(options, Config) {
     return { planFile: options.planFile, registryFile: options.registryFile, projectionFile: options.projectionFile,
-        visualDispositionFile: options.visualDispositionFile,
+        visualDispositionFile: options.visualDispositionFile || null,
+        ...(options.waiveVisuals ? { waiveVisuals: true } : {}),
         selectedPaperIds: options.paperIds || [],
         ...roots(Config) };
 }

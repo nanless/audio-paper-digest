@@ -149,6 +149,10 @@ npm run validate:data -- --allow-empty
 | `PD_DAILY_SOURCE_SKIP_MAX` | 默认 2，范围 0–5；封存阶段官方 PDF 全地址 404 时本批最多跳过篇数 |
 | `PD_DAILY_CORRECTION_LIMIT` | 默认 `min(15, max(10, floor(N/10)))`，范围 1–15；仅允许抬高、不能降低默认值 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 日更独立页面审查默认 16，范围 1–32；会议页面审查最多 5 路，汇总优先派发 |
+| `PD_CONFERENCE_EXTRACTOR_VERSION` | 会议 PDF 抽取器版本，默认 `v2`（双栏重排、结构化表与 288 DPI 裁切），可设为 `v1` 兼容旧抽取器 |
+| `PD_CONFERENCE_QUEUE_CONCURRENCY` | 会议队列调度最大并发上限，默认 3，范围 1–32 |
+| `PD_PAGES_DEPLOY_POLL_SECONDS` | 会议发布后等待 GitHub Pages 部署的轮询间隔（秒），默认 10，范围 1–120 |
+| `PD_PAGES_DEPLOY_TIMEOUT_SECONDS` | 会议发布后等待 GitHub Pages 部署的超时上限（秒），默认 600，范围 10–1800 |
 | `PD_HISTORY_REVIEW_CONCURRENCY` | 历史独立页面审查默认 5，范围 1–16 |
 | `PD_BLOG_REVIEW_CHUNK_CHARS` | 单页审查分块字符数，默认 20000，范围 4000–24000 |
 | `PD_BLOG_REVIEW_MAX_TOKENS` | 单页审查单次输出上限，默认 4000，范围 1000–32000 |

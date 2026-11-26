@@ -677,15 +677,15 @@ def assert_blog_lock_held(lock_path=None, *, require_active=False):
         if target['state']['error'] is not None:
             raise BlogRepositoryLockError('共享博客锁的续租线程已失败，拒绝继续写操作') from target['state']['error']
         current = target['state']['snapshot']
-    try:
-        replay = _snapshot(current['path'])
-    except FileNotFoundError as exc:
-        raise BlogRepositoryLockError('共享博客锁已被移除，当前进程已失去所有权') from exc
-    if replay['directoryIdentity'] != current['directoryIdentity'] \
-            or not replay.get('owner') or not replay['owner'].get('record') \
-            or replay['owner']['record']['token'] != current['owner']['record']['token']:
-        raise BlogRepositoryLockError('共享博客锁身份已变更，当前进程已失去所有权')
-    return replay
+        try:
+            replay = _snapshot(current['path'])
+        except FileNotFoundError as exc:
+            raise BlogRepositoryLockError('共享博客锁已被移除，当前进程已失去所有权') from exc
+        if replay['directoryIdentity'] != current['directoryIdentity'] \
+                or not replay.get('owner') or not replay['owner'].get('record') \
+                or replay['owner']['record']['token'] != current['owner']['record']['token']:
+            raise BlogRepositoryLockError('共享博客锁身份已变更，当前进程已失去所有权')
+        return replay
 
 
 @contextmanager
@@ -702,12 +702,12 @@ def shared_blog_repository_lock(blog_repo, *, owner='paper-digest-publisher',
 
     def heartbeat():
         while not stop.wait(interval):
-            try:
-                with guard:
+            with guard:
+                try:
                     state['snapshot'] = _renew(state['snapshot'])
-            except Exception as exc:  # 退出时按失败处理，绝不释放别人的锁
-                state['error'] = exc
-                return
+                except Exception as exc:  # 退出时按失败处理，绝不释放别人的锁
+                    state['error'] = exc
+                    return
 
     thread = threading.Thread(target=heartbeat,
                               name=f'blog-lock-heartbeat-{os.getpid()}', daemon=True)
@@ -716,8 +716,10 @@ def shared_blog_repository_lock(blog_repo, *, owner='paper-digest-publisher',
     _holder_stack().append(holder)
     try:
         yield lock_path
-        if state['error'] is not None:
-            raise BlogRepositoryLockError('共享博客锁的续租线程失败') from state['error']
+        with guard:
+            heartbeat_error = state['error']
+        if heartbeat_error is not None:
+            raise BlogRepositoryLockError('共享博客锁的续租线程失败') from heartbeat_error
         # 退出临界区前复核锁未被外部篡改/替换（包括未触及心跳间隔的短临界区）。
         assert_blog_lock_held(lock_path)
     finally:

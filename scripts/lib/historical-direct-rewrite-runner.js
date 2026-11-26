@@ -851,6 +851,11 @@ function publicationSourceFor(item, sourceDetails, sourceDescriptor, options = {
             fail(`${item.paperId} official metadata sidecar authors are empty or invalid`);
         }
         result.authors = sealed.authors.slice();
+        for (const field of ['comment', 'journalRef', 'doi', 'venueBadge']) {
+            const val = typeof sealed[field] === 'string' ? sealed[field].trim()
+                : typeof sealed.metadata?.[field] === 'string' ? sealed.metadata[field].trim() : '';
+            if (val) result[field] = val;
+        }
     }
     return result;
 }
@@ -871,8 +876,13 @@ function directPaper(item, sourceDetails = {}) {
             || authors.some(author => typeof author !== 'string' || !author.trim() || author !== author.trim()))) {
             fail(`${item.paperId} official publication authors are required for direct analysis`);
         }
+        const optionalMeta = {};
+        for (const field of ['comment', 'journalRef', 'doi', 'venueBadge']) {
+            const val = typeof sourceDetails[field] === 'string' ? sourceDetails[field].trim() : '';
+            if (val) optionalMeta[field] = val;
+        }
         return { directPaperId: item.paperId, arxivId: item.route.arxivId,
-            ...(authors ? { authors: authors.slice() } : {}), ...(title ? { title } : {}) };
+            ...(authors ? { authors: authors.slice() } : {}), ...(title ? { title } : {}), ...optionalMeta };
     }
     const authors = sourceDetails.publicationAuthors;
     if (authors !== undefined && (!Array.isArray(authors) || authors.length === 0
@@ -1103,14 +1113,26 @@ async function ephemeralArxivMaterializer(arxivId, figures, dependencies = {}) {
                     rawBytes: rendered.rawBytes, assetSha256: rendered.assetSha256, assetMediaType: rendered.mediaType });
                 continue;
             }
+            const cached = dependencies.figureCache instanceof Map ? dependencies.figureCache.get(figure.url) : null;
+            if (cached && Buffer.isBuffer(cached.rawBytes) && typeof cached.mediaType === 'string'
+                && sha256(cached.rawBytes) === cached.assetSha256) {
+                materialized.push({ ...figure, rawBytes: Buffer.from(cached.rawBytes),
+                    assetSha256: cached.assetSha256, assetMediaType: cached.mediaType });
+                continue;
+            }
             const item = await freshArxiv.withEphemeralArxivFigures({ arxivId, figures: [figure],
                 sourceRoot: dependencies.freshArxivSourceRoot,
                 temporaryRoot: dependencies.temporaryRoot,
                 persistentRoots: dependencies.persistentRoots || [] }, async temporary => {
                 const stored = temporary.figures[0];
                 const bytes = readRegular(stored.tempPath, 32 * 1024 * 1024).bytes;
+                const assetSha256 = sha256(bytes);
+                if (dependencies.figureCache instanceof Map) {
+                    dependencies.figureCache.set(figure.url, { rawBytes: Buffer.from(bytes),
+                        mediaType: stored.mediaType, assetSha256 });
+                }
                 return { ...figure, rawBytes: bytes,
-                    assetSha256: sha256(bytes), assetMediaType: stored.mediaType };
+                    assetSha256, assetMediaType: stored.mediaType };
             }, { fetchFigure: dependencies.fetchFigure });
             materialized.push(item);
         } catch (error) {
@@ -1125,12 +1147,22 @@ async function ephemeralArxivMaterializer(arxivId, figures, dependencies = {}) {
 // 给双模型提供图片输入：它只返回内存里的 base64，生命周期和 Reader 配图
 // 一样落在操作系统临时目录，所以主分析请求碰不到那个旧缓存。
 async function ephemeralArxivPrimaryImageDownloader(arxivId, imageUrl, dependencies = {}) {
+    const cached = dependencies.figureCache instanceof Map ? dependencies.figureCache.get(imageUrl) : null;
+    if (cached && Buffer.isBuffer(cached.rawBytes) && typeof cached.mediaType === 'string'
+        && sha256(cached.rawBytes) === cached.assetSha256) {
+        return { base64: cached.rawBytes.toString('base64'), mime: cached.mediaType, sha256: cached.assetSha256, cacheHit: true };
+    }
     return freshArxiv.withEphemeralArxivFigures({ arxivId, figures: [{ ordinal: 1, url: imageUrl }],
         sourceRoot: dependencies.freshArxivSourceRoot, temporaryRoot: dependencies.temporaryRoot,
         persistentRoots: dependencies.persistentRoots || [] }, async temporary => {
         const item = temporary.figures[0];
         const bytes = readRegular(item.tempPath, 32 * 1024 * 1024).bytes;
-        return { base64: bytes.toString('base64'), mime: item.mediaType, sha256: sha256(bytes), cacheHit: false };
+        const hash = sha256(bytes);
+        if (dependencies.figureCache instanceof Map) {
+            dependencies.figureCache.set(imageUrl, { rawBytes: Buffer.from(bytes),
+                mediaType: item.mediaType, assetSha256: hash });
+        }
+        return { base64: bytes.toString('base64'), mime: item.mediaType, sha256: hash, cacheHit: false };
     }, { fetchFigure: dependencies.fetchFigure });
 }
 
@@ -1209,7 +1241,8 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
     const sourcePaper = item.route.kind === 'conference-local-pdf'
         ? { ...sourceDetails, title: titleFromConferenceMetadata(item.route.writerInputs[0], item),
             ...(sourceDetails.publicationAuthors ? { publicationAuthors: sourceDetails.publicationAuthors } : {}) }
-        : { ...sourceDetails, publicationAuthors: dependencies.publicationMetadataAuthors };
+        : { ...sourceDetails, publicationAuthors: dependencies.publicationMetadataAuthors,
+            ...(dependencies.publicationMetadataExtras || {}) };
     const freshPaper = directPaper(item, sourcePaper);
     const recovered = readAnalysisRecovery({ executionDirectory, item, sourceDescriptor, allowMissing: true });
     // 只有外层记录重新核对出同一份 paper/run/来源快照，才接受这次恢复。
@@ -2057,6 +2090,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 descriptor, freshArxivSourceRoot: options.freshArxivSourceRoot, executionRoot: options.executionRoot });
             registry = transition(registry, plan, item.paperId, 'source_ready', { source: descriptor }, clock()); persist();
             let publicationMetadataAuthors;
+            let publicationMetadataExtras;
             if (item.route.kind === 'arxiv-fresh-fetch') {
                 const publication = publicationSourceFor(item, sourceDetails, descriptor, {
                     freshArxivSourceRoot: options.freshArxivSourceRoot,
@@ -2065,15 +2099,25 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     includeAuthors: true
                 });
                 publicationMetadataAuthors = publication.authors;
+                const extras = {};
+                for (const field of ['comment', 'journalRef', 'doi', 'venueBadge']) {
+                    if (typeof publication[field] === 'string' && publication[field].trim()) {
+                        extras[field] = publication[field].trim();
+                    }
+                }
+                if (Object.keys(extras).length) publicationMetadataExtras = extras;
             }
             registry = transition(registry, plan, item.paperId, 'analyzing', {}, clock()); persist();
             executionDir = executionDirectory(options.executionRoot, item, descriptor); safeDirectory(executionDir, true, 'paper execution directory');
+            const figureCache = new Map();
             const executionDependencies = { ...dependencies, freshArxivSourceRoot: options.freshArxivSourceRoot,
+                figureCache,
                 ...(item.route.kind === 'arxiv-fresh-fetch' ? {
                     ...(Number.isSafeInteger(descriptor?.generation) ? { sourceGeneration: descriptor.generation } : {}),
                     ...(descriptor?.sourceManifestSha256 ? { sourceManifestSha256: descriptor.sourceManifestSha256 } : {})
                 } : {}),
                 ...(publicationMetadataAuthors ? { publicationMetadataAuthors } : {}),
+                ...(publicationMetadataExtras ? { publicationMetadataExtras } : {}),
                 // Normal failure rounds reuse the same candidate and paid
                 // ledger. Attempt counters never authorize a fresh Reader epoch.
                 persistentRoots: [options.registryRoot, options.executionRoot, options.stagingRoot] };
@@ -2103,11 +2147,28 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 deferReaderCandidateCommit: true }, () => analyze({ item,
                 sourceDetails: clone(sourceDetails), sourceDescriptor: descriptor, executionDirectory: executionDir,
                 dependencies: executionDependencies }));
+            const runArxivWithVerifiedBundleAuthorSource = () => {
+                if (item.route.kind !== 'arxiv-fresh-fetch'
+                    || !Buffer.isBuffer(source?.pdf)
+                    || typeof options.freshArxivSourceRoot !== 'string'
+                    || !freshArxiv.generationExists(options.freshArxivSourceRoot, item.route.arxivId, arxivGeneration)) {
+                    return invokeAnalysis([]);
+                }
+                const freshContext = require('./fresh-analysis-context.js');
+                freshContext.prepareVerifiedHistoricalBundleAuthorSource({
+                    rootDir: options.freshArxivSourceRoot,
+                    arxivId: item.route.arxivId,
+                    generation: arxivGeneration,
+                    sourceManifestSha256: descriptor.sourceManifestSha256,
+                    details: sourceDetails
+                });
+                return freshContext.withVerifiedBundleReaderAuthorSource(sourceDetails, () => invokeAnalysis([]));
+            };
             const analysis = item.route.kind === 'conference-local-pdf'
                 ? await withEphemeralConferenceFigures({ pdfPath: item.route.writerInputs[0]?.pdf.absolutePath,
                     visualAudit: sourceDetails.pdfVisualAudit },
                     invokeAnalysis, executionDependencies)
-                : await invokeAnalysis([]);
+                : await runArxivWithVerifiedBundleAuthorSource();
             // A nested analyzer may have retained a callback error in its
             // failure result. The marked save failure still stops the batch.
             if (saveErrors.size) throw saveErrors.values().next().value;

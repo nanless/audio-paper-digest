@@ -37,6 +37,21 @@ describe('会议来源绑定的开源清单', () => {
         assert.match(result, /- 数据集：论文中未提及/);
         assert.doesNotMatch(result, /not publicly available/);
     });
+
+    it('Conference G8: scanOpensource 对会议论文去重 thirdParty 与 typedUrls', async () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const result = await deep.scanOpensource(
+            { source: 'conference', title: 'Conference paper' },
+            'Our code is available at https://github.com/example/audio-proj. '
+                + 'We also refer to https://github.com/example/audio-proj in section 4 '
+                + 'and compare against https://github.com/other/baseline.'
+        );
+        assert.match(result, /- 代码：https:\/\/github\.com\/example\/audio-proj/);
+        const thirdPartyLine = result.split('\n').find(line => line.startsWith('- 其他资源链接：')) || '';
+        assert.ok(!thirdPartyLine.includes('https://github.com/example/audio-proj'),
+            `typed URL 不得重复出现在 thirdParty 行：${thirdPartyLine}`);
+        assert.match(thirdPartyLine, /https:\/\/github\.com\/other\/baseline/);
+    });
 });
 
 describe('标签规则的运行时分析集成', () => {

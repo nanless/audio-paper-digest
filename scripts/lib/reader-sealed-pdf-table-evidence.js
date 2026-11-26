@@ -28,11 +28,8 @@ function deriveBundle(expectation, requestedHeader = proofFormat.header(FAMILY))
     if (!isDeepStrictEqual(declaredHeader, requestedHeader)) throw new Error('PDF metadata header contains non-format fields');
     require('../env-loader').requireExternalRuntime('reader-sealed-pdf-table-evidence');
     require('../workspace-role').requireWorkspaceRole('daily', root);
-    const config = require('../config'), fresh = require('./fresh-analysis-context');
-    const sources = path.resolve(expectation.rootDir || '');
-    const run = path.basename(path.dirname(sources));
-    if (path.basename(sources) !== 'sources' || path.dirname(path.dirname(sources)) !== path.resolve(config.FILES.dailyFreshSourceRunsDir)
-        || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(run)) throw new Error('Expected current daily sealed source root');
+    const fresh = require('./fresh-analysis-context');
+    fresh.assertSealedFourFileArxivRoot(expectation.rootDir, 'Expected current daily sealed source root');
     return fresh.withVerifiedBundleReaderAuthorFiles(expectation, source => {
         const sourceApi = require('./fresh-arxiv-rewrite-source');
         const before = sourceApi.readFreshArxivRewriteSource(expectation);
@@ -84,11 +81,11 @@ function deriveBundle(expectation, requestedHeader = proofFormat.header(FAMILY))
 }
 
 function deriveCurrent(paper) {
-    const fresh = require('./fresh-analysis-context'), context = fresh.getFreshAnalysisContext();
-    if (!context || !fresh.isDailyFreshSourceScope()) throw new Error('Exact PDF grid requires the actual daily source scope');
-    const source = fresh.readFreshSource(context.runDir, paper, context), d = source.freshSourceDescriptor;
-    return deriveBundle({ rootDir: path.join(context.runDir, 'sources'), arxivId: d.paperId,
-        generation: d.sourceGeneration, sourceManifestSha256: d.sourceManifestSha256, sourceSnapshotSha256: d.sourceSnapshotSha256 });
+    const fresh = require('./fresh-analysis-context');
+    if (!fresh.isSealedFourFileArxivScope()) throw new Error('Exact PDF grid requires the actual daily source scope');
+    const bundle = fresh.resolveActiveSealedFourFileArxivBundle(paper);
+    if (!bundle) throw new Error('Exact PDF grid requires the actual daily source scope');
+    return deriveBundle(bundle.expectation);
 }
 
 function verifyEvidence(expectation, evidence) {
@@ -99,10 +96,11 @@ function verifyEvidence(expectation, evidence) {
 }
 
 function withArtifacts(artifacts, paperId, callback) {
-    const fresh = require('./fresh-analysis-context'), context = fresh.getFreshAnalysisContext();
-    if (!context || !fresh.isDailyFreshSourceScope()) return callback();
-    const source = fresh.readFreshSource(context.runDir, paperId, context);
-    if (!isDeepStrictEqual(source.structuredArtifacts, artifacts)) throw new Error('PDF grid artifacts differ from the current sealed source');
+    const fresh = require('./fresh-analysis-context');
+    if (!fresh.isSealedFourFileArxivScope()) return callback();
+    const bundle = fresh.resolveActiveSealedFourFileArxivBundle(paperId);
+    if (!bundle) return callback();
+    if (!isDeepStrictEqual(bundle.source.structuredArtifacts, artifacts)) throw new Error('PDF grid artifacts differ from the current sealed source');
     const current = scope.getStore();
     const representation = proofFormat.header(FAMILY);
     if (current?.artifacts === artifacts && isDeepStrictEqual(current.header, representation)) return callback();

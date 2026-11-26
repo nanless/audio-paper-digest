@@ -722,3 +722,289 @@ test('新建博客文件默认 0644，且已推送后缺 publication.json 时可
     assert.equal(recovered.receipt.remoteVerifiedOid, pushedCommit);
     assert.equal(fs.existsSync(path.join(loaded.directory, 'publication.json')), true);
 });
+
+test('G13: deterministicReview 阻断乱码、重复段、内部评分锚点、未转义 HTML、裸 $ 公式与错位表格', () => {
+    const fm = '---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_tags_contract: "paper-tag-flat-tags"\ndraft: false\n---\n\n';
+    const check = body => {
+        const bytes = Buffer.from(fm + body);
+        return api.deterministicReview({ path: 'content/posts/check.md', sha256: sha(bytes) }, bytes);
+    };
+    const longPara = '这是一段足够长的正文段落用于检测完全重复的段落问题，它包含完整的技术描述、实验口径、误差分析与架构细节说明，整体字符长度明确超过八十个字符阈值，以确保严格触发重复段落阻断规则并防止重复粘贴上线。';
+    assert.doesNotThrow(() => check('# 标题\n\n干净正文，支持 \\(\\alpha + \\beta\\) 与价格 $12.50。\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n'));
+    assert.throws(() => check('含乱码 \ufffd 字符。\n'), /UTF-8 乱码/);
+    assert.throws(() => check(`${longPara}\n\n${longPara}\n`), /完全重复的长正文段落/);
+    assert.throws(() => check('正文泄漏 [A_METHOD_01] 内部锚点。\n'), /内部评分证据锚点/);
+    assert.throws(() => check('正文包含 <b>裸粗体</b> 标签。\n'), /裸 HTML/);
+    assert.throws(() => check('正文包含未转义 <task> 标签。\n'), /未转义的 HTML-like 标签/);
+    assert.throws(() => check('正文包含未转换公式 $\\alpha + \\beta$。\n'), /裸 \$ LaTeX 公式/);
+    assert.throws(() => check('| A | B |\n| --- | --- |\n| 1 | 2 | 3 |\n'), /列数不对齐/);
+});
+
+test('G13: runHugoRenderedHtmlGate 阻断 Hugo HTML 中的 <merror> 与 katex-error，放行干净页面', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-hugo-html-gate-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const sourceDir = path.join(root, 'site');
+    const publicDir = path.join(root, 'public');
+    const mdRel = 'content/posts/2026-09-01-math-page.md';
+    fs.mkdirSync(path.dirname(path.join(sourceDir, mdRel)), { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, mdRel), '---\ntitle: "Math Page"\ndate: 2026-09-01\n---\n\n正文。\n');
+    const htmlDir = path.join(publicDir, 'posts', '2026-09-01-math-page');
+    fs.mkdirSync(htmlDir, { recursive: true });
+    const htmlFile = path.join(htmlDir, 'index.html');
+
+    fs.writeFileSync(htmlFile, '<html><head><title>Math Page | 音频研究门户</title></head><body><div class="post-content"><p>正常正文</p></div></body></html>');
+    assert.deepEqual(api.runHugoRenderedHtmlGate({ publicDir, sourceDir, modifiedMarkdownPaths: [mdRel] }), []);
+
+    fs.writeFileSync(htmlFile, '<html><head><title>Math Page | 音频研究门户</title></head><body><div class="post-content"><math><merror><mtext>bad</mtext></merror></math></div></body></html>');
+    const merrorIssues = api.runHugoRenderedHtmlGate({ publicDir, sourceDir, modifiedMarkdownPaths: [mdRel] });
+    assert.ok(merrorIssues.some(msg => msg.includes('<merror>')), JSON.stringify(merrorIssues));
+
+    fs.writeFileSync(htmlFile, '<html><head><title>Math Page | 音频研究门户</title></head><body><div class="post-content"><span class="katex-error">\\bad</span></div></body></html>');
+    const katexIssues = api.runHugoRenderedHtmlGate({ publicDir, sourceDir, modifiedMarkdownPaths: [mdRel] });
+    assert.ok(katexIssues.some(msg => msg.includes('katex-error')), JSON.stringify(katexIssues));
+});
+
+test('G17 & G16: --waive-visuals 自动绑定 2026-11-02 不生图政策，status 呈现 pagesDeployVerified/webVerified 且兼容旧事务', t => {
+    const parsedWaive = cli.parseArgs(['plan', '--apply', '--publication-id', publicationId,
+        '--plan-file', '/tmp/plan.json', '--registry-file', '/tmp/registry.json',
+        '--projection-file', '/tmp/projection.json', '--waive-visuals', '--paper-ids', 'arxiv:2605.30365']);
+    assert.equal(parsedWaive.waiveVisuals, true);
+    assert.equal(parsedWaive.visualDispositionFile, undefined);
+    assert.throws(() => cli.parseArgs(['plan', '--apply', '--publication-id', publicationId,
+        '--plan-file', '/tmp/plan.json', '--registry-file', '/tmp/registry.json',
+        '--projection-file', '/tmp/projection.json', '--waive-visuals', '--visual-disposition', '/tmp/v.json']), /命令写法不对/);
+
+    const disposition = api.buildStandingWaiveVisualDisposition({
+        plan: { planSha256: hash('1') },
+        scope: 'selected-sample-publication'
+    });
+    assert.equal(disposition.mode, 'waived');
+    assert.equal(disposition.requestedBy, 'user');
+    assert.match(disposition.reason, /2026-11-02/);
+
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-publication-online-status-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const outputRoot = path.join(root, 'runtime');
+    const blogRepo = path.join(root, 'blog');
+    fs.mkdirSync(path.join(blogRepo, 'content', 'posts'), { recursive: true });
+    fs.mkdirSync(outputRoot, { recursive: true });
+    const identity = `paper_digest_tags_registry_sha256: ${hash('a')}\npaper_digest_tags_registry_version: paper-tag-catalog\n`;
+    const baseline = Buffer.from(`---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_tags_contract: "paper-tag-flat-tags"\n${identity}draft: false\n---\nold\n`);
+    const next = Buffer.from(`---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_tags_contract: "paper-tag-flat-tags"\n${identity}draft: false\n---\nnew\n`);
+    fs.writeFileSync(path.join(blogRepo, 'content/posts/2026-01-01-paper.md'), baseline);
+    const authority = fakeAuthority(next, baseline);
+    const deps = {
+        loadAuthority: () => authority, blogState, gitBlob: () => baseline,
+        worktreeSha: (_repo, rel) => fs.existsSync(path.join(blogRepo, rel)) ? sha(fs.readFileSync(path.join(blogRepo, rel))) : null,
+        sourceBytes: () => next, hugoVersion: 'hugo v0.fixture', validatePublishedTagCatalog: () => ({ valid: true }),
+        hugoGate: () => ({ status: 'passed', engine: 'fixture', version: 'hugo v0.fixture' }),
+        semanticReview: ({ loadedPlan, generation, protocol }) => {
+            const page = { path: 'content/posts/2026-01-01-paper.md', sha256: sha(next), textChunks: 1, imageCount: 0, imageReviewMode: 'not-required', passed: true, issues: [] };
+            page.resultSha256 = api.stableHash(page);
+            const body = { ...require('../scripts/lib/protocol-codec').recordHeader('historical-direct-semantic-review', 'historical-direct-semantic-review'),
+                publicationId: loadedPlan.plan.publicationId, generationSha256: generation.manifest.generationSha256,
+                reviewProtocolFingerprint: protocol, semanticProtocol: api.semanticReviewProtocol(),
+                results: [page], resultSetSha256: api.stableHash([page]), passed: true };
+            return { receipt: { ...body, semanticReviewSha256: api.stableHash(body) }, fileSha256: hash('7') };
+        },
+        validateActivatedWorktree: () => true, now: () => now, publishGit: () => oid('f'),
+        prePublishRemote: () => ({ branch: 'main', localHead: oid('a'), remoteIdentitySha256: hash('d'), remoteOid: oid('a') }),
+        pushAndVerify: () => ({ remoteName: 'origin', remoteIdentitySha256: hash('d'), remoteVerifiedOid: oid('f') }),
+        liveRemote: () => ({ remoteIdentitySha256: hash('d'), remoteOid: oid('f') })
+    };
+    const plan = api.buildPlan({ publicationId, authorityOptions: {}, blogRepo, createdAt: now }, deps);
+    api.writePlan({ outputRoot, plan });
+    api.generate({ outputRoot, publicationId, authorityOptions: {}, blogRepo, apply: true }, deps);
+    api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps);
+    api.activate({ outputRoot, publicationId, blogRepo, apply: true }, deps);
+    api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps);
+
+    const beforeOnline = api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps);
+    assert.equal(beforeOnline.complete, true);
+    assert.equal(beforeOnline.pagesDeployVerified, false);
+    assert.equal(beforeOnline.webVerified, false);
+
+    fs.writeFileSync(path.join(outputRoot, publicationId, 'online-verification.json'), JSON.stringify({
+        publicationId, remoteVerifiedOid: oid('f'), pagesDeployVerified: true, webVerified: true,
+        checked: 1, ok: 1, failed: 0, verifiedAt: now
+    }, null, 2));
+    const afterOnline = api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps);
+    assert.equal(afterOnline.pagesDeployVerified, true);
+    assert.equal(afterOnline.webVerified, true);
+    assert.equal(afterOnline.stages.onlineVerification.complete, true);
+});
+
+test('G12: 按日期完整重写样本（selectedPaperIds 覆盖完整日批次）时，loadDirectAuthority 原子同步单篇与 YYYY-MM-DD.md 汇总页', async t => {
+    const aggregateApi = require('../scripts/lib/historical-direct-aggregate.js');
+    const catalogApi = require('../scripts/lib/historical-direct-rewrite-input-catalog.js');
+    const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
+    const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
+    const directControl = require('../scripts/lib/historical-direct-control.js');
+    const engine = require('../scripts/analysis-engine.js');
+    const { validAnalysisPaper, validLegacyApiAnalysisPaper } = require('./valid-analysis-fixture.js');
+
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-pub-cohort-sync-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const blog = path.join(root, 'blog');
+    const DATE1 = '2026-08-08';
+    const DATE2 = '2026-08-09';
+    const writeFile = (filename, value) => {
+        fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(filename, value, { mode: 0o600 });
+        return sha(Buffer.isBuffer(value) ? value : Buffer.from(value));
+    };
+    const mkPage = (rel, title, kind, scope, cohortDate) => {
+        const arxiv = title.replace('arXiv ', '');
+        const body = kind === 'paper' ? `[arXiv](https://arxiv.org/abs/${arxiv})` : 'summary';
+        const content = `---\ntitle: ${title}\ndate: ${cohortDate}\n---\n${body}\n`;
+        return {
+            pageId: `page:${sha(rel)}`, path: rel, primaryUrl: `https://example.test/${path.basename(rel, '.md')}/`,
+            contentSha256: writeFile(path.join(blog, rel), content), kind, scope, cohortDate,
+            identityHints: kind === 'paper'
+                ? { status: 'single', candidates: [{ scheme: 'arxiv', value: arxiv, sources: ['body:arxiv-link'] }] }
+                : { status: 'none', candidates: [] }
+        };
+    };
+    const pages = [
+        mkPage('content/posts/2026-08-08-p1.md', 'arXiv 2608.00001', 'paper', { type: 'daily', key: DATE1 }, DATE1),
+        mkPage(`content/posts/${DATE1}.md`, 'Summary 1', 'daily-summary', { type: 'daily', key: DATE1 }, DATE1),
+        mkPage('content/posts/2026-08-09-p2.md', 'arXiv 2608.00002', 'paper', { type: 'daily', key: DATE2 }, DATE2),
+        mkPage(`content/posts/${DATE2}.md`, 'Summary 2', 'daily-summary', { type: 'daily', key: DATE2 }, DATE2)
+    ];
+    const inventory = { counts: {}, ledgerSha256: sha('inv'), pageSetSha256: planApi.stableHash(pages), pages };
+    const inventoryFile = path.join(root, 'inventory.json');
+    writeFile(inventoryFile, `${JSON.stringify(inventory, null, 2)}\n`);
+    const writtenCat = catalogApi.buildAndWrite({
+        arxivOnly: true, apply: true, name: 'arxiv-only.json', inventoryFile, blogRoot: blog
+    }, { files: { historicalDirectRewriteInputCatalogDir: path.join(root, 'catalogs') } });
+    const plan = planApi.buildFromFiles({ catalogFile: writtenCat.filename, inventoryFile, blogRoot: blog });
+    const projection = aggregateApi.buildAggregateProjection({ plan, inventory });
+    const planFile = path.join(root, 'plan.json');
+    const projectionFile = path.join(root, 'projection.json');
+    writeFile(planFile, `${JSON.stringify(plan, null, 2)}\n`);
+    writeFile(projectionFile, `${JSON.stringify(projection, null, 2)}\n`);
+
+    const sourceRoot = path.join(root, 'sources');
+    const executionRoot = path.join(root, 'executions');
+    const stagingRoot = path.join(root, 'staging');
+    const registryRoot = path.join(root, 'registries');
+    const publicationMetadataRoot = path.join(root, 'pub-meta');
+    const aggregateRoot = path.join(root, 'aggregates');
+    const captured = new Map();
+    const capture = async ({ arxivId, generation }) => {
+        const text = `Title ${arxivId}\nAbstract\n${'Exact text. '.repeat(10)}\nKeywords: speech\n1 Introduction\nIn our evaluation on the LibriSpeech test set, our model reduces WER from 10.2% to 9.8% compared with the baseline.`;
+        const pdfBytes = Buffer.from(`%PDF-1.4\n${arxivId}\n%%EOF\n`);
+        const structuredArtifacts = { version: 1, tables: [], formulas: [], figures: [], flattenedTextSha256: sha(text) };
+        structuredArtifacts.payloadSha256 = sha(JSON.stringify(structuredArtifacts));
+        const rec = {
+            arxivId, generation, sourceManifestSha256: sha(`m:${arxivId}`), text,
+            runtimeDetails: { paperId: `arxiv:${arxivId}`, source: 'html', sourceId: arxivId, text, imageInfos: [],
+                structuredArtifacts, htmlAvailability: 'available', htmlAttempts: 1, warnings: [] },
+            manifest: { text: { responseSha256: sha(text), source: 'html', sourceId: arxivId }, pdf: { responseSha256: sha(pdfBytes) } }
+        };
+        captured.set(arxivId, rec);
+        return rec;
+    };
+    const readPublicationMetadata = ({ arxivId, generation }) => {
+        const s = captured.get(arxivId);
+        const abstract = `Official abstract for ${arxivId}.`;
+        const snapshot = runner.stableHash({ paperId: s.runtimeDetails.paperId, source: s.runtimeDetails.source,
+            sourceId: s.runtimeDetails.sourceId, textSha256: sha(s.runtimeDetails.text), structuredArtifacts: s.runtimeDetails.structuredArtifacts });
+        return {
+            abstract, authors: ['Author One'], sourceManifestSha256: s.sourceManifestSha256,
+            sourceSnapshotSha256: snapshot, sourceTextSha256: sha(s.runtimeDetails.text),
+            proof: {
+                contract: 'historical-arxiv-publication-metadata-v1', paperId: `arxiv:${arxivId}`,
+                manifestSha256: sha('sm'), atomResponseSha256: sha('atom'), metadataRecordSha256: sha('meta'),
+                abstractSha256: sha(abstract), entryVersion: 1, entryUpdatedAt: '2026-01-01T00:00:00.000Z',
+                publishedAt: '2025-12-31T00:00:00.000Z', sourceCapturedAt: '2026-01-02T00:00:00.000Z',
+                sourceEarliestCapturedAt: '2026-01-02T00:00:00.000Z', sourceLatestCapturedAt: '2026-01-02T00:00:00.000Z',
+                observedAt: '2026-01-03T00:00:00.000Z', sourceId: arxivId, querySourceId: arxivId,
+                sourceName: `https://export.arxiv.org/api/query?id_list=${arxivId}&max_results=1`,
+                sourceManifestSha256: s.sourceManifestSha256, sourceSnapshotSha256: snapshot,
+                sourceTextSha256: sha(s.runtimeDetails.text), generation
+            }
+        };
+    };
+    const freshArxiv = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
+    t.mock.method(freshArxiv, 'readFreshArxivRewriteSource', args => structuredClone(captured.get(args.arxivId)));
+    t.mock.method(runner, 'replayHistoricalReaderPdfSourceForStaging', args => ({
+        sourceDetails: captured.get(args.item.route.arxivId).runtimeDetails
+    }));
+    const rendererSha256 = directPageStaging.currentRendererImplementationSha256();
+    t.mock.method(directPageStaging, 'currentRendererImplementationSha256', () => rendererSha256);
+    directControl.loadOrCreateSourceStatus({ sourceRoot, plan, generation: 1, apply: true, now });
+    for (const item of plan.queue) {
+        directControl.updateSourceStatus({ sourceRoot, plan, generation: 1, event: { paperId: item.paperId, status: 'ready' }, now });
+    }
+    const runRes = await runner.runDirectRewrite({
+        apply: true, plan, blogRoot: blog, registryRoot, executionRoot, stagingRoot,
+        freshArxivSourceRoot: sourceRoot, publicationMetadataRoot,
+        freshArxivFailureHandoffRoot: path.join(root, 'handoffs'), queue: 'arxiv', arxivGeneration: 1,
+        paperIds: ['arxiv:2608.00001']
+    }, {
+        captureFreshArxivRewriteSource: capture,
+        assertPublicationMetadataReady: () => {},
+        readPublicationMetadata,
+        rendererImplementationSha256: () => rendererSha256,
+        renderDirectPage: packet => ({ markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }),
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => {
+            const paper = validLegacyApiAnalysisPaper(item.route.arxivId);
+            const cur = validAnalysisPaper(item.route.arxivId);
+            paper.analysisManifest.stages.taxonomySeal = cur.analysisManifest.stages.taxonomySeal;
+            paper.analysisManifest.stages.coreSummaryRepair = cur.analysisManifest.stages.coreSummaryRepair;
+            paper.analysisManifest.contracts.taxonomy = cur.analysisManifest.contracts.taxonomy;
+            paper.analysisManifest.contracts.coreSummary = cur.analysisManifest.contracts.coreSummary;
+            for (const f of ['coreSummaryInputAnalysisSha256', 'inputCoreSummarySha256', 'outputCoreSummarySha256']) {
+                paper.analysisManifest.stages.scoringAudit[f] = cur.analysisManifest.stages.scoringAudit[f];
+            }
+            const prov = runner.buildDirectSourceRecord(item, sourceDescriptor);
+            paper.directPaperId = item.paperId; paper.title = `Fresh ${item.paperId}`; paper.sourceSha256 = prov.sourceSha256;
+            paper.freshRewriteProvenance = prov; paper.analysisManifest.freshRewriteProvenance = structuredClone(prov);
+            paper.analysisManifest.sourceAcquisition = { analysisSource: sourceDetails.source, sourceId: sourceDetails.sourceId,
+                sourceTextChars: sourceDetails.text.length, usedTextChars: sourceDetails.text.length, fullTextChars: sourceDetails.text.length,
+                fullTextAvailable: true, truncated: false, sourceSha256: prov.sourceSha256, usedTextSha256: prov.sourceSha256,
+                structuredArtifactsSha256: prov.structuredArtifactsSha256, htmlAttempts: 1, warnings: [] };
+            const ai = paper.apiReaderAuthors.identity;
+            ai.sourceTextSha256 = prov.sourceSha256; ai.metadataSha256 = runner.stableHash(paper.authors);
+            ai.authors[0].nameBinding.metadataSha256 = ai.metadataSha256;
+            ai.authors[0].affiliationBindings[0].sourceTextSha256 = prov.sourceSha256;
+            paper.apiReaderAuthors.sourceDomSha256 = prov.sourceSha256;
+            paper.apiReaderAuthors.identitySha256 = runner.stableHash(ai);
+            paper.apiReaderResources.sourceTextSha256 = prov.sourceSha256;
+            paper.apiReaderResources.identitySha256 = runner.stableHash({ contract: paper.apiReaderResources.contract,
+                sourceTextSha256: prov.sourceSha256, resources: paper.apiReaderResources.resources });
+            Object.assign(paper.analysisManifest.stages.apiReaderArticle, {
+                readerAuthorsSha256: runner.stableHash(paper.apiReaderAuthors),
+                readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256,
+                resourceIdentitySha256: paper.apiReaderResources.identitySha256,
+                sourceBindingsSourceTextSha256: prov.sourceSha256,
+                structuredArtifactsSha256: prov.structuredArtifactsSha256
+            });
+            paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
+            assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
+            return paper;
+        }
+    });
+    assert.equal(runRes.status, 'complete');
+    const aggInputs = aggregateApi.loadDirectAggregateInputs({
+        planFile, registryFile: runRes.registryFile, projectionFile, stagingRoot, executionRoot,
+        freshArxivSourceRoot: sourceRoot, publicationMetadataRoot, readPublicationMetadata,
+        currentRendererImplementationSha256: rendererSha256
+    });
+    const aggs = aggregateApi.buildDirectAggregates({ inputs: aggInputs, daily: DATE1 });
+    aggregateApi.writeDirectAggregates({
+        outputRoot: aggregateRoot, aggregateRunId: aggregateApi.aggregateRunIdFor(aggs), aggregates: aggs
+    });
+
+    const loaded = api.loadDirectAuthority({
+        planFile, registryFile: runRes.registryFile, projectionFile, waiveVisuals: true,
+        selectedPaperIds: ['arxiv:2608.00001'], stagingRoot, executionRoot, aggregateRoot,
+        freshArxivSourceRoot: sourceRoot, publicationMetadataRoot, readPublicationMetadata
+    });
+    const paths = loaded.artifacts.map(a => a.path).sort();
+    assert.ok(paths.includes('content/posts/2026-08-08-p1.md'), '应包含重写单篇页');
+    assert.ok(paths.includes(`content/posts/${DATE1}.md`), '完整日批次样本重写应原子同步对应日期汇总页');
+    assert.ok(!paths.includes(`content/posts/${DATE2}.md`), '未入选日期汇总页不得被修改');
+    assert.equal(loaded.visualDisposition.mode, 'waived');
+});

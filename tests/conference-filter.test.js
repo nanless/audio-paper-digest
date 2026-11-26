@@ -204,7 +204,13 @@ test('核心音频会议的论文交给模型判断；其他会议仍可由关�
         { conferenceId: 'nime-2026', title: 'A Responsive Piano Interface' },
         { conferenceId: 'odyssey-2026', title: 'Robust Identity Embeddings' },
         { conferenceId: 'speechprosody-2026', title: 'Prosodic Representation Learning' },
-        { conferenceId: 'iwslt-2026', title: 'Simultaneous Translation with Adaptive Policies' }
+        { conferenceId: 'iwslt-2026', title: 'Simultaneous Translation with Adaptive Policies' },
+        { conferenceId: 'ismir-2026', title: 'Symbolic Score Following with Diffusion' },
+        { conferenceId: 'dcase-2026', title: 'Polyphonic Scene Classification Under Shift' },
+        { conferenceId: 'waspaa-2025', title: 'Spatial Array Calibration Methods' },
+        { conferenceId: 'asru-2025', title: 'Low-Latency Sequence Transducers' },
+        { conferenceId: 'interspeech-2027', title: 'Future Year Agnostic Core Audio Fallback' },
+        { conferenceId: 'ismir-2028', title: 'Future Year Agnostic Music Retrieval Fallback' }
     ];
     const abstract = 'We present a new system design with controlled experiments, quantitative comparisons, ablation studies, and reproducible evaluation protocols.';
     for (const example of examples) {
@@ -216,9 +222,25 @@ test('核心音频会议的论文交给模型判断；其他会议仍可由关�
     const broad = filter.evaluateConferenceKeywordPrefilter({ title: 'Generic Convex Optimization', abstract }, 'eusipco-2026');
     assert.equal(broad.pass, false);
     assert.equal(broad.conferenceCategoryFallback, false);
+    // Wave 11C prefilter overlay: rescues modern 2025-2026 audio terms and excludes zero-FN non-audio homonyms on broad conferences.
+    const rescued = filter.evaluateConferenceKeywordPrefilter(
+        { title: 'Streaming Adaptation for CosyVoice and MaskGCT', abstract },
+        'neurips-2026'
+    );
+    assert.equal(rescued.pass, true);
+    assert.equal(rescued.rescuedByModernVocabulary, true);
+    const rejectedWireless = filter.evaluateConferenceKeywordPrefilter(
+        {
+            title: 'Hybrid Beamforming for 6G mmWave MIMO Base Station Wireless Channels',
+            abstract: 'We optimize precoding and downlink beamforming for 6G massive MIMO antenna arrays using channel state information and OFDM subcarriers.'
+        },
+        'icassp-2026'
+    );
+    assert.equal(rejectedWireless.pass, false);
+    assert.equal(rejectedWireless.dailyFilterPrefilterRule, 'non_audio_wireless_beamforming');
     assert.deepEqual(filter.CORE_AUDIO_CONFERENCE_IDS,
-        ['chime-2026', 'dafx-2026', 'icmc-2026', 'interspeech-2026', 'iwslt-2026', 'jep-2026', 'nime-2026',
-            'odyssey-2026', 'speechprosody-2026']);
+        ['asru-2025', 'chime-2026', 'dafx-2026', 'dcase-2026', 'icmc-2026', 'interspeech-2026', 'ismir-2026',
+            'iwslt-2026', 'jep-2026', 'nime-2026', 'odyssey-2026', 'speechprosody-2026', 'waspaa-2025']);
     assert.equal(filter.FILTER_CONFIG_BINDING.coreConferenceFallbackContract,
         filter.CORE_CONFERENCE_FALLBACK_CONTRACT);
 });

@@ -623,3 +623,38 @@ print(json.dumps([publish._project_reader_cell_tex_display(x) for x in items]))`
         assert.equal(projectReaderCellTexDisplay(raw), pyResults[idx], `Node vs Python mismatch for ${JSON.stringify(raw)}`);
     });
 });
+
+test('TeX 单元格局部重复折叠使用真实词元起点边界（修复假阴性与假阳性且 Node/Python 一致）', () => {
+    const cases = [
+        // False-negative fixes: multi-char tokens after non-word delimiters must fold cleanly
+        ['Metric (SNR\\mathrm{SNR})', 'Metric (SNR)'],
+        ['Sample rate (16kHz\\mathrm{16kHz})', 'Sample rate (16kHz)'],
+        ['Window (20ms\\mathrm{20ms})', 'Window (20ms)'],
+        ['Metric (f × 8{f}\\times 8)', 'Metric (f × 8)'],
+        ['Aligned temporal granularity (†:f×8{}^{\\dagger}\\!:{f}\\times 8; ‡:f×4{}^{\\ddagger}\\!:{f}\\times 4)', 'Aligned temporal granularity (†:f×8; ‡:f×4)'],
+        // False-positive fixes: partial suffix glued to alphanumeric/CJK prefix must NOT fold
+        ['Base12.3\\mathrm{.3})', 'Base12.3\\mathrm{.3})'],
+        ['foo1†:f×8{}^{\\dagger}\\!:{f}\\times 8)', 'foo1†:f×8{}^{\\dagger}\\!:{f}\\times 8)'],
+        ['中文SNR\\mathrm{SNR})', '中文SNR\\mathrm{SNR})'],
+    ];
+    for (const [raw, expected] of cases) {
+        const out = projectReaderCellTexDisplay(raw);
+        assert.equal(out, expected, `JS mismatch for ${JSON.stringify(raw)}`);
+        assert.equal(projectReaderCellTexDisplay(out), out, `JS idempotence for ${JSON.stringify(raw)}`);
+    }
+    const projectRoot = path.resolve(__dirname, '..');
+    const pyResults = JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', `import sys, json
+sys.path.insert(0, 'scripts')
+import blog_formula_tex_display as py_tex
+items = json.load(sys.stdin)
+print(json.dumps([py_tex._project_reader_cell_tex_display(x) for x in items], ensure_ascii=False))`], {
+        cwd: projectRoot,
+        input: JSON.stringify(cases.map(([raw]) => raw)),
+        encoding: 'utf8',
+        env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
+    }).trim());
+    cases.forEach(([raw, expected], idx) => {
+        assert.equal(pyResults[idx], expected, `Python mismatch for ${JSON.stringify(raw)}`);
+        assert.equal(projectReaderCellTexDisplay(raw), pyResults[idx], `Node vs Python drift for ${JSON.stringify(raw)}`);
+    });
+});

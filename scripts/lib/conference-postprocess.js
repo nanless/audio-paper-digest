@@ -34,6 +34,7 @@ const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
 const FULL = { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' };
 const PDF_VISUAL = { fullText: 'full', tables: 'unavailable', formulas: 'unavailable', figures: 'available' };
+const PDF_VISUAL_TABLES = { fullText: 'full', tables: 'available', formulas: 'unavailable', figures: 'available' };
 const readerFormats = require('./reader-record-format');
 const readerProtocols = require('./reader-stage-protocols');
 const scoringFormats = require('./scoring-record-format');
@@ -208,7 +209,8 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         || loaded.analysis.papers[0].id !== loaded.run.paperId || loaded.analysis.papers[0].arxivId || loaded.analysis.papers[0].paper_id) fail('会议分析的完成状态、论文身份或完成凭证与实际文件不一致。');
     if (stableHash(loaded.run.capabilities) !== stableHash(WEAK)
         && stableHash(loaded.run.capabilities) !== stableHash(FULL)
-        && stableHash(loaded.run.capabilities) !== stableHash(PDF_VISUAL)) fail('会议来源声明的表格、公式或图片处理能力不符合支持的组合。');
+        && stableHash(loaded.run.capabilities) !== stableHash(PDF_VISUAL)
+        && stableHash(loaded.run.capabilities) !== stableHash(PDF_VISUAL_TABLES)) fail('会议来源声明的表格、公式或图片处理能力不符合支持的组合。');
     const artifacts = loaded.source?.sourceDetails?.structuredArtifacts;
     if (!artifacts || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)
         || !Array.isArray(artifacts.figures)) fail('会议来源缺少包含表格、公式和图片数组的结构化记录。');
@@ -230,6 +232,12 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
             || !codec.hasValidHeader(artifacts, 'conference-reader-pdf-artifacts',
                 Object.hasOwn(artifacts, 'contract') ? 'contract' : 'parserVersion'))) {
         fail('仅提供 PDF 图像的来源不能声明已有原表单元格或 TeX 公式。');
+    }
+    if (stableHash(loaded.run.capabilities) === stableHash(PDF_VISUAL_TABLES)
+        && (!artifacts.tables.length || artifacts.formulas.length
+            || !codec.hasValidHeader(artifacts, 'conference-reader-pdf-artifacts',
+                Object.hasOwn(artifacts, 'contract') ? 'contract' : 'parserVersion'))) {
+        fail('v2 PDF 表格与图像来源必须携带已核验原表且不能声明原始 TeX 公式。');
     }
     const sourcePaper = loaded.analysis.papers[0];
     const authenticatedPdfBindings = (sourcePaper.apiReaderPlan?.tableBindings || [])
@@ -1386,12 +1394,103 @@ function buildAggregateArtifacts({ analysisRoot, aggregateRoot, apply = false, a
     });
     const aggregateTags = [...new Set(members.flatMap(item => item.labels))].sort((left, right) => left.localeCompare(right, 'zh-CN'));
     const aggregateDate = members.map(item => item.date).sort().at(-1);
-    const lines = ['---', `title: "${conferenceId} 论文深度解读"`, `date: ${aggregateDate}`, 'draft: false', 'paper_digest_pipeline_owned: true',
+    const formatMedal = rank => (rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : String(rank));
+    const resourceBadgesFor = resources => {
+        const list = Array.isArray(resources) ? resources : [];
+        let hasCode = false, hasModelOrData = false, hasDemo = false;
+        for (const resource of list) {
+            if (!resource || resource.availability !== 'available') continue;
+            if (resource.type === 'code') hasCode = true;
+            else if (resource.type === 'model' || resource.type === 'dataset') hasModelOrData = true;
+            else if (resource.type === 'demo') hasDemo = true;
+        }
+        const icons = [hasCode ? '💻' : '', hasModelOrData ? '🤗' : '', hasDemo ? '🔊' : ''].filter(Boolean);
+        return { hasCode, hasModelOrData, hasDemo, text: icons.length ? icons.join(' ') : '-' };
+    };
+    const compactLabel = (value, maxChars = 40) => {
+        const clean = md(value).replace(/[。！？；!?;]+/g, '，').replace(/，{2,}/g, '，').replace(/^[ ，,、；;：:]+|[ ，,、；;：:]+$/g, '');
+        if (clean.length <= maxChars) return clean;
+        return `${clean.slice(0, maxChars).replace(/[ ，,、；;：:(-【]+$/, '')}…`;
+    };
+    const badgesByPaperId = new Map(members.map(item => [item.paperId, resourceBadgesFor(item.resources)]));
+    const tierMust = members.filter(item => item.score >= 8.0);
+    const tierFocus = members.filter(item => item.score >= 7.0 && item.score < 8.0);
+    const tierSkim = members.filter(item => item.score < 7.0);
+    const codeCnt = members.filter(item => badgesByPaperId.get(item.paperId).hasCode).length;
+    const modelCnt = members.filter(item => badgesByPaperId.get(item.paperId).hasModelOrData).length;
+    const demoCnt = members.filter(item => badgesByPaperId.get(item.paperId).hasDemo).length;
+    const focusBits = directions.slice(0, 4).map(([label, count]) => {
+        const concept = taskConceptByLabel.get(label);
+        const topScore = Math.max(...members.filter(item => item.primaryTask === label).map(item => item.score));
+        return `[#${md(label)}](${conceptHref(concept.id)})（${count} 篇，最高 ${topScore} 分）`;
+    });
+    const thematicBriefLines = [
+        '### 🧭 会议研究脉络',
+        '',
+        ...(focusBits.length ? [`- **焦点方向**：${focusBits.join('、')}。`] : []),
+        `- **阅读与开源快照**：共 ${members.length} 篇完成评分（精读必看 ${tierMust.length} 篇 · 重点关注 ${tierFocus.length} 篇 · 速览参考 ${tierSkim.length} 篇）；资源覆盖 💻 代码 ${codeCnt} 篇、🤗 模型或数据 ${modelCnt} 篇、🔊 试听演示 ${demoCnt} 篇。`,
+        ''
+    ];
+    const readingTierLines = ['### 🎯 三档阅读分级', ''];
+    for (const [tierLabel, tierItems] of [
+        ['🔥 精读必看（8.0 分及以上）', tierMust],
+        ['📌 重点关注（7.0–7.9 分）', tierFocus],
+        ['⚡ 速览参考（7.0 分以下）', tierSkim]
+    ]) {
+        if (!tierItems.length) continue;
+        const entries = tierItems.map(item => {
+            const badgeText = badgesByPaperId.get(item.paperId).text;
+            const badgeTail = badgeText !== '-' ? ` ${badgeText}` : '';
+            return `[${compactLabel(item.readerTitle, 36)}](${item.url})（${item.score} 分${badgeTail}）`;
+        });
+        for (let idx = 0; idx < entries.length; idx += 3) {
+            const prefix = idx === 0 ? `**${tierLabel}**（共 ${tierItems.length} 篇）：` : `**${tierLabel}**（续）：`;
+            readingTierLines.push(`- ${prefix}${entries.slice(idx, idx + 3).join('、')}`);
+        }
+    }
+    readingTierLines.push('');
+    const spotlightLines = [];
+    if (members.length) {
+        const top = members[0];
+        const topConcept = taskConceptByLabel.get(top.primaryTask);
+        const topBadges = badgesByPaperId.get(top.paperId).text;
+        const metaBits = [md(top.rankBucket), md(top.documentType),
+            topConcept ? `[#${md(top.primaryTask)}](${conceptHref(topConcept.id)})` : `#${md(top.primaryTask)}`].filter(Boolean);
+        const badgeTail = topBadges !== '-' ? ` · 资源 ${topBadges}` : '';
+        spotlightLines.push('### 🌟 会议精选焦点', '',
+            `> 🥇 **[${compactLabel(top.readerTitle, 48)}](${top.url})** · 总分 **${top.score}**/10（${metaBits.join(' · ')}）${badgeTail}`);
+        const topParsed = readerRecordByPaperId.get(top.paperId)?.paper?.parsed || {};
+        const isV2Rubric = topParsed.scoringRubricVersion === 'type-aware-v2';
+        const dimDefs = isV2Rubric ? [
+            ['innovationScore', '创新', 10], ['technicalRigorScore', '技术严谨', 10],
+            ['experimentalSufficiencyScore', '实验充分', 10], ['clarityScore', '清晰度', 10],
+            ['impactScore', '影响力', 10], ['openSourceScore', '开源', 10],
+            ['reproducibilityScore', '可复现', 10], ['engineeringScore', '工程/实践', 10]
+        ] : [
+            ['innovationScore', '创新', 2], ['technicalRigorScore', '技术严谨', 1.5],
+            ['experimentalSufficiencyScore', '实验充分', 1.5], ['clarityScore', '清晰度', 1],
+            ['impactScore', '影响力', 1.5], ['openSourceScore', '开源', 1.5],
+            ['reproducibilityScore', '可复现', 0.5], ['engineeringScore', '工程/实践', 1.5]
+        ];
+        const rankedDims = dimDefs.map(([key, label, max]) => {
+            const rawVal = topParsed[key];
+            const num = Number(rawVal);
+            if (rawVal === undefined || rawVal === null || rawVal === '' || !Number.isFinite(num)) return null;
+            return { ratio: num / max, max, text: `${label} ${isV2Rubric ? num.toFixed(1) : rawVal}/${max}` };
+        }).filter(Boolean).sort((a, b) => b.ratio - a.ratio || b.max - a.max);
+        if (rankedDims.length) {
+            spotlightLines.push('>', `> 突出维度：${rankedDims.slice(0, 3).map(d => d.text).join(' · ')}`);
+        }
+        spotlightLines.push('');
+    }
+    const lines = ['---', `title: "${conferenceId} 论文深度解读"`, `date: ${aggregateDate}`, 'draft: false',
+        'layout: "posts"', 'paper_digest_pipeline_owned: true',
         `tags: ${JSON.stringify(aggregateTags)}`, `categories: ${JSON.stringify([`${conferenceId} 论文`])}`,
         `description: "共收录 ${members.length} 篇 ${conferenceId} 会议论文深度解读"`,
         'paper_digest_page_type: index', `paper_digest_reader_quality: "${READER_FACING_CONTRACT}"`,
         `paper_digest_reader_quality_schema_fingerprint: "${codec.schemaFingerprint('reader-facing-page')}"`,
         `paper_digest_tags_contract: "${tagRulesApi.TAG_FLAT_COMPAT_CONTRACT}"`,
+        `paper_digest_tags_schema_fingerprint: "${codec.schemaFingerprint('paper-tag-flat-tags')}"`,
         `paper_digest_tags_selection_contract: "${aggregateTagMetadata.selectionContract}"`,
         `paper_digest_tags_registry_version: "${aggregateTagMetadata.registryVersion}"`,
         `paper_digest_tags_registry_sha256: "${tagCatalog.registrySha256}"`,
@@ -1399,16 +1498,27 @@ function buildAggregateArtifacts({ analysisRoot, aggregateRoot, apply = false, a
         'paper_digest_tags_scope: "aggregate-primary-task-counts"', '---', '', `# ${conferenceId} 论文深度解读`, '',
         `本汇总收录已核验计划中全部 ${members.length} 篇已完成分析、标签分配和单篇页面生成的论文。`, '',
         '🏷️ 标签说明：本期标签来自新版词表；热门方向只统计主任务。', '',
-        '## ⚡ 今日概览', '', `计划入选的 ${members.length} 篇论文已完成深度分析、读者文章和单篇页面生成。`, '',
-        '### 🏷️ 热门方向', '', '| 方向（仅主任务） | 数量 |', '|---|---:|'];
-    for (const [label, count] of directions) lines.push(`| #${md(label)} | ${count} 篇 |`);
+        '## ⚡ 会议概览', '', `计划入选的 ${members.length} 篇论文已完成深度分析、读者文章和单篇页面生成。`, '',
+        ...thematicBriefLines,
+        ...readingTierLines,
+        ...spotlightLines,
+        '### 🏷️ 热门方向', '', '| 方向（仅主任务） | 数量 | 分布 |', '|---|---:|---|'];
+    for (const [label, count] of directions) {
+        const concept = taskConceptByLabel.get(label);
+        lines.push(`| [#${md(label)}](${conceptHref(concept.id)}) | ${count} 篇 | ${'█'.repeat(Math.min(count, 15))} |`);
+    }
     // 热门方向表之后给出同一 registry 的多级下钻统计；排版保持与现有表格
     // 一致的中文克制风格（分面小节 + 缩进层级列表 + 概念子树筛选链接）。
     lines.push('', ...hierarchyLines(hierarchy, presentations.facetDisplayLabels));
     lines.push('', '## 📊 论文评分排行榜', '',
-        '| 排名 | Reader 中文题目 | 英文题目 | 八维评分 | 分档 | 文档类型 | 主任务 |',
-        '|---:|---|---|---|---|---|---|');
-    for (const item of members) lines.push(`| ${item.rank} | [${md(item.readerTitle)}](${item.url}) | [${md(item.title)}](${item.url}) | ${readerDisplayByPaperId.get(item.paperId).scoreLine.replace(/ \| /g, ' · ')} | ${md(item.rankBucket)} | ${md(item.documentType)} | #${md(item.primaryTask)} |`);
+        '| 排名 | 论文 | 中文导览 | 总分 | 分档 | 文档类型 | 主任务 | 资源 |',
+        '|---|---|---|---:|---|---|---|---|');
+    for (const item of members) {
+        const concept = taskConceptByLabel.get(item.primaryTask);
+        const taskLink = concept ? `[#${md(item.primaryTask)}](${conceptHref(concept.id)})` : `#${md(item.primaryTask)}`;
+        const badges = badgesByPaperId.get(item.paperId).text;
+        lines.push(`| ${formatMedal(item.rank)} | [${md(item.title)}](${item.url}) | [${md(item.readerTitle)}](${item.url}) | ${item.score} | ${md(item.rankBucket)} | ${md(item.documentType)} | ${taskLink} | ${badges} |`);
+    }
     lines.push('', '---', '', '## 📋 论文列表', '');
     for (const item of members) lines.push(`### ${item.rank}. [${md(item.readerTitle)}](${item.url})`, '',
         `> 英文题目：*[${md(item.title)}](${item.url})*`, '',

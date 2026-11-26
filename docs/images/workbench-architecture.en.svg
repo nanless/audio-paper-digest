@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="432" viewBox="0 0 960 432" role="img" aria-labelledby="title desc">
   <title id="title">Audio Research Workbench Three-Layer Architecture</title>
-  <desc id="desc">Studio Monograph three-layer architecture: the content engine runs the daily pipeline (with conference and historical pipelines preserved) and pushes reviewed diffs to the Studio Monograph 2.0 Hugo portal; Mac and Android v1.5.0 apps sync snapshots and podcasts read-only while isolating personal LLM, Zotero, and WebDAV sync.</desc>
+  <desc id="desc">Studio Monograph three-layer architecture: the content engine runs active daily, conference, and historical pipelines at full parity and pushes reviewed diffs to the Studio Monograph 2.0 Hugo portal; Mac and Android v1.5.x apps sync snapshots and podcasts read-only while isolating personal LLM, Zotero, and WebDAV sync.</desc>
   <defs>
     <style>
       text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #182120; }
@@ -35,7 +35,7 @@
 
   <rect x="46" y="146" width="228" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
   <text x="58" y="168" class="t-badge" fill="#0f5c58">Three Isolated Pipelines</text>
-  <text x="58" y="191" class="t-item">Daily active · conf / hist paused</text>
+  <text x="58" y="191" class="t-item">Daily · Conference · History</text>
 
   <rect x="46" y="218" width="228" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
   <text x="58" y="240" class="t-badge" fill="#0f5c58">Shared LLM/API Core</text>
@@ -75,7 +75,7 @@
   <rect x="672" y="88" width="256" height="282" rx="14" fill="#ffffff" stroke="#e4bfa8" stroke-width="1.6"/>
   <rect x="672" y="88" width="256" height="44" rx="14" fill="#b85a34"/>
   <rect x="672" y="118" width="256" height="14" fill="#b85a34"/>
-  <text x="688" y="115" class="t-card">3. Native Apps (v1.5.0)</text>
+  <text x="688" y="115" class="t-card">3. Native Apps (v1.5.x)</text>
 
   <rect x="686" y="146" width="228" height="62" rx="9" fill="#fdf8f4" stroke="#ead6c9" stroke-width="1.2"/>
   <text x="698" y="168" class="t-badge" fill="#a64d2a">Zero-Config Reading</text>

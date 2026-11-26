@@ -116,20 +116,28 @@ function normalizedOfficialResult(id, result) {
     const proof = result.proof;
     const querySourceId = proof?.querySourceId;
     const replayed = metadataApi.parseOfficialArxivMetadataResponse(id, rawBytes.toString('utf8'), { querySourceId });
+    const legacyBase = metadataApi.stripOptionalPublicationMetadata(replayed.metadata);
+    const replayedHash = freshRun.stableHash(replayed.metadata);
+    const legacyHash = freshRun.stableHash(legacyBase);
+    const resultHash = freshRun.stableHash(result.metadata);
+    const matchesCurrent = proof?.recordSha256 === replayedHash && resultHash === replayedHash;
+    const matchesLegacy = proof?.recordSha256 === legacyHash && resultHash === legacyHash;
     const observedAt = proof?.observedAt;
     if (!proof || proof.contract !== metadataApi.CONTRACT || proof.paperId !== `arxiv:${id}`
         || proof.sourceName !== replayed.proof.sourceName || proof.querySourceId !== replayed.proof.querySourceId
         || proof.fileSha256 !== sha256(rawBytes)
-        || proof.recordSha256 !== freshRun.stableHash(replayed.metadata)
+        || (!matchesCurrent && !matchesLegacy)
         || proof.entryVersion !== replayed.proof.entryVersion
         || proof.entryUpdatedAt !== replayed.proof.entryUpdatedAt
         || proof.publishedAt !== replayed.proof.publishedAt
         || typeof observedAt !== 'string' || !Number.isFinite(Date.parse(observedAt))
-        || new Date(observedAt).toISOString() !== observedAt
-        || freshRun.stableHash(result.metadata) !== freshRun.stableHash(replayed.metadata)) {
+        || new Date(observedAt).toISOString() !== observedAt) {
         fail('官方 Atom 提取结果或获取记录无法根据原始响应重新核对');
     }
-    return { ...replayed, proof: { ...replayed.proof, observedAt } };
+    const chosenMetadata = matchesCurrent ? replayed.metadata : legacyBase;
+    const chosenRecordSha = matchesCurrent ? replayedHash : legacyHash;
+    return { ...replayed, metadata: chosenMetadata,
+        proof: { ...replayed.proof, recordSha256: chosenRecordSha, observedAt } };
 }
 function sourceBinding(sourceRoot, id, generation) {
     const source = freshSource.readFreshArxivRewriteSource({ rootDir: sourceRoot, arxivId: id, generation });
@@ -241,14 +249,19 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
     const official = metadataApi.parseOfficialArxivMetadataResponse(id, atomBytes.toString('utf8'), {
         querySourceId: manifest.atom.querySourceId
     });
+    const officialLegacyBase = metadataApi.stripOptionalPublicationMetadata(official.metadata);
+    const officialHash = freshRun.stableHash(official.metadata);
+    const officialLegacyHash = freshRun.stableHash(officialLegacyBase);
+    const storedHash = freshRun.stableHash(metadata);
+    const matchesCurrentMetadata = officialHash === manifest.metadata.recordSha256 && storedHash === officialHash;
+    const matchesLegacyMetadata = officialLegacyHash === manifest.metadata.recordSha256 && storedHash === officialLegacyHash;
     if (official.proof.sourceName !== manifest.atom.sourceName
         || official.proof.querySourceId !== manifest.atom.querySourceId
         || official.proof.fileSha256 !== manifest.atom.responseSha256
-        || official.proof.recordSha256 !== manifest.metadata.recordSha256
+        || (!matchesCurrentMetadata && !matchesLegacyMetadata)
         || official.proof.entryVersion !== manifest.atom.entryVersion
         || official.proof.entryUpdatedAt !== manifest.atom.entryUpdatedAt
         || official.proof.publishedAt !== manifest.atom.publishedAt
-        || freshRun.stableHash(metadata) !== freshRun.stableHash(official.metadata)
         || sha256(Buffer.from(metadata.abstract, 'utf8')) !== manifest.metadata.abstractSha256) {
         fail('发布元数据记录无法根据原始官方 Atom 响应重新核对');
     }
@@ -284,10 +297,16 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
     // 只整理返回的作者视图，
     // 不改已保存的附带文件及其 SHA。
     const authors = metadata.authors.map(author => author.trim());
+    const optionalExtras = {};
+    for (const field of metadataApi.OPTIONAL_METADATA_FIELDS) {
+        const value = official.metadata[field];
+        if (typeof value === 'string' && value.trim()) optionalExtras[field] = value.trim();
+    }
     return { directory, sourceManifestSha256: manifest.source.sourceManifestSha256,
         sourceSnapshotSha256: manifest.source.sourceSnapshotSha256,
         sourceTextSha256: manifest.source.sourceTextSha256, abstract: metadata.abstract,
         authors,
+        ...optionalExtras,
         proof: { ...codec.recordHeader(manifest.contract === MANIFEST_CONTRACT ? CONTRACT
             : codec.historicalContract('historical-arxiv-publication-metadata', 'atom-sidecar-proof'),
         'historical-arxiv-publication-metadata'), paperId: `arxiv:${id}`, manifestSha256: sha256(manifestBytes),
@@ -364,11 +383,17 @@ function reusableOfficialAtomIndex({ freshRewriteRoot, paperIds } = {}) {
                 if (!queryMatch) continue;
                 const querySourceId = decodeURIComponent(queryMatch[1]);
                 const parsed = metadataApi.parseOfficialArxivMetadataResponse(id, atom.toString('utf8'), { querySourceId });
+                const legacyParsedMeta = metadataApi.stripOptionalPublicationMetadata(parsed.metadata);
+                const legacyParsedHash = freshRun.stableHash(legacyParsedMeta);
                 const paper = inputs?.papers?.find(item => String(item?.arxivId || item?.paper_id || '').replace(/v\d+$/i, '') === id);
+                const paperHash = freshRun.stableHash(paper);
+                const matchesParsedCurrent = proof?.recordSha256 === parsed.proof.recordSha256
+                    && paperHash === freshRun.stableHash(parsed.metadata);
+                const matchesParsedLegacy = proof?.recordSha256 === legacyParsedHash
+                    && paperHash === legacyParsedHash;
                 if (!proof || proof.contract !== metadataApi.CONTRACT || proof.paperId !== `arxiv:${id}`
                     || proof.sourceName !== parsed.proof.sourceName || proof.fileSha256 !== parsed.proof.fileSha256
-                    || proof.recordSha256 !== parsed.proof.recordSha256
-                    || freshRun.stableHash(paper) !== freshRun.stableHash(parsed.metadata)) continue;
+                    || (!matchesParsedCurrent && !matchesParsedLegacy)) continue;
                 // 旧运行的 createdAt 不算新运行身份的一部分。
                 // 仅查询指定的固定版本 vN 时，才可用它记录获取时间；不带版本号的候选须使用
                 // 获取记录中保存的观察时间。

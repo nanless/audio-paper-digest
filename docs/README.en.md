@@ -25,7 +25,7 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 | Compare platform features and window adaptation | [Android feature mapping](android-feature-parity.md), [interface design](macos-interface-design-research.md) |
 | Understand personal study and product decisions | [Workbench design](desktop-research-workbench-plan.md), which separates current capabilities from future goals |
 
-The current published release for both Mac and Android is **1.5.0 (build 24)** (published 26 November 2026, commit `5b5a8e79`), adding the native daily audio podcast player, Wave 12 / Track 13.3 audio spec & score-audit card styling, aligned offline multi-word search and filters, full rebranding to Audio Research Workbench / Audio Research Portal, and legacy `/audio-paper-digest-blog/` compatibility; see the [1.5.0 release record](workbench-1.5.0-review.md).
+The current source version for both Mac and Android is **1.5.1 (build 25) (not yet published)**, covering Studio Monograph UI refinements, cross-platform page/offline fixes, and full conference/historical pipeline parity; see the [1.5.1 pre-release record](workbench-1.5.1-review.md). The latest published release is **1.5.0 / build 24** (published 26 November 2026, commit `5b5a8e79`); see the [1.5.0 release record](workbench-1.5.0-review.md).
 
 <details>
 <summary>Previous releases 1.4.7–1.3.0 (each version retains its own date, environment, and tested scope)</summary>
@@ -73,8 +73,8 @@ First prepare the environment using [setup](setup.md), then follow the [operatin
 | Task | Instructions |
 |---|---|
 | Today's digest or recovery from a saved stage | [Daily procedure](../SKILL.md#1-日更), [fetch boundaries](daily-fetch-boundary.md), [source checks under locks](locked-source-validation.md) |
-| Official conference acquisition, filtering, analysis, and publication | [Conference workflow](conference-workflow.md) |
-| Rewrite historical pages from original papers while retaining URLs | [Historical sources and updates](history-rewrite.md) |
+| Official conference acquisition, filtering, analysis, and publication | [Conference workflow](conference-workflow.md), [New conference onboarding guide (2026/2027+)](conference-workflow.md#新会议全流程接入指南20262027) |
+| Audit and batch-rewrite outdated historical posts while retaining URLs | [Outdated historical blog rewrite guide](history-rewrite.md#过时历史博客批量重写指南), [Historical sources and updates](history-rewrite.md) |
 | Review, publish, and verify completed historical work | [Historical publication](history-direct-publication.md) |
 | Update only the presentation of a complete daily batch | [Republication with unchanged sources and analysis](data-format.md#同来源同分析的日批重发布) |
 
@@ -121,7 +121,7 @@ Standing paid authorization permits necessary subsequent windows, with original 
 
 These records explain the problems, changes, and actual verification at the time. They are not separate current operating procedures.
 
-- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md), [1.4.4](workbench-1.4.4-review.md), [1.4.5](workbench-1.4.5-review.md), [1.4.6](workbench-1.4.6-review.md), [1.4.7](workbench-1.4.7-review.md), [1.5.0](workbench-1.5.0-review.md).
+- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md), [1.4.4](workbench-1.4.4-review.md), [1.4.5](workbench-1.4.5-review.md), [1.4.6](workbench-1.4.6-review.md), [1.4.7](workbench-1.4.7-review.md), [1.5.0](workbench-1.5.0-review.md), [1.5.1 (pre-release)](workbench-1.5.1-review.md).
 - Android fixes: [1.3.1](android-1.3.1-review.md), [1.3.2](android-1.3.2-review.md), [1.3.3](android-1.3.3-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
 - Shared workflows and maintenance: [workflow review](shared-workflow-review.md), [repository maintenance](repository-maintenance-review.md).

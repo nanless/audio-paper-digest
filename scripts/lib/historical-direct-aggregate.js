@@ -668,10 +668,58 @@ function publicHttps(value, label) {
     if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) fail(`${label} is not public HTTPS`);
     return url.href;
 }
+function formatMedal(rank) {
+    if (rank === 1) return '🥇';
+    if (rank === 2) return '🥈';
+    if (rank === 3) return '🥉';
+    return String(rank);
+}
+
+function memberResourceBadges(member) {
+    const resources = Array.isArray(member.canonical?.resources) ? member.canonical.resources : [];
+    const available = resources.filter(r => r && r.availability === 'available');
+    const hasCode = available.some(r => r.type === 'code' || r.type === 'reproduction');
+    const hasModelOrData = available.some(r => r.type === 'model' || r.type === 'dataset');
+    const hasDemo = available.some(r => r.type === 'demo');
+    const icons = [];
+    if (hasCode) icons.push('💻');
+    if (hasModelOrData) icons.push('🤗');
+    if (hasDemo) icons.push('🔊');
+    return { hasCode, hasModelOrData, hasDemo, text: icons.length ? icons.join(' ') : '-' };
+}
+
+function sanitizeAggregateMarkdownForPublish(markdown) {
+    let text = String(markdown || '');
+    // 清理可能泄漏的内部评分证据锚点
+    text = text.replace(/\[(?:A|SCORING_SOURCE)_[A-Z0-9_/-]+\]/g, '');
+    // 剥离非代码区块内的裸 <b>/<i>/<u> 内联 HTML 标签
+    text = text.replace(/<(b|i|u)(?:\s+[^>\n]*)?>([^\n]*?)<\/\1>/gi, '$2');
+    // 规范化多余空行，保持单行尾换行
+    text = text.replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+    return text;
+}
+
+function aggregateSummaryDate(scope, key, members, options = {}) {
+    if (scope === 'daily' && DATE_RE.test(String(key || ''))) return key;
+    if (DATE_RE.test(String(options.cohortDate || ''))) return options.cohortDate;
+    const memberDates = members
+        .flatMap(member => (member.pages || []).map(page => page?.cohortDate))
+        .filter(value => DATE_RE.test(String(value || '')))
+        .sort();
+    if (memberDates.length) return memberDates[memberDates.length - 1];
+    if (DATE_RE.test(String(key || ''))) return key;
+    return '2026-01-01';
+}
+
 function renderAggregate(scope, key, members, options = {}) {
-    const display = scope === 'daily' ? `音频研究日报 ${key}`
+    const isDaily = scope === 'daily';
+    const display = isDaily ? `音频研究日报 ${key}`
         : scope === 'conference-task' ? `${options.conferenceKey.toUpperCase()} · ${options.displayLabel}`
             : `${key.toUpperCase()} 论文汇总`;
+    const summaryDate = aggregateSummaryDate(scope, key, members, options);
+    const categories = isDaily
+        ? ['论文速递']
+        : [`${String(options.conferenceKey || key).toUpperCase()} 论文`];
     const tags = [...new Set(members.flatMap(item => item.canonical.labels))].sort();
     const directionCounts = [...members.reduce((counts, item) => counts.set(item.canonical.primaryTaskLabel,
         (counts.get(item.canonical.primaryTaskLabel) || 0) + 1), new Map()).entries()]
@@ -692,6 +740,7 @@ function renderAggregate(scope, key, members, options = {}) {
         if (!concept) fail(`汇总 ${scope}:${key} 包含当前词表外的标签：${label}`);
         return { id: concept.id, facet: concept.facet, label: concept.preferredLabel.zh };
     };
+    const conceptLink = concept => `[#${md(concept.label)}](/audio-research-portal/papers/?concept=${encodeURIComponent(concept.id)})`;
     const records = members.map(member => ({ registryVersion: tagCatalogIdentity(catalog),
         registrySha256: catalog.registrySha256, concepts: member.canonical.labels.map(selectedConcept) }));
     // 与会议汇总复用已有有界 Python 桥，一次投影整批，避免逐篇启动进程。
@@ -717,11 +766,17 @@ function renderAggregate(scope, key, members, options = {}) {
         if (concept.facet !== 'task') fail(`汇总 ${scope}:${key} 的主任务不属于研究任务维度。`);
         return concept;
     });
-    let output = `---\ntitle: ${JSON.stringify(display)}\ndraft: false\n`;
-    output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n`;
+    const conceptByLabel = new Map(directionConcepts.map(concept => [concept.label, concept]));
+    const tagsSchemaFingerprint = codec.schemaFingerprint('paper-tag-flat-tags');
+    let output = `---\ntitle: ${JSON.stringify(display)}\ndate: ${summaryDate}\ndraft: false\n`;
+    output += `tags: ${JSON.stringify(tags)}\ncategories: ${JSON.stringify(categories)}\n`;
+    output += `description: ${JSON.stringify(`共分析 ${members.length} 篇语音/AI 论文`)}\n`;
+    output += 'layout: "posts"\n';
+    output += 'paper_digest_pipeline_owned: true\npaper_digest_page_type: index\n';
     output += `paper_digest_reader_quality: "${codec.contract('reader-facing-page')}"\n`;
     output += `paper_digest_reader_quality_schema_fingerprint: "${codec.schemaFingerprint('reader-facing-page')}"\n`;
     output += `paper_digest_tags_contract: "${tagRules.flatCompatContract}"\n`;
+    output += `paper_digest_tags_schema_fingerprint: "${tagsSchemaFingerprint}"\n`;
     output += `paper_digest_tags_selection_contract: "${classificationMetadata.selectionContract}"\n`;
     output += `paper_digest_tags_registry_version: "${classificationMetadata.registryVersion}"\n`;
     output += `paper_digest_tags_registry_sha256: "${classificationMetadata.registrySha256}"\n`;
@@ -730,22 +785,97 @@ function renderAggregate(scope, key, members, options = {}) {
     output += `# ${display}\n\n`;
     output += `本期共收录 **${members.length}** 篇论文，每篇导读均依据原文重新撰写。\n\n`;
     output += '🏷️ 标签说明：本期标签来自新版词表；站点标签页同时显示历史标签与新标签。\n\n';
-    output += '## ⚡ 今日概览\n\n';
-    output += '### 🏷️ 热门方向\n\n| 方向（仅主任务） | 数量 |\n|---|---:|\n';
-    for (const [label, count] of directionCounts) output += `| #${md(label)} | ${count} 篇 |\n`;
-    output += '\n### 📊 论文评分排行榜\n\n';
-    output += '| 排名 | 论文 | 评分 | 主任务 | 主方法 |\n|---:|---|---:|---|---|\n';
-    for (const member of members) {
+    output += `## ⚡ ${isDaily ? '今日概览' : '会议概览'}\n\n`;
+
+    // Studio Monograph 2.0：研究脉络简报
+    const tierMust = members.filter(m => m.canonical.score >= 8.0);
+    const tierFocus = members.filter(m => m.canonical.score >= 7.0 && m.canonical.score < 8.0);
+    const tierSkim = members.filter(m => m.canonical.score < 7.0);
+    const badgeRecords = members.map(memberResourceBadges);
+    const codeCnt = badgeRecords.filter(b => b.hasCode).length;
+    const modelCnt = badgeRecords.filter(b => b.hasModelOrData).length;
+    const demoCnt = badgeRecords.filter(b => b.hasDemo).length;
+    const clusterBits = directionCounts.slice(0, 4).map(([label, count]) => {
+        const concept = conceptByLabel.get(label);
+        const topScore = Math.max(...members.filter(m => m.canonical.primaryTaskLabel === label).map(m => m.canonical.score));
+        return `${conceptLink(concept)}（${count} 篇，最高 ${topScore.toFixed(1)} 分）`;
+    });
+    output += `### 🧭 ${isDaily ? '今日研究脉络' : '会议研究脉络'}\n\n`;
+    if (clusterBits.length) {
+        output += `- **焦点方向**：${clusterBits.join('、')}。\n`;
+    }
+    output += `- **阅读与开源快照**：共 ${members.length} 篇完成评分（精读必看 ${tierMust.length} 篇 · 重点关注 ${tierFocus.length} 篇 · 速览参考 ${tierSkim.length} 篇）；资源覆盖 💻 代码 ${codeCnt} 篇、🤗 模型或数据 ${modelCnt} 篇、🔊 试听演示 ${demoCnt} 篇。\n\n`;
+
+    // 热门方向（条形分布 + 概念链接）
+    output += '### 🏷️ 热门方向\n\n| 方向（仅主任务） | 数量 | 分布 |\n|---|---:|---|\n';
+    for (const [label, count] of directionCounts) {
+        const concept = conceptByLabel.get(label);
+        const bar = '█'.repeat(Math.min(count, 15));
+        output += `| ${conceptLink(concept)} | ${count} 篇 | ${bar} |\n`;
+    }
+
+    // 8 列论文评分排行榜（奖牌 + 资源图标）
+    output += `\n### 📊 论文评分排行榜（${members.length} 篇，按分数降序）\n\n`;
+    output += '| 排名 | 论文 | 中文导览 | 总分 | 分档 | 文档类型 | 主任务 | 资源 |\n|---:|---|---|---:|---|---|---|---|\n';
+    for (const [index, member] of members.entries()) {
         const version = member.source.sourceVersion;
         const visibleVersion = version
             ? ` · ⚠️ 当前稿不可用；分析官方历史版本 [${md(version.selectedSourceId)}](${publicHttps(version.selectedPdfUrl, `${member.item.paperId} historical PDF URL`)})`
             : '';
-        output += `| ${member.rank} | [${md(member.canonical.readerTitle)}](${internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`)})${visibleVersion} | ${member.canonical.score.toFixed(1)} | ${md(member.canonical.primaryTaskLabel)} | ${md(member.canonical.primaryMethodLabel)} |\n`;
+        const url = internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`);
+        const taskConcept = conceptByLabel.get(member.canonical.primaryTaskLabel) || selectedConcept(member.canonical.primaryTaskLabel);
+        const badges = badgeRecords[index].text;
+        output += `| ${formatMedal(member.rank)} | [${md(member.canonical.title)}](${url})${visibleVersion} | ${md(member.canonical.readerTitle)} | ${member.canonical.score.toFixed(1)} | ${md(member.canonical.rankBucket)} | ${md(member.canonical.documentType)} | ${conceptLink(taskConcept)} | ${badges} |\n`;
     }
+
+    // 三档阅读分级
+    const readingTiers = [
+        ['🔥 精读必看（8.0 分及以上）', tierMust],
+        ['📌 重点关注（7.0–7.9 分）', tierFocus],
+        ['⚡ 速览参考（7.0 分以下）', tierSkim]
+    ];
+    output += '\n### 🎯 三档阅读分级\n\n';
+    for (const [tierLabel, tierMembers] of readingTiers) {
+        if (!tierMembers.length) continue;
+        const entries = tierMembers.map(member => {
+            const url = internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`);
+            const badges = memberResourceBadges(member).text;
+            const badgeStr = badges !== '-' ? ` ${badges}` : '';
+            return `[${md(member.canonical.readerTitle)}](${url})（${member.canonical.score.toFixed(1)} 分${badgeStr}）`;
+        });
+        for (let offset = 0; offset < entries.length; offset += 3) {
+            const chunk = entries.slice(offset, offset + 3);
+            const prefix = offset === 0 ? `**${tierLabel}**（共 ${tierMembers.length} 篇）：` : `**${tierLabel}**（续）：`;
+            output += `- ${prefix}${chunk.join('、')}\n`;
+        }
+    }
+
+    // 精选焦点 Spotlight 卡片
+    if (members.length > 0) {
+        const top = members[0];
+        const topUrl = internalUrl(top.renderedPages[0].primaryUrl, `${top.item.paperId} page URL`);
+        const topTask = conceptByLabel.get(top.canonical.primaryTaskLabel) || selectedConcept(top.canonical.primaryTaskLabel);
+        const topBadges = badgeRecords[0].text;
+        const metaBits = [md(top.canonical.rankBucket), md(top.canonical.documentType), conceptLink(topTask)].filter(Boolean);
+        const metaTail = metaBits.length ? `（${metaBits.join(' · ')}）` : '';
+        const badgeTail = topBadges !== '-' ? ` · 资源 ${topBadges}` : '';
+        output += `\n### 🌟 ${isDaily ? '今日精选焦点' : '会议精选焦点'}\n\n`;
+        output += `> 🥇 **[${md(top.canonical.readerTitle)}](${topUrl})** · 总分 **${top.canonical.score.toFixed(1)}**/10${metaTail}${badgeTail}\n`;
+        const topDims = (top.canonical.scoreDimensions || [])
+            .filter(d => d && Number.isFinite(d.value))
+            .slice()
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 3)
+            .map(d => `${md(d.label)} ${d.value.toFixed(1)}/10`);
+        if (topDims.length) {
+            output += `>\n> 突出维度：${topDims.join(' · ')}\n`;
+        }
+    }
+
     output += '\n---\n\n## 📋 论文列表\n';
     for (const [index, member] of members.entries()) {
         const blogUrl = internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`);
-        output += `\n### ${member.rank}. [${md(member.canonical.readerTitle)}](${blogUrl})\n\n`;
+        output += `\n### ${formatMedal(member.rank)} [${md(member.canonical.readerTitle)}](${blogUrl})\n\n`;
         output += `> 英文题目：*[${md(member.canonical.title)}](${blogUrl})*\n\n`;
         const version = member.source.sourceVersion;
         if (version) {
@@ -766,7 +896,7 @@ function renderAggregate(scope, key, members, options = {}) {
         output += `🔗 **开源资源**\n\n${readerDisplays[index].resourceBlock}\n`;
         output += '\n---\n';
     }
-    return output;
+    return sanitizeAggregateMarkdownForPublish(output);
 }
 function sourceGenerationFor(scope, key, staged) {
     const arxiv = staged.filter(member => member.item.route.kind === 'arxiv-fresh-fetch');

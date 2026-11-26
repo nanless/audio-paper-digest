@@ -554,9 +554,17 @@ test('会议 Reader revision 保留原完成包，失败中断后从同一候选
                 latestAnalysisAttemptErrorScope: 'run', latestAnalysisAttemptRetryable: false } };
         value.apiReaderArticle = 'new valid Reader'; return { success: true, result: value };
     } };
-    const stopped = await require('../scripts/lib/analysis-stop-control').withAnalysisStopControl(() =>
-        Promise.allSettled(queuedParents.map(parentExecutionId => adapter.refreshConferenceReader(
-            { ...input, parentExecutionId }, { engine: queueEngine, deep: deepStub }))));
+    const Config = require('../scripts/config.js');
+    const previousConcurrency = Config.ANALYSIS_CONFIG.concurrency;
+    Config.ANALYSIS_CONFIG.concurrency = 3;
+    let stopped;
+    try {
+        stopped = await require('../scripts/lib/analysis-stop-control').withAnalysisStopControl(() =>
+            Promise.allSettled(queuedParents.map(parentExecutionId => adapter.refreshConferenceReader(
+                { ...input, parentExecutionId }, { engine: queueEngine, deep: deepStub }))));
+    } finally {
+        Config.ANALYSIS_CONFIG.concurrency = previousConcurrency;
+    }
     assert.equal(normalCalls, 3, 'only three already started full analyses may finish');
     assert.equal(stopped.filter(value => value.status === 'rejected'
         && value.reason.code === 'ANALYSIS_STOP_REQUESTED').length, 2);
@@ -1116,4 +1124,44 @@ test('已核维护父 seed 与新预检资源走正常非精简修订，不把�
     const result = await adapter.refreshConferenceReader({ ...input, reviewMaintenanceHandle: Object.freeze({ synthetic: true }) }, { engine, deep: operations });
     assert.equal(result.status, 'complete'); assert.equal(readers, 1);
     assert.deepEqual(fs.readFileSync(path.join(loaded.directory, 'analysis.json')), original);
+});
+
+test('v2 会议抽取来源把已核验表格传入 structuredArtifacts.tables 并开启 tables=available 能力', () => {
+    const extraction = require('../scripts/lib/conference-extraction-receipt.js');
+    const paperId = 'conference:icassp:2026:icassp-arnumber:777';
+    const text = 'Abstract\n' + 'Speech processing evaluation results and ablation study. '.repeat(40);
+    const v2Source = {
+        paperId,
+        text,
+        sourceBinding: { pdfSha256: 'a'.repeat(64) },
+        structuredArtifacts: {
+            contract: extraction.ARTIFACT_V2_CONTRACT,
+            profile: extraction.ARTIFACT_V2_PROFILE,
+            tables: [{
+                ordinal: 1,
+                page: 1,
+                caption: 'Table 1: Speech enhancement results.',
+                cells: [
+                    ['Model', 'WER', 'PESQ'],
+                    ['Baseline', '8.4', '2.91'],
+                    ['Proposed', '5.1', '3.42']
+                ],
+                sourceRef: 'pdf:table:1:page:1',
+                recoveryStatus: 'complete'
+            }],
+            formulas: [],
+            figures: []
+        }
+    };
+    const details = adapter.sourceDetails(v2Source);
+    assert.deepEqual(details.conferenceCapabilities, {
+        fullText: 'full', tables: 'available', formulas: 'unavailable', figures: 'available'
+    });
+    assert.equal(details.structuredArtifacts.tables.length, 1);
+    assert.equal(details.structuredArtifacts.tables[0].ordinal, 1);
+    assert.equal(details.structuredArtifacts.tables[0].cells.length, 9);
+    assert.equal(details.structuredArtifacts.tables[0].headerRows, 1);
+    assert.equal(details.structuredArtifacts.tables[0].bodyRows, 2);
+    assert.equal(details.structuredArtifacts.health.recovered.tables, 1);
+    assert.doesNotThrow(() => adapter.validatePersistedSourceDetails(details, paperId));
 });

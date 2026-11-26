@@ -277,15 +277,25 @@ function inputDescriptor(loaded, selectedPapers) {
     return { path: loaded.filename, sha256: loaded.fileSha256, selectedPapers };
 }
 
-function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}) {
-    const conference = typeof conferenceManifest?.filename === 'string' ? conferenceManifest : readStableJson(conferenceManifest, 'approved conference local-source manifest');
+function buildScopedCatalog({ conferenceManifest = null, inventoryFile, blogRoot, arxivOnly = false } = {}) {
+    if (typeof arxivOnly !== 'boolean') fail('arxivOnly 必须是布尔值');
+    if (arxivOnly && conferenceManifest !== null && conferenceManifest !== undefined) {
+        fail('--arxiv-only 模式不能同时传入会议本地来源 manifest');
+    }
+    const conference = arxivOnly ? null
+        : (typeof conferenceManifest?.filename === 'string' ? conferenceManifest
+            : readStableJson(conferenceManifest, 'approved conference local-source manifest'));
     const inventory = typeof inventoryFile?.filename === 'string' ? inventoryFile : readStableJson(inventoryFile, 'frozen historical inventory');
     const normalizedInventory = conferencePageMappingsApi.normalizeInventory(inventory.value);
     dailyPrimaryArxiv.verifyBodyOnlyIdentityHints({ inventory: inventory.value, blogRoot });
     const dailyPrimaryArxivBindings = dailyPrimaryArxivBindingsFromFrozenInventory(inventory.value, blogRoot);
     const arxiv = arxivEntriesFromFrozenInventory(inventory.value, dailyPrimaryArxivBindings);
-    const scopedConference = scopeConferenceEntries({ conferenceManifest: conference.value, inventory: inventory.value, blogRoot });
-    const dailyIcml = dailyIcmlPosterEntries({ conferenceManifest: conference.value, inventory: inventory.value, blogRoot });
+    const scopedConference = arxivOnly
+        ? { entries: [], conferencePageCount: 0 }
+        : scopeConferenceEntries({ conferenceManifest: conference.value, inventory: inventory.value, blogRoot });
+    const dailyIcml = arxivOnly
+        ? { entries: [], bindings: [], routableBindings: [], authoritySha256: null }
+        : dailyIcmlPosterEntries({ conferenceManifest: conference.value, inventory: inventory.value, blogRoot });
     const conferenceById = new Map(scopedConference.entries.map(entry => [entry.paperId, entry]));
     // 已经拥有冻结会议页面的规范条目，继续使用按标题绑定的保留来源。独立保存的
     // poster 绑定只证明日更投影；把写作来源换成 miniconf 元数据，会让那 1,302 个
@@ -313,7 +323,7 @@ function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}
             dailyIcmlPosterBindingCount: dailyIcml.bindings.length,
             dailyIcmlPosterRoutableBindingCount: dailyIcml.routableBindings.length,
             conferencePageCount: scopedConference.conferencePageCount },
-        inputs: [inputDescriptor(conference, conferenceEntries.length)], summary,
+        inputs: conference ? [inputDescriptor(conference, conferenceEntries.length)] : [], summary,
         dailyPrimaryArxivBindings, dailyPrimaryArxivBindingSetSha256: stableHash(dailyPrimaryArxivBindings),
         dailyIcmlPosterBindings: dailyIcml.bindings,
         dailyIcmlPosterBindingSetSha256: stableHash(dailyIcml.bindings),
@@ -397,9 +407,10 @@ function normalizeCatalog(value) {
         || stableHash(dailyIcmlPosterRoutableBindings) !== value.dailyIcmlPosterRoutableBindingSetSha256) {
         fail('每日 ICML 可路由 poster 绑定集发生变化');
     }
-    if (value.inputs.length !== 1 || !plain(value.inputs[0]) || typeof value.inputs[0].path !== 'string'
+    const isArxivOnlyInputs = value.inputs.length === 0;
+    if (!isArxivOnlyInputs && (value.inputs.length !== 1 || !plain(value.inputs[0]) || typeof value.inputs[0].path !== 'string'
         || !path.isAbsolute(value.inputs[0].path) || !validSha(value.inputs[0].sha256)
-        || !Number.isSafeInteger(value.inputs[0].selectedPapers) || value.inputs[0].selectedPapers < 0) {
+        || !Number.isSafeInteger(value.inputs[0].selectedPapers) || value.inputs[0].selectedPapers < 0)) {
         fail('目录中已批准会议输入描述符格式错误');
     }
     const paperIds = new Set(); let arxivPapers = 0; let conferencePapers = 0; let arxivPages = 0; const sourceSets = {};
@@ -441,8 +452,11 @@ function normalizeCatalog(value) {
     const conferencePaperIds = new Set(entries.filter(entry => entry.paperId.startsWith('conference:')).map(entry => entry.paperId));
     const expectedIcmlRoutableBindings = dailyIcmlPosterRoutableBindings.filter(binding => conferencePaperIds.has(
         `conference:icml:2026:openreview-forum-id:${binding.poster.forumId}`)).length;
+    const selectedConferencePapers = isArxivOnlyInputs ? 0 : value.inputs[0].selectedPapers;
     if (dailyPrimaryArxivBindings.some(binding => !arxivPaperIds.has(`arxiv:${binding.arxivId}`))
-        || value.inputs[0].selectedPapers !== conferencePapers || value.scopeBinding.conferencePageCount < conferencePapers
+        || (isArxivOnlyInputs && (conferencePapers !== 0 || value.scopeBinding.conferencePageCount !== 0
+            || dailyIcmlPosterBindings.length !== 0 || dailyIcmlPosterRoutableBindings.length !== 0))
+        || selectedConferencePapers !== conferencePapers || value.scopeBinding.conferencePageCount < conferencePapers
         || value.scopeBinding.arxivPageCount < arxivPapers
         || value.scopeBinding.dailyPrimaryArxivBindingCount !== dailyPrimaryArxivBindings.length
         || value.scopeBinding.dailyIcmlPosterBindingCount !== dailyIcmlPosterBindings.length
@@ -451,7 +465,7 @@ function normalizeCatalog(value) {
         fail('目录的 scope 计数发生变化');
     }
     return { ...header, scope: SCOPE, scopeBinding: clone(value.scopeBinding),
-        inputs: [clone(value.inputs[0])], summary: expectedSummary, dailyPrimaryArxivBindings,
+        inputs: isArxivOnlyInputs ? [] : [clone(value.inputs[0])], summary: expectedSummary, dailyPrimaryArxivBindings,
         dailyPrimaryArxivBindingSetSha256: value.dailyPrimaryArxivBindingSetSha256,
         dailyIcmlPosterBindings, dailyIcmlPosterBindingSetSha256: value.dailyIcmlPosterBindingSetSha256,
         dailyIcmlPosterRoutableBindings,
@@ -515,9 +529,12 @@ function writeCurrentCatalogPointer({ catalogRoot, catalogName, fileSha256 } = {
 }
 
 function buildAndWrite(options, overrides = {}) {
-    if (!options || typeof options.conferenceManifest !== 'string' || typeof options.inventoryFile !== 'string'
-        || typeof options.blogRoot !== 'string') {
-        fail('必须提供已批准的会议 manifest、冻结清单和 blog 根目录');
+    const arxivOnly = options?.arxivOnly === true;
+    if (!options || (!arxivOnly && typeof options.conferenceManifest !== 'string')
+        || typeof options.inventoryFile !== 'string' || typeof options.blogRoot !== 'string') {
+        fail(arxivOnly
+            ? '--arxiv-only 模式必须提供冻结清单和 blog 根目录'
+            : '必须提供已批准的会议 manifest、冻结清单和 blog 根目录');
     }
     if (options.name !== undefined && !SAFE_NAME_RE.test(String(options.name || ''))) {
         fail('目录文件名不安全，current.json 仅供当前目录指针使用');

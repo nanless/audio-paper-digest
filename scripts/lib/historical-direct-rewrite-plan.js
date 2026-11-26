@@ -267,9 +267,22 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
         || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
         fail('当前带范围限制的 v5 来源目录属于另一份已保存的页面清单');
     }
-    const conferenceArtifact = normalizedConferenceProjections(conferencePageProjections, {
-        catalogFileSha256, inventory: history
-    });
+    const arxivOnlyCatalog = currentCatalog.inputs.length === 0
+        && currentCatalog.summary.conferencePapers === 0
+        && currentCatalog.scopeBinding.conferencePageCount === 0;
+    const conferenceArtifact = (arxivOnlyCatalog && (conferencePageProjections === null || conferencePageProjections === undefined))
+        ? {
+            projections: [],
+            unmatchedPages: [],
+            artifactSha256: stableHash({
+                contract: 'arxiv-only-no-conference-projections-v1',
+                catalogFileSha256,
+                inventory: { ledgerSha256: history.ledgerSha256, pageSetSha256: history.pageSetSha256 }
+            })
+        }
+        : normalizedConferenceProjections(conferencePageProjections, {
+            catalogFileSha256, inventory: history
+        });
     const conferenceByPaperId = new Map(conferenceArtifact.projections.map(item => [item.paperId, item]));
     dailyPrimaryArxiv.verifyBodyOnlyIdentityHints({ inventory, blogRoot });
     const knownArxiv = new Set(entries.filter(item => item.paperId.startsWith('arxiv:')).map(item => item.paperId));
@@ -821,11 +834,16 @@ function writeUnprojectedCatalogReport({ root, plan } = {}) {
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile, blogRoot } = {}) {
+function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile = null, blogRoot } = {}) {
     const catalog = conferencePageMappingsApi.readStableJson(catalogFile, '本地来源目录');
     const inventory = conferencePageMappingsApi.readStableJson(inventoryFile, '历史页面清单');
-    const projection = conferencePageMappingsApi.readStableJson(conferenceProjectionFile, '会议论文与页面对应记录');
     const currentCatalog = normalizeCurrentCatalog(catalog.value);
+    const arxivOnlyCatalog = currentCatalog.inputs.length === 0
+        && currentCatalog.summary.conferencePapers === 0
+        && currentCatalog.scopeBinding.conferencePageCount === 0;
+    const projection = (arxivOnlyCatalog && (conferenceProjectionFile === null || conferenceProjectionFile === undefined))
+        ? { value: null }
+        : conferencePageMappingsApi.readStableJson(conferenceProjectionFile, '会议论文与页面对应记录');
     if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
         fail('当前带范围限制的 v5 来源目录所使用的页面清单文件或 SHA 已变化');

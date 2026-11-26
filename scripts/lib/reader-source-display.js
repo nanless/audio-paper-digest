@@ -209,9 +209,22 @@ function foldReaderTexCellDuplicate(value) {
             const squeezedCore = squeeze(core);
             if (squeezedCore && squeeze(prefix).endsWith(squeezedCore)) {
                 const head = prefix.replace(/\s+$/u, '');
-                const at = head.lastIndexOf(core.trim().slice(-1));
-                const before = at > 0 ? head.slice(0, at) : '';
-                if (!before || !/[A-Za-z0-9\u4e00-\u9fff]$/u.test(before)) return prefix + trailing;
+                let i = head.length - 1;
+                let j = squeezedCore.length - 1;
+                while (j >= 0 && i >= 0) {
+                    if (/\s/u.test(head[i])) {
+                        i -= 1;
+                        continue;
+                    }
+                    if (head[i] !== squeezedCore[j]) break;
+                    i -= 1;
+                    j -= 1;
+                }
+                const at = j < 0 ? i + 1 : -1;
+                if (at >= 0) {
+                    const before = at > 0 ? head.slice(0, at) : '';
+                    if (!before || !/[A-Za-z0-9\u4e00-\u9fff]$/u.test(before)) return prefix + trailing;
+                }
             }
         }
         if (canonicalPlain === canonicalPrefix) return prefix;

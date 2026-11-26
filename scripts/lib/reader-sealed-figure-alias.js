@@ -60,16 +60,33 @@ function readSource() {
     const fresh = require('./fresh-analysis-context');
     const context = fresh.getFreshAnalysisContext();
     const direct = require('./direct-rewrite-analysis-context').getDirectRewriteAnalysisContext();
-    if (!fresh.isDailyFreshSourceScope() || !context?.paperId || !direct
-        || direct.paperId !== `arxiv:${context.paperId}` || direct.runId !== context.runId
-        || direct.route !== 'arxiv-fresh-fetch') fail('actual same-paper daily fresh and direct scopes are required');
-    const source = fresh.readFreshSource(context.runDir, context.paperId, context);
-    const descriptor = source?.freshSourceDescriptor;
-    if (!require('./daily-source-format').isBundleDescriptor(descriptor)
-        || ['runId', 'sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256', 'sourceGeneration', 'sourceManifestSha256']
-            .some(key => descriptor[key] !== direct[key])
-        || !isDeepStrictEqual(source, direct.sourceDetails)) fail('physical four-file source differs from the actual direct scope');
-    return { context, direct, source };
+    if (fresh.isDailyFreshSourceScope()) {
+        if (!context?.paperId || !direct
+            || direct.paperId !== `arxiv:${context.paperId}` || direct.runId !== context.runId
+            || direct.route !== 'arxiv-fresh-fetch') fail('actual same-paper daily fresh and direct scopes are required');
+        const source = fresh.readFreshSource(context.runDir, context.paperId, context);
+        const descriptor = source?.freshSourceDescriptor;
+        if (!require('./daily-source-format').isBundleDescriptor(descriptor)
+            || ['runId', 'sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256', 'sourceGeneration', 'sourceManifestSha256']
+                .some(key => descriptor[key] !== direct[key])
+            || !isDeepStrictEqual(source, direct.sourceDetails)) fail('physical four-file source differs from the actual direct scope');
+        return { context, direct, source };
+    }
+    if (!fresh.isSealedFourFileArxivScope() || !direct || direct.route !== 'arxiv-fresh-fetch') {
+        fail('actual same-paper daily fresh and direct scopes are required');
+    }
+    const bundle = fresh.resolveActiveSealedFourFileArxivBundle(direct.paperId.slice('arxiv:'.length));
+    if (!bundle || bundle.kind !== 'historical'
+        || bundle.sourceSha256 !== direct.sourceSha256
+        || bundle.structuredArtifactsSha256 !== direct.structuredArtifactsSha256
+        || bundle.historicalSnapshotSha256 !== direct.sourceSnapshotSha256
+        || bundle.generation !== direct.sourceGeneration
+        || bundle.sourceManifestSha256 !== direct.sourceManifestSha256
+        || bundle.source.text !== direct.sourceDetails.text
+        || !isDeepStrictEqual(bundle.source.structuredArtifacts, direct.sourceDetails.structuredArtifacts)) {
+        fail('physical four-file source differs from the actual direct scope');
+    }
+    return { context: direct, direct, source: bundle.source };
 }
 function sourceFigures(source, evidence) {
     const figures = source.structuredArtifacts?.figures;

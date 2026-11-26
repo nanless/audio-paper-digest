@@ -747,3 +747,113 @@ test('podcast pipeline F3 fixes: RSS dedupe, Workbench branding, env blogBaseUrl
         fs.rmSync(tmpDir, { recursive: true, force: true });
     }
 });
+
+test('publish-daily-podcast: today MP3 cleanly skips prior WAV episodes in client feed, while corrupt today MP3 fails fast before GH upload', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wave14-3-mp3-prior-wav-'));
+    try {
+        const inputPath = path.join(tmpDir, 'deep-analysis-result.json');
+        fs.writeFileSync(inputPath, JSON.stringify(makeSampleAnalysisData('2026-11-26'), null, 2));
+
+        const priorDir = path.join(tmpDir, 'prior-episodes');
+        fs.mkdirSync(priorDir, { recursive: true });
+        const priorWav = releaseLib.buildPodcastEpisodeMetadata({
+            date: '2026-11-24',
+            title: '历史 WAV 播客 2026-11-24',
+            description: '旧期 WAV 回退产物。',
+            audioUrl: 'https://github.com/nanless/audio-research-portal/releases/download/podcast-2026-11/podcast-2026-11-24.wav',
+            audioBytes: 234567,
+            audioSha256: 'c'.repeat(64),
+            durationSeconds: 150,
+            mimeType: 'audio/wav',
+            ttsEngine: 'indextts-2.5',
+            chapters: []
+        });
+        const priorMp3 = releaseLib.buildPodcastEpisodeMetadata({
+            date: '2026-11-25',
+            title: '历史 MP3 播客 2026-11-25',
+            description: '旧期 MP3 正常产物。',
+            audioUrl: 'https://github.com/nanless/audio-research-portal/releases/download/podcast-2026-11/podcast-2026-11-25.mp3',
+            audioBytes: 123456,
+            audioSha256: 'd'.repeat(64),
+            durationSeconds: 180,
+            mimeType: 'audio/mpeg',
+            ttsEngine: 'indextts-2.5',
+            chapters: []
+        });
+        fs.writeFileSync(path.join(priorDir, 'podcast-2026-11-24.episode.json'), JSON.stringify(priorWav));
+        fs.writeFileSync(path.join(priorDir, 'podcast-2026-11-25.episode.json'), JSON.stringify(priorMp3));
+
+        // 1) Today = valid MP3 + prior = WAV & MP3 -> real upload path succeeds, client feed skips prior WAV
+        const outDirOk = path.join(tmpDir, 'out-ok');
+        const ghCalls = [];
+        const okRes = publisher.runDailyPodcastPipeline(
+            {
+                date: '2026-11-26',
+                input: inputPath,
+                outDir: outDirOk,
+                episodesDir: priorDir,
+                backend: 'silent-mock',
+                format: 'mp3',
+                mockSecondsPerChunk: 0.2,
+                dryRun: false
+            },
+            {
+                env: { PATH: process.env.PATH, HOME: process.env.HOME },
+                ghExecFileSyncFn: (bin, args) => {
+                    ghCalls.push({ bin, args });
+                    return 'ok';
+                }
+            }
+        );
+        assert.equal(okRes.audioManifest.format, 'mp3');
+        assert.equal(okRes.releaseResult.published, true);
+        assert.ok(ghCalls.length >= 2);
+        assert.equal(okRes.episodeCountInFeed, 3); // RSS includes today MP3 + prior MP3 + prior WAV
+        assert.deepEqual(
+            okRes.clientFeed.episodes.map(ep => ep.date),
+            ['2026-11-26', '2026-11-25'] // prior WAV cleanly skipped in client feed
+        );
+
+        // 2) Corrupted today = MP3 (bad mimeType / excessive duration) MUST fail fast BEFORE GitHub Release upload
+        for (const [label, mutateManifest, expectedPattern] of [
+            ['bad-mime', manifest => { manifest.mimeType = 'audio/wav'; }, /audio\/mpeg/],
+            ['bad-duration', manifest => { manifest.durationSeconds = 90000; }, /durationSeconds/]
+        ]) {
+            const outDirBad = path.join(tmpDir, `out-${label}`);
+            let badGhInvoked = false;
+            assert.throws(
+                () => publisher.runDailyPodcastPipeline(
+                    {
+                        date: '2026-11-26',
+                        input: inputPath,
+                        outDir: outDirBad,
+                        episodesDir: priorDir,
+                        backend: 'silent-mock',
+                        format: 'mp3',
+                        mockSecondsPerChunk: 0.2,
+                        dryRun: false
+                    },
+                    {
+                        env: { PATH: process.env.PATH, HOME: process.env.HOME },
+                        execFileSyncFn: (bin, args, opts) => {
+                            const out = execFileSync(bin, args, opts);
+                            const manifestPath = path.join(outDirBad, 'podcast-2026-11-26.audio-manifest.json');
+                            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                            mutateManifest(manifest);
+                            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+                            return out;
+                        },
+                        ghExecFileSyncFn: () => {
+                            badGhInvoked = true;
+                            return 'ok';
+                        }
+                    }
+                ),
+                expectedPattern
+            );
+            assert.equal(badGhInvoked, false, `${label}: must fail BEFORE uploading to GitHub Releases`);
+        }
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});

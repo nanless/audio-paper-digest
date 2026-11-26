@@ -6356,7 +6356,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     if (localSourceInput) localSource.assertFinalizerInput(localSourceInput, paper);
     const aliasEvidenceUrls = new Set();
     const hasDailyUnselectedAlias = directContext.getDirectRewriteAnalysisContext()
-        && require('./lib/fresh-analysis-context').isDailyFreshSourceScope()
+        && require('./lib/fresh-analysis-context').isSealedFourFileArxivScope()
         && Array.isArray(generated.imageEvidence)
         && generated.imageEvidence.some(image => image?.kind === 'figure'
             && (aliasEvidenceUrls.has(image.url) || (aliasEvidenceUrls.add(image.url), false)));
@@ -12365,7 +12365,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     }
     // 历史直接分析绝不碰旧格式的 data/current 图片缓存。它们的下载器只返回来自运行器
     // 自有来源路线的临时内存字节；普通每日分析仍用自己的缓存。
-    const deferDailyLegacyImages = require('./lib/fresh-analysis-context.js').isDailyFreshSourceScope()
+    const deferDailyLegacyImages = require('./lib/fresh-analysis-context.js').isSealedFourFileArxivScope()
         && (hasCompleteApiReaderFigureBinding(paper, analysisManifest)
             || !isRecoveryStageTerminal('imageSupplement', analysisManifest.stages.imageSupplement?.status));
     let downloadedImages = isDualModel && !deferDailyLegacyImages
@@ -13731,16 +13731,34 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             // 响应体超过 6 MiB 上限）。这种情况下 Reader 提示词正确地拿不到像素，因此
             // 生成的文章必须略去这张图，而不是要求直接证据核验流程去证明从未观察到的
             // 字节。历史直接运行仍要求每张声明的图片都有确切证据，缺少证据就拒绝。
-            const dailyFigureEvidence = require('./lib/fresh-analysis-context.js').isDailyFreshSourceScope()
-                ? new Set((generatedReaderResult.imageEvidence || [])
+            const freshContext = require('./lib/fresh-analysis-context.js');
+            const figureEvidenceList = Array.isArray(generatedReaderResult.imageEvidence)
+                ? generatedReaderResult.imageEvidence : [];
+            const dailyFigureEvidence = freshContext.isDailyFreshSourceScope()
+                ? new Set(figureEvidenceList
                     .filter(item => item?.kind === 'figure' && item.status === 'ready')
                     .map(item => `${item.ordinal}\u0000${item.url}`))
+                : null;
+            const historicalPermanentFailedFigures = !dailyFigureEvidence && freshContext.isSealedFourFileArxivScope()
+                ? new Set([
+                    ...figureEvidenceList
+                        .filter(item => item?.kind === 'figure' && item.status && item.status !== 'ready')
+                        .map(item => `${item.ordinal}\u0000${item.url}`),
+                    ...(imageManifest?.downloadOutcomes || [])
+                        .filter(item => item?.status === 'permanent_reject' && item.url)
+                        .map(item => item.url)
+                ])
                 : null;
             const figuresForMaterialization = dailyFigureEvidence
                 ? injectedReaderResult.figures.filter(figure => (
                     dailyFigureEvidence.has(`${figure.ordinal}\u0000${figure.url}`)
                 ))
-                : injectedReaderResult.figures;
+                : historicalPermanentFailedFigures && historicalPermanentFailedFigures.size > 0
+                    ? injectedReaderResult.figures.filter(figure => (
+                        !historicalPermanentFailedFigures.has(`${figure.ordinal}\u0000${figure.url}`)
+                        && !historicalPermanentFailedFigures.has(figure.url)
+                    ))
+                    : injectedReaderResult.figures;
             const materializedFigures = directContext.getDirectRewriteAnalysisContext()
                 ? bindDirectApiReaderFiguresToEvidence(
                     figuresForMaterialization,
@@ -14202,20 +14220,7 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
     // 结果确定：这份六行的清单用不着模型，而一次格式错误的单发模型响应不能让一份本来
     // 完整的会议分析卡住。
     if (paper?.source === 'conference') {
-        const candidates = extractPaperSourceRepositoryCandidates(sourceText);
-        const values = type => [...new Set(candidates.filter(item => item.type === type)
-            .map(item => item.url))];
-        const value = (type, missing) => values(type).join('；') || missing;
-        const thirdParty = values('third_party');
-        return [
-            '## 开源详情',
-            `- 代码：${value('code', '论文中未提及代码链接')}`,
-            `- 模型权重：${value('model', '论文中未提及')}`,
-            `- 数据集：${value('dataset', '论文中未提及')}`,
-            `- Demo：${value('demo', '论文中未提及')}`,
-            `- 复现材料：${value('reproduction', '论文中未提及')}`,
-            `- 其他资源链接：${thirdParty.join('；') || '未提及'}（不代表作者资源已开放）`
-        ].join('\n');
+        return buildDeterministicOpenSourceScan(sourceText);
     }
     const baseEvidence = typeof preparedEvidence === 'string'
         ? preparedEvidence

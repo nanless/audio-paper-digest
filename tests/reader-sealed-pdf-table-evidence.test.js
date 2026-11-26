@@ -6,10 +6,15 @@ const actualRoot = process.env.PD_GENERIC_PDF_REAL_SOURCE_ROOT;
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
 test('新PDF证据在真实来源作用域外不可伪造或泄漏', () => {
+    const fresh = require('../scripts/lib/fresh-analysis-context');
+    const config = require('../scripts/config');
     assert.equal(pdf.evidence({ ordinal: 1, sourceDomSha256: 'a'.repeat(64) }), null);
     assert.equal(pdf.displayCell({}, 0, 0), null);
     assert.throws(() => pdf.assertProof({}, { contract: pdf.CONTRACT }), /verified source scope/);
     assert.throws(() => pdf.deriveBundle({ rootDir: '/tmp/untrusted/sources' }), /current daily/);
+    // G7: 受信任的历史四文件封存根路径可通过校验，未受信任路径仍被拒绝
+    assert.equal(fresh.assertSealedFourFileArxivRoot(config.FILES.freshArxivFetchedSourcesDir), path.resolve(config.FILES.freshArxivFetchedSourcesDir));
+    assert.throws(() => fresh.assertSealedFourFileArxivRoot('/tmp/untrusted/sources'), /current daily/);
 });
 
 test('真实四封存来源的四个完整表精确重放，错SHA/删数/变格/跨作用域拒绝', { skip: !actualRoot }, async () => {

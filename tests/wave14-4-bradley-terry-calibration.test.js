@@ -1367,3 +1367,81 @@ test('Wave 14.4 Regression [P2-9, P2-10, P2-11]: scoreDecimals tie stats, unidir
     assert.throws(() => bt.computeKendallTauB([1, NaN], [1, 2]), RangeError);
     assert.throws(() => bt.computeKendallTauB([1, 2], [1, Infinity]), RangeError);
 });
+
+test('Wave 14.4 Conference Parity: --conference-process aggregates completed analysis.json files cleanly in --dry-run and --replay', async () => {
+    const tmpDir = makeTempDir('bt-conf-process-');
+    try {
+        const processId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        const procDir = path.join(tmpDir, 'conference-processes', processId);
+        const analysisDir = path.join(tmpDir, 'conference-analysis');
+        fs.mkdirSync(procDir, { recursive: true });
+
+        const entries = [
+            { paperId: 'conference:icassp:2026:icassp-arnumber:101', runId: '11111111-1111-4111-8111-111111111111', score: 7.4 },
+            { paperId: 'conference:icassp:2026:icassp-arnumber:102', runId: '22222222-2222-4222-8222-222222222222', score: 7.4 },
+            { paperId: 'conference:icassp:2026:icassp-arnumber:103', runId: '33333333-3333-4333-8333-333333333333', score: 7.4 },
+            { paperId: 'conference:icassp:2026:icassp-arnumber:104', runId: '44444444-4444-4444-8444-444444444444', score: 7.4 }
+        ];
+        const items = {};
+        for (const e of entries) {
+            items[e.paperId] = { status: 'complete', analysisRunId: e.runId };
+            const dir = path.join(analysisDir, e.runId);
+            fs.mkdirSync(dir, { recursive: true });
+            const paper = makeRealisticPaper(e.paperId, e.score);
+            paper.id = e.paperId;
+            paper.conferencePaperId = e.paperId;
+            delete paper.arxivId;
+            paper.analyzedAt = '2026-11-26T08:00:00.000Z';
+            fs.writeFileSync(
+                path.join(dir, 'analysis.json'),
+                JSON.stringify({ status: 'complete', papers: [paper] }, null, 2),
+                'utf8'
+            );
+        }
+        // Incomplete item should be skipped safely without error
+        items['conference:icassp:2026:icassp-arnumber:999'] = { status: 'failed', analysisRunId: null };
+        fs.writeFileSync(
+            path.join(procDir, 'state.json'),
+            JSON.stringify({ processId, authority: { conferenceId: 'icassp-2026' }, updatedAt: '2026-11-26T09:00:00.000Z', items }, null, 2),
+            'utf8'
+        );
+
+        const paths = {
+            conferenceProcessDir: path.join(tmpDir, 'conference-processes'),
+            conferenceAnalysisDir: analysisDir,
+            dataDir: path.join(tmpDir, 'data')
+        };
+
+        // Mutual exclusion & validation checks
+        assert.throws(() => cli.parseCliArgs(['--dry-run', '--conference-process', 'not-a-uuid']), /valid UUID v4/);
+        assert.throws(() => cli.parseCliArgs(['--dry-run', '--conference-process', processId, '--date', '2026-11-26']), /cannot be combined/);
+        assert.throws(() => cli.parseCliArgs(['--dry-run', '--conference-process', processId, '--input', '/tmp/a.json']), /cannot be combined/);
+
+        // --dry-run executes offline and schedules all 4 completed conference papers
+        const dry = await cli.runCalibrationCli(['--dry-run', '--conference-process', processId, '--rounds', '2'], { paths });
+        assert.equal(dry.sidecar.mode, 'dry_run');
+        assert.equal(dry.sidecar.batchId, 'icassp-2026');
+        assert.equal(dry.sidecar.schedule.rounds, 2);
+        assert.equal(dry.sidecar.schedule.totalPairs, 4);
+        assert.equal(dry.sidecar.schedule.estimatedApiCalls, 8);
+        assert.equal(dry.sidecar.readOnlyInvariant.llmRequestsSent, 0);
+
+        // --replay writes default sidecar under runtime/score-calibrations/conference/<processId>/score-calibration-v1.json
+        const replayFile = path.join(tmpDir, 'conf-comparisons.json');
+        fs.writeFileSync(replayFile, JSON.stringify({
+            comparisons: [
+                { round: 1, paperA: entries[0].paperId, paperB: entries[1].paperId, winner: 'A', confidence: 'high', reason: 'stronger' },
+                { round: 1, paperA: entries[2].paperId, paperB: entries[3].paperId, winner: 'A', confidence: 'high', reason: 'stronger' },
+                { round: 2, paperA: entries[0].paperId, paperB: entries[2].paperId, winner: 'A', confidence: 'high', reason: 'stronger' }
+            ]
+        }), 'utf8');
+        const replayed = await cli.runCalibrationCli(['--replay', replayFile, '--conference-process', processId, '--unidirectional'], { paths });
+        assert.equal(replayed.sidecar.mode, 'replay');
+        assert.equal(replayed.sidecar.papers.length, 4);
+        assert.equal(replayed.sidecar.papers[0].paperId, entries[0].paperId);
+        assert.ok(replayed.outputPath.endsWith(path.join('runtime', 'score-calibrations', 'conference', processId, 'score-calibration-v1.json')));
+        assert.ok(fs.existsSync(replayed.outputPath));
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});

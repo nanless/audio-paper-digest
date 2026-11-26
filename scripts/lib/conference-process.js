@@ -135,6 +135,7 @@ function currentImplementationFiles() {
     files.push('scripts/lib/prompt-rendering-contract.js');
     files.push('scripts/lib/immutable-file.js');
     files.push('scripts/lib/model-text-sanitization.js');
+    files.push('scripts/conference_extractor_v2.py');
     files.push(...SOURCE_VERIFICATION_FILES);
     return require('./workflow-implementation-files.js').collectWorkflowImplementationFiles({
         root: path.join(__dirname, '..', '..'), entryFiles: files });
@@ -700,17 +701,17 @@ function sealOneSource(context, member, deps, createdAt, { replayExisting = true
     const previousReceipt = path.join(root, names.receipt);
     if (fs.existsSync(previousReceipt)) {
         const old = recovery.readPrivateJson(previousReceipt);
-        const receiptReady = old.status === 'ready' && old.textReplayable === true;
-        if (!receiptReady || old.extractor?.implementationSha256 !== extraction.EXTRACTOR_IMPLEMENTATION_SHA256
-            || old.extractor?.backend?.version !== extraction.BACKEND_VERSION
-            || !codec.isCurrentHeader(old, 'conference-pdf-extraction-receipt')) {
+        if (!extraction.isCurrentExtractorReceipt(old)) {
             // 被阻塞或过期的回执永远不能当作当前证明。保留它原来的文件名，
             // 只把独立核验过的原始 PDF/元数据交给新的提取器代次。
             // 这样实现迁移就能修掉一个确定性的 PDF 审计缺陷，
             // 既不用删掉失败证据，也不用授权新的分析运行。
             upgradedFrom = names.receipt;
+            const targetExtractorSha = process.env.PD_CONFERENCE_EXTRACTOR_VERSION === 'v1'
+                ? extraction.EXTRACTOR_IMPLEMENTATION_SHA256
+                : extraction.EXTRACTOR_V2_IMPLEMENTATION_SHA256;
             const generation = stableHash({ source: context.authority.implementationSha256,
-                extractorImplementationSha256: extraction.EXTRACTOR_IMPLEMENTATION_SHA256, backend: extraction.BACKEND_VERSION,
+                extractorImplementationSha256: targetExtractorSha, backend: extraction.BACKEND_VERSION,
                 ...codec.recordHeader(extraction.RECEIPT_CONTRACT, 'conference-pdf-extraction-receipt'),
                 pdfSha256: candidate.sha256, metadataSha256: sha256(metadataBytes),
                 previousReceiptSha256: old.receiptSha256 || null });

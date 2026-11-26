@@ -239,11 +239,58 @@ function normalizedPaper(source, publicationHeader = currentHeader('conference-o
 
 function buildReplayableReaderArtifacts(source, header) {
     const raw = source.structuredArtifacts;
+    const { ARTIFACT_V2_PROFILE } = require('./conference-extraction-receipt.js');
     const sourceDom = value => stableHash(value);
-    // 旧版已保存并核验的 PDF 结构化提取记录里的 `tex` 可能含启发式矩阵和纯文本。
+    const isV2 = raw.profile === ARTIFACT_V2_PROFILE;
+    // 旧版（v1）已保存并核验的 PDF 结构化提取记录里的 `tex` 可能含启发式矩阵和纯文本。
     // 原样保留它们，绝不要把内容提升为 DOM 单元格或原始 LaTeX。
-    // 哈希只证明字节，不证明提取正确。
-    const tables = [];
+    // v2 增强抽取器产生的已核验完整表格可进入 Reader structuredArtifacts.tables。
+    const tables = isV2
+        ? (raw.tables || [])
+            .filter(table => table && table.recoveryStatus === 'complete'
+                && Array.isArray(table.cells) && table.cells.length >= 2
+                && Array.isArray(table.cells[0]) && table.cells[0].length >= 2)
+            .map(table => {
+                const matrix = table.cells.map(row => row.map(cell => String(cell)));
+                const cells = [];
+                for (let rowIndex = 0; rowIndex < matrix.length; rowIndex += 1) {
+                    for (let colIndex = 0; colIndex < matrix[rowIndex].length; colIndex += 1) {
+                        const cellText = matrix[rowIndex][colIndex];
+                        cells.push({
+                            row: rowIndex,
+                            column: colIndex,
+                            header: rowIndex === 0,
+                            rowspan: 1,
+                            colspan: 1,
+                            text: cellText,
+                            sourceDomSha256: sourceDom({
+                                kind: 'pdf-table-v2-cell',
+                                sourceRef: table.sourceRef,
+                                row: rowIndex,
+                                column: colIndex,
+                                text: cellText
+                            })
+                        });
+                    }
+                }
+                return {
+                    ordinal: table.ordinal,
+                    label: `Table ${table.ordinal}`,
+                    caption: table.caption || '',
+                    sourceDomSha256: sourceDom({
+                        kind: 'pdf-table-v2',
+                        sourceRef: table.sourceRef,
+                        caption: table.caption || '',
+                        cells: matrix
+                    }),
+                    headerRows: 1,
+                    bodyRows: Math.max(0, matrix.length - 1),
+                    cells,
+                    matrix,
+                    recoveryStatus: 'complete'
+                };
+            })
+        : [];
     const formulas = [];
     const figures = (raw.figures || []).filter(figure => figure.asset && figure.recoveryStatus === 'complete').map(figure => {
         const images = figure.asset ? [{ kind: 'inline_pdf',
@@ -271,12 +318,18 @@ function buildReplayableReaderArtifacts(source, header) {
 }
 
 function sourceDetails(source, formats = sourceFormatsForIntent()) {
-    if (codec.isContract(source.structuredArtifacts.profile, 'conference-pdf-replayable-layout')) {
+    const { ARTIFACT_V2_PROFILE } = require('./conference-extraction-receipt.js');
+    const isV2 = source.structuredArtifacts.profile === ARTIFACT_V2_PROFILE;
+    if (codec.isContract(source.structuredArtifacts.profile, 'conference-pdf-replayable-layout') || isV2) {
         const structuredArtifacts = buildReplayableReaderArtifacts(source, formats['conference-reader-pdf-artifacts']);
+        const tablesAvailable = isV2 && structuredArtifacts.tables.length > 0;
         return { text: source.text, source: 'conference_pdf_text', sourceId: source.paperId,
             imageInfos: [], htmlAvailability: 'not_applicable', htmlAttempts: 0,
-            warnings: ['PDF 表格仅可引用原文或复核原页；文字层公式不是原始 TeX，不提供可发布结构化表格或公式。'], structuredArtifacts,
-            conferenceCapabilities: { fullText: 'full', tables: 'unavailable',
+            warnings: [tablesAvailable
+                ? 'PDF 表格与图片来自 v2 增强抽取结果；文字层公式不是原始 TeX，不提供可发布原始 TeX 公式。'
+                : 'PDF 表格仅可引用原文或复核原页；文字层公式不是原始 TeX，不提供可发布结构化表格或公式。'],
+            structuredArtifacts,
+            conferenceCapabilities: { fullText: 'full', tables: tablesAvailable ? 'available' : 'unavailable',
                 formulas: 'unavailable', figures: 'available' } };
     }
     if (!codec.isContract(source.structuredArtifacts.profile, 'conference-pdf-weak-layout')
@@ -299,13 +352,17 @@ function sourceDetails(source, formats = sourceFormatsForIntent()) {
 }
 function validatePersistedSourceDetails(details, paperId) {
     if (details?.conferenceCapabilities?.fullText === 'full') {
+        const capHash = stableHash(details.conferenceCapabilities);
+        const tablesUnavailable = capHash === stableHash({ fullText: 'full',
+            tables: 'unavailable', formulas: 'unavailable', figures: 'available' });
+        const tablesAvailable = capHash === stableHash({ fullText: 'full',
+            tables: 'available', formulas: 'unavailable', figures: 'available' });
         if (details.source !== 'conference_pdf_text' || details.sourceId !== paperId
             || typeof details.text !== 'string' || details.text.length < contextApi.MIN_TEXT_CHARS
             || !Array.isArray(details.imageInfos) || details.imageInfos.length
             || details.htmlAvailability !== 'not_applicable' || details.htmlAttempts !== 0
             || !Array.isArray(details.warnings)
-            || stableHash(details.conferenceCapabilities) !== stableHash({ fullText: 'full',
-                tables: 'unavailable', formulas: 'unavailable', figures: 'available' })) {
+            || (!tablesUnavailable && !tablesAvailable)) {
             throw new Error('conference structured source details are invalid');
         }
         const artifacts = details.structuredArtifacts;
@@ -314,12 +371,19 @@ function validatePersistedSourceDetails(details, paperId) {
         const required = [...Object.keys(artifactHeader), 'sourceKind', 'sourceId', 'paperId',
             'sourceHtmlSha256', 'tables', 'formulas', 'figures', 'references', 'health',
             'flattenedTextSha256', 'payloadSha256'];
+        const tablesValid = tablesAvailable
+            ? (Array.isArray(artifacts?.tables) && artifacts.tables.length > 0
+                && artifacts.tables.every(table => table && typeof table === 'object'
+                    && table.recoveryStatus === 'complete'
+                    && /^[a-f0-9]{64}$/.test(String(table.sourceDomSha256 || ''))
+                    && Array.isArray(table.matrix) && table.matrix.length >= 2
+                    && Array.isArray(table.cells) && table.cells.length >= 4))
+            : (Array.isArray(artifacts?.tables) && artifacts.tables.length === 0);
         if (!artifacts || Object.keys(artifacts).sort().join('\0') !== required.sort().join('\0')
             || artifacts.sourceKind !== 'conference_pdf' || artifacts.sourceId !== paperId
             || artifacts.paperId !== paperId || !/^[a-f0-9]{64}$/.test(artifacts.sourceHtmlSha256)
             || artifacts.flattenedTextSha256 !== sha256(details.text)
-            || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)
-            || artifacts.tables.length || artifacts.formulas.length
+            || !tablesValid || !Array.isArray(artifacts.formulas) || artifacts.formulas.length
             || !Array.isArray(artifacts.figures) || !Array.isArray(artifacts.references)
             || artifacts.references.length
             || !artifacts.health || artifacts.health.status !== 'ready'
@@ -669,7 +733,7 @@ const RECOVERY_WINDOW_CONTRACT = codec.contract('conference-reader-recovery-wind
 let fullRevisionActive = 0;
 const fullRevisionWaiters = [];
 async function withNormalAnalysisSlot(callback) {
-    const limit = Math.max(1, Math.min(3, require('../config').ANALYSIS_CONFIG.concurrency || 3));
+    const limit = Math.max(1, Number(require('../config').ANALYSIS_CONFIG.concurrency) || 3);
     while (fullRevisionActive >= limit) await new Promise(resolve => fullRevisionWaiters.push(resolve));
     fullRevisionActive += 1;
     try {

@@ -813,6 +813,87 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertIn(expected_h1, md)
         self.assertIn(expected_en, md)
 
+    def test_current_schema_fingerprinted_conference_official_publication_renders_workbench_cleanly(self):
+        import protocol_codec as protocols
+        publisher = MODULE.load_publish_to_blog()
+        packet = self.packet()
+        current_header = protocols.record_header('conference-official-publication', 'conference-official-publication')
+        current_pub = {
+            **current_header,
+            'recordUrl': 'https://ieeexplore.ieee.org/document/100',
+            'pdfUrl': 'https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=100',
+        }
+        packet['publication'] = copy.deepcopy(current_pub)
+        packet['paper']['conferencePublication'] = copy.deepcopy(current_pub)
+        rendered = MODULE.render_packet(packet)
+        self.assertIn('paper_digest_workbench_source_kind: conference', rendered['markdown'])
+        self.assertIn('paper_digest_workbench_record_url: "https://ieeexplore.ieee.org/document/100"', rendered['markdown'])
+        # Invalid schemaFingerprint must still fail closed.
+        bad_pub = {**current_pub, 'schemaFingerprint': '0' * 64}
+        bad_paper = copy.deepcopy(packet['paper'])
+        bad_paper['conferencePublication'] = bad_pub
+        with self.assertRaisesRegex(publisher.PublishDataValidationError, '公开来源格式不受支持'):
+            publisher.build_verified_conference_workbench_bundle(
+                bad_paper, '2026-09-07', paper_id=bad_paper['id'], publication=bad_pub,
+                reader_plan=bad_paper['apiReaderPlan'],
+                parsed={**bad_paper['parsed'], 'primaryTaskTag': '#语音识别', 'primaryMethodTag': '#Transformer'},
+                authors=bad_paper['apiReaderAuthors']['authors'])
+
+    def test_daily_nine_pass_reader_display_pipeline_and_heading_nesting_apply_to_conference(self):
+        packet = self.packet()
+        paper = packet['paper']
+        article = (
+            '## 核心方法拆解\n\n'
+            '本文用 S_yes/S_no 划分集合，并达到 ≥10\\geq 10 dB 增益。\n\n'
+            '**关键术语**AudioToken 表示离散声学词元。'
+        )
+        plan = paper['apiReaderPlan']
+        plan['conceptBridges'] = [{'term': '关键术语', 'explanation': '**关键术语**AudioToken 表示离散声学词元。'}]
+        plan_sha = stable_sha(plan)
+        article_sha = hashlib.sha256(article.encode()).hexdigest()
+        paper['apiReaderArticle'] = article
+        paper['apiReaderArticleSha256'] = article_sha
+        paper['apiReaderPlanSha256'] = plan_sha
+        stage = paper['analysisManifest']['stages']['apiReaderArticle']
+        stage.update(planSha256=plan_sha, articleSha256=article_sha)
+        md = MODULE.render_packet(packet)['markdown']
+        self.assertIn('### 核心方法拆解', md)
+        self.assertNotIn('\n## 核心方法拆解\n', md)
+        self.assertIn('`S_yes`/`S_no`', md)
+        self.assertIn('≥10 dB', md)
+        self.assertNotIn(r'\geq 10', md)
+        self.assertIn('**关键术语** AudioToken 表示离散声学词元。', md)
+        # Bare TeX inside rendered markdown tables must fail closed.
+        bad = self.packet()
+        bad_article = '| 指标 | 数值 |\n|---|---|\n| 得分 | 0.8\\uparrow |'
+        bad_sha = hashlib.sha256(bad_article.encode()).hexdigest()
+        bad['paper']['apiReaderArticle'] = bad_article
+        bad['paper']['apiReaderArticleSha256'] = bad_sha
+        bad['paper']['analysisManifest']['stages']['apiReaderArticle']['articleSha256'] = bad_sha
+        with self.assertRaises(Exception) as ctx:
+            MODULE.render_packet(bad)
+        self.assertIn('TeX', str(ctx.exception))
+
+    def test_conference_frontmatter_header_doi_track_and_metadata_details_parity(self):
+        import protocol_codec as protocols
+        packet = self.packet()
+        packet['conference'] = {'id': 'icassp-2026', 'year': 2026, 'name': 'ICASSP 2026'}
+        packet['paper']['doi'] = '10.1109/ICASSP49660.2026.100001'
+        packet['paper']['conferenceTrack'] = 'Speech Recognition & Enhancement'
+        md = MODULE.render_packet(packet)['markdown']
+        self.assertIn('hiddenInHomeList: true', md)
+        self.assertIn(
+            f'paper_digest_tags_schema_fingerprint: "{protocols.schema_fingerprint(MODULE.FLAT_TAG_CONTRACT)}"',
+            md,
+        )
+        self.assertIn('paper_digest_conference_name: "ICASSP 2026"', md)
+        self.assertIn('paper_digest_doi: "10.1109/ICASSP49660.2026.100001"', md)
+        self.assertIn('paper_digest_conference_doi: "10.1109/ICASSP49660.2026.100001"', md)
+        self.assertIn('> DOI：`10.1109/ICASSP49660.2026.100001`', md)
+        self.assertIn('> Track：Speech Recognition & Enhancement', md)
+        self.assertIn('<details>\n<summary>📎 论文与评分元数据</summary>', md)
+        self.assertLess(md.index('<summary>📎 论文与评分元数据</summary>'), md.index('## ⚖️ 评分明细'))
+
 
 if __name__ == '__main__':
     unittest.main()

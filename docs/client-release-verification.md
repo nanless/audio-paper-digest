@@ -1,4 +1,6 @@
-# 客户端发行核验（1.5.0）
+# 客户端发行核验（最近公开发行 1.5.0）
+
+> 当前源码版本已推进至 **1.5.1（构建号 25）（尚未公开发布）**，详见 [1.5.1 预发布记录](workbench-1.5.1-review.md)。待 `v1.5.1` 正式冻结构建、双端签名打包、创建附注标签与完成公开匿名下载核验后，再补充 1.5.1 十二件附件与签名记录；下表为最近已公开发行版本 `1.5.0 / 构建号 24` 的核验实录。
 
 ## 1.5.0 公开结果
 
@@ -36,7 +38,7 @@
 
 ## 1.5.0 的签名
 
-Mac 应用自 1.5.0 起更名为 `音频研究工作台.app`，继续使用应用标识 `com.nanless.PaperDigest` 与本地 `ad-hoc; not notarized` 签名（未经过 Apple 公证）。公开 ZIP 中的应用包经 `codesign -dv --verbose=4` 核对：格式为 arm64 Mach-O，`Signature=adhoc`，`TeamIdentifier=not set`，CDHash `f694ae0ba15e9f9db97f76febc3d607ea85cb6da`；`build-info.json` 记录 `sourceCommit` 与 `releaseHead` 均为 `5b5a8e79e5e70290cb650fd37e71417f46946a2b`，版本 1.5.0（构建号 24）、`arm64`、最低系统 macOS 15.0、随包 Node `24.19.0`。ad-hoc 签名只证明包在打包后没有被改动，不提供 Apple 开发者身份。
+Mac 应用自 1.5.0 起更名为 `音频研究工作台.app`，继续使用应用标识 `com.nanless.PaperDigest` 与本地 `ad-hoc; not notarized` 签名（未经过 Apple 公证）。公开 ZIP 中的应用包经 `codesign -dv --verbose=4` 核对：格式为 arm64 Mach-O，`Signature=adhoc`，`TeamIdentifier=not set`，CDHash `f694ae0ba15e9f9db97f76febc3d607ea85cb6da`；`build-info.json` 记录 `sourceCommit` 与 `releaseHead` 均为 `5b5a8e79e5e70290cb650fd37e71417f46946a2b`，版本 1.5.0 / 构建号 24、`arm64`、最低系统 macOS 15.0、随包 Node `24.19.0`。ad-hoc 签名只证明包在打包后没有被改动，不提供 Apple 开发者身份。
 
 公开 APK 沿用 1.4.4–1.4.7 的发布签名库（使用 `apksigner` 36.0.0 签名并经 `finalize-signed` 封存核验，`signingOrigin: provided-signed-apk`）。经 `apksigner verify --print-certs --verbose` 核对，证书 DN 为 `CN=Paper Digest, OU=Release, O=nanless, L=Shanghai, ST=Shanghai, C=CN`，证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（RSA 4096），实际通过 **APK Signature Scheme v3** 验证（`v1/v2/v3.1/v4` 为 `false`）；`android-build-info.json` 记录 `versionName` 1.5.0、`versionCode` 24、`minSdk` 28、`targetSdk` 37，应用标识 `com.nanless.paperdigest`，四种 ABI 齐全且原生库符合 16 KiB ELF 对齐。已安装 1.4.4–1.4.7 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9…`，仍需先导出完整备份、卸载旧版再安装。
 
