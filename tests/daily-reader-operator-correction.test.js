@@ -643,3 +643,19 @@ test('人工修正冷核重放先做与在线一致的确定性归一化再完�
  assert(parseAt>normalizeAt,'the full parse must consume the normalized draft, not the raw patch endpoint');
  assert(body.includes("pixelFigureOrdinals: readyFigureOrdinals"),'normalization must use the paid ready figure ordinals');
 });
+test('零序号补丁人工修正接替已重做普通完成时经 verifiedSupersededCompletionPointer 继承旧证明指针',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/deep-analyzer.js'),'utf8');
+ const start=source.indexOf('async function finalizeApiReaderRefresh(');
+ const slice=source.slice(start,start+1400);
+ assert(slice.includes("|| previousSupersededOrdinalProof\n            || require('./lib/reader-target-ordinal-patch').verifiedSupersededCompletionPointer(paper)"),
+  'finalizeApiReaderRefresh must verify superseded completion pointer for zero-record operator completions');
+ const ordinal=require('../scripts/lib/reader-target-ordinal-patch');
+ // Negative: tampered readerRevisionHistory context is still rejected fail-closed.
+ assert.throws(()=>ordinal.verifiedSupersededCompletionPointer({
+  readerRevisionHistory:{contract:'daily-reader-revision-history-v1',reason:'stage-invalidated',
+   completionProof:{path:'/tmp/fake.json',sha256:'not-a-sha'}},
+  analysisManifest:{contracts:{},stages:{apiReaderArticle:{status:'complete'}}}
+ }),/invalid superseded revision pointer context/);
+ // Positive baseline: absent revision pointer cleanly returns null.
+ assert.equal(ordinal.verifiedSupersededCompletionPointer({analysisManifest:{contracts:{},stages:{}}}),null);
+});

@@ -447,6 +447,33 @@ class ExecutiveAbstractV4Test(unittest.TestCase):
             single_sentence_with_if, summary_header=new_header, source_text=custom_metric_source,
         ))
 
+        split_metric_and_natural_boundary = '\n\n'.join([
+            paragraphs[0],
+            paragraphs[1],
+            '**关键实验与核心代价：**在 LibriSpeech test-clean 主基准的 1.5 kbps 流式评测设置下，转写词错率 WER、主观自然度预测分 UTMOS 与说话人余弦相似度 SpkSim 同帧对比。恒定码率下本文为 6.15%、3.96 和 0.841，优于最优经典 Mimi 的 9.84%、3.42 和 0.763。关键消融表明移除正交信息瓶颈后上述指标明显回落，代价是引入 28.5 ms 前瞻窗口延迟与 1.45s 首次编译耗时，单张 GPU 上流式推理实时率 RTF 为 0.14。',
+            '**适用边界与深读导览：**当前结论成立于 16 kHz 流式英语语音重建与单说话人清晰近场语音场景，不覆盖多人重叠混响会议、宽带乐器合奏或极端低信噪比工业噪声环境。实际部署前仍需真实噪声环境与跨语种说话人分布的独立验证。若想深究正交信息瓶颈推导与因果卷积掩码细节，可查阅下方长文的方法推导与消融章节。',
+        ])
+        self.assertIsNone(publisher._detailed_core_summary_semantic_issue(
+            split_metric_and_natural_boundary, summary_header=new_header, source_text=EXECUTIVE_SOURCE_TEXT,
+        ))
+        double_negated_boundary = split_metric_and_natural_boundary.replace(
+            '不覆盖多人重叠混响会议、宽带乐器合奏或极端低信噪比工业噪声环境。实际部署前仍需真实噪声环境与跨语种说话人分布的独立验证。',
+            '并非不覆盖多人重叠混响会议、宽带乐器合奏或极端低信噪比工业噪声环境。实际部署前无需再做真实噪声环境与跨语种说话人分布的独立验证。',
+        )
+        self.assertIn('缺少结论适用边界', publisher._detailed_core_summary_semantic_issue(
+            double_negated_boundary, summary_header=new_header, source_text=EXECUTIVE_SOURCE_TEXT,
+        ))
+
+        agent_pipeline_summary = '\n\n'.join([
+            paragraphs[0],
+            '**核心思路与方法架构：**本文围绕语音交互系统构建面向多轮通话的记忆增强管线。通话中对话模块依托现成大模型实现语音到语音交互，五个后台工具负责检索记忆、记录新信息与联网搜索。通话结束后管线从逐字稿提炼摘要与事实，写入时间知识图谱，并在积累到阈值后提炼高层洞察、重写关系背景，供下次组装会话指令时与人格和本轮话题一并使用。',
+            paragraphs[2],
+            paragraphs[3],
+        ])
+        self.assertIsNone(publisher._detailed_core_summary_semantic_issue(
+            agent_pipeline_summary, summary_header=new_header, source_text=EXECUTIVE_SOURCE_TEXT,
+        ))
+
 
 if __name__ == '__main__':
     unittest.main()

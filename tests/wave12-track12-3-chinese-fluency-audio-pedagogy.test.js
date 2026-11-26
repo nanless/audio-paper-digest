@@ -223,7 +223,9 @@ describe('Wave 12 Track 12.3: Expanded audio metric whitelist on STRUCTURED_V5',
             'WER 降低，PESQ 从 2.15 提升至 3.40，SI-SDR 由 11.2 提升到 15.6，SDR 达到 +12.5 dB，SNR 升至 18.0 分贝。',
             'WER 改善时 MOS 为 4.2 ± 0.1，UTMOS 提升到 4.12 与 PESQ 提升到 3.45，SIM 为 0.88 且 SECS 为 0.85。',
             'WER 改善时 MOS 4.2，PESQ 3.4，且延迟降至 12 ms、显存降至 8 GB，延迟在 10 到 20 ms、码率为 16 到 32 kbps。',
-            'EER 降低了 2.5 pp [1.2, 3.8]。'
+            'EER 降低了 2.5 pp [1.2, 3.8]。',
+            // 2026-11-26 真实保存稿 2611.33409v1：0–1 尺度 BERTScore 召回率与无量纲 CIDEr 同句并列不应误报缺单位
+            '3 组中听觉语境事实准确但参考句未收录，佐证验证集上 BERTScore 召回率从 0.9366 升至 0.9376 而 CIDEr 从 64.0 降至 62.0 的分叉，同时门控变体在第一阶段即从 0.85 CIDEr 降至 0.79 CIDEr 并在第二阶段崩溃，纯音频消融仅 0.14 CIDEr，说明单全局 token 难以承载时序语法。'
         ];
         for (const s of validAudioSentences) {
             const issues = editorial.findMissingComparisonUnits(s, {
@@ -232,9 +234,17 @@ describe('Wave 12 Track 12.3: Expanded audio metric whitelist on STRUCTURED_V5',
             assert.deepEqual(issues, [], `Should not flag valid audio metrics on STRUCTURED_V5: ${s}`);
         }
 
-        // Must still catch genuine bare percentage WER/EER & negated ViSQOL transfer
+        // Must still catch genuine bare percentage WER/EER & negated ViSQOL/CIDEr transfer
         assert.equal(
             editorial.findMissingComparisonUnits('虽然 ViSQOL 从 3.40 提升到 4.12，但 WER 从 8.5 降至 4.2。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            1
+        );
+        assert.equal(
+            editorial.findMissingComparisonUnits('验证集上 BERTScore 召回率从 93.66 升至 93.76 而 CIDEr 从 64.0 降至 62.0。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            1
+        );
+        assert.equal(
+            editorial.findMissingComparisonUnits('这里变化不是 CIDEr 从 64.0 降至 62.0，而是召回率从 64.0 降至 62.0。', { editorialProfile: format.STRUCTURED_V5 }).length,
             1
         );
         assert.equal(

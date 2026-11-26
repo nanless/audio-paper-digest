@@ -245,6 +245,43 @@ class ReaderInlineSvgDependencyTest(unittest.TestCase):
             renderer.validate_svg(bare_table_svg)
         self.assertNotIsInstance(bad_ctx.exception, renderer.UnsupportedSvgDependency)
 
+    def test_replay_saved_inline_svg_pixels_retries_v2_jitter_and_rejects_mismatch(self):
+        import hashlib
+        from unittest import mock
+        import reader_inline_svg_pixel_replay as replay_mod
+
+        raw = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40" viewBox="0 0 80 40">'
+            b'<rect x="2" y="2" width="76" height="36" fill="#336699"/></svg>'
+        )
+        png_jitter = b'\x89PNG\r\n\x1a\njitter-variant'
+        png_exact = b'\x89PNG\r\n\x1a\nexact-saved-bytes'
+        expected_sha = hashlib.sha256(png_exact).hexdigest()
+
+        calls = []
+
+        def flaky_render(svg_bytes, **kwargs):
+            calls.append(kwargs)
+            if kwargs == {'hidpi': True, 'deterministic_v2': True}:
+                return png_exact if len(calls) == 3 else png_jitter
+            return png_jitter
+
+        with mock.patch.object(renderer, 'render_svg', side_effect=flaky_render):
+            replayed, provenance = replay_mod.replay_saved_inline_svg_pixels(
+                raw, expected_sha, contract=renderer.CONTRACT
+            )
+        self.assertEqual(replayed, png_exact)
+        self.assertIsNone(provenance)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(c == {'hidpi': True, 'deterministic_v2': True} for c in calls))
+
+        with mock.patch.object(renderer, 'render_svg', return_value=png_jitter), \
+             mock.patch.object(replay_mod, '_trusted_renderers', return_value=iter(())):
+            with self.assertRaisesRegex(ValueError, 'No trusted original SVG renderer'):
+                replay_mod.replay_saved_inline_svg_pixels(
+                    raw, expected_sha, contract=renderer.CONTRACT
+                )
+
 
 if __name__ == '__main__':
     unittest.main()

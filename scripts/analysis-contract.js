@@ -4736,8 +4736,8 @@ function validateExecutiveAbstractSurfaceStructure(rawSummary) {
 }
 
 function hasExecutiveMethodArchitecture(contentBody) {
-    const componentPattern = /(?:编码器|解码器|声码器|分词器|量化器|转换器|变换器|Transformer|Conformer|Mamba|UNet|扩散|流匹配|注意力|网络|主干|骨干|适配器|投影层|投影头|模块|分支|前端|后端|分类头|回归头|预测头|判别器|生成器|检索器|规划器|求解器|滤波器|估计器|识别器|合成器|谱均衡|引擎|探针|矩阵|子空间|表征|特征|嵌入|隐状态|隐变量|码本|令牌|token|掩码|掩膜|损失|目标函数|正则|采样器|蒸馏)/giu;
-    const actionPattern = /(?:输入|接收|提取|编码|映射|投影|压缩|量化|池化|聚合|融合|拼接|注入|调制|对齐|检索|筛选|路由|分解|预测|估计|重构|重建|解码|合成|生成|输出|优化|更新|训练|微调|冻结|约束|抑制|消除|解耦)/giu;
+    const componentPattern = /(?:编码器|解码器|声码器|分词器|量化器|转换器|变换器|Transformer|Conformer|Mamba|UNet|扩散|流匹配|注意力|网络|主干|骨干|适配器|投影层|投影头|模块|分支|前端|后端|分类头|回归头|预测头|判别器|生成器|检索器|规划器|求解器|滤波器|估计器|识别器|合成器|谱均衡|引擎|探针|矩阵|子空间|表征|特征|嵌入|隐状态|隐变量|码本|令牌|token|掩码|掩膜|损失|目标函数|正则|采样器|蒸馏|知识图谱|大模型|智能体|工具链|后台工具|对话系统|管线|流水线)/giu;
+    const actionPattern = /(?:输入|接收|提取|编码|映射|投影|压缩|量化|池化|聚合|融合|拼接|注入|调制|对齐|检索|筛选|路由|分解|预测|估计|重构|重建|解码|合成|生成|输出|优化|更新|训练|微调|冻结|约束|抑制|消除|解耦|提炼|写入|记录|组装|重写)/giu;
     const deniedSentence = /(?:假设|假想|假定|设想|如果|预计|预期|可能|未来实验|计划采用|第三方|他人研究|先前工作|相关工作|现有(?:主流|方法|方案|路线|编解码器|模型|系统|工作)|传统(?:方法|方案|路线|指标|编解码器|模型|系统|工作)|以往(?:方法|方案|路线|模型|工作|研究)|主流(?:方法|方案|路线|编解码器|模型)|任务需要将|任务以[^。]{1,48}为输入)/u;
     for (const paragraph of String(contentBody || '').split(/\n\s*\n/u)) {
         const sentences = paragraph.split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
@@ -4797,15 +4797,9 @@ function stripDefinedMetricAcronymNumbers(text, definedAcronyms = []) {
     return out;
 }
 
-function sentenceHasExecutiveMetricAndResultNumber(rawSentence, sourceText, definedAcronyms = []) {
+function sentenceHasExecutiveMetric(rawSentence, sourceText, definedAcronyms = []) {
     const cleaned = stripCoreSummaryNonResultNumerals(stripSymbolicPatternRelation(String(rawSentence || '').trim()));
     if (!cleaned) return false;
-    const nonOp = stripDefinedMetricAcronymNumbers(
-        cleaned.replace(new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' '),
-        definedAcronyms
-    );
-    const numbers = nonOp.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
-    if (numbers.length === 0) return false;
     const withoutModelLabels = cleaned.replace(/(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))/giu, '');
     const withoutGeneric = withoutModelLabels.replace(new RegExp(CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN.source, 'gi'), ' ');
     return CORE_SUMMARY_METRIC_PATTERN.test(withoutGeneric)
@@ -4818,13 +4812,25 @@ function sentenceHasExecutiveMetricAndResultNumber(rawSentence, sourceText, defi
         || hasSourceBoundHitCountMetric(cleaned, sourceText);
 }
 
+function sentenceHasExecutiveMetricAndResultNumber(rawSentence, sourceText, definedAcronyms = []) {
+    const cleaned = stripCoreSummaryNonResultNumerals(stripSymbolicPatternRelation(String(rawSentence || '').trim()));
+    if (!cleaned) return false;
+    const nonOp = stripDefinedMetricAcronymNumbers(
+        cleaned.replace(new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' '),
+        definedAcronyms
+    );
+    const numbers = nonOp.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
+    if (numbers.length === 0) return false;
+    return sentenceHasExecutiveMetric(rawSentence, sourceText, definedAcronyms);
+}
+
 function executiveSummaryQuantitativeResultState(contentBody, sourceText = null) {
     const direct = coreSummaryQuantitativeResultState(contentBody, sourceText);
     if (direct.complete) return direct;
     const allSentences = String(contentBody || '').split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
     const deniedWindowSentence = /(?:假设|假想|假定|设想|如果|若在|预计|预期|可能|计划|未来|先前研究|相关工作|第三方|他人|引用|引述|转述|并非|并未|不是|未测|未报告|未进行)/u;
     const operationalClausePattern = /(?:\d+(?:\.\d+)?\s*(?:kbps|bps|kHz|MHz|Hz)\b|(?:训练|推理|部署|单卡|单核|多卡|冷启动|前瞻(?:窗口)?|首次编译|图编译|编译|显存|内存|硬件|参数(?:量|规模|开销)?|实时率|(?<![A-Za-z0-9_])RTF(?![A-Za-z0-9_])|延迟|(?<![A-Za-z0-9_])latency(?![A-Za-z0-9_])|吞吐|(?<![A-Za-z0-9_])throughput(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FLOPs?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])MACs?(?![A-Za-z0-9_]))[^，,；;。！？!?\n]{0,36})/giu;
-    const explicitCounterpartPattern = /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|竞品|移除|消融|完整模型|次优|(?<![A-Za-z0-9_])(?:baseline|versus|vs\.?)(?![A-Za-z0-9_])|(?:传统|主流|现有|以往)[^，,。；\n]{0,18}(?:方法|模型|系统|基线|代理|方案|编解码器)|与\s*[A-Za-z0-9\u4e00-\u9fa5_-]{2,30}\s*(?:相比|对照|对比|比较)|比较\s*\d+\s*个(?:系统|模型|方法)|(?:高于|低于|优于|超过|领先)(?:次优|内置|原生|原始|单一|基础|随机|零样本|微调前|基线|对照|同量|同规模)[^，,。；\n]{0,12}的)/iu;
+    const explicitCounterpartPattern = /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|竞品|移除|消融|完整模型|次优|(?<![A-Za-z0-9_])(?:baseline|versus|vs\.?)(?![A-Za-z0-9_])|(?:传统|主流|现有|以往)[^，,。；\n]{0,18}(?:方法|模型|系统|基线|代理|方案|编解码器)|与\s*[A-Za-z0-9\u4e00-\u9fa5_-]{2,30}\s*(?:相比|对照|对比|比较)|比较\s*\d+\s*个(?:系统|模型|方法)|(?:高于|低于|优于|超过|领先)(?:最优|最佳|最强|次优|经典|传统|内置|原生|原始|单一|基础|随机|零样本|微调前|基线|对照|同量|同规模)[^，,。；\n]{0,16}的)/iu;
     for (const paragraph of String(contentBody || '').split(/\n\s*\n/u)) {
         const sentences = paragraph.split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
         const definedAcronyms = extractExecutiveParagraphDefinedMetricAcronyms(paragraph, sourceText, deniedWindowSentence);
@@ -4832,8 +4838,24 @@ function executiveSummaryQuantitativeResultState(contentBody, sourceText = null)
             for (let index = 0; index + windowSize <= sentences.length; index++) {
                 const windowParts = sentences.slice(index, index + windowSize);
                 if (windowParts.some(part => deniedWindowSentence.test(part) || hasCrossMetricDirectionalComparison(part))) continue;
-                if (!windowParts.some(part => sentenceHasExecutiveMetricAndResultNumber(part, sourceText, definedAcronyms)
-                    && CORE_SUMMARY_COMPARISON_PATTERN.test(part))) continue;
+                const hasSameSentenceMetricComparison = windowParts.some(part =>
+                    sentenceHasExecutiveMetricAndResultNumber(part, sourceText, definedAcronyms)
+                    && CORE_SUMMARY_COMPARISON_PATTERN.test(part));
+                const hasSplitMetricComparison = !hasSameSentenceMetricComparison
+                    && windowParts.length >= 2
+                    && windowParts.some(part => sentenceHasExecutiveMetric(part, sourceText, definedAcronyms))
+                    && windowParts.some(part => {
+                        if (!CORE_SUMMARY_COMPARISON_PATTERN.test(part)) return false;
+                        const cleanedPart = stripDefinedMetricAcronymNumbers(
+                            stripCoreSummaryNonResultNumerals(part)
+                                .replace(operationalClausePattern, ' ')
+                                .replace(new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' ')
+                                .replace(new RegExp(CORE_SUMMARY_METRIC_PATTERN.source, 'gi'), match => match.replace(/\d+(?:\.\d+)?/g, '')),
+                            definedAcronyms
+                        );
+                        return (cleanedPart.match(CORE_SUMMARY_NUMBER_PATTERN) || []).length >= 2;
+                    });
+                if (!hasSameSentenceMetricComparison && !hasSplitMetricComparison) continue;
                 const combined = windowParts.join('，');
                 if (!explicitCounterpartPattern.test(combined)) continue;
                 const nonOpWindow = stripDefinedMetricAcronymNumbers(
@@ -5168,12 +5190,18 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     // 可能性副词，且不能是否定式（“不会失效”不算边界）。
     const failureConditionBoundary = /(?<![不未没])(?:可能|会|将|易|容易|仍会)(?:(?![不未没])[^。！？!?\n]){0,10}(?:失效|失灵|失准|退化|恶化)/.test(boundaryBody);
     const unverifiedScopeBoundary = /(?:不在|不属于|未纳入|不纳入)[^。！？!?\n]{0,12}(?:验证|覆盖|评估|评测|测试)范围/.test(boundaryBody);
+    const executivePendingOrUncoveredBoundary = useExecutiveAbstract && boundaryBody.split(/[。！？!?\n]/u).some(sentence => (
+        (/(?:仍需|尚需|尚待|有待)[^。！？!?\n]{0,60}(?:验证|评估|测试)/u.test(sentence)
+            && !/(?:无需|不需|不必|已完成|已经完成|不再需要)/u.test(sentence))
+        || (/不覆盖[^。！？!?\n]{1,60}/u.test(sentence)
+            && !/(?:并非|不是|并不|不存在|没有|未曾|不能说|无法断言)[^，,；;。！？!?\n]{0,20}不覆盖/u.test(sentence))
+    ));
     // 2026-11-06 曾以“先完成发布”为由整段取消除阻断，但写作提示词（core-summary-repair.md）
     // 和发布端的同名规则仍要求结论适用边界，只关 Node 一侧会让两端判定分叉，并让下面这组
     // 已经按真实保存稿迭代过的边界判据连同回归用例一起失效。因此恢复原判据：
     // 没有可核验的结论适用边界、失败条件或未验证范围时仍然拒绝。
     if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !failureConditionBoundary && !unverifiedScopeBoundary && !hasNaturalScopedBoundary(boundaryBody) && !hasSourceBoundDnsMosBoundary(boundaryBody, sourceText)) {
+        && !conditionalMetricFailure && !singleReferenceBoundary && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !failureConditionBoundary && !unverifiedScopeBoundary && !executivePendingOrUncoveredBoundary && !hasNaturalScopedBoundary(boundaryBody) && !hasSourceBoundDnsMosBoundary(boundaryBody, sourceText)) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const costBody = useExecutiveAbstract

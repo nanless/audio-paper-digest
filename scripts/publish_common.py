@@ -8636,6 +8636,30 @@ def fix_latex_delimiters(text):
             inline_math,
             prose,
         )
+
+        # 仅对明确含 TeX 命令或上下标的带内边距单行行内公式（如 ``$ \hat{d}(t) = d_c + \hat{d}_{res}(t) $``）
+        # 转为 ``\(...\)``，避免 ``$ 5 + 2 $`` 或两个被中文隔开的裸金额被误转为公式。
+        def spaced_tex_inline_math(match):
+            raw_inner = match.group(1)
+            body = raw_inner.strip()
+            if not body or raw_inner == body:
+                return match.group(0)
+            if re.match(r'^\d', body):
+                return match.group(0)
+            if not re.search(r'\\[A-Za-z]+|[A-Za-z][_^](?:\{[^}]+\}|[A-Za-z0-9])', body):
+                return match.group(0)
+            line_start = converted.rfind('\n', 0, match.start()) + 1
+            line_end = converted.find('\n', match.end())
+            line = converted[line_start:line_end if line_end >= 0 else len(converted)]
+            if line.lstrip().startswith('|') and re.search(r'(?<!\\)\|', body):
+                return match.group(0)
+            return r'\(' + body + r'\)'
+
+        converted = re.sub(
+            r'(?<![\\$])\$(?!\$)([ \t]*[^$\n\u3400-\u9fff]+?[ \t]*)\$(?![\d$])',
+            spaced_tex_inline_math,
+            converted,
+        )
         # 少数 arXiv 图注有 TeX 起始定界符，却在单位前漏掉收尾的 ``$``（例如
         # ``f_s=$16\,kHz``）。这种“数字 + TeX 细空格 + 单位”的窄形态是明确的
         # 公式，不是金额；按普通图注文本保留原意。

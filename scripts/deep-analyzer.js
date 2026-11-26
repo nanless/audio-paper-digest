@@ -6296,9 +6296,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const previousOperatorCompletionProof = operatorSupersedes
         ? previousOrdinalProof
             || previousSupersededOrdinalProof
-            || (generated.ordinalPatchCompilations?.length
-                ? require('./lib/reader-target-ordinal-patch').verifiedSupersededCompletionPointer(paper)
-                : null)
+            || require('./lib/reader-target-ordinal-patch').verifiedSupersededCompletionPointer(paper)
         : previousOrdinalProof;
     const replacesOrdinalCompletion = !generated.ordinalPatchCompilations?.length && previousOrdinalProof;
     if (replacesOrdinalCompletion) {

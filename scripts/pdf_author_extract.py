@@ -23,6 +23,7 @@ import os
 import re
 import stat
 import sys
+import threading
 import unicodedata
 from pathlib import Path
 
@@ -35,6 +36,8 @@ CONTRACT_V2 = "pdf-page1-author-evidence-v2"
 CONTRACT_V3 = "pdf-page1-author-evidence-v3"
 CONTRACT = CONTRACT_V2
 _V3_GUARDS_ENABLED = False
+# PyMuPDF (fitz) 全局上下文非线程安全，且 v3 使用模块级守卫开关，多线程并发重放必须串行化。
+_PDF_AUTHOR_EXTRACT_LOCK = threading.RLock()
 MAX_PDF_BYTES = 512 * 1024 * 1024
 
 ICON_FONT_RE = re.compile(
@@ -3663,8 +3666,9 @@ def _try_mode_inline_author_aff(merged_lines: list[dict]) -> tuple[list[dict], s
 
 
 def extract_pdf_page1_authors_v1(pdf_bytes: bytes) -> dict | None:
-    import pdf_author_extract_v1 as _v1
-    return _v1.extract_pdf_page1_authors(pdf_bytes)
+    with _PDF_AUTHOR_EXTRACT_LOCK:
+        import pdf_author_extract_v1 as _v1
+        return _v1.extract_pdf_page1_authors(pdf_bytes)
 
 
 def extract_pdf_page1_authors_v2(pdf_bytes: bytes) -> dict | None:
@@ -3672,19 +3676,20 @@ def extract_pdf_page1_authors_v2(pdf_bytes: bytes) -> dict | None:
         return None
     pdf_sha = _sha256_bytes(bytes(pdf_bytes))
     doc = None
-    try:
-        doc = fitz.open(stream=bytes(pdf_bytes), filetype="pdf")
-        if doc.needs_pass or len(doc) == 0:
+    with _PDF_AUTHOR_EXTRACT_LOCK:
+        try:
+            doc = fitz.open(stream=bytes(pdf_bytes), filetype="pdf")
+            if doc.needs_pass or len(doc) == 0:
+                return None
+            page = doc[0]
+            if page.rect.width <= 0 or page.rect.height <= 0:
+                return None
+            header_lines, footnote_lines, page_w, _page_h = _extract_page1_lines(page)
+        except Exception:
             return None
-        page = doc[0]
-        if page.rect.width <= 0 or page.rect.height <= 0:
-            return None
-        header_lines, footnote_lines, page_w, _page_h = _extract_page1_lines(page)
-    except Exception:
-        return None
-    finally:
-        if doc is not None:
-            doc.close()
+        finally:
+            if doc is not None:
+                doc.close()
 
     if not header_lines:
         return None
@@ -4292,25 +4297,27 @@ def extract_pdf_page1_authors_v2(pdf_bytes: bytes) -> dict | None:
 
 
 def extract_pdf_page1_authors_v3(pdf_bytes: bytes) -> dict | None:
-    global _V3_GUARDS_ENABLED
-    prev = _V3_GUARDS_ENABLED
-    _V3_GUARDS_ENABLED = True
-    try:
-        result = extract_pdf_page1_authors_v2(pdf_bytes)
-    finally:
-        _V3_GUARDS_ENABLED = prev
+    with _PDF_AUTHOR_EXTRACT_LOCK:
+        global _V3_GUARDS_ENABLED
+        prev = _V3_GUARDS_ENABLED
+        _V3_GUARDS_ENABLED = True
+        try:
+            result = extract_pdf_page1_authors_v2(pdf_bytes)
+        finally:
+            _V3_GUARDS_ENABLED = prev
     if isinstance(result, dict):
         return {**result, "contract": CONTRACT_V3}
     return result
 
 
 def extract_pdf_page1_authors(pdf_bytes: bytes, contract: str = CONTRACT_V2) -> dict | None:
-    if contract in (CONTRACT_V1, "v1"):
-        return extract_pdf_page1_authors_v1(pdf_bytes)
-    if contract in (CONTRACT_V2, "v2", None, ""):
-        return extract_pdf_page1_authors_v2(pdf_bytes)
-    if contract in (CONTRACT_V3, "v3"):
-        return extract_pdf_page1_authors_v3(pdf_bytes)
+    with _PDF_AUTHOR_EXTRACT_LOCK:
+        if contract in (CONTRACT_V1, "v1"):
+            return extract_pdf_page1_authors_v1(pdf_bytes)
+        if contract in (CONTRACT_V2, "v2", None, ""):
+            return extract_pdf_page1_authors_v2(pdf_bytes)
+        if contract in (CONTRACT_V3, "v3"):
+            return extract_pdf_page1_authors_v3(pdf_bytes)
     raise ValueError(f"Unsupported PDF page-1 author contract: {contract}")
 
 

@@ -3119,3 +3119,49 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
         self.assertIsNotNone(res_k800)
         self.assertEqual(len(res_k800[0]), 800)
         self.assertLess(dt, 1.0, f"R19 #8 Python Mode B K=800 took {dt:.3f}s")
+
+    def test_pdf_author_extract_multithreaded_v2_v3_isolation(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import fitz
+        import pdf_author_extract as pae
+
+        def make_pdf(draw_fn, width=595, height=842):
+            doc = fitz.open()
+            page = doc.new_page(width=width, height=height)
+            draw_fn(page)
+            data = doc.tobytes()
+            doc.close()
+            return data
+
+        pdf_bytes = make_pdf(lambda p: (
+            p.insert_text((72, 80), "Concurrent Replay Isolation Test", fontsize=16),
+            p.insert_text((72, 118), "Alice Brown", fontsize=11),
+            p.insert_text((134, 114), "1", fontsize=7),
+            p.insert_text((142, 118), ", Bob White", fontsize=11),
+            p.insert_text((204, 114), "2", fontsize=7),
+            p.insert_text((72, 140), "1", fontsize=7),
+            p.insert_text((80, 142), "MIT", fontsize=10),
+            p.insert_text((72, 156), "2", fontsize=7),
+            p.insert_text((80, 158), "Stanford University", fontsize=10),
+            p.insert_text((72, 220), "Abstract", fontsize=12),
+        ))
+        expected_v2 = pae.extract_pdf_page1_authors_v2(pdf_bytes)
+        expected_v3 = pae.extract_pdf_page1_authors_v3(pdf_bytes)
+        self.assertIsNotNone(expected_v2)
+        self.assertIsNotNone(expected_v3)
+        self.assertEqual(expected_v2["contract"], pae.CONTRACT_V2)
+        self.assertEqual(expected_v3["contract"], pae.CONTRACT_V3)
+
+        def worker(idx: int):
+            if idx % 2 == 0:
+                got = pae.extract_pdf_page1_authors_v2(pdf_bytes)
+                return ("v2", got, pae._V3_GUARDS_ENABLED)
+            got = pae.extract_pdf_page1_authors_v3(pdf_bytes)
+            return ("v3", got, pae._V3_GUARDS_ENABLED)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(worker, range(32)))
+
+        for tag, got, flag_after in results:
+            self.assertEqual(got, expected_v2 if tag == "v2" else expected_v3)
+        self.assertFalse(pae._V3_GUARDS_ENABLED)

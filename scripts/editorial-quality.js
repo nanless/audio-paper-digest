@@ -1726,9 +1726,11 @@ function findMissingComparisonUnits(text, options = {}) {
             const audioVal = `[-+]?\\d+(?:\\.\\d+)?${ciTail}(?:\\s*(?:dB|ms|s|分贝|毫秒|秒))?`;
             const singleVerb = '(?:微升到|提升到|提升至|提高到|提高至|改善到|改善至|增加到|增至|升至|降至|下降到|下降至|降低到|降低至|减少到|减至|达到|为|是|=)';
             const rangeVerb = '(?:微升到|提升到|提升至|提高到|提高至|改善到|改善至|增加到|增至|升至|降至|下降到|下降至|降低到|降低至|减少到|减至|到|至)';
-            const audioDelim = '(?=\\s*(?:分)?(?:\\s*(?:[，,。；;！？!?、（）()]|与|和|且|而|并)|$))';
+            const audioDelim = '(?=\\s*(?:分)?(?:\\s*(?:[，,。；;！？!?、（）()]|与|和|且|而|并|的|时|后|下|中)|$))';
+            const nonPercentMetricNames = '(?:SI-SDRi|SI-SDR|SDR|SNR|STOI|ESTOI|FAD|CLAP|RTF|TTFA|MCD|LSD|SIM|SECS|CIDEr|SPIDEr|METEOR|SPICE|BLEU(?:-[1-4])?|ROUGE(?:-[12L])?|FENSE)';
+            const postUnitMetricNames = '(?:CIDEr|SPIDEr|METEOR|SPICE|BLEU(?:-[1-4])?|ROUGE(?:-[12L])?|FENSE)';
             numericText = numericText
-                // 仅在 STRUCTURED_V5 屏蔽已知非百分比音频指标（1–5 感知打分与声学客观指标）的直接取值/变化区间，
+                // 仅在 STRUCTURED_V5 屏蔽已知非百分比音频与描述指标（1–5 感知打分、声学客观指标、无量纲描述指标）的直接取值/变化区间，
                 // 以及显式带非百分比时延/容量/码率单位的数值；EER 属于百分率指标故不在此屏蔽，且严格保留同句否定归属保护。
                 .replace(
                     new RegExp(
@@ -1739,7 +1741,14 @@ function findMissingComparisonUnits(text, options = {}) {
                 )
                 .replace(
                     new RegExp(
-                        `(?<![A-Za-z0-9_.-])(?:SI-SDRi|SI-SDR|SDR|SNR|STOI|ESTOI|FAD|CLAP|RTF|TTFA|MCD|LSD|SIM|SECS)\\s*(?:反而\\s*)?(?:(?:从|由)\\s*${audioVal}\\s*${rangeVerb}\\s*|${singleVerb}\\s*|[ \\t]+)${audioVal}(?![A-Za-z0-9_.])` + audioDelim,
+                        `(?<![A-Za-z0-9_.-])${nonPercentMetricNames}\\s*(?:反而\\s*)?(?:(?:从|由)\\s*${audioVal}\\s*${rangeVerb}\\s*|${singleVerb}\\s*|[ \\t]+)${audioVal}(?![A-Za-z0-9_.])` + audioDelim,
+                        'giu'
+                    ),
+                    negateGuard
+                )
+                .replace(
+                    new RegExp(
+                        `(?:(?:从|由)\\s*${audioVal}\\s*${postUnitMetricNames}(?![A-Za-z0-9_.-])\\s*${rangeVerb}\\s*${audioVal}\\s*${postUnitMetricNames}(?![A-Za-z0-9_.-])|(?:仅|仅为|达到|为|是|=)?\\s*${audioVal}\\s*${postUnitMetricNames}(?![A-Za-z0-9_.-]))`,
                         'giu'
                     ),
                     negateGuard

@@ -48,13 +48,17 @@ def replay_saved_inline_svg_pixels(raw, expected_sha256, *, contract=None):
     # The current security validator still gates every historical producer.
     validate_svg(raw)
     if contract == V2_CONTRACT or contract is None:
-        try:
-            v2_actual = render_svg(raw, hidpi=True, deterministic_v2=True)
-            if hashlib.sha256(v2_actual).hexdigest() == expected_sha256:
-                return v2_actual, None
-        except Exception:
-            if contract == V2_CONTRACT:
-                raise
+        v2_attempts = 16 if contract == V2_CONTRACT else 8
+        for attempt in range(v2_attempts):
+            try:
+                v2_actual = render_svg(raw, hidpi=True, deterministic_v2=True)
+                if hashlib.sha256(v2_actual).hexdigest() == expected_sha256:
+                    return v2_actual, None
+            except Exception:
+                if contract == V2_CONTRACT and attempt + 1 >= v2_attempts:
+                    raise
+                if contract != V2_CONTRACT:
+                    break
     actual = render_svg(raw)
     if hashlib.sha256(actual).hexdigest() == expected_sha256:
         return actual, None
@@ -74,8 +78,11 @@ def replay_saved_inline_svg_pixels(raw, expected_sha256, *, contract=None):
             continue
         calls = [{}]
         try:
-            if 'hidpi' in inspect.signature(producer).parameters:
+            params = inspect.signature(producer).parameters
+            if 'hidpi' in params:
                 calls.append({'hidpi': True})
+            if 'hidpi' in params and 'deterministic_v2' in params:
+                calls.append({'hidpi': True, 'deterministic_v2': True})
         except (TypeError, ValueError):
             pass
         for kwargs in calls:

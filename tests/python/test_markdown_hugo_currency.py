@@ -86,6 +86,16 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
 
     def test_math_like_dollar_expressions_still_fail_closed(self):
         self.assertEqual(fix_latex_delimiters('$5 + 2'), '$5 + 2')
+        self.assertEqual(fix_latex_delimiters('$ 5 + 2 $'), '$ 5 + 2 $')
+        self.assertEqual(fix_latex_delimiters('$ 5 元与 $ 10'), '$ 5 元与 $ 10')
+
+    def test_spaced_tex_inline_math_converts_without_touching_currency(self):
+        text = r'最终估计为 $ \hat{d}(t) = d_c + \hat{d}_{res}(t) $，后台迟滞更新。'
+        fixed = sanitize_markdown_for_publish(text)
+        self.assertEqual(fixed, r'最终估计为 \(\hat{d}(t) = d_c + \hat{d}_{res}(t)\)，后台迟滞更新。')
+        self.assertEqual(math_and_emphasis_issues(fixed, 'Reader'), [])
+        table = '| a | b |\n| --- | --- |\n| $ a_1 | b_2 $ | ok |'
+        self.assertIn('$ a_1 | b_2 $', fix_latex_delimiters(table))
 
     def test_quoted_angle_bracket_tokens_cannot_open_html(self):
         fixed = sanitize_markdown_for_publish('迷你记谱法写作 "<1 2>" 和 "<a b c>"。')

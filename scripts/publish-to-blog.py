@@ -5263,12 +5263,14 @@ def _has_executive_method_architecture(content_body):
         r'(?:编码器|解码器|声码器|分词器|量化器|转换器|变换器|Transformer|Conformer|Mamba|UNet|'
         r'扩散|流匹配|注意力|网络|主干|骨干|适配器|投影层|投影头|模块|分支|前端|后端|分类头|回归头|'
         r'预测头|判别器|生成器|检索器|规划器|求解器|滤波器|估计器|识别器|合成器|谱均衡|引擎|探针|矩阵|子空间|表征|特征|嵌入|'
-        r'隐状态|隐变量|码本|令牌|token|掩码|掩膜|损失|目标函数|正则|采样器|蒸馏)',
+        r'隐状态|隐变量|码本|令牌|token|掩码|掩膜|损失|目标函数|正则|采样器|蒸馏|'
+        r'知识图谱|大模型|智能体|工具链|后台工具|对话系统|管线|流水线)',
         re.IGNORECASE,
     )
     action_re = re.compile(
         r'(?:输入|接收|提取|编码|映射|投影|压缩|量化|池化|聚合|融合|拼接|注入|调制|对齐|检索|筛选|'
-        r'路由|分解|预测|估计|重构|重建|解码|合成|生成|输出|优化|更新|训练|微调|冻结|约束|抑制|消除|解耦)'
+        r'路由|分解|预测|估计|重构|重建|解码|合成|生成|输出|优化|更新|训练|微调|冻结|约束|抑制|消除|解耦|'
+        r'提炼|写入|记录|组装|重写)'
     )
     denied_re = re.compile(
         r'(?:假设|假想|假定|设想|如果|预计|预期|可能|未来实验|计划采用|第三方|他人研究|先前工作|相关工作|'
@@ -5766,12 +5768,9 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
                     found.append(acronym)
         return found
 
-    def _sentence_has_executive_metric_and_number(raw_sentence, defined_acronyms=(), preceding='', following=''):
+    def _sentence_has_executive_metric(raw_sentence, defined_acronyms=(), preceding='', following=''):
         cleaned_s = _strip_core_summary_non_result_numerals(raw_sentence.strip())
         if not cleaned_s:
-            return False
-        non_op = _strip_defined_metric_acronym_numbers(operational_re.sub(' ', cleaned_s), defined_acronyms)
-        if not number.findall(non_op):
             return False
         without_models, admitted_surface = _admitted_metric_surface(cleaned_s)
         without_generic = generic_english_metric_re.sub(' ', admitted_surface)
@@ -5785,6 +5784,15 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
             or _has_statistical_result(without_models)
             or _has_source_bound_hit_count_metric(cleaned_s)
         )
+
+    def _sentence_has_executive_metric_and_number(raw_sentence, defined_acronyms=(), preceding='', following=''):
+        cleaned_s = _strip_core_summary_non_result_numerals(raw_sentence.strip())
+        if not cleaned_s:
+            return False
+        non_op = _strip_defined_metric_acronym_numbers(operational_re.sub(' ', cleaned_s), defined_acronyms)
+        if not number.findall(non_op):
+            return False
+        return _sentence_has_executive_metric(raw_sentence, defined_acronyms, preceding, following)
 
     raw_body_sentences = re.split(r'[。！？!?\n]', content_body)
     has_complete_result = any(
@@ -5811,7 +5819,7 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
             r'(?:传统|主流|现有|以往)[^，,。；\n]{0,18}(?:方法|模型|系统|基线|代理|方案|编解码器)|'
             r'与\s*[A-Za-z0-9\u4e00-\u9fa5_-]{2,30}\s*(?:相比|对照|对比|比较)|'
             r'比较\s*\d+\s*个(?:系统|模型|方法)|'
-            r'(?:高于|低于|优于|超过|领先)(?:次优|内置|原生|原始|单一|基础|随机|零样本|微调前|基线|对照|同量|同规模)[^，,。；\n]{0,12}的)',
+            r'(?:高于|低于|优于|超过|领先)(?:最优|最佳|最强|次优|经典|传统|内置|原生|原始|单一|基础|随机|零样本|微调前|基线|对照|同量|同规模)[^，,。；\n]{0,16}的)',
             re.IGNORECASE,
         )
         for paragraph in re.split(r'\n\s*\n', content_body):
@@ -5822,11 +5830,28 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
                     win = p_sentences[idx:idx + win_size]
                     if any(denied_window_re.search(part) or _has_cross_metric_directional_comparison(part) for part in win):
                         continue
-                    if not any(
+                    has_same_sentence_metric_comp = any(
                         _sentence_has_executive_metric_and_number(part, defined_acronyms)
                         and (comparison.search(part) or baseline_transition.search(part))
                         for part in win
-                    ):
+                    )
+                    has_split_metric_comp = (
+                        not has_same_sentence_metric_comp
+                        and len(win) >= 2
+                        and any(_sentence_has_executive_metric(part, defined_acronyms) for part in win)
+                        and any(
+                            (comparison.search(part) or baseline_transition.search(part))
+                            and len(number.findall(_strip_defined_metric_acronym_numbers(
+                                metric.sub(
+                                    lambda m: re.sub(r'\d+(?:\.\d+)?', '', m.group(0)),
+                                    operational_re.sub(' ', operational_clause_re.sub(' ', _strip_core_summary_non_result_numerals(part))),
+                                ),
+                                defined_acronyms,
+                            ))) >= 2
+                            for part in win
+                        )
+                    )
+                    if not has_same_sentence_metric_comp and not has_split_metric_comp:
                         continue
                     combined = '，'.join(win)
                     if not explicit_counterpart_re.search(combined):
@@ -5907,9 +5932,21 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
     )
     failure_condition_boundary = re.search(r'(?<![不未没])(?:可能|会|将|易|容易|仍会)(?:(?![不未没])[^。！？!?\n]){0,10}(?:失效|失灵|失准|退化|恶化)', boundary_body)
     unverified_scope_boundary = re.search(r'(?:不在|不属于|未纳入|不纳入)[^。！？!?\n]{0,12}(?:验证|覆盖|评估|评测|测试)范围', boundary_body)
+    executive_pending_or_uncovered_boundary = use_executive and any(
+        (
+            re.search(r'(?:仍需|尚需|尚待|有待)[^。！？!?\n]{0,60}(?:验证|评估|测试)', sentence)
+            and not re.search(r'(?:无需|不需|不必|已完成|已经完成|不再需要)', sentence)
+        )
+        or (
+            re.search(r'不覆盖[^。！？!?\n]{1,60}', sentence)
+            and not re.search(r'(?:并非|不是|并不|不存在|没有|未曾|不能说|无法断言)[^，,；;。！？!?\n]{0,20}不覆盖', sentence)
+        )
+        for sentence in re.split(r'[。！？!?\n]', boundary_body)
+    )
     if not any((explicit_boundary, separated_unverified_boundary, conditional_failure,
                 scoped_conclusion_boundary, attention_scope_boundary, observational_causal_boundary,
                 uncovered_scope_boundary, failure_condition_boundary, unverified_scope_boundary,
+                executive_pending_or_uncovered_boundary,
                 _has_natural_scoped_boundary(boundary_body))):
         issues.append('缺少结论适用边界、失败条件或未验证范围')
     cost_body = (
@@ -9559,7 +9596,10 @@ def _api_reader_payload_uncached(paper):
                     resource = _reader_inline_svg_resource(paper, plan, item,
                         source_binding_proof['structuredArtifactsSha256'], paper['sourceSha256'])
                     raw_asset, pixel_replay = replay_saved_inline_svg_pixels(
-                        resource['inlineSvg'].encode('utf-8'), item.get('assetSha256'))
+                        resource['inlineSvg'].encode('utf-8'),
+                        item.get('assetSha256'),
+                        contract=item.get('inlineSvgRenderContract'),
+                    )
                     actual_sha = hashlib.sha256(raw_asset).hexdigest()
                     if actual_sha != item.get('assetSha256'):
                         raise PublishDataValidationError('内联论文图重新渲染的像素与 Reader 实际输入不一致。')
