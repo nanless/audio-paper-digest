@@ -870,7 +870,7 @@ function buildDailyPodcastScript(analysisData, options = {}) {
 
     // 1. Intro segment
     const introParts = [
-        `大家好，欢迎收听${spokenDate}的语音与音频论文速递。`
+        `大家好，欢迎收听${spokenDate}的音频研究日报。`
     ];
     if (bundles.length === 0) {
         introParts.push('今天没有新增通过全文核验的音频论文。');
@@ -989,13 +989,13 @@ function buildDailyPodcastScript(analysisData, options = {}) {
     // 4. Outro segment (adapted for empty-day batches when allowEmpty === true)
     const outroParts = bundles.length === 0
         ? [
-            `以上就是${spokenDate}语音与音频论文速递的简要播报。`,
-            '今日暂无新增通过核验的论文，欢迎前往音频论文速递博客浏览往期精读内容。',
+            `以上就是${spokenDate}音频研究日报的简要播报。`,
+            '今日暂无新增通过核验的论文，欢迎前往音频研究门户浏览往期精读内容。',
             '感谢收听，我们下一期再见。'
         ]
         : [
-            `以上就是${spokenDate}语音与音频论文速递的全部内容。`,
-            '每篇论文的完整中文精读、原图解析、公式推导与开源链接，都已经整理在音频论文速递博客的今日专题页中，欢迎前往主页查阅。',
+            `以上就是${spokenDate}音频研究日报的全部内容。`,
+            '每篇论文的完整中文精读、原图解析、公式推导与开源链接，都已经整理在音频研究门户的今日专题页中，欢迎前往主页查阅。',
             '感谢收听，我们下一期再见。'
         ];
     segments.push(createSegment({
@@ -1011,7 +1011,7 @@ function buildDailyPodcastScript(analysisData, options = {}) {
 
     const episodeTitle = roundup.title
         ? normalizeForChineseTts(roundup.title)
-        : `语音/音频论文速递播客 ${dateStr}`;
+        : `音频研究日报播客 ${dateStr}`;
     const totalChunks = segments.reduce((sum, seg) => sum + seg.chunks.length, 0);
     const estimatedDurationSeconds = estimateSpeakingSeconds(segments);
 

@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * 论文速递只读体检命令。
+ * 音频研究工作台只读体检命令。
  *
  * 用法：
  *   node scripts/doctor.js [--date YYYY-MM-DD] [--offline] [--network] [--json]
@@ -1596,7 +1596,7 @@ function renderTable(checks, options = {}) {
     const list = Array.isArray(checks) ? checks : [];
     const labelWidth = Math.max(12, ...list.map(check => displayWidth(check.label)));
     const lines = [];
-    lines.push('论文速递体检（只读）');
+    lines.push('音频研究工作台体检（只读）');
     const date = options.date || '';
     const dateNote = options.dateNote || '';
     const network = options.network ? '联网探测（--network）' : '离线（--offline，不联网）';

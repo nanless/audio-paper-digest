@@ -123,7 +123,7 @@ def check_app_branding(plist, filename):
     # Only the exact shipped version/build pair uses the original branding.
     # Callers supply the actual bundle plist, never sidecar legacy assertions.
     legacy = plist.get('CFBundleShortVersionString') == '1.0.0' and plist.get('CFBundleVersion') == '1'
-    expected = '论文速递' if legacy else '论文速递工作台'
+    expected = '论文速递' if legacy else '音频研究工作台'
     require(plist.get('CFBundleDisplayName') == plist.get('CFBundleName') == expected, '实际包内应用显示名不匹配')
     require(filename == expected + '.app', '实际应用文件名不匹配')
 
@@ -266,7 +266,7 @@ def prepare(args):
             run(['/usr/bin/ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', copy, archive])
             if args.dmg:
                 os.symlink('/Applications', stage/'Applications')
-                run(['/usr/bin/hdiutil', 'create', '-volname', '论文速递工作台 '+info['version'], '-srcfolder', stage, '-format', 'UDZO', '-ov', temporary/(prefix+'.dmg')])
+                run(['/usr/bin/hdiutil', 'create', '-volname', '音频研究工作台 '+info['version'], '-srcfolder', stage, '-format', 'UDZO', '-ov', temporary/(prefix+'.dmg')])
         # Decode the produced ZIP and verify its exact bundle, not merely its archive listing.
         verify_zip(archive, repo, info, app.name)
         build_info={'contract': CONTRACT, 'preparedAtUTC': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'publicationEligible': False, 'publicationState': 'local-candidate-only', 'bundleName': app.name, **info}
@@ -375,13 +375,14 @@ def prepare(args):
         if info['version'] == '1.5.0':
             changes = '''## 1.5.0 更新
 
-- 新增原生每日音频播客播放器：两端 100% 原生下载校验与播放（macOS AVFoundation + 媒体控制中心、Android MediaPlayer + 音频焦点），严格限定受控 GitHub Release HTTPS 白名单、最多 4 次已核验重定向、40 MiB 上限、字节/SHA-256/MP3 魔数校验与 150 MiB / 5 期独立 LRU 缓存（排除备份与 WebDAV 同步），支持 0.75–2.0 倍速、章节跳转与直达论文；未发布播客时 404/410 静默隐藏。
-- 补齐 Wave 12 音频快速规格卡与 Track 13.3 评分审计卡片样式及元数据：两端导读与汇总页完整支持快速规格卡、音频 Demo 按钮、三档阅读分级与评分审计卡片，论文页头与列表卡片新增分级评分徽章（精选/高分/推荐）、排名档位、论文类型、会议名称徽章与已核验资源徽章。
+- 迁移至新发布站点路径 `nanless.github.io/audio-research-portal/`，彻底恢复 1.4.7 客户端因站点改名（301）中断的在线目录与导读同步，并保留旧路径 `/audio-paper-digest-blog/` 的便携备份恢复、桌面见证与会议目录过渡兼容。
+- 新增原生每日音频播客播放器：两端 100% 原生下载校验与播放（macOS AVFoundation + 媒体控制中心、Android MediaPlayer + 音频焦点），严格限定受控 GitHub Release HTTPS 四仓库白名单（新旧工作台与发布站仓库）、最多 4 次已核验重定向、40 MiB 上限、字节/SHA-256/MP3 魔数校验与 150 MiB / 5 期独立 LRU 缓存（排除备份与 WebDAV 同步），支持 0.75–2.0 倍速、章节跳转与直达论文；未发布播客时 404/410 静默隐藏，同时保留历史播客清单指纹兼容。
+- 补齐 Wave 12 音频快速规格卡与 Track 13.3 评分审计卡片样式及元数据：两端导读与汇总页完整支持快速规格卡、音频 Demo 按钮、三档阅读分级与评分审计卡片，论文页头与列表卡片新增分级评分徽章（精选/高分/推荐）、排名档位、论文类型、会议名称徽章与已核验资源徽章；修复 Android 汇总图注中 `.katex-html` 视觉噪声净化。
 - 升级离线检索与筛选体验：两端对齐 NFKC 多词空格 AND 检索与“相关度”排序、按会议动态计数筛选、评分快捷档位（全部 / 精选 ≥ 8.0 / 高分 ≥ 7.0 / 推荐 ≥ 6.0 / 仅含评分）以及开源代码 / 模型权重 / 数据集 / 音频 Demo 双层离线+可选索引筛选。
 - 保持 `client/details/*` 协议与既有 `schemaFingerprint` 零破坏兼容；两端保持同一版本（1.5.0）与构建号（24），Android 沿用 1.4.4–1.4.7 发布签名库，无新增权限、依赖或组件。
 
 '''
-        notes=f'''# 论文速递工作台 {info['version']}
+        notes=f'''# 音频研究工作台 {info['version']}
 
 {changes}
 
@@ -390,8 +391,8 @@ def prepare(args):
 - 适用架构：{info['architecture']}；系统要求：macOS 15 及以上。
 - 应用版本：{info['version']}，构建号 {info['bundleVersion']}。
 - 采用本地签名，未经过 Apple 公证。
-- 安装前先退出旧版客户端。使用 DMG 时，将应用拖到应用程序文件夹；使用 ZIP 时，解压后将应用移到应用程序文件夹。
-- 包内自带运行组件和许可，可直接阅读论文速递网站的内容。
+- 安装前先退出旧版客户端。使用 DMG 时，将应用拖到应用程序文件夹；使用 ZIP 时，解压后将应用移到应用程序文件夹。从 1.4.x 升级时应用更名为“音频研究工作台.app”，共用原资料目录与钥匙串，安装后请退出并移除旧“论文速递工作台.app”。
+- 包内自带运行组件和许可，可直接阅读音频研究门户的内容。
 
 ## Android 安装与升级
 
@@ -550,7 +551,7 @@ def publish_plan(args, private_draft=False):
     require(args.repository=='nanless/audio-research-workbench','必须明确使用当前仓库')
     tag=verified_remote_tag('v'+info['version'],head) if private_draft else None
     assets=[str(args.prepared.resolve()/name) for name in sorted(load(args.prepared/'release-manifest.json')['assets'])]+[str(args.prepared.resolve()/'release-manifest.json'),str(args.prepared.resolve()/'SHA256SUMS')]
-    command=['gh','release','create','v'+info['version'],*assets,'--repo',args.repository,'--verify-tag','--target',head,'--title','论文速递工作台 '+info['version'],'--notes-file',str(args.prepared.resolve()/'RELEASE_NOTES.md'),'--draft']
+    command=['gh','release','create','v'+info['version'],*assets,'--repo',args.repository,'--verify-tag','--target',head,'--title','音频研究工作台 '+info['version'],'--notes-file',str(args.prepared.resolve()/'RELEASE_NOTES.md'),'--draft']
     if private_draft:command[command.index('--repo')+1]='github.com/nanless/audio-research-workbench'
     if args.prerelease:command.append('--prerelease')
     return {'stage':'private-draft' if private_draft else 'fully-qualified-draft','remoteTag':tag,'executed':False,'automaticTagCreation':False,'publicPublication':False,'qualification':('84项前置验收通过，REL-03/04仅可通过或待验；只准创建私有草稿，不能公开' if private_draft else '原69项及新增云端与发行17项通过只是本地门，维护者仍须复核对应包的实际证据；命令仅创建草稿'),'requiresExistingRemoteTag':'v'+info['version'],'argv':command}

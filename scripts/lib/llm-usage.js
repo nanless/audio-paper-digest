@@ -151,8 +151,11 @@ function writeLlmUsageEvent(event, options = {}) {
         if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('用量目录必须是真实目录，不能是符号链接');
     }
     fs.chmodSync(directory, 0o700);
-    // 按北京日期 YYYY-MM-DD 分片写入新事件（不动任何已钉的历史平铺文件）。
-    // 若合成测试事件不含合法 at 时间戳，回退到根目录保持兼容。
+    // 默认保持平铺写入（兼容全量历史账本回放、桌面端 ModelUsage 与既有 verifier）；
+    // 显式传 shardByDate: true 或设置 PD_LLM_USAGE_SHARD_BY_DATE=1 时按北京日期 YYYY-MM-DD 分片写入。
+    // 桌面端传 shardByDate: false 时同步跳过 -daily 只读索引，避免污染工作区备份结构。
+    const shardByDate = options.shardByDate === true || (options.shardByDate !== false && process.env.PD_LLM_USAGE_SHARD_BY_DATE === '1');
+    const writeDailyIndex = options.shardByDate !== false;
     let writeDir = directory;
     let eventBjDate = null;
     if (event && typeof event.at === 'string') {
@@ -161,15 +164,17 @@ function writeLlmUsageEvent(event, options = {}) {
             const candidate = new Date(parsedMs + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
             if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
                 eventBjDate = candidate;
-                const shardDir = path.join(directory, candidate);
-                try { fs.mkdirSync(shardDir, { mode: 0o700 }); }
-                catch (error) { if (error.code !== 'EEXIST') throw error; }
-                const shardStat = fs.lstatSync(shardDir);
-                if (!shardStat.isDirectory() || shardStat.isSymbolicLink()) {
-                    throw new Error('用量日期分片目录必须是真实目录，不能是符号链接');
+                if (shardByDate) {
+                    const shardDir = path.join(directory, candidate);
+                    try { fs.mkdirSync(shardDir, { mode: 0o700 }); }
+                    catch (error) { if (error.code !== 'EEXIST') throw error; }
+                    const shardStat = fs.lstatSync(shardDir);
+                    if (!shardStat.isDirectory() || shardStat.isSymbolicLink()) {
+                        throw new Error('用量日期分片目录必须是真实目录，不能是符号链接');
+                    }
+                    fs.chmodSync(shardDir, 0o700);
+                    writeDir = shardDir;
                 }
-                fs.chmodSync(shardDir, 0o700);
-                writeDir = shardDir;
             }
         }
     }
@@ -194,7 +199,7 @@ function writeLlmUsageEvent(event, options = {}) {
     const directoryFd = fs.openSync(writeDir, 'r');
     try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
     // 同步追加一份按北京日期分片的只读索引缓存（best-effort，绝不影响主账本原子写入与历史回放）。
-    if (eventBjDate && event && event.kind) {
+    if (writeDailyIndex && eventBjDate && event && event.kind) {
         try {
             const bjDate = eventBjDate;
             if (/^\d{4}-\d{2}-\d{2}$/.test(bjDate)) {

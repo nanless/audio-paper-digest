@@ -222,9 +222,8 @@ class DesktopDetailsRepository(
         ) { "macOS 桌面状态见证协议或验证代不匹配" }
         val sourceCommit = witness.getString("sourceCommit")
         require(COMMIT_OID_PATTERN.matches(sourceCommit)) { "macOS 桌面状态见证 sourceCommit 非法" }
-        val expectedBasePath = URI(CatalogRepository.SITE).rawPath
         val basePath = witness.getString("basePath")
-        require(basePath == expectedBasePath && basePath.startsWith("/") && basePath.endsWith("/")) {
+        require(isAcceptedSiteBasePath(basePath, CatalogRepository.SITE)) {
             "macOS 桌面状态见证 basePath 与当前站点路径不一致：$basePath"
         }
         witness.nullableString("generatedAt")?.let { requireIsoTimestampWithTz(it, "macosWitness.generatedAt") }
@@ -2245,9 +2244,8 @@ class DesktopDetailsRepository(
             val expectedKeys = setOf("contract", "schemaFingerprint") + schema.getJSONArray("fields").strings()
             requireExactKeys(obj, expectedKeys, MANIFEST_PATH)
 
-            val expectedBasePath = URI(siteUrl).rawPath
             val basePath = obj.getString("basePath")
-            require(basePath == expectedBasePath && basePath.startsWith("/") && basePath.endsWith("/")) {
+            require(isAcceptedSiteBasePath(basePath, siteUrl)) {
                 "manifest.basePath 与站点部署路径不一致：$basePath"
             }
             val generatedAt = obj.getString("generatedAt")
@@ -2279,6 +2277,17 @@ class DesktopDetailsRepository(
                 snapshotContract = snapshotFormat.getString("contract"),
                 snapshotSchemaFingerprint = snapshotFormat.getString("schemaFingerprint"),
             )
+        }
+
+        internal fun isAcceptedSiteBasePath(basePath: String, siteUrl: String): Boolean {
+            if (!basePath.startsWith("/") || !basePath.endsWith("/")) return false
+            val uri = runCatching { URI(siteUrl) }.getOrNull() ?: return false
+            val raw = uri.rawPath.orEmpty()
+            val expected = if (raw.endsWith("/")) raw else "$raw/"
+            if (basePath == expected) return true
+            return uri.host?.equals("nanless.github.io", ignoreCase = true) == true &&
+                expected == "/audio-research-portal/" &&
+                basePath == "/audio-paper-digest-blog/"
         }
 
         internal fun verifyAndSanitizeArticleHtml(raw: ByteArray, blogURL: String): SanitizedArticleHtml {

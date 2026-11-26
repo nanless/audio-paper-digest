@@ -1,6 +1,6 @@
 # 桌面论文研究工作台规划
 
-本文说明论文速递工作台的产品目标、数据分层和设计取舍。现行应用支持阅读、同步、个人模型研究和 Zotero 存档，安装与实际使用见[Mac 说明](../apps/macos/README.md)及[Android 说明](../apps/android/README.md)。固定测试样稿与显示资源见[共享材料](../prototypes/macos-research/README.md)；静态详情数据协议见[静态数据合同](desktop-data-contract.md)，技术备选和后续研究扩展在下文按设计目标说明，具体功能范围以现行应用为准。
+本文说明音频研究工作台的产品目标、数据分层和设计取舍。现行应用支持阅读、同步、个人模型研究和 Zotero 存档，安装与实际使用见[Mac 说明](../apps/macos/README.md)及[Android 说明](../apps/android/README.md)。固定测试样稿与显示资源见[共享材料](../prototypes/macos-research/README.md)；静态详情数据协议见[静态数据合同](desktop-data-contract.md)，技术备选和后续研究扩展在下文按设计目标说明，具体功能范围以现行应用为准。
 
 本文保留最初设计中的扩展目标。阅读具体流程前，先区分以下状态，避免把目标当作已经交付的能力：
 
@@ -35,7 +35,7 @@ Mac 应用直接消费已经发布的网站成果，默认单栏阅读，打开 
 
 ### 2.1 可直接利用的成果
 
-- 公开站点为[论文速递](https://nanless.github.io/audio-paper-digest-blog/)。2026-10-24 的原 `/index.json` 入口样本为 22 个分片、8,720 条页面记录；这是当时入口声明，含多种页面类型，论文身份按实际内容去重核验，现行数量随发布变化。当前源码优先读取 `client/details/manifest.json` 及其内容寻址快照与详情，仅在该入口返回 HTTP 404 或 410 时按[网站数据与恢复](mac-app-data.md)回退读取 `client/index.json` 与原入口；源码升级不重算历史样本，也不能把兼容读取当作重新分析网站内容。
+- 公开站点为[音频研究门户](https://nanless.github.io/audio-research-portal/)（旧地址 `/audio-paper-digest-blog/` 保持兼容）。2026-10-24 的原 `/index.json` 入口样本为 22 个分片、8,720 条页面记录；这是当时入口声明，含多种页面类型，论文身份按实际内容去重核验，现行数量随发布变化。当前源码优先读取 `client/details/manifest.json` 及其内容寻址快照与详情，仅在该入口返回 HTTP 404 或 410 时按[网站数据与恢复](mac-app-data.md)回退读取 `client/index.json` 与原入口；源码升级不重算历史样本，也不能把兼容读取当作重新分析网站内容。
 - 博客已有中文标题、任务与方法、多级标签、网站评分、原论文链接、图文正文和引用导出。客户端应显示这些已有结果，并保留其来源和版本。
 - 原附属文件格式包含 `citation.json`、`citation.bib`、`citation.ris`、`rethink-context.json`。具体字段由发布器生成；不能把上下文资料误认为完整 Reader。
 - 博客搜索分片加载器已经检查同源路径、长度、SHA 与数量。桌面同步可以沿用这套约束的设计，增加本地事务与版本管理。

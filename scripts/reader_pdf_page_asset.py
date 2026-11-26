@@ -20,7 +20,7 @@ if __name__ == '__main__':
     raise SystemExit('This helper is called through the normal blog publisher.')
 
 import fitz
-from reader_inline_svg import source_descriptor, validate_svg, has_unsaved_latexml_static_layout
+from reader_inline_svg import ACCEPTED_CONTRACTS, source_descriptor, validate_svg, has_unsaved_latexml_static_layout
 
 CONTRACT = 'reader-sealed-pdf-page-asset-v1'
 DPI = 144
@@ -402,7 +402,9 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
     if failure is None:
         return None
     descriptor = source_descriptor(resource, paper_id)
-    need(all(figure.get(key) == descriptor[key] for key in descriptor),
+    need(figure.get('url') == descriptor['url']
+         and figure.get('inlineSvgSourceSha256') == descriptor['inlineSvgSourceSha256']
+         and figure.get('inlineSvgRenderContract') in ACCEPTED_CONTRACTS,
          'pdf_page_original_svg_identity_changed')
     need(re.fullmatch(r'[a-f0-9]{64}', str(figure.get('sourceDomSha256', ''))),
          'pdf_page_original_dom_sha_missing')

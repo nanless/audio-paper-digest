@@ -1,8 +1,8 @@
-# Paper Digest Workbench for Mac
+# Audio Research Workbench for Mac
 
 [简体中文](README.md)
 
-The workbench brings published Paper Digest articles, original PDFs, and your personal research into one reading environment. Read the illustrated explanation first, open the paper to check it, save questions, model responses, excerpts, and notes, then archive selected material in Zotero.
+Audio Research Workbench brings published Audio Research Portal articles, original PDFs, and your personal research into one reading environment. Read the illustrated explanation first, open the paper to check it, save questions, model responses, excerpts, and notes, then archive selected material in Zotero.
 
 The installed application runs independently. You do not need the source repository, a development server, or a separate Node installation. Reading and synchronizing published content does not analyze papers again. Only an explicit personal study request or connection test calls your configured model service.
 
@@ -18,7 +18,7 @@ The interface labels quoted below are Chinese labels in the application. Linked 
 | Signing | Local ad-hoc signing; not notarized by Apple |
 | Bundled runtime | Node 24.19.0; users do not install it separately |
 
-Mac and Android packages and checksums are available on the same [GitHub Releases page](https://github.com/nanless/audio-research-workbench/releases). Drag the extracted `论文速递工作台.app`, or the application inside the DMG, into Applications. If macOS blocks the first launch, verify the download source and published checksum, then use the appropriate Privacy & Security action to allow the application to open.
+Mac and Android packages and checksums are available on the same [GitHub Releases page](https://github.com/nanless/audio-research-workbench/releases). Starting with 1.5.0, the app bundle is named `音频研究工作台.app`; drag the extracted app bundle, or the application inside the DMG, into Applications. If macOS blocks the first launch, verify the download source and published checksum, then use the appropriate Privacy & Security action to allow the application to open.
 
 Version 1.3.0 adds site-wide hierarchical classification, reorganizes desktop navigation, and aligns query rules with Android. See the [implementation and acceptance record (Chinese)](../../docs/workbench-1.3.0-review.md). Version 1.4.3 moves the large catalog into a background load, uses a compact browsing projection, and reduces repeated work when opening explanations and uploading cloud backups. See the [1.4.3 record (Chinese)](../../docs/workbench-1.4.3-review.md#发行状态) for automated tests, the manual acceptance not repeated, and the release state, and [client performance](../../docs/client-performance.md) for measured changes. The published package is 1.4.7; see the [1.4.7 record (Chinese)](../../docs/workbench-1.4.7-review.md), [1.4.6 record (Chinese)](../../docs/workbench-1.4.6-review.md), and [1.4.5 record (Chinese)](../../docs/workbench-1.4.5-review.md) for changes and tested scope, and [client release verification](../../docs/client-release-verification.md) for signing and asset checks.
 
@@ -112,7 +112,7 @@ npm run install:app
 
 Some interface tests accept `PD_MAC_BROWSER`. The complete `npm test` still includes tests using `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` directly. Installing Playwright Chromium or setting that variable alone does not meet the complete test prerequisite. Scientific-layout tests require the public MiCLA PDF and three original figures, prepared using the [sample instructions (Chinese)](../../prototypes/macos-research/README.md). Expected checksums come from the controlled sample manifest. These local assets are not included in a formal package.
 
-The default build uses the `release` channel and produces `.build/论文速递工作台.app` without paper samples. `--channel private-qa` includes samples for local testing in an isolated data directory. The channel rejects `--install`. The build checks Node's version, architecture, minimum OS, external dynamic-library dependencies, and matching license. Installation refuses to replace an application while `PaperDigest` is running; it does not force the process to quit.
+The default build uses the `release` channel and produces `.build/音频研究工作台.app` without paper samples. `--channel private-qa` includes samples for local testing in an isolated data directory. The channel rejects `--install`. The build checks Node's version, architecture, minimum OS, external dynamic-library dependencies, and matching license. Installation refuses to replace an application while `PaperDigest` is running; it does not force the process to quit.
 
 The application identifier `com.nanless.PaperDigest`, executable `PaperDigest`, Keychain service, and data root `~/Library/Application Support/PaperDigest/` remain compatible. About provides the bundled third-party license texts. Runtime updates require matching license material through the maintenance process; original license text must not be edited to bypass version checks.
 

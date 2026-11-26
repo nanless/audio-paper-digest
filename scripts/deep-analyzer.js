@@ -4,7 +4,7 @@ const qualityFormats = require('./lib/analysis-quality-format');
 const sourceInputFormats = require('./lib/source-input-format');
 const { createActiveTimeBudget } = require('./lib/active-time-budget');
 const { setupScriptLogging } = require('./log-setup');
-if (require.main === module && !process.argv.includes('--json')) {
+if (!process.argv.includes('--json')) {
     setupScriptLogging(__filename);
 }
 
@@ -6686,7 +6686,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     let scoreDelta = scoringDelta.scoreDelta;
     const consensusRequired = shouldTriggerScoringConsensus({
         firstScore: finalScore,
-        previousRunScore: scoringDelta.previousRunScore,
+        previousRunScore: scoringDelta.previousScore,
         capsApplied: scoringResult.audit?.capsApplied || []
     });
     const consensus = await runScoringAuditConsensus({
@@ -9810,12 +9810,11 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
                 disconnectCode === 'ECONNRESET'
                 || disconnectCode === 'ETIMEDOUT'
                 || disconnectCode === 'REQUEST_STREAM_IDLE_TIMEOUT'
-                || disconnectCode === 'REQUEST_SOCKET_TIMEOUT'
                 || /socket hang up|ECONNRESET/i.test(String(lastError.message || ''))
             );
             if (isSinglePaperTransientDisconnect) {
                 const nowMs = Date.now();
-                const paperTag = String(options?.usageContext?.paperId || options?.affinityKey || `anon:${nowMs}`);
+                const paperTag = String(cfg?.usageContext?.paperId || cfg?.affinityKey || `anon:${nowMs}`);
                 while (recentTransientDisconnects.length > 0 && nowMs - recentTransientDisconnects[0].at > 120000) {
                     recentTransientDisconnects.shift();
                 }
@@ -10441,7 +10440,9 @@ async function fetchArxivPdfUncached(arxivId, options = {}) {
             if (!response.ok) {
                 if (candidate === normalized) currentPdfStatus = response.status;
                 if (response.status === 404) break;
-                if ((response.status === 429 || response.status === 403 || response.status >= 500) && httpRetriesLeft > 0) {
+                if ((useGate || options.retryHttpStatus === true)
+                    && (response.status === 429 || response.status === 403 || response.status >= 500)
+                    && httpRetriesLeft > 0) {
                     httpRetriesLeft -= 1;
                     const fallbackWait = Math.min(60000, (5 - httpRetriesLeft) * 6000);
                     const waitMs = useGate

@@ -37,12 +37,12 @@ class WorkbenchBranding(unittest.TestCase):
 
     def test_patch_records_actual_application_and_effective_launcher_label(self):
         facts = m.manifest_facts(manifest(), '1.0.1', 4)
-        self.assertEqual('论文速递工作台', facts['applicationLabel'])
-        self.assertEqual('论文速递工作台', facts['launcherLabel'])
+        self.assertEqual('音频研究工作台', facts['applicationLabel'])
+        self.assertEqual('音频研究工作台', facts['launcherLabel'])
         self.assertEqual(m.APP, facts['applicationId'])
 
     def test_old_missing_or_unresolved_application_labels_fail_new_patch(self):
-        for label in ('论文速递', None, '@string/app_name', '@ref/0x7'):
+        for label in ('论文速递', '论文速递工作台', None, '@string/app_name', '@ref/0x7'):
             with self.subTest(label=label):
                 self.reject('application_label', lambda: m.manifest_facts(manifest(label), '1.0.1', 4))
 

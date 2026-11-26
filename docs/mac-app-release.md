@@ -1,4 +1,4 @@
-# 论文速递工作台 Mac 版：构建与发行
+# 音频研究工作台 Mac 版：构建与发行
 
 本页说明 1.4.7（构建号 23）的本地准备和联合发行操作。1.4.7 已于 2026-11-23 公开发布，附注标签 `v1.4.7` 指向发行提交 `520e93c3`，12 件附件见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.4.7)，签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。上一版 1.4.6 已于 2026-11-20 公开发布（提交 `fcf7e05b`），见 [1.4.6 记录](workbench-1.4.6-review.md)；1.4.5 已于 2026-11-12 公开发布（提交 `f9241190`），见 [1.4.5 记录](workbench-1.4.5-review.md)；1.4.4 已于 2026-11-05 公开发布，见 [1.4.4 记录](workbench-1.4.4-review.md)；1.4.3 的发行记录保留在[1.4.3 记录](workbench-1.4.3-review.md#发行状态)。
 
@@ -12,7 +12,7 @@
 
 | 项目 | 当前发行目标 |
 |---|---|
-| 应用 | 论文速递工作台.app |
+| 应用 | 音频研究工作台.app（1.5.0 起更名；1.4.x 及之前为旧包名） |
 | 版本、构建号 | 1.4.7、23 |
 | 架构、最低系统 | arm64、macOS 15 |
 | 运行时 | 随包 Node 24.19.0 |
@@ -33,7 +33,7 @@ npm --prefix apps/macos run build
 npm --prefix apps/macos run install:app
 ```
 
-构建输出为 `apps/macos/.build/论文速递工作台.app`；安装脚本写入 `~/Applications/论文速递工作台.app`。脚本检测到 `PaperDigest` 仍运行时拒绝替换，不强制退出。旧名称的应用包不自动删除，资料目录、应用标识与钥匙串服务保持兼容。
+构建输出为 `apps/macos/.build/音频研究工作台.app`；安装脚本写入 `~/Applications/音频研究工作台.app`。脚本检测到 `PaperDigest` 仍运行时拒绝替换，不强制退出。旧名称的应用包不自动删除，资料目录、应用标识与钥匙串服务保持兼容。
 
 正式包使用 `release` 通道。`private-qa` 含科学样稿，仅用于本机测试，不能生成正式发行计划。新构建使用新的未签名暂存目录，不从旧签名包删除资源。
 
@@ -43,19 +43,19 @@ npm --prefix apps/macos run install:app
 
 ```sh
 apps/macos/release.sh inspect \
-  --app 'apps/macos/.build/论文速递工作台.app' \
+  --app 'apps/macos/.build/音频研究工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.4.7
+  --version 1.5.0
 
 apps/macos/release.sh prepare \
-  --app 'apps/macos/.build/论文速递工作台.app' \
+  --app 'apps/macos/.build/音频研究工作台.app' \
   --build-record "$BUILD_RECORD" \
-  --version 1.4.7 \
-  --output 'apps/macos/.build/releases/1.4.7-arm64' \
+  --version 1.5.0 \
+  --output 'apps/macos/.build/releases/1.5.0-arm64' \
   --dmg
 
 apps/macos/release.sh verify \
-  --prepared 'apps/macos/.build/releases/1.4.7-arm64'
+  --prepared 'apps/macos/.build/releases/1.5.0-arm64'
 ```
 
 `inspect` 只读核对干净工作区、来源、实际输入、版本、签名、架构与最低系统。输出目录必须尚不存在，失败不覆盖原产物。`--dmg` 可省略；要求生成 DMG 时，失败不会自动改交 ZIP。

@@ -3,7 +3,7 @@ from project_env import load_project_env
 load_project_env()
 
 """
-论文速递 → GitHub Pages 博客
+音频研究工作台 → 音频研究门户（GitHub Pages）
 
 产物结构（平铺）：
   content/posts/
@@ -37,6 +37,7 @@ import difflib
 import functools
 import errno
 import html
+import inspect
 import json, re, sys, os, subprocess, datetime, base64, hashlib, math, io
 import concurrent.futures
 import threading
@@ -5533,6 +5534,11 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
     # 发布器在 Node 分析阶段之后按同一份 v3/v4 正文规则再次检查，
     # 所以上游已经接受的指标，不能仅仅因为它用了
     # 更新的别名（例如 PPL、CA-SDRi 或压缩率）就在这里被拒。
+    import os as _os
+    import sys as _sys
+    _scripts_dir = _os.path.dirname(_os.path.abspath(__file__)) if '__file__' in globals() else _os.path.join(_os.getcwd(), 'scripts')
+    if _scripts_dir not in _sys.path:
+        _sys.path.insert(0, _scripts_dir)
     from publish_common import (
         _has_adjacent_affirmative_evidence_withdrawal,
         _own_observed_source_scope,
@@ -7105,8 +7111,8 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
 
 def _render_empty_digest_index(date_str, category):
     """渲染经确认的零候选日汇总页：只有标题、日期和“今日没有新论文”。"""
-    conference_title = 'ICML 2026 论文速递' if category == 'icml-2026' \
-        else f'语音/音乐/音频论文速递 {date_str}'
+    conference_title = 'ICML 2026 音频研究专题' if category == 'icml-2026' \
+        else f'音频研究日报 {date_str}'
     markdown = f'''---
 title: "{conference_title}"
 date: {date_str}
@@ -7425,7 +7431,7 @@ def generate_index_page(
             'paper_digest_tags_scope: "aggregate-primary-task-counts"\n'
         )
 
-    conference_title = f'ICML 2026 论文速递' if category == 'icml-2026' else f'语音/音乐/音频论文速递 {date_str}'
+    conference_title = 'ICML 2026 音频研究专题' if category == 'icml-2026' else f'音频研究日报 {date_str}'
     md = f"""---
 title: "{conference_title}"
 date: {date_str}
@@ -7930,8 +7936,8 @@ def load_visual_summary_cards(papers, date_str, manifest_path=None):
     return enriched, assets
 
 
-def _digest_title(date_str, category='论文速递'):
-    return 'ICML 2026 论文速递' if category == 'icml-2026' else f'语音/音乐/音频论文速递 {date_str}'
+def _digest_title(date_str, category='音频研究日报'):
+    return 'ICML 2026 音频研究专题' if category == 'icml-2026' else f'音频研究日报 {date_str}'
 
 
 def _digest_cover_context(papers, date_str, category='论文速递'):
@@ -10160,7 +10166,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
     else:
         md += '> ⚠️ 该论文分析失败\n'
 
-    md += f'\n---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({BASE_PATH}/posts/{date_str}/)\n'
+    md += f'\n---\n\n[← 返回 {date_str} 音频研究日报]({BASE_PATH}/posts/{date_str}/)\n'
 
     return sanitize_markdown_for_publish(md), slug
 

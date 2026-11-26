@@ -72,7 +72,7 @@ test('超过可局部整理范围的65节稿，完整重试和旧空稿恢复都
     let requests = 0;
     const assertFullPrompt = messages => {
         const prompt = messages[0].content[0].text;
-        assert.match(prompt, /提交时仍要输出完整 JSON/);
+        assert.match(prompt, /提交完整 JSON/);
         assert.match(prompt, /原始输出 sections 实际 65 节/);
         assert.match(prompt, /sections\[5\].*body2/);
         assert.match(prompt, /sections\[13\].*tableIntro/);

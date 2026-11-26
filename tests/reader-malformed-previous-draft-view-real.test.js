@@ -67,7 +67,7 @@ test('original v9 full canonical prompt renderer preserves the exact recorded pr
 test('current registered v11 full renderer preserves real evidence and the diagnostic-only context limit',()=>{
     assert.equal(require(path.join(ROOT,'scripts/lib/prompt-contracts')).currentTextStagePromptPath('apiReaderArticle'),'prompts/current/api-reader-article.md');
     const result=nativeFullPrompt();assert.notEqual(result.originalPrompt,fixture.nativeOriginalPrompt);
-    assert.ok(result.originalPrompt.includes('独立 PDF 引文只用于明确允许的恢复'));
+    assert.ok(result.originalPrompt.includes('独立 PDF 引文（仅限明确授权恢复）'));
     assert.ok(result.originalPrompt.includes(fixture.nativeFullPromptVariables.sourceEvidence)&&result.prompt.includes(fixture.nativeFullPromptVariables.sourceEvidence));
     assert.equal(result.previousDraft,raw);assert.equal(decode(result.previousDraftPromptView).rawSha256,sha(raw));
     assert.equal(result.prompt.length,result.originalPrompt.length-raw.length+result.previousDraftPromptView.length);assert.ok(result.prompt.length<=240000);

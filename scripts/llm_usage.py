@@ -210,6 +210,7 @@ def write_llm_usage_event(event, directory=None):
     target_dir.chmod(0o700)
     write_dir = target_dir
     bj_date = None
+    shard_by_date = os.environ.get('PD_LLM_USAGE_SHARD_BY_DATE') == '1'
     if isinstance(event, dict) and isinstance(event.get('at'), str):
         try:
             dt = datetime.fromisoformat(event['at'].replace('Z', '+00:00'))
@@ -219,16 +220,17 @@ def write_llm_usage_event(event, directory=None):
             candidate_date = (dt.astimezone(timezone(timedelta(hours=8)))).strftime('%Y-%m-%d')
             if re.fullmatch(r'\d{4}-\d{2}-\d{2}', candidate_date):
                 bj_date = candidate_date
-                shard_dir = target_dir / bj_date
-                try:
-                    shard_dir.mkdir(mode=0o700)
-                except FileExistsError:
-                    pass
-                shard_mode = shard_dir.lstat().st_mode
-                if not stat.S_ISDIR(shard_mode) or stat.S_ISLNK(shard_mode):
-                    raise ValueError('用量日期分片目录必须是真实目录，不能是符号链接')
-                shard_dir.chmod(0o700)
-                write_dir = shard_dir
+                if shard_by_date:
+                    shard_dir = target_dir / bj_date
+                    try:
+                        shard_dir.mkdir(mode=0o700)
+                    except FileExistsError:
+                        pass
+                    shard_mode = shard_dir.lstat().st_mode
+                    if not stat.S_ISDIR(shard_mode) or stat.S_ISLNK(shard_mode):
+                        raise ValueError('用量日期分片目录必须是真实目录，不能是符号链接')
+                    shard_dir.chmod(0o700)
+                    write_dir = shard_dir
         except ValueError as exc:
             if '符号链接' in str(exc) or '真实目录' in str(exc):
                 raise

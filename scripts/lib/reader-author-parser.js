@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const childProcess = require('node:child_process');
 const cheerio = require('cheerio');
 const identityFormat = require('./reader-identity-format');
 // 解析或逐人关联失败不能推断论文没有披露机构；旧提示语仍按原签名只读兼容。
@@ -2376,28 +2376,38 @@ function extractPdfPage1AuthorsSync(pdfBytes, options = {}) {
     delete childEnv.PYTHONPATH;
     delete childEnv.NODE_OPTIONS;
     let tmpDir = null;
-    let result;
+    let fd;
+    let stdout = '';
     try {
         tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pd-pdf-authors-')));
         fs.chmodSync(tmpDir, 0o700);
-        const tmpPdf = path.join(tmpDir, 'source.pdf');
-        fs.writeFileSync(tmpPdf, payload, { mode: 0o600 });
-        result = spawnSync('bash', [runner, script, '--pdf', tmpPdf, '--contract', requestedContract], {
+        const inputFile = path.join(tmpDir, 'input.json');
+        fs.writeFileSync(
+            inputFile,
+            JSON.stringify({ contract: requestedContract, pdfBase64: payload.toString('base64') }),
+            { mode: 0o600 }
+        );
+        fd = fs.openSync(inputFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        stdout = childProcess.execFileSync('bash', [runner, script, '3'], {
             cwd: rootDir,
             env: childEnv,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: ['ignore', 'pipe', 'pipe', fd],
             encoding: 'utf8',
             timeout: 20000,
             maxBuffer: 8 * 1024 * 1024
         });
+    } catch (error) {
+        if (error && error.code === 'TEST_TMP_WRITE_GUARD') throw error;
+        return null;
     } finally {
+        if (fd !== undefined) fs.closeSync(fd);
         if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-    if (result.error || result.signal || result.status !== 0 || !result.stdout) {
+    if (!stdout) {
         return null;
     }
     try {
-        const parsed = JSON.parse(result.stdout);
+        const parsed = JSON.parse(stdout);
         const valid = validatePdfPage1AuthorEvidence(parsed, pdfSha) && parsed.contract === requestedContract ? parsed : null;
         setBoundedCacheEntry(pdfPage1AuthorCache, cacheKey, valid ? structuredClone(valid) : null);
         return valid ? structuredClone(valid) : null;

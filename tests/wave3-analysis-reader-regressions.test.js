@@ -925,7 +925,7 @@ test('F-P0-1 & F-P1-8/9/10 & F-P3-17: 7 份提示词契约对齐检查', () => {
     const readPrompt = name => fs.readFileSync(path.join(ROOT, 'prompts/current', name), 'utf8');
     const readerPrompt = readPrompt('api-reader-article.md');
     assert.equal((readerPrompt.match(/\{mechanicalContract\}/g) || []).length, 1, 'api-reader-article.md 不得重复包含 {mechanicalContract}');
-    assert.match(readerPrompt, /`focusPoints` 可输出 `\[\]` 或 2–4 个针对这张图的简短观察要点（每项 6–120 字）/);
+    assert.match(readerPrompt, /`focusPoints` (?:可输出|为) `\[\]` 或 2–4 (?:个针对这张图的简短观察要点（每项|项简短观察点（)6–120 字）/);
 
     const scoringPrompt = readPrompt('scoring-audit.md');
     assert.match(scoringPrompt, /总分不得超过 `8\.4`/);

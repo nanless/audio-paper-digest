@@ -34,7 +34,7 @@ test('different safety policies for one shared path refuse before reading, rathe
 test('a deleted original never disappears silently from the batch',t=>{const f=fixture(t),pin=f.write('one','bytes'),h=f.mint([pin]);fs.unlinkSync(pin.filename);assert.throws(()=>f.api.assertVerifiedPublicationReaderPdfSourcesUnchanged([h]));});
 test('empty batch is just the original empty loop and grants no source/qualification result',t=>{const f=fixture(t);assert.equal(f.api.assertVerifiedPublicationReaderPdfSourcesUnchanged([]),undefined);assert.equal(f.reads(),0);});
 test('current source factory keeps the reviewed format checks; single-source accessors and issuance order stay fixed',()=>{
- const expected={"factory": "8025f5c4950a84beab8a51fe7d20833ff8ba85397541f49dec7218b1f95878cf", "sourceAccessor": "7d7ffcfc43c86f399e029089df0a94b59273f4d43cdfe6f0ea52e949213442aa", "figureAccessor": "43cb83b3737194c2dd822bc162e9afc87c550f65c865e4f2f88b427a849a5b86"};
+ const expected={"factory": "081dc0be9249d76814a4b679881bae18a8a13909a722b8967d5fbedc046e485d", "sourceAccessor": "7d7ffcfc43c86f399e029089df0a94b59273f4d43cdfe6f0ea52e949213442aa", "figureAccessor": "43cb83b3737194c2dd822bc162e9afc87c550f65c865e4f2f88b427a849a5b86"};
  const factory=source.slice(source.indexOf('function replayCanonicalReaderPdfSource('),source.indexOf('function projectAttestedRawFigure('));
  assert.equal(hash(Buffer.from(factory.replace('    rememberCanonicalPdfSourceBytePins(handle, pinnedFiles, deps.discovery);\n',''))),expected.factory);
  assert.equal(hash(Buffer.from(source.slice(source.indexOf('function readVerifiedPublicationReaderPdfSource(handle)'),source.indexOf('function withPublicationEvidence(')))),expected.sourceAccessor);

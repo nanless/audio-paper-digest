@@ -5,10 +5,11 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { schemaFingerprint } = require('./protocol-codec');
 
 const PODCAST_EPISODE_METADATA_CONTRACT = 'daily-podcast-episode-v1';
 const CLIENT_PODCAST_FEED_CONTRACT = 'paper-daily-podcast-feed';
-const CLIENT_PODCAST_FEED_SCHEMA_FINGERPRINT = 'd0e7166a5ae14ba85f421b84ccf05813c43dae0a598bc39c2c75886c81f15ad2';
+const CLIENT_PODCAST_FEED_SCHEMA_FINGERPRINT = schemaFingerprint(CLIENT_PODCAST_FEED_CONTRACT);
 const CLIENT_PODCAST_FEED_MAX_EPISODES = 120;
 const CLIENT_PODCAST_FEED_MAX_BYTES = 2 * 1024 * 1024; // 2 MiB
 
@@ -409,8 +410,8 @@ function publishPodcastToGitHubRelease(options = {}) {
 
     const releaseTitle = options.releaseTitle || (
         tagGrouping === 'monthly'
-            ? `语音/音频论文速递播客 ${date.slice(0, 7)}`
-            : `语音/音频论文速递播客 ${date}`
+            ? `音频研究日报播客 ${date.slice(0, 7)}`
+            : `音频研究日报播客 ${date}`
     );
 
     if (options.dryRun === true || options.localOnly === true) {
@@ -631,7 +632,7 @@ function buildPodcastEpisodeMetadata(input = {}) {
     );
 
     const cleanTitle = String(input.title || '').replace(/[\r\n\0]+/g, ' ').trim()
-        || `语音/音频论文速递播客 ${date}`;
+        || `音频研究日报播客 ${date}`;
     const cleanDesc = String(input.description || input.summary || '').trim()
         || `${date} 语音、音乐与音频前沿论文每日中文播客导览。`;
 
@@ -894,7 +895,7 @@ function buildPodcastRssXml(episodes, channelConfig = {}) {
         throw new Error('episodes must be an array');
     }
 
-    const title = String(channelConfig.title || '语音与音频论文速递播客').trim();
+    const title = String(channelConfig.title || '音频研究工作台播客').trim();
     const link = validateSafeHttpsUrl(
         channelConfig.link || 'https://nanless.github.io/audio-research-portal/',
         'channelConfig.link'
@@ -907,7 +908,7 @@ function buildPodcastRssXml(episodes, channelConfig = {}) {
         channelConfig.description || '每日追踪 arXiv 与顶会语音、音乐与音频前沿论文的中文音频精讲。'
     ).trim();
     const language = String(channelConfig.language || 'zh-cn').trim();
-    const author = String(channelConfig.author || 'Audio Paper Digest').trim();
+    const author = String(channelConfig.author || 'Audio Research Workbench').trim();
     const category = String(channelConfig.category || 'Technology').trim();
     const channelExplicit = channelConfig.explicit === true ? 'true' : 'false';
     const imageUrl = channelConfig.imageUrl

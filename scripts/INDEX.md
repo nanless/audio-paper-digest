@@ -29,14 +29,14 @@
 | `conference-tools.js` | 私有会议来源状态的只读维护命令。它们有意只接受配置的运行根目录下的直接 JSON |
 | `conference-workspace.js` | 会议工作区的只读维护诊断。 |
 | `config-check.js` | 只读检查项目 .env：必填、类型、范围与未知变量。不写文件、不打印密钥值。 |
-| `config.js` | 论文速递的公共配置：路径、抓取、筛选、分析和发布参数。 |
+| `config.js` | 音频研究工作台的公共配置：路径、抓取、筛选、分析和发布参数。 |
 | `deep-analysis-only.js` | Node 流程入口或共享模块 |
 | `deep-analyzer.js` | Node 流程入口或共享模块 |
 | `digest-run-report.js` | Node 流程入口或共享模块 |
 | `digest-scorecard.js` | 只读 LLM 运行记分卡（Wave 11 Track 11C）。 |
 | `digest-status.js` | Node 流程入口或共享模块 |
 | `docs-consistency.js` | 检查文档里的 npm 命令、客户端版本声明、链接与锚点、双语索引、废弃写法、环境变量、env.example 同步及 AGENTS.md 体积。 |
-| `doctor.js` | 论文速递只读体检命令。 |
+| `doctor.js` | 音频研究工作台只读体检命令。 |
 | `editorial-quality.js` | 项目规定：scripts/*.js 里每个可直接执行的脚本，都要在沙箱里做任何事之前先失败退出。 |
 | `env-loader.js` | Node 流程入口或共享模块 |
 | `evaluate-keyword-prefilter.js` | Node 流程入口或共享模块 |

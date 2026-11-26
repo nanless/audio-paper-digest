@@ -42,7 +42,7 @@ class SecurityResources(unittest.TestCase):
         self.table = TABLE
         self.xml = {'/res/8G.xml': NET, '/res/Qq.xml': BACKUP, '/res/4j.xml': EXTRACTION}
         self.refs = dict(REFS)
-        self.manifest = self.helper.xml(label='论文速递工作台', **REFS).replace('android:versionName="1.0.0" android:versionCode="1"', 'android:versionName="1.0.1" android:versionCode="4"')
+        self.manifest = self.helper.xml(label='音频研究工作台', **REFS).replace('android:versionName="1.0.0" android:versionCode="1"', 'android:versionName="1.0.1" android:versionCode="4"')
         self.sdk = types.SimpleNamespace(call=self.call)
 
     def call(self, tool, *args):

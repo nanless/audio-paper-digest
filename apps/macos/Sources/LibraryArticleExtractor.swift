@@ -333,6 +333,15 @@ extension LibraryService {
         return copy.stringValue ?? ""
     }
 
+    private static func isConferenceDirectoryURL(_ url: URL, siteBaseURL: URL) -> Bool {
+        if url.absoluteString == siteBaseURL.appendingPathComponent("conferences", isDirectory: true).absoluteString {
+            return true
+        }
+        return siteBaseURL.host?.lowercased() == "nanless.github.io"
+            && LibraryService.expectedSiteBasePath(siteBaseURL) == "/audio-research-portal/"
+            && url.absoluteString == "https://nanless.github.io/audio-paper-digest-blog/conferences/"
+    }
+
     /// Website aggregates have their own descriptor/body contract and never pass through Paper extraction.
     static func extractAggregateHTML(_ bytes: Data, descriptor: PublishedAggregate, responseURL: URL, fetchedAt: String, siteBaseURL: URL = PublishedAggregateReader.site, format: AggregateDocumentFormat? = nil) throws -> AggregateDocument {
         guard bytes.count > 0, bytes.count <= 16 * 1024 * 1024, let raw = String(data: bytes, encoding: .utf8), (ISO8601DateFormatter().date(from: fetchedAt) != nil || { let format = ISO8601DateFormatter(); format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return format.date(from: fetchedAt) != nil }()) else { throw AggregateFailure.invalid("汇总网页原件编码、时间或大小无效") }
@@ -357,7 +366,7 @@ extension LibraryService {
         switch descriptor.kind {
         case .daily, .conference: selector = "//div[@id='article-body' and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"
         case .page:
-            if expected.absoluteString == siteBaseURL.appendingPathComponent("conferences", isDirectory: true).absoluteString { selector = "//div[@id='conference-directory' and contains(concat(' ',normalize-space(@class),' '),' conference-directory ')]" }
+            if isConferenceDirectoryURL(expected, siteBaseURL: siteBaseURL) { selector = "//div[@id='conference-directory' and contains(concat(' ',normalize-space(@class),' '),' conference-directory ')]" }
             else { selector = "//div[contains(concat(' ',normalize-space(@class),' '),' reader-guide-content ') and contains(concat(' ',normalize-space(@class),' '),' post-content ')]" }
         }
         let nodes = try doc.nodes(forXPath: selector)
@@ -408,7 +417,7 @@ extension LibraryService {
         switch descriptor.kind {
         case .daily, .conference: selector = "//div[@id='article-body' and contains(concat(' ',normalize-space(@class),' '),' post-content ')]"
         case .page:
-            if expected.absoluteString == siteBaseURL.appendingPathComponent("conferences", isDirectory: true).absoluteString { selector = "//div[@id='conference-directory' and contains(concat(' ',normalize-space(@class),' '),' conference-directory ')]" }
+            if isConferenceDirectoryURL(expected, siteBaseURL: siteBaseURL) { selector = "//div[@id='conference-directory' and contains(concat(' ',normalize-space(@class),' '),' conference-directory ')]" }
             else { selector = "//div[contains(concat(' ',normalize-space(@class),' '),' reader-guide-content ') and contains(concat(' ',normalize-space(@class),' '),' post-content ')]" }
         }
         let nodes = try doc.nodes(forXPath: selector)

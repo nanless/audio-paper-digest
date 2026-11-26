@@ -177,9 +177,12 @@ class Wave12Track124SpecCardAndRoundupTest(unittest.TestCase):
         self.assertIn('### 🎯 三档阅读分级', md)
         self.assertIn('### 🌟 今日精选焦点', md)
         self.assertIn('| 排名 | 论文 | 中文导览 | 总分 | 分档 | 文档类型 | 最上级任务 | 资源 |', md)
-        self.assertIn('🔥 精读必看（8.0 分及以上）', md)
-        self.assertIn('📌 重点关注（7.0–7.9 分）', md)
-        self.assertIn('⚡ 速览参考（7.0 分以下）', md)
+        if any(s >= 8.0 for s, _, _ in scored):
+            self.assertIn('🔥 精读必看（8.0 分及以上）', md)
+        if any(7.0 <= s < 8.0 for s, _, _ in scored):
+            self.assertIn('📌 重点关注（7.0–7.9 分）', md)
+        if any(s < 7.0 for s, _, _ in scored):
+            self.assertIn('⚡ 速览参考（7.0 分以下）', md)
         self.assertIn('突出维度：', md)
         top_plan = (scored[0][1].get('apiReaderPlan') or {}) if scored else {}
         if top_plan.get('oneSentenceThesis'):

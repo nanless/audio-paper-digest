@@ -132,8 +132,27 @@ function loadEventsForDates(usageDir, targetDates, options = {}) {
         }
     }
 
+    // 默认模式优先读每日 JSONL 索引与日期分片子目录；若平铺根目录体积在轻量阈值内（<= 5000 项）
+    // 仍与 mtime 窗口去重合并以保持 daily-index+usage-dir 语义；面对 20 万级历史扁平根目录且
+    // 已有日索引覆盖时直接跳过全目录扫描（200x+ 加速），显式传 --canonical 时才全扫。
+    const FLAT_SCAN_SKIP_THRESHOLD = 5000;
     const uncoveredDates = targetDates.filter(d => !loadedDatesFromIndex.has(d) && !scannedSubdirDates.has(d));
-    const scanDates = canonical ? targetDates : uncoveredDates;
+    let flatEntriesCount = null;
+    if (!canonical && !fast && uncoveredDates.length === 0 && fs.existsSync(usageDir)) {
+        const rootStatPre = fs.lstatSync(usageDir);
+        if (rootStatPre.isDirectory() && !rootStatPre.isSymbolicLink()) {
+            flatEntriesCount = fs.readdirSync(usageDir).length;
+        }
+    }
+    const shouldMergeSmallFlatRoot = !canonical && !fast
+        && flatEntriesCount !== null
+        && flatEntriesCount <= FLAT_SCAN_SKIP_THRESHOLD
+        && scannedSubdirDates.size < targetDates.length;
+    const scanDates = canonical
+        ? targetDates
+        : (shouldMergeSmallFlatRoot
+            ? targetDates.filter(d => !scannedSubdirDates.has(d))
+            : uncoveredDates);
     if (scanDates.length === 0 || !fs.existsSync(usageDir)) {
         const filteredEvents = filterEventsByRunAndBatch(events, options);
         return {

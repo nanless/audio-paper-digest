@@ -112,7 +112,7 @@ async function main() {
     try {
         await assert.rejects(pipeline.fullFetch(options), error => error === stop);
         assert.equal(requests.length, 425);
-        assert.equal(arxivCalls, 7);
+        assert.equal(arxivCalls, config.ARXIV_CATEGORIES.length);
         assert.equal(hfCalls, 1);
         const decisionFile = config.FILES.filterDecisions;
         const decision = JSON.parse(fs.readFileSync(decisionFile));

@@ -96,14 +96,14 @@ test('2611.24453 回归：表格单元格与正文中 <mphantom>、.ltx_phantom 
         '84'
     );
 
-    // 2. 真实负数单元格完整保留负号
+    // 2. 真实负数单元格完整保留负号（v5 去除 <annotation> 双写后不再重复拼出 '−-'）
     assert.equal(table.matrix[3][1], '−0.13');
-    assert.equal(table.matrix[3][2], '−-0.13 [−-0.16, −-0.11]');
+    assert.equal(table.matrix[3][2], '−0.13 [−0.16, −0.11]');
     assert.equal(
         normalizeReaderSourceDisplayArtifacts(projectReaderCellTexDisplay(table.matrix[3][2])),
         '−0.13 [−0.16, −0.11]'
     );
-    assert.equal(table.matrix[3][3], '−0.24-0.24');
+    assert.equal(table.matrix[3][3], '−0.24');
 
     // 3. 图注与正文同样剔除虚影负号并保留真实负号
     assert.equal(
@@ -111,7 +111,7 @@ test('2611.24453 回归：表格单元格与正文中 <mphantom>、.ltx_phantom 
         'Table 2: Net margin drop with 1.36 positive peak and -0.13 negative drop.'
     );
     assert.match(sourceText, /Within one chord symbol yields 1\.36 \[1\.27, 1\.44\], whereas non-chord to chord yields −0\.13/);
-    assert.match(sourceText, /Text-mode phantom alignment 0\.06 \[0\.00, 0\.11\] versus bass −-0\.24 \[−-0\.33, −-0\.16\]\./);
+    assert.match(sourceText, /Text-mode phantom alignment 0\.06 \[0\.00, 0\.11\] versus bass −0\.24 \[−0\.33, −0\.16\]\./);
     assert.doesNotMatch(sourceText, /[−-]1\.36|[−-]0\.06/);
 
     // 4. sourceDomSha256 依然严格绑定未克隆修改前的原始 DOM outerHTML

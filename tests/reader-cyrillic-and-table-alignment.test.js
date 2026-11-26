@@ -483,16 +483,20 @@ test('C2 与 D5：现用 Reader 与局部修复提示词包含列头单位证据
     const articlePrompt = fs.readFileSync(path.join(ROOT, 'prompts/current/api-reader-article.md'), 'utf8');
     const repairPrompt = fs.readFileSync(path.join(ROOT, 'prompts/current/api-reader-repair.md'), 'utf8');
 
-    for (const prompt of [articlePrompt, repairPrompt]) {
-        assert.match(prompt, /source_quotes.*(?:列头|单位)/);
-        assert.match(prompt, /GiB/);
-        assert.match(prompt, /裸数字/);
-        assert.match(prompt, /不少于 4 张/);
-        assert.match(prompt, /p <= 0\.05/);
-        assert.match(prompt, /斜纹/);
-        assert.match(prompt, /“全部”“所有”“只有”“唯一”/);
-        assert.match(prompt, /条件.*图例颜色.*方法行名/);
-    }
+    assert.match(articlePrompt, /source_quotes.*(?:列头|单位)/);
+    assert.match(articlePrompt, /GiB/);
+    assert.match(articlePrompt, /图例线型\/颜色\/填充/);
+    assert.match(articlePrompt, /全部\/唯一/);
+    assert.match(articlePrompt, /\{mechanicalContract\}/);
+
+    assert.match(repairPrompt, /source_quotes.*(?:列头|单位)/);
+    assert.match(repairPrompt, /GiB/);
+    assert.match(repairPrompt, /裸数字/);
+    assert.match(repairPrompt, /不少于 4 张/);
+    assert.match(repairPrompt, /p <= 0\.05/);
+    assert.match(repairPrompt, /斜纹/);
+    assert.match(repairPrompt, /“全部”“所有”“只有”“唯一”/);
+    assert.match(repairPrompt, /条件.*图例颜色.*方法行名/);
 });
 
 test('主分析在线 getRepairableAnalysisStructureIssues 与补表判定对称开启 D1/D2，默认冷迁移模式保持关闭', async () => {

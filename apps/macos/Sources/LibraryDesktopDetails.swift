@@ -265,9 +265,15 @@ extension LibraryService {
               url.password == nil,
               url.query == nil,
               url.fragment == nil,
-              url.path.hasPrefix(siteBaseURL.path + "/"),
               !url.pathComponents.contains(".."),
               !url.path.contains("\\") else {
+            throw ServiceError.invalid("资料地址超出可信站点目录。")
+        }
+        let basePrefix = expectedSiteBasePath(siteBaseURL)
+        let isLegacyOwned = siteBaseURL.host?.lowercased() == "nanless.github.io"
+            && basePrefix == "/audio-research-portal/"
+            && url.path.hasPrefix("/audio-paper-digest-blog/")
+        guard url.path.hasPrefix(basePrefix) || isLegacyOwned else {
             throw ServiceError.invalid("资料地址超出可信站点目录。")
         }
         return url
@@ -1019,6 +1025,14 @@ extension LibraryService {
         return raw.hasSuffix("/") ? raw : raw + "/"
     }
 
+    static func isAcceptedSiteBasePath(_ basePath: String, siteBaseURL: URL) -> Bool {
+        let expected = expectedSiteBasePath(siteBaseURL)
+        if basePath == expected { return true }
+        return siteBaseURL.host?.lowercased() == "nanless.github.io"
+            && expected == "/audio-research-portal/"
+            && basePath == "/audio-paper-digest-blog/"
+    }
+
     private func verifiedCachedFile(relative: String, expectedBytes: Int, expectedSHA256: String) throws -> Data? {
         try Self.verifiedOptionalLocalFile(
             relative: relative,
@@ -1144,7 +1158,7 @@ extension LibraryService {
               manifestObj["contract"] as? String == ClientProtocols.contract("paper-desktop-manifest"),
               Set(manifestObj.keys).isSuperset(of: manifestRequired),
               let basePath = manifestObj["basePath"] as? String,
-              basePath == Self.expectedSiteBasePath(siteBaseURL),
+              Self.isAcceptedSiteBasePath(basePath, siteBaseURL: siteBaseURL),
               let snapshotId = manifestObj["snapshotId"] as? String,
               Self.isValidSHA256(snapshotId),
               let sourceCommit = manifestObj["sourceCommit"] as? String,

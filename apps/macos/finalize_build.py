@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 
 
-APP_NAME = '论文速递工作台.app'
+APP_NAME = '音频研究工作台.app'
 REGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
 
 
@@ -33,7 +33,7 @@ def require_closed(bundle=None):
             process = subprocess.run(['/bin/ps', '-p', pid, '-o', 'comm='], capture_output=True, text=True)
             if process.stdout.strip() != str(bundle / 'Contents/MacOS/PaperDigest'):
                 continue
-        raise RuntimeError(f'论文速递工作台仍在运行（PID {pid}），请先保存并正常退出。')
+        raise RuntimeError(f'音频研究工作台仍在运行（PID {pid}），请先保存并正常退出。')
 
 
 def replace_bundle(candidate, target, previous, validate):

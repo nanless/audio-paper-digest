@@ -2983,7 +2983,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         markdown = publish_to_blog.generate_index_page(
             [], [], date_str, {}, '论文速递', empty_batch_confirmed=True,
         )
-        self.assertIn('语音/音乐/音频论文速递 2026-11-05', markdown)
+        self.assertIn('音频研究日报 2026-11-05', markdown)
         self.assertIn(f'date: {date_str}', markdown)
         self.assertIn('今日没有新论文', markdown)
         self.assertIn('paper_digest_page_type: index', markdown)
@@ -9848,10 +9848,10 @@ body
             'parsed': {'score': '1'},
         }, '2026-07-10')
         self.assertEqual(slug, 'no-tags-2607-00001')
-        self.assertEqual(len(markdown.encode('utf-8')), 428)
+        self.assertEqual(len(markdown.encode('utf-8')), 414)
         self.assertEqual(
             hashlib.sha256(markdown.encode('utf-8')).hexdigest(),
-            '60ba2efb3353ac4aa92ca3087ff45ab7dd3a27f9ce0a676b7ab159dcf7b4a743',
+            'bb1fe1d5475e5fa0600bb09c8c2e3229c11c87ea7ac8e243506add02182f99fa',
         )
 
     def test_generation_input_source_reference_replays_selected_archive_and_rejects_drift(self):

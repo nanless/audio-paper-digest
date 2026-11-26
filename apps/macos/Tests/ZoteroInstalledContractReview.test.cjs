@@ -70,8 +70,8 @@ function context() {
 
 function payload(filename = 'paper.pdf', contentType = 'application/pdf') {
   return { itemType: 'attachment', parentItem: 'EXAMPLE1', linkMode: 'imported_file',
-    title: '论文速递工作台 · 原始附件', contentType, filename,
-    note: 'PaperDigest-Asset: pdf:example', tags: [{ tag: '论文速递' }] };
+    title: '音频研究工作台 · 原始附件', contentType, filename,
+    note: 'PaperDigest-Asset: pdf:example', tags: [{ tag: '音频研究工作台' }] };
 }
 
 test('installed constructor really starts with an unset linkMode', () => {

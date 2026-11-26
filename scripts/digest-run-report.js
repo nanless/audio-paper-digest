@@ -1113,7 +1113,7 @@ function formatMarkdownDailyReport(targetDate, report, summaryText) {
             report.visuals?.status
         ] || (report.postPublishVisualWaiver ? '已豁免' : '未知'));
     return [
-        `# 论文速递日报 ${targetDate}`,
+        `# 音频研究日报 ${targetDate}`,
         '',
         String(summaryText || ''),
         '',

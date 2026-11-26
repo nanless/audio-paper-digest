@@ -27,7 +27,7 @@ assert_app_not_running() {
   local active_pids
   active_pids="$(/usr/bin/pgrep -x PaperDigest || true)"
   if [[ -n "$active_pids" ]]; then
-    echo "论文速递工作台仍在运行（PID：$(echo "$active_pids" | tr '\n' ' ')）。请先在应用中保存并正常退出，再安装新版本；原安装未替换。" >&2
+    echo "音频研究工作台仍在运行（PID：$(echo "$active_pids" | tr '\n' ' ')）。请先在应用中保存并正常退出，再安装新版本；原安装未替换。" >&2
     return 1
   fi
 }
@@ -68,7 +68,7 @@ icon_source="$app_root/Assets/AppIcon.png"
 build_root="$app_root/.build"
 mkdir -p "$build_root"
 work="$(mktemp -d "$build_root/package.XXXXXX")"
-bundle="$work/论文速递工作台.app"
+bundle="$work/音频研究工作台.app"
 resources="$bundle/Contents/Resources"
 mkdir -p "$bundle/Contents/MacOS" "$resources/Runtime" "$resources/Shared" "$resources/Assets" "$work/Sources" "$work/Build"
 cp "$icon_source" "$resources/Assets/AppIcon.png"
@@ -87,7 +87,7 @@ node_version="$(env -i PATH=/usr/bin:/bin "$node_runtime" --version)"
 bash "$repo_root/scripts/python-runtime.sh" "$app_root/build_resources.py" --repo "$repo_root" --app "$app_root" --resources "$resources" --channel "$channel" --node-version "$node_version"
 cp "$app_root/llm-worker.cjs" "$resources/"
 while IFS= read -r -d '' relative; do
-  case "/$relative/" in */.env*/*|*/data/runtime/*) continue ;; esac
+  case "/$relative/" in */.env*/*|*/data/runtime/*|*/scripts/*.md/*) continue ;; esac
   [[ -f "$repo_root/$relative" ]] || continue
   mkdir -p "$resources/Shared/$(dirname "$relative")"
   cp "$repo_root/$relative" "$resources/Shared/$relative"
@@ -144,7 +144,7 @@ codesign --force --sign - --timestamp=none "$resources/Runtime/node"
 /usr/bin/python3 - "$work" "$app_root" "$repo_root" "$channel" <<'PY'
 import hashlib,json,pathlib,subprocess,sys,datetime
 work,app,repo=map(pathlib.Path,sys.argv[1:4]);channel=sys.argv[4]
-bundle=work/'论文速递工作台.app';resources=bundle/'Contents/Resources'
+bundle=work/'音频研究工作台.app';resources=bundle/'Contents/Resources'
 # Check actual channel resources before signing; no signed-bundle removal.
 sys.path.insert(0,str(app));from build_resources import assert_no_scientific_seed,check_licenses
 check_licenses(resources/'Web')

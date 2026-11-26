@@ -5,8 +5,21 @@ const fs = require('node:fs'), path = require('node:path'), crypto = require('no
 const base = path.resolve('data/runtime/daily-20261016-full/triage/final-completion-20261017');
 const previewFile = path.join(base, 'b/three-review-failures-public-attempt3/2610.21941-public-preview-paper.json');
 const inputsFile = path.join(base, 'execution/three-review-failures-inputs-v3.json');
-const actualAvailable = fs.existsSync(previewFile) && fs.existsSync(inputsFile);
 const read = file => JSON.parse(fs.readFileSync(file));
+const actualAvailable = (() => {
+    if (!fs.existsSync(previewFile) || !fs.existsSync(inputsFile)) return false;
+    try {
+        const inputs = read(inputsFile);
+        return Boolean(
+            inputs?.manifestFile && fs.existsSync(inputs.manifestFile)
+            && Array.isArray(inputs.entries)
+            && inputs.entries.every(row => row?.feedbackFile && fs.existsSync(row.feedbackFile)
+                && row?.recordFile && fs.existsSync(row.recordFile))
+        );
+    } catch (_) {
+        return false;
+    }
+})();
 
 test('真实Teacher标签父包与已保存Reader子稿：冷完成、严格负例和新子包预览', { skip: !actualAvailable }, async t => {
     for (const module of ['node:http', 'node:https']) t.mock.method(require(module), 'request', () => assert.fail('no network'));

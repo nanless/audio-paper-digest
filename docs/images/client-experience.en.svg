@@ -28,7 +28,7 @@
   <text x="32" y="64" class="t-sub">Solid arrows: read-only fetch or explicit save  ·  Dashed arrow: user-confirmed restore (never silent merge)</text>
 
   <rect x="32" y="96" width="224" height="122" rx="12" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
-  <text x="48" y="124" class="t-card" fill="#1d4ed8">Public Web Portal</text>
+  <text x="48" y="124" class="t-card" fill="#1d4ed8">Audio Research Portal</text>
   <text x="48" y="149" class="t-body">Static detail snapshots &amp; tags</text>
   <text x="48" y="169" class="t-body">Guides, digests, BibTeX / RIS</text>
   <text x="48" y="196" class="t-small">Read-only; never triggers analysis</text>

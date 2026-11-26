@@ -1,4 +1,4 @@
-# 论文速递工作台 Mac 版：Zotero 归档
+# 音频研究工作台 Mac 版：Zotero 归档
 
 工作台通过官方本地 API，将一篇论文和所选材料存入正在运行的 Zotero Desktop。当前支持本机个人文库；Android 使用独立的 Web API 配置，双方不共享本机许可。
 

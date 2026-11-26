@@ -7552,7 +7552,7 @@ def _open_publish_json_with_account_pool(
                 is_streamed_responses = (api_type == 'openai_responses' and payload.get('stream') is True)
                 response_limit = 16 * 1024 * 1024 if is_streamed_responses else 2 * 1024 * 1024
                 read_deadline = started + float(timeout)
-                if hasattr(response, 'read1') or isinstance(response, __import__('io').IOBase):
+                if is_streamed_responses and isinstance(response, http.client.HTTPResponse):
                     chunks = []
                     total_read = 0
                     while total_read <= response_limit:

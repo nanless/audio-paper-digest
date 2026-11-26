@@ -1002,7 +1002,7 @@ test('弱 PDF Reader 策略强制空的结构绑定，非空的模型草稿要�
     assert.match(prompts[0], /conference-reader-weak-unavailable-structure-v1/);
     assert.match(prompts[0], /tableBindings、formulaBindings、figurePlacements 必须全部为 \[\]/);
     assert.match(prompts[1], /tableBindings、formulaBindings、figurePlacements 必须全部为 \[\]/);
-    assert.match(prompts[1], /请为刚进入语音、音乐或音频领域的研究生写一篇中文论文解读/);
+    assert.match(prompts[1], /请为刚进入语音、音乐或音频领域的研究生写一篇.*中文论文解读/);
     assert.doesNotMatch(prompts[1], /请修复下方尚未通过检查的论文解读/);
 
     const policy = context.WEAK_READER_CAPABILITY_POLICY;

@@ -1,6 +1,6 @@
-# 论文速递工作台 Mac 版：数据与恢复
+# 音频研究工作台 Mac 版：数据与恢复
 
-客户端读取论文速递公开网站的目录、正文与引用资料。日更、会议和历史文章进入同一资料库，原评分、分类、来源和版本保持不变。数据读取由 [LibraryService](../apps/macos/Sources/LibraryService.swift) 与 [LibraryDesktopDetails](../apps/macos/Sources/LibraryDesktopDetails.swift) 实现，优先遵循[静态数据合同](desktop-data-contract.md)消费 `client/details/*` 快照与内容寻址详情。
+客户端读取音频研究门户公开网站的目录、正文与引用资料。日更、会议和历史文章进入同一资料库，原评分、分类、来源和版本保持不变。数据读取由 [LibraryService](../apps/macos/Sources/LibraryService.swift) 与 [LibraryDesktopDetails](../apps/macos/Sources/LibraryDesktopDetails.swift) 实现，优先遵循[静态数据合同](desktop-data-contract.md)消费 `client/details/*` 快照与内容寻址详情。
 
 ## 网站资料与个人研究
 

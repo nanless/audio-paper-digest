@@ -1,8 +1,8 @@
-# 论文速递工作台 Mac 版
+# 音频研究工作台 Mac 版
 
 [English](README.en.md)
 
-工作台把网站导读、论文原始 PDF 和个人研究放在同一个阅读环境中。你可以先读论文速递网站已经发布的图文讲解，再打开原文核对，保存自己的问题、模型回答、摘录和笔记，最后将选定材料归档到 Zotero 文献库。
+音频研究工作台把网站导读、论文原始 PDF 和个人研究放在同一个阅读环境中。你可以先读音频研究门户已经发布的图文讲解，再打开原文核对，保存自己的问题、模型回答、摘录和笔记，最后将选定材料归档到 Zotero 文献库。
 
 安装后应用独立运行，无需下载项目源码、启动开发服务器或另装 Node。阅读和同步网站已有内容不重新分析论文；只有主动发起个人研究或连接测试，才会请求自己配置的模型服务。
 
@@ -16,7 +16,7 @@
 | 签名 | 本地临时签名（ad-hoc），未通过 Apple 公证 |
 | 随包运行时 | Node 24.19.0，使用者无需另行安装 |
 
-Mac 与 Android 的安装包和校验值在同一 [GitHub 发行页](https://github.com/nanless/audio-research-workbench/releases)提供。安装时将解压后的“论文速递工作台.app”或 DMG 中的应用拖入“应用程序”。首次打开若被系统拦截，先核对下载来源与发布校验值，再按 macOS 的“隐私与安全性”提示允许打开该应用。
+Mac 与 Android 的安装包和校验值在同一 [GitHub 发行页](https://github.com/nanless/audio-research-workbench/releases)提供。1.5.0 起应用更名为“音频研究工作台.app”，安装时将解压后的应用包或 DMG 中的应用拖入“应用程序”。首次打开若被系统拦截，先核对下载来源与发布校验值，再按 macOS 的“隐私与安全性”提示允许打开该应用。
 
 1.3.0 增加全站多级分类浏览、整理桌面导航，并与 Android 对齐查询规则；该轮实现、逐轮审查和实际验收状态见[审改记录](../../docs/workbench-1.3.0-review.md)。1.4.3 把大目录移到后台载入、列表改用紧凑投影，并减少打开导读和云上传的重复工作；本轮自动测试、未重做的人工验收和发行状态见 [1.4.3 记录](../../docs/workbench-1.4.3-review.md#发行状态)，性能数据见[客户端性能](../../docs/client-performance.md)。当前公开发行的安装包为 1.4.7，改动与验证范围见 [1.4.7 记录](../../docs/workbench-1.4.7-review.md)（上一版 1.4.6 见 [1.4.6 记录](../../docs/workbench-1.4.6-review.md)，1.4.5 见 [1.4.5 记录](../../docs/workbench-1.4.5-review.md)），签名与附件核验见[客户端发行核验](../../docs/client-release-verification.md)。
 
@@ -108,7 +108,7 @@ npm run install:app
 
 部分界面测试可通过 `PD_MAC_BROWSER` 指定浏览器；完整 `npm test` 仍含直接使用 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` 的入口，单独安装 Playwright Chromium 或设置该变量不能替代这一前提。科学排版测试需要按[样稿准备说明](../../prototypes/macos-research/README.md)准备公开 MiCLA PDF 和三张原图，校验值以受控样稿清单为准；这些本机测试资产不进入正式包。
 
-默认构建使用 `release` 通道，输出 `.build/论文速递工作台.app`，不捆绑论文样稿。`--channel private-qa` 用于含样稿的本机测试，请在隔离资料目录中单独运行。该通道不接受 `--install`。构建会检查 Node 的版本、架构、最低系统、外部动态库依赖及对应许可。安装脚本检测到 `PaperDigest` 进程仍在运行时拒绝替换，不强制结束应用。
+默认构建使用 `release` 通道，输出 `.build/音频研究工作台.app`，不捆绑论文样稿。`--channel private-qa` 用于含样稿的本机测试，请在隔离资料目录中单独运行。该通道不接受 `--install`。构建会检查 Node 的版本、架构、最低系统、外部动态库依赖及对应许可。安装脚本检测到 `PaperDigest` 进程仍在运行时拒绝替换，不强制结束应用。
 
 应用标识 `com.nanless.PaperDigest`、可执行文件 `PaperDigest`、钥匙串服务及资料根 `~/Library/Application Support/PaperDigest/` 保持兼容。关于窗口提供随包第三方许可全文；更新运行时须同时按维护流程准备匹配许可，不能修改原许可正文来绕过版本检查。
 

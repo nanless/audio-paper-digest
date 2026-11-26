@@ -29,7 +29,7 @@
 
   <!-- Left: Public sources -->
   <rect x="32" y="96" width="224" height="122" rx="12" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
-  <text x="48" y="124" class="t-card" fill="#1d4ed8">公开论文网站</text>
+  <text x="48" y="124" class="t-card" fill="#1d4ed8">音频研究门户</text>
   <text x="48" y="149" class="t-body">静态详情快照与分类索引</text>
   <text x="48" y="170" class="t-body">单篇导读、汇总与引用</text>
   <text x="48" y="196" class="t-small">只读获取，不触发重分析</text>
@@ -48,7 +48,7 @@
   <rect x="310" y="96" width="276" height="254" rx="14" fill="#ffffff" stroke="#a78bfa" stroke-width="1.8"/>
   <rect x="310" y="96" width="276" height="44" rx="14" fill="#f5f3ff"/>
   <rect x="310" y="126" width="276" height="14" fill="#f5f3ff"/>
-  <text x="328" y="124" class="t-card" fill="#5b21b6">论文速递工作台（1.5.0）</text>
+  <text x="328" y="124" class="t-card" fill="#5b21b6">音频研究工作台（1.5.0）</text>
 
   <text x="328" y="164" class="t-badge" fill="#4338ca">Mac（Apple 芯片）· Android（4 ABI）</text>
   <text x="328" y="190" class="t-body">• 400 项九维分类浏览与离线检索</text>

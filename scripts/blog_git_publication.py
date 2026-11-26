@@ -727,7 +727,7 @@ def execute_git_push(
             hooks['_run_git'](
                 [
                     'commit',
-                    '-m', f'content: 发布 {date_str} 论文速递并同步评分与审查结果',
+                    '-m', f'content: 发布 {date_str} 音频研究日报并同步评分与审查结果',
                     '-m', review_description
                           + '推送前已逐文件校验审查凭证 SHA-256，本步不重新生成或 review。',
                 ],

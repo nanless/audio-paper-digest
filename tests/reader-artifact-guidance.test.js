@@ -5,7 +5,7 @@ const cheerio = require('cheerio');
 const deep = require('../scripts/deep-analyzer');
 const tables = require('../scripts/lib/reader-tables');
 test('选择表被拒绝后提示由程序保留完整原表，来源和全部校验保持原样', () => {
- const html = '<html><body><figure class="ltx_table"><figcaption>Table 1: Results</figcaption><table><tr><th></th><th>EER (%)</th></tr><tr><td>Baseline</td><td>2.34</td></tr><tr><td>Ours</td><td>1.23</td></tr></table></figure></body></html>';
+ const html = '<html><body><figure class="ltx_table"><figcaption>Table 1: Results</figcaption><table><tr><th>Method</th><th></th><th>EER (%)</th></tr><tr><td>Baseline</td><td>1.10</td><td>2.34</td></tr><tr><td>Ours</td><td>0.88</td><td>1.23</td></tr></table></figure></body></html>';
  const sourceText = cheerio.load(html)('body').text();
  const artifacts = deep.bindStructuredArtifactsToText(deep.parseArxivStructuredArtifactsFromHtml(html, '2609.00001v1', '2609.00001v1'), sourceText);
  const table = artifacts.tables[0];

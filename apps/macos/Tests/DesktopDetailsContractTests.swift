@@ -1148,7 +1148,16 @@ actor DesktopDetailsFixtureServer {
         try await expectThrows("unknown manifest schemaFingerprint rejected") { _ = try await service.sync() }
         try await assertBaselineIntact("unknown-manifest-fingerprint")
 
-        // Case 2: Mismatched basePath in manifest.json
+        // Case 2: Mismatched basePath in manifest.json (while legacy /audio-paper-digest-blog/ is strictly accepted on nanless.github.io/audio-research-portal/)
+        let portalSiteURL = URL(string: "https://nanless.github.io/audio-research-portal/")!
+        let foreignSiteURL = URL(string: "https://evil.example/audio-research-portal/")!
+        try expect(LibraryService.isAcceptedSiteBasePath("/audio-research-portal/", siteBaseURL: portalSiteURL), "current portal basePath accepted")
+        try expect(LibraryService.isAcceptedSiteBasePath("/audio-paper-digest-blog/", siteBaseURL: portalSiteURL), "legacy v1.4.7 basePath accepted on nanless.github.io")
+        try expect(!LibraryService.isAcceptedSiteBasePath("/other-blog/", siteBaseURL: portalSiteURL), "arbitrary basePath rejected")
+        try expect(!LibraryService.isAcceptedSiteBasePath("/audio-paper-digest-blogging/", siteBaseURL: portalSiteURL), "prefix-spoofed basePath rejected")
+        try expect(!LibraryService.isAcceptedSiteBasePath("/audio-paper-digest-blog/", siteBaseURL: foreignSiteURL), "legacy basePath rejected on foreign host")
+        let legacyPaperURL = try LibraryService.sameSiteURL("https://nanless.github.io/audio-paper-digest-blog/posts/2026-11-18-demo/", siteBaseURL: portalSiteURL)
+        try expect(legacyPaperURL.path == "/audio-paper-digest-blog/posts/2026-11-18-demo", "sameSiteURL accepts legacy v1.4.7 post URL on nanless.github.io")
         var badBaseManifest = try JSONSerialization.jsonObject(with: nextBundle.manifestBytes) as! [String: Any]
         badBaseManifest["basePath"] = "/other-blog/"
         await server.put("/blog/client/details/manifest.json", try jsonBytes(badBaseManifest))

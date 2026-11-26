@@ -1202,7 +1202,7 @@ describe('loadPublishedIdsFromBlog', () => {
         assert.strictEqual(invocation.command, 'git');
         assert.ok(invocation.args.includes('HEAD'));
         assert.ok(invocation.args.includes(':(glob)content/posts/**/*.md'));
-        assert.deepStrictEqual(Object.keys(invocation.options.env).sort(), ['LC_ALL', 'PATH']);
+        assert.deepStrictEqual(Object.keys(invocation.options.env).sort(), ['GIT_TERMINAL_PROMPT', 'LC_ALL', 'PATH']);
     });
 
     it('扫描 Git HEAD 失败时停止去重，不能改用工作目录文件', () => {

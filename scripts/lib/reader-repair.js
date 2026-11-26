@@ -1640,7 +1640,7 @@ function collectDraftIssues(draft, parserError, options = {}) {
                         }
                     }
                     addUnknownFields(value, rootFields, '根对象');
-                    const rawFormatLimits = rawEditorialProfile
+                    const rawFormatLimits = rawEditorialProfile === readerFormat.STRUCTURED_V5
                         ? limitsForDraftFormat({ editorialProfile: rawEditorialProfile })
                         : limitsForDraftFormat(value);
                     if (Array.isArray(value.sections)) {

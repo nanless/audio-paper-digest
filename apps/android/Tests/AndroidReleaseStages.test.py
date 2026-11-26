@@ -27,7 +27,7 @@ class AndroidReleaseStages(unittest.TestCase):
    android_acceptance=self.status,notes_file=self.notes,draft_id=91,downloaded=self.download)
   self.tag={'tag':'v1.3.1','commitOID':self.head,'annotated':True};self.tag_oid='a'*40;self.reads=0;self.after=None;self.local_mutation=None;self.corrupt=None;self.omit=None;self.commands=[];self.inspected=[]
   self.record={'id':91,'tag_name':'v1.3.1','target_commitish':self.head,'draft':True,'published_at':None,'prerelease':False,
-   'name':'论文速递工作台 Android 1.3.1','body':self.notes.read_text(encoding='utf-8'),'updated_at':'fixed',
+   'name':'音频研究工作台 Android 1.3.1','body':self.notes.read_text(encoding='utf-8'),'updated_at':'fixed',
    'assets':[{'id':101+i,'name':p.name,'size':p.stat().st_size,'state':'uploaded','digest':'sha256:'+m.file_sha(p),'download_count':0} for i,p in enumerate(sorted(self.folder.iterdir()))]}
   def inspect(apk,repo,sdk,version,code,runtime,certificate):
    self.inspected.append((apk,certificate));m.require(certificate==self.certificate,'certificate_mismatch')

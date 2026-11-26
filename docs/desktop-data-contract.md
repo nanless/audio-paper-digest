@@ -1,6 +1,6 @@
 # 客户端静态数据合同
 
-本文规定论文速递公开站点的独立论文详情与内容寻址正文出口（`client/details/*`）。`paper-desktop-manifest`、`paper-desktop-snapshot` 与 `paper-desktop-detail` 已在 [`config/protocols/clients.json`](../config/protocols/clients.json) 登记，由 `apps/generate-client-protocols.py` 生成双端校验常量，由博客构建（`scripts/export-desktop-details.js` 与 `scripts/verify-build.js`）导出并全量核验，并在当前源码中由 Mac（[`LibraryDesktopDetails.swift`](../apps/macos/Sources/LibraryDesktopDetails.swift)、[`LibraryService.swift`](../apps/macos/Sources/LibraryService.swift)）与 Android 客户端原生消费，见[网站数据与恢复](mac-app-data.md)及[Android 说明](../apps/android/README.md)。
+本文规定音频研究门户公开站点的独立论文详情与内容寻址正文出口（`client/details/*`）。`paper-desktop-manifest`、`paper-desktop-snapshot` 与 `paper-desktop-detail` 已在 [`config/protocols/clients.json`](../config/protocols/clients.json) 登记，由 `apps/generate-client-protocols.py` 生成双端校验常量，由博客构建（`scripts/export-desktop-details.js` 与 `scripts/verify-build.js`）导出并全量核验，并在当前源码中由 Mac（[`LibraryDesktopDetails.swift`](../apps/macos/Sources/LibraryDesktopDetails.swift)、[`LibraryService.swift`](../apps/macos/Sources/LibraryService.swift)）与 Android 客户端原生消费，见[网站数据与恢复](mac-app-data.md)及[Android 说明](../apps/android/README.md)。
 
 当目标站点的 `client/details/manifest.json` 返回 HTTP 404 或 410（尚未部署该出口）时，客户端按过渡兼容规则回退读取 `client/index.json` 及原 `index.json`；一旦 `client/details/manifest.json` 返回 HTTP 200 或其他非缺失错误，任何协议头、结构指纹、字节长度或 SHA-256 异常均失败即拒并保留上一份完整快照，绝不静默回退。1.4.6 起已发行的安装包优先读取 `client/details/manifest.json`；已发行的 1.4.3 至 1.4.5 安装包继续读取 `client/index.json` 与 `client/papers/` 四份附属文件。接口不以路径编号表示结构变化，所有结构变更均以已登记的稳定合同名与 `schemaFingerprint` 为准。
 

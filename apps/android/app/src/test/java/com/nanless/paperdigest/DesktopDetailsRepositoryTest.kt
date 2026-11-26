@@ -1695,11 +1695,18 @@ class DesktopDetailsRepositoryTest {
                 .put("validationEpoch", epoch)
                 .put("sourceCommit", sourceCommit)
                 .put("generatedAt", "2026-11-18T07:05:00Z")
-                .put("basePath", "/audio-research-portal/")
+                .put("basePath", "/audio-paper-digest-blog/")
                 .put("paperDetails", JSONObject())
                 .put("aggregateDetails", JSONObject())
                 .put("activeTombstones", JSONArray().put(activeTomb))
                 .put("tombstoneHistory", macosHistoryEvents)
+
+            // Verify legacy v1.4.7 basePath transition boundary strictly accepts /audio-paper-digest-blog/ on nanless.github.io only
+            assertTrue(DesktopDetailsRepository.isAcceptedSiteBasePath("/audio-research-portal/", CatalogRepository.SITE))
+            assertTrue(DesktopDetailsRepository.isAcceptedSiteBasePath("/audio-paper-digest-blog/", CatalogRepository.SITE))
+            assertFalse(DesktopDetailsRepository.isAcceptedSiteBasePath("/other-blog/", CatalogRepository.SITE))
+            assertFalse(DesktopDetailsRepository.isAcceptedSiteBasePath("/audio-paper-digest-blogging/", CatalogRepository.SITE))
+            assertFalse(DesktopDetailsRepository.isAcceptedSiteBasePath("/audio-paper-digest-blog/", "https://evil.example/audio-research-portal/"))
 
             val macosStateFile = File(dir, "PublishedLibrary/desktop-details/macos-states/$snapshotId-$epoch.json")
             JsonFiles.write(macosStateFile, macosWitness.toString().toByteArray(Charsets.UTF_8))

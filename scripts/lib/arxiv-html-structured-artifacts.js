@@ -1128,7 +1128,7 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
             'annotation[encoding="application/x-tex"], annotation[encoding="application/x-latex"], '
             + 'm\\:annotation[encoding="application/x-tex"], m\\:annotation[encoding="application/x-latex"]'
         ).first().text();
-        return stripLatexPhantoms(String(annotation || math.attr('alttext') || '').trim())
+        return String(annotation || math.attr('alttext') || '').trim()
             .replace(/^\$|\$$/g, '')
             .replace(/\s+/g, ' ')
             .trim();
@@ -1142,7 +1142,7 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
         if (topLevelMaths.length <= 1) {
             rawLatex = topLevelMaths.length === 1
                 ? extractMathTex(topLevelMaths[0])
-                : stripLatexPhantoms(String(wrapper.attr('alttext') || '').trim());
+                : String(wrapper.attr('alttext') || '').trim();
         } else {
             // LaTeXML 把 align / eqnarray / ltx_equationgroup 按列拆成多个 <math>（如左侧变量 + 右侧表达式），
             // 仅取 .first() 会截断 90% 以上的多列/多行公式。这里按 .ltx_eqn_row / tr 逐行拼接全部顶层 <math>。

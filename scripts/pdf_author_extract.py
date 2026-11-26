@@ -4338,6 +4338,31 @@ def read_pdf_file(path: Path) -> bytes:
 
 def main() -> None:
     require_external_runtime("pdf_author_extract.py")
+    if len(sys.argv) == 2 and sys.argv[1] == "3":
+        import base64
+
+        info = os.fstat(3)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise SystemExit("pdf_author_extract: fd 3 必须是普通单链接文件")
+        max_json_bytes = int(MAX_PDF_BYTES * 4 // 3) + 1024 * 1024
+        if info.st_size > max_json_bytes:
+            raise SystemExit("pdf_author_extract: fd 3 输入超过体积上限")
+        with os.fdopen(3, "rb") as handle:
+            raw_json = handle.read(max_json_bytes + 1)
+        if len(raw_json) != info.st_size:
+            raise SystemExit("pdf_author_extract: fd 3 输入读取时发生变化")
+        payload = json.loads(raw_json.decode("utf-8"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("pdfBase64"), str):
+            raise SystemExit("pdf_author_extract: fd 3 缺少 pdfBase64 字段")
+        contract = payload.get("contract", CONTRACT_V2)
+        if contract not in (CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, "v1", "v2", "v3"):
+            raise SystemExit(f"pdf_author_extract: 不支持的提取合同 {contract}")
+        pdf_bytes = base64.b64decode(payload["pdfBase64"], validate=True)
+        if len(pdf_bytes) > MAX_PDF_BYTES or not pdf_bytes.startswith(b"%PDF-"):
+            raise SystemExit("pdf_author_extract: fd 3 PDF 字节无效或超限")
+        result = extract_pdf_page1_authors(pdf_bytes, contract=contract)
+        sys.stdout.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        return
     parser = argparse.ArgumentParser(description="从 PDF 首页确定性提取作者与机构绑定")
     parser.add_argument("--pdf", type=Path, help="已封存 PDF 的绝对路径（不传则从 stdin 读取原始 PDF 字节）")
     parser.add_argument("--contract", default=CONTRACT_V2, choices=[CONTRACT_V1, CONTRACT_V2, CONTRACT_V3, "v1", "v2", "v3"], help="提取合同版本")

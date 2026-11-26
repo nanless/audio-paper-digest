@@ -62,7 +62,8 @@ object AggregateHtml {
         require(raw.size in 1..16*1024*1024);val source=PublishedAggregateReader.pageURL(descriptor.sourceURL);require(responseURL==source);Instant.parse(fetchedAt)
         val html=PublishedUtf8.decode(raw);require(!html.contains("<!ENTITY",true));val doc=Jsoup.parse(html,source)
         val canonical=doc.select("link").filter{it.attr("rel").equals("canonical",true)};require(canonical.size<=1);canonical.firstOrNull()?.let{require(PublishedAggregateReader.pageURL(it.attr("href"))==source)}
-        val selector=when(descriptor.kind){"daily","conference"->"div#article-body.post-content";"page"->if(URI(source).rawPath=="/audio-research-portal/conferences/")"#conference-directory.conference-directory" else "div.reader-guide-content.post-content";else->error("invalid aggregate kind")}
+        val rawPath=URI(source).rawPath
+        val selector=when(descriptor.kind){"daily","conference"->"div#article-body.post-content";"page"->if(rawPath=="/audio-research-portal/conferences/"||rawPath=="/audio-paper-digest-blog/conferences/")"#conference-directory.conference-directory" else "div.reader-guide-content.post-content";else->error("invalid aggregate kind")}
         val nodes=doc.select(selector);require(nodes.size==1){"汇总正文结构缺失或重复"};val body=nodes.single();body.select("[hidden]").remove()
         // Jsoup preserves ordinary HTML5 containers; replace their names before applying the shared shape policy.
         body.select("section,article,main").forEach{it.tagName("div")}
@@ -72,7 +73,7 @@ object AggregateHtml {
         val resources=images.map{image->val rawSource=image.attr("src");val valid=safeURL(rawSource,source);JSONObject().put("sourceURL",valid?:rawSource).put("kind","image").put("missingReason",if(valid==null)"原图片地址不受本入口支持，未下载或隐藏缺项"else"尚未保存该图片；没有声称完整离线")};require(resources.size<=128)
         clean(body,source);val plain=plainText(body);require(plain.isNotBlank()){"汇总缺少连续正文"};val derived=body.html()
         val slots=body.select("img").mapIndexed{i,image->
-            val address=originalSources[image].orEmpty();val caption=image.parents().firstOrNull{it.normalName()=="figure"}?.select("figcaption")?.joinToString("\n"){it.wholeText()}?.trim().orEmpty()
+            val address=originalSources[image].orEmpty();val caption=image.parents().firstOrNull{it.normalName()=="figure"}?.select("figcaption")?.joinToString("\n"){plainText(it)}?.trim().orEmpty()
             AggregateImageSlot(i,safeURL(address,source),image.attr("alt"),caption)
         }
         require(slots.size<=128)

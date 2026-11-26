@@ -35,10 +35,13 @@ CHILD = textwrap.dedent('''
     original_write = os.write
 
     def checked_open(name, flags, *args, **kwargs):
-        if scenario == 'renew' and name == 'owner.json' and flags & os.O_RDWR:
+        if scenario == 'renew' and isinstance(name, str) and (
+            (name == 'owner.json' and flags & os.O_RDWR)
+            or (name.startswith('.owner.') and name.endswith('.tmp'))
+        ):
             directory_fd = kwargs['dir_fd']
-            os.unlink(name, dir_fd=directory_fd)
-            os.mkfifo(name, 0o600, dir_fd=directory_fd)
+            os.unlink('owner.json', dir_fd=directory_fd)
+            os.mkfifo('owner.json', 0o600, dir_fd=directory_fd)
             swapped.set()
         return original_open(name, flags, *args, **kwargs)
 

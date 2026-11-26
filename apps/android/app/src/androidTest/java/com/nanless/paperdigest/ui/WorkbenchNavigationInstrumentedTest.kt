@@ -61,7 +61,7 @@ class WorkbenchNavigationInstrumentedTest {
     }
     @Test fun firstLaunchShowsDailyAndConferenceIsFirstLevelAndSetupIsDirect(){
         val controller=Controller();compose.setContent{PaperDigestApp(controller)}
-        compose.onNodeWithText("每日论文速递").assertIsDisplayed()
+        compose.onNodeWithText("每日音频研究").assertIsDisplayed()
         compose.onNodeWithText("合成日更").assertExists()
         compose.onNodeWithText("会议论文集 2").performClick()
         compose.onNodeWithText("会议").assertIsSelected()

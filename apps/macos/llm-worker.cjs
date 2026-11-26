@@ -81,7 +81,7 @@ process.stdin.on('end', async () => {
     const response = await api.requestLlmJson(api.buildApiUrl(protocol, declared), declared, model, body,
       api.buildHeaders(protocol, config.key, JSON.stringify(body)),
       {timeoutMs:Math.max(10000,Math.min(600000,Number(config.timeoutMs)||180000)),maxResponseBytes:16*1024*1024,
-       recordUsage:true,usageDirectory,usageContext:context,apiKeys:[config.key],...(config.protocol==='auto'||!config.protocol?{}:{declaredProtocol:protocol})});
+       recordUsage:true,usageDirectory,usageShardByDate:false,usageContext:context,apiKeys:[config.key],...(config.protocol==='auto'||!config.protocol?{}:{declaredProtocol:protocol})});
     observed={protocol,model:typeof response.body?.model==='string'&&response.body.model.trim()?response.body.model:null,
       usage:response.body?.usage||null,finishStatus:response.body?.status||response.body?.choices?.[0]?.finish_reason||'unknown'};
     if (response.statusCode < 200 || response.statusCode >= 300) {

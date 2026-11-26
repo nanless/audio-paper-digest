@@ -3,7 +3,7 @@
   "components": [
     {
       "id": "paper-digest",
-      "title": "论文速递工作台",
+      "title": "音频研究工作台",
       "version": "1.5.0",
       "sourceURL": "https://github.com/nanless/audio-research-workbench",
       "path": "PaperDigest-MIT.txt",

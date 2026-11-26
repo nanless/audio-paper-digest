@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="504" viewBox="0 0 960 504" role="img" aria-labelledby="title desc">
-  <title id="title">每日论文速递端到端流水线</title>
+  <title id="title">音频研究日报端到端流水线</title>
   <desc id="desc">六个阶段从左到右分两排展开：上排为抓取去重、筛选入选与四文件来源封存；下排为多阶段分析与长文写作、生成与三层审查、推送部署与逐页网页核验。底部标明失败保留断点与日更默认不生图。</desc>
   <defs>
     <style>

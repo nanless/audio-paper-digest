@@ -164,6 +164,8 @@ const SCHEMA = Object.freeze([
         allowed: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'highest', 'maximum'] },
     { name: 'PD_WORKSPACE_ALLOW_CROSS_ROLE', required: false, type: 'bool' },
     { name: 'PD_STORAGE_RETENTION_DAYS', required: false, type: 'int', min: 1, max: 3650 },
+    { name: 'PD_LLM_USAGE_SHARD_BY_DATE', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'],
+        hint: '设为 1 按北京时间 YYYY-MM-DD/ 子目录分片写入新用量事件（默认 0 保持平铺兼容全量历史回放）' },
     { name: 'PD_LOG_RETENTION_DAYS', required: false, type: 'int', min: 1, max: 3650 },
     { name: 'PD_LOG_MAX_TOTAL_BYTES', required: false, type: 'int', min: 1048576 },
     { name: 'PAPER_DIGEST_ENABLE_FILE_LOGS', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },

@@ -1,7 +1,7 @@
 package com.nanless.paperdigest.data
 
 /** Display grouping only. Original row kind, source identity and paper capabilities are unchanged. */
-fun workbenchConferenceDirectory(record:PublishedAggregate)=record.sourceURL==PublishedAggregateReader.SITE+"conferences/"
+fun workbenchConferenceDirectory(record:PublishedAggregate)=record.sourceURL==PublishedAggregateReader.SITE+"conferences/" || record.sourceURL=="https://nanless.github.io/audio-paper-digest-blog/conferences/"
 fun workbenchConferenceTask(record:PublishedAggregate)=record.conferenceScope=="task" ||
     (record.conferenceScope==null && java.net.URI(record.sourceURL).path.trimEnd('/').substringAfterLast('/', "").contains("-task-"))
 fun workbenchAggregateInSection(record:PublishedAggregate,section:String)=when(section){

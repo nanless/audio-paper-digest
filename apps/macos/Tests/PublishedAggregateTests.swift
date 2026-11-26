@@ -97,6 +97,29 @@ import Darwin
         let legacyJSON=try JSONSerialization.jsonObject(with:JSONEncoder().encode(legacyDTO)) as! [String:Any]
         try check(legacy.sourceRecordCount==2&&legacy.records.count==1&&legacyDTO.kind == .daily&&legacyDTO.rawDate.isEmpty&&legacyDTO.displayDate==nil&&legacyDTO.conferenceScope==nil&&legacyDTO.source.rowIndex==1&&legacyDTO.source.normalizedRowSHA256==PublishedAggregateReader.sha(try PublishedAggregateReader.normalizedRow(legacyRow))&&["pdfURL","paperId","citation","identityStatus"].allSatisfy{legacyJSON[$0]==nil}&&legacyRow["pageType"] as? String=="daily-summary","legacy daily-summary aliases display kind only; raw row witness and unknown date survive")
         try check(["conference-summary","conference-task","future-summary","DAILY-SUMMARY","daily-summary "].allSatisfy{kind in rejects{_=try legacyRead(legacyVector.replacingOccurrences(of:"daily-summary",with:kind))}},"unsupported scan kinds and unknown page types still reject with a valid original witness")
+        let legacyConferencesDescriptor = PublishedAggregate(
+            id: "page:/audio-paper-digest-blog/conferences/",
+            kind: .page,
+            conferenceScope: nil,
+            title: "Conferences",
+            titleZh: "会议目录",
+            summary: "",
+            rawDate: "2026-10-27",
+            displayDate: "2026-10-27",
+            categories: [],
+            tags: [],
+            sourceURL: "https://nanless.github.io/audio-paper-digest-blog/conferences/",
+            source: catalog.records[0].source
+        )
+        let legacyConferencesHTML = Data("<html><link rel='canonical' href='https://nanless.github.io/audio-paper-digest-blog/conferences/'/><body><div id='conference-directory' class='conference-directory'><p>旧路径会议总目录</p><figure><img src='https://arxiv.org/html/2501.00001v1/fig1.png' alt='fig'/><figcaption>图注</figcaption></figure></div></body></html>".utf8)
+        let legacyConferencesDoc = try LibraryService.extractAggregateHTML(
+            legacyConferencesHTML,
+            descriptor: legacyConferencesDescriptor,
+            responseURL: URL(string: legacyConferencesDescriptor.sourceURL)!,
+            fetchedAt: "2026-10-27T00:00:00Z"
+        )
+        let legacyConferencesPlan = try LibraryService.aggregateImagePlan(legacyConferencesDoc, rawHTML: legacyConferencesHTML)
+        try check(legacyConferencesDoc.plainText.contains("旧路径会议总目录") && legacyConferencesPlan.slots.count == 1 && legacyConferencesPlan.slots[0].caption == "图注", "legacy /audio-paper-digest-blog/conferences/ selects #conference-directory on both extractAggregateHTML and aggregateImagePlan")
         print("RESULT passed=\(passed) failed=0")
     }
 }

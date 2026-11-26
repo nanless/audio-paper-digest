@@ -2,7 +2,7 @@
 
 [中文](README.md) · **English**
 
-These guides cover the Audio Paper Digest website, its content workflows, and the Mac and Android reading applications. Choose the task first, then read the relevant details. You do not need to read every protocol before starting. Actual commands and execution constraints are defined by the implementation and [AGENTS.md](../AGENTS.md).
+These guides cover the Audio Research Portal website, the Audio Research Workbench content workflows, and the Mac and Android reading applications. Choose the task first, then read the relevant details. You do not need to read every protocol before starting. Actual commands and execution constraints are defined by the implementation and [AGENTS.md](../AGENTS.md).
 
 Unless an English README is explicitly linked below, the detailed documents are in Chinese. This index does not imply that the detailed guides or the published articles have English editions.
 

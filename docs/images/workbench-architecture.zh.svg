@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="450" viewBox="0 0 960 450" role="img" aria-labelledby="title desc">
-  <title id="title">论文速递工作台三层全景架构</title>
-  <desc id="desc">三层结构图：左侧内容生产引擎运行日更、官方会议与历史更新，将通过三层审查的页面推送至中间公开网站；右侧 Mac 与 Android 工作台只读获取网站内容，并提供独立的个人研究、Zotero 与云端备份功能。</desc>
+  <title id="title">音频研究工作台三层全景架构</title>
+  <desc id="desc">三层结构图：左侧音频研究工作台内容生产引擎运行日更、官方会议与历史更新，将通过三层审查的页面推送至中间的音频研究门户；右侧 Mac 与 Android 音频研究工作台只读获取门户内容，并提供独立的个人研究、Zotero 与云端备份功能。</desc>
   <defs>
     <style>
       text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #0f172a; }
@@ -24,8 +24,8 @@
 
   <rect width="960" height="450" rx="16" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
 
-  <text x="32" y="42" class="t-main">论文速递工作台 · 三层结构一览</text>
-  <text x="32" y="65" class="t-sub">内容生产、公开网站与个人阅读应用职责分离：打开文章不触发模型重算，个人研究数据与生产账本互不混用</text>
+  <text x="32" y="42" class="t-main">音频研究工作台 · 三层结构一览</text>
+  <text x="32" y="65" class="t-sub">内容生产、公开音频研究门户与双端个人工作台职责分离：打开文章不触发模型重算，个人研究数据与生产账本互不混用</text>
 
   <!-- Column 1: x=32..288 (w=256) -->
   <rect x="32" y="88" width="256" height="296" rx="14" fill="#ffffff" stroke="#93c5fd" stroke-width="1.8"/>
@@ -56,7 +56,7 @@
   <rect x="356" y="88" width="248" height="296" rx="14" fill="#ffffff" stroke="#5eead4" stroke-width="1.8"/>
   <rect x="356" y="88" width="248" height="44" rx="14" fill="#f0fdfa"/>
   <rect x="356" y="118" width="248" height="14" fill="#f0fdfa"/>
-  <text x="370" y="116" class="t-card" fill="#0f766e">② 公开网站（Hugo）</text>
+  <text x="370" y="116" class="t-card" fill="#0f766e">② 音频研究门户（Hugo）</text>
 
   <rect x="370" y="148" width="220" height="68" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
   <text x="382" y="169" class="t-badge" fill="#0f766e">面向读者的中文知识库</text>
@@ -80,7 +80,7 @@
   <rect x="672" y="88" width="256" height="296" rx="14" fill="#ffffff" stroke="#c4b5fd" stroke-width="1.8"/>
   <rect x="672" y="88" width="256" height="44" rx="14" fill="#f5f3ff"/>
   <rect x="672" y="118" width="256" height="14" fill="#f5f3ff"/>
-  <text x="686" y="116" class="t-card" fill="#5b21b6">③ 阅读工作台（双端）</text>
+  <text x="686" y="116" class="t-card" fill="#5b21b6">③ 音频研究工作台（双端）</text>
 
   <rect x="686" y="148" width="228" height="68" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
   <text x="698" y="169" class="t-badge" fill="#5b21b6">开箱即用 · 无需生产 .env</text>

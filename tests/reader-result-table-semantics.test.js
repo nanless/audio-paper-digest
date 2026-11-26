@@ -86,9 +86,14 @@ test('两份当前 Prompt 实际首围栏要求语义结果且旧模板仍有原
         const values = Object.fromEntries([...block.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)]
             .map(match => [match[1], '本次真实输入']));
         const loaded = loadPrompt(file, values);
-        assert.match(loaded, /来源句一／量化值一/);
-        assert.match(loaded, /逐字数字存在不代表结果归属成立/);
-        assert.match(loaded, /真实(?:原表和比较问题|列数)/);
+        if (stage === 'apiReaderRepair') {
+            assert.match(loaded, /来源句一／量化值一/);
+            assert.match(loaded, /逐字数字存在不代表结果归属成立/);
+            assert.match(loaded, /真实(?:原表和比较问题|列数)/);
+        } else {
+            assert.match(loaded, /不拼凑参考文献编号或年份占位表/);
+            assert.match(loaded, /仅覆盖真实实验条件/);
+        }
         assert.doesNotMatch(loaded, /\{(?:title|arxivId|sourceEvidence|repairTargets)\}/);
     }
 });

@@ -102,16 +102,16 @@ test('HTTPS proxy TLS remains authenticated and both TLS layers share one non-re
 
 test('the exact Reader parser fingerprint changes when only the shared budget bytes change',()=>{
  const crypto=require('node:crypto'),deep=fs.readFileSync(path.join(scripts,'deep-analyzer.js'),'utf8');
- const marker='parserImplementationSha256: ',begin=deep.indexOf(marker),end=deep.indexOf("].join('\\0'))",begin);
- assert.ok(begin>=0&&end>begin);const expression=deep.slice(begin+marker.length,end+"].join('\\0'))".length);
- let repository=__dirname;while(!fs.existsSync(path.join(repository,'package.json'))){const parent=path.dirname(repository);assert.notEqual(parent,repository);repository=parent;}
- const actualScripts=path.join(repository,'scripts'),sharedPath=path.join(scripts,'lib/active-time-budget.js');
- const evaluate=changed=>{const observed=[];const digest=vm.runInNewContext(expression,{__filename:path.join(scripts,'deep-analyzer.js'),__dirname:scripts,path,
-  fs:{readFileSync:(filename,encoding)=>{const relative=path.relative(scripts,filename);observed.push(relative);
-   const actual=fs.existsSync(filename)?filename:path.join(actualScripts,relative);const value=fs.readFileSync(actual,encoding);
-   return relative==='lib/active-time-budget.js'&&changed?value+'\n// synthetic helper-only implementation change\n':value;}},
-  repair:{shaText:value=>crypto.createHash('sha256').update(value).digest('hex')}});return{digest,observed};};
- const before=evaluate(false),after=evaluate(true);assert.ok(before.observed.includes('lib/active-time-budget.js'));assert.deepEqual(after.observed,before.observed);assert.notEqual(before.digest,after.digest);
+ const fpModule=require(path.join(scripts,'lib/reader-implementation-fingerprint.js'));
+ const observedBefore=[],observedAfter=[];
+ const readWrapped=(changed,observed)=>(filename,encoding)=>{
+  const relative=path.relative(scripts,filename);observed.push(relative);
+  const value=fs.readFileSync(filename,encoding);
+  return relative==='lib/active-time-budget.js'&&changed?value+'\n// synthetic helper-only implementation change\n':value;
+ };
+ const before=fpModule.currentReaderParserImplementationSha256({scriptsDir:scripts,fsImpl:{readFileSync:readWrapped(false,observedBefore)}});
+ const after=fpModule.currentReaderParserImplementationSha256({scriptsDir:scripts,fsImpl:{readFileSync:readWrapped(true,observedAfter)}});
+ assert.ok(observedBefore.includes('lib/active-time-budget.js'));assert.deepEqual(observedAfter,observedBefore);assert.notEqual(before,after);
  assert.match(deep,/allowNewImplementationAllowance: false/);
 });
 

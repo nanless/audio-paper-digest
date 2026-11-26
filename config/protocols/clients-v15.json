@@ -2,7 +2,7 @@
   "protocols": [
     {
       "name": "paper-daily-podcast-feed",
-      "currentVariant": "github-release-audio-feed",
+      "currentVariant": "github-release-multi-repo-audio-feed",
       "currentSchema": {
         "fields": [
           "generatedAt",
@@ -30,10 +30,49 @@
         "maxFeedBytes": 2097152,
         "maxAudioBytes": 41943040,
         "maxEpisodes": 120,
-        "audioHostPolicy": "github-release-https-nanless-audio-paper-digest-or-blog-only",
+        "audioHostPolicy": "github-release-https-nanless-audio-research-workbench-portal-or-legacy-only",
         "integrity": "sha256-and-bytes-of-actual-mp3-audio-file"
       },
-      "historical": []
+      "historical": [
+        {
+          "tag": "paper-daily-podcast-feed",
+          "variant": "github-release-audio-feed",
+          "header": {
+            "contract": "paper-daily-podcast-feed",
+            "schemaFingerprint": "d0e7166a5ae14ba85f421b84ccf05813c43dae0a598bc39c2c75886c81f15ad2"
+          },
+          "schema": {
+            "fields": [
+              "generatedAt",
+              "episodes"
+            ],
+            "episodeFields": [
+              "id",
+              "date",
+              "title",
+              "summary",
+              "audioUrl",
+              "bytes",
+              "sha256",
+              "durationSeconds",
+              "mimeType",
+              "chapters",
+              "paperIds"
+            ],
+            "chapterFields": [
+              "title",
+              "startSeconds",
+              "endSeconds",
+              "paperId"
+            ],
+            "maxFeedBytes": 2097152,
+            "maxAudioBytes": 41943040,
+            "maxEpisodes": 120,
+            "audioHostPolicy": "github-release-https-nanless-audio-paper-digest-or-blog-only",
+            "integrity": "sha256-and-bytes-of-actual-mp3-audio-file"
+          }
+        }
+      ]
     },
     {
       "name": "paper-resource-badges-index",

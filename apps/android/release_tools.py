@@ -4,7 +4,7 @@ import argparse, contextlib, datetime, getpass, hashlib, importlib.util, json, o
 if os.environ.get('CODEX_SANDBOX'): raise SystemExit('normal_environment_required')
 P=pathlib.Path
 APP='com.nanless.paperdigest'
-LABEL='论文速递工作台'
+LABEL='音频研究工作台'
 ICON_SHA='18b7f280a530e6a881bc7017a1f78d6ba2c1a65741dea6a04116782433e3fbfb'
 # Exact original and independently reviewed lossless AAPT2 encoding; unknown encodings stay closed.
 ICON_PACKAGED_SHAS={ICON_SHA,'60456a5becd90786a1aac02afdeb5fa1b2f82a4aab7bdb265a13bf80efb6d4be'}
@@ -530,7 +530,7 @@ def android_private_draft_plan(args):
          'downloadVerificationRequired':True,'qualification':'Android 84项前置验收通过；仅A-REL-03/04可待验。只生成私有草稿命令，尚未创建或公开；Mac不在本次发行范围。',
          'argv':['gh','release','create',tag['tag'],*[str(p) for p in files.values()],
                  '--repo','github.com/nanless/audio-research-workbench','--verify-tag','--target',verified['sourceCommit'],
-                 '--title','论文速递工作台 Android '+verified['version'],'--notes-file',str(regular(args.notes_file)),'--draft']}
+                 '--title','音频研究工作台 Android '+verified['version'],'--notes-file',str(regular(args.notes_file)),'--draft']}
 
 def verify_android_downloaded(args):
  # No network: the downloaded six files must equal the selected original release, then pass the real APK verifier.

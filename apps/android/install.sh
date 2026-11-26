@@ -11,6 +11,6 @@ device_state="$(adb -s "$serial" get-state 2>/dev/null)" || { echo "指定设备
 [[ "$device_state" == device ]] || { echo "指定设备未就绪，未安装。" >&2; exit 1; }
 if [[ "$serial" == emulator-* ]]; then
  avd_name="$(adb -s "$serial" emu avd name | tr -d '\r' | sed '/^OK$/d')"
- [[ "$avd_name" == PaperDigest_QA_API35 || "$avd_name" == PaperDigest_QA_API28 ]] || { echo "这不是论文速递工作台独立验收设备，未安装。" >&2; exit 1; }
+ [[ "$avd_name" == PaperDigest_QA_API35 || "$avd_name" == PaperDigest_QA_API28 ]] || { echo "这不是音频研究工作台独立验收设备，未安装。" >&2; exit 1; }
 fi
 adb -s "$serial" install -r -t "$apk"

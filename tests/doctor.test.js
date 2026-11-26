@@ -1194,7 +1194,7 @@ test('CLI 沙箱守卫：spawn 时业务前 exit 1，import 时不杀进程', ()
     });
     assert.equal(guarded.status, 1);
     assert.match(guarded.stderr, /沙箱外运行/);
-    assert.ok(!guarded.stdout.includes('论文速递体检'), '沙箱内不得执行业务检查');
+    assert.ok(!guarded.stdout.includes('音频研究工作台体检') && !guarded.stdout.includes('论文速递体检'), '沙箱内不得执行业务检查');
 
     // import 路径不得在模块加载时退出：子进程先设置沙箱标志再 require。
     const imported = spawnSync(process.execPath, [

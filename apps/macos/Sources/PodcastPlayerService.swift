@@ -393,7 +393,7 @@ actor PodcastPlayerService {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw PodcastError.invalid("播客订阅清单不是有效 UTF-8 JSON 对象。")
         }
-        guard ClientProtocols.isCurrentHeader(obj, "paper-daily-podcast-feed") else {
+        guard ClientProtocols.hasValidHeader(obj, "paper-daily-podcast-feed") else {
             throw PodcastError.invalid("播客订阅清单协议头或 schemaFingerprint 无效。")
         }
         guard Set(obj.keys).isSubset(of: allowedRootKeys) else {
@@ -975,7 +975,7 @@ actor PodcastPlayerService {
         guard enableMediaCenter else { return }
         let info: [String: Any] = [
             MPMediaItemPropertyTitle: episode.title,
-            MPMediaItemPropertyArtist: "论文速递工作台 · 每日播客",
+            MPMediaItemPropertyArtist: "音频研究工作台 · 每日播客",
             MPMediaItemPropertyAlbumTitle: episode.date,
             MPMediaItemPropertyPlaybackDuration: duration > 0 ? duration : episode.durationSeconds,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,

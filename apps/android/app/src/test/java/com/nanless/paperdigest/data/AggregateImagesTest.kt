@@ -65,6 +65,20 @@ class AggregateImagesTest {
         assertEquals(listOf("Caption 0","Caption 1"),plan.slots.map{it.caption});assertEquals(listOf(0,1),plan.slots.map{it.index});assertEquals(listOf(url,url),plan.slots.map{it.sourceURL});assertEquals(original,canonical(f.store.cachedDocument(f.descriptor,f.raw)))
         assertFalse(plan.templateBodyHTML.contains(" src="));assertEquals(f.original.getString("sanitizedBodySHA256"),plan.originalBodySHA256)
     }
+    @Test fun figcaptionPrunesKatexHtmlAndLegacyConferenceDirectoryParses() {
+        val mathCaption="<figure><img src='$url' alt='Math fig'/><figcaption>图1 <span class='katex'><span class='katex-mathml'><math><semantics><mi>x</mi><annotation encoding='application/x-tex'>\\alpha+\\beta</annotation></semantics></math></span><span class='katex-html' aria-hidden='true'>DUP_VISUAL_NOISE</span></span> 说明</figcaption></figure>"
+        val f=fixture(mathCaption)
+        val plan=f.store.imagePlan(f.descriptor,f.raw)
+        val caption=plan.slots.single().caption
+        assertTrue(caption.contains("[公式 TeX：\\alpha+\\beta]"))
+        assertFalse(caption.contains("DUP_VISUAL_NOISE"))
+
+        val legacySource=AggregateSource("a".repeat(64),"b".repeat(64),1,"index.json",0,"c".repeat(64),"foundation-sorted-keys-json-v1")
+        val legacyDir=PublishedAggregate("page:/audio-paper-digest-blog/conferences/","page",null,"Conferences","会议目录","","2026-10-24","2026-10-24",emptyList(),emptyList(),"https://nanless.github.io/audio-paper-digest-blog/conferences/",legacySource)
+        val html="<html><link rel='canonical' href='${legacyDir.sourceURL}'/><body><div id='conference-directory' class='conference-directory'><p>ICASSP 2026 目录内容</p></div></body></html>".toByteArray()
+        val parsed=AggregateHtml.parse(html,legacyDir,legacyDir.sourceURL,"2026-10-24T00:00:00Z")
+        assertTrue(parsed.getString("plainText").contains("ICASSP 2026 目录内容"))
+    }
     @Test fun normalDuplicateURLFetchesOnceAndStreamsBothPositions()=runBlocking {
         val f=fixture();val bytes=png();val requests=AtomicInteger();val view=online(f,bytes,requests)
         assertEquals(1,requests.get());assertEquals(2,view.savedCount);assertEquals(0,view.missingCount);assertFalse(view.bodyHTML.contains("base64"));assertTrue(view.bodyHTML.contains("Caption 0")&&view.bodyHTML.contains("Caption 1"))

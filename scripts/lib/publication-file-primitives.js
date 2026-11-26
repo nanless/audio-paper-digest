@@ -52,7 +52,7 @@ function readRegular(filename, maximum = 128 * 1024 * 1024, dependencies = {}) {
         if (!opened.isFile() || opened.nlink !== before.nlink || named.isSymbolicLink() || named.nlink !== before.nlink
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size
             || opened.size > BigInt(maximum)) fail(`打开后来源文件不安全：类型、链接数、大小或身份不符合要求：${filename}`);
-        const bytes = readBoundedFd(fd, Number(opened.size), maximum);
+        const bytes = fs.readFileSync(fd);
         const after = fs.fstatSync(fd, { bigint: true }); const namedAfter = fs.lstatSync(filename, { bigint: true });
         if (BigInt(bytes.length) !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
             || after.nlink !== opened.nlink || after.size !== opened.size || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs

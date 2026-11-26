@@ -25,7 +25,7 @@ test('Reader 提示词告知与解析器共用同一组阈值，并按每次请�
     assert.match(notice, /列数遵循真实原表/);
     assert.match(notice, /不为凑列添加无来源/);
     assert.match(notice, /5000–18000/);
-    assert.match(notice, /没有收到像素时，figurePlacements 必须为空/);
+    assert.match(notice, /没有收到像素时[， ]?figurePlacements 必须为空/);
     const prompt = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-article.md').toString('utf8');
     assert.match(prompt, /\{mechanicalContract\}/);
     assert.doesNotMatch(prompt, /未附像素但允许/);

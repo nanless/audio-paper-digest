@@ -2865,12 +2865,16 @@ def _api_reader_page_binding_issue(content, paper, *, hooks: Mapping | None = No
             expected_tail_parts.append(
                 f'## ⚖️ 评分明细\n\n{reader_display_fields["scoringReason"]}'
             )
+            expected_tails = []
             if date_str:
-                expected_tail_parts.append(
-                    f'---\n\n[← 返回 {date_str} 语音/音乐/音频论文速递]({_H.BASE_PATH}/posts/{date_str}/)'
-                )
-            expected_tail = sanitize_markdown_for_publish('\n\n'.join(expected_tail_parts)).strip()
-            if after_article.strip() != expected_tail:
+                for label in ('音频研究日报', '语音/音乐/音频论文速递'):
+                    parts = list(expected_tail_parts) + [
+                        f'---\n\n[← 返回 {date_str} {label}]({_H.BASE_PATH}/posts/{date_str}/)'
+                    ]
+                    expected_tails.append(sanitize_markdown_for_publish('\n\n'.join(parts)).strip())
+            else:
+                expected_tails.append(sanitize_markdown_for_publish('\n\n'.join(expected_tail_parts)).strip())
+            if after_article.strip() not in expected_tails:
                 raise _H.PublishDataValidationError('页面深度解读章节末尾存在未经核验的额外内容或篡改元数据/尾注。')
             page_proof = _H._validate_api_reader_source_bindings(paper, article=page_article)
             if page_proof != proof:

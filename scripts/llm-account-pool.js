@@ -578,12 +578,23 @@ function readPidStartTime(pid) {
     } catch { return null; }
 }
 
-const PROCESS_BOOT_TIME_SECONDS = readSystemBootTimeSeconds();
-const CURRENT_PID_START_TIME = readPidStartTime(process.pid);
+let cachedBootTimeSeconds;
+let cachedCurrentPidStartTime;
+
+function getProcessBootTimeSeconds() {
+    if (cachedBootTimeSeconds === undefined) cachedBootTimeSeconds = readSystemBootTimeSeconds();
+    return cachedBootTimeSeconds;
+}
+
+function getCurrentPidStartTime() {
+    if (cachedCurrentPidStartTime === undefined) cachedCurrentPidStartTime = readPidStartTime(process.pid);
+    return cachedCurrentPidStartTime;
+}
 
 function localLockOwnerIsAlive(owner) {
-    if (Number.isInteger(owner.bootTime) && PROCESS_BOOT_TIME_SECONDS !== null
-        && owner.bootTime !== PROCESS_BOOT_TIME_SECONDS) {
+    const bootTime = Number.isInteger(owner.bootTime) ? getProcessBootTimeSeconds() : null;
+    if (Number.isInteger(owner.bootTime) && bootTime !== null
+        && owner.bootTime !== bootTime) {
         return false;
     }
     try {
@@ -696,8 +707,10 @@ function acquireStateLock(stateFile, options = {}) {
                 token,
                 acquiredAt: new Date().toISOString()
             };
-            if (PROCESS_BOOT_TIME_SECONDS !== null) ownerPayload.bootTime = PROCESS_BOOT_TIME_SECONDS;
-            if (CURRENT_PID_START_TIME !== null) ownerPayload.pidStartTime = CURRENT_PID_START_TIME;
+            const bootTime = getProcessBootTimeSeconds();
+            const pidStartTime = getCurrentPidStartTime();
+            if (bootTime !== null) ownerPayload.bootTime = bootTime;
+            if (pidStartTime !== null) ownerPayload.pidStartTime = pidStartTime;
             const createdOwnerStat = writeLockOwnerJson(lockPath, createdDirStat, ownerPayload);
             if (!createdOwnerStat) {
                 if (nowMonotonicMs() - startedAt >= timeoutMs) {

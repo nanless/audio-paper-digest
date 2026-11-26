@@ -13,7 +13,8 @@ const doctor = require('./doctor.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
-const SITE_TITLE_MARKER = '语音/音乐/音频论文速递';
+const SITE_TITLE_MARKER = '音频研究门户';
+const LEGACY_SITE_TITLE_MARKERS = ['语音/音乐/音频论文速递'];
 const formats = require('./lib/protocol-codec');
 const ARTIFACT_FORMAT = 'web-verification';
 
@@ -101,7 +102,12 @@ function titleOf(html) {
 function titleMatches(title, marker = SITE_TITLE_MARKER) {
     if (!title) return false;
     if (titleHasCorruptionArtifacts(title)) return false;
-    return String(title).includes(marker);
+    const text = String(title);
+    if (text.includes(marker)) return true;
+    if (marker === SITE_TITLE_MARKER) {
+        return LEGACY_SITE_TITLE_MARKERS.some(legacy => text.includes(legacy));
+    }
+    return false;
 }
 
 function titleHasCorruptionArtifacts(title) {

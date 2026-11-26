@@ -7,6 +7,7 @@ are isolated mocks, so these tests do not claim live CONNECT or model integratio
 """
 import ast
 import contextlib
+import http.client
 import io
 import json
 from email.message import Message
@@ -25,6 +26,8 @@ import urllib.response
 SOURCE = Path(__file__).resolve().parents[2] / 'scripts' / 'publish_common.py'
 DEFINITIONS = {
     '_PublishLLMRedirectError', '_PublishLLMNoRedirectHandler',
+    '_enable_tcp_keepalive', '_KeepAliveHTTPConnection', '_KeepAliveHTTPSConnection',
+    '_KeepAliveHTTPHandler', '_KeepAliveHTTPSHandler',
     '_read_publish_http_error', '_sanitize_publish_llm_error',
     '_open_publish_json_with_account_pool', 'call_publish_llm_api',
 }
@@ -86,7 +89,10 @@ class Fixture:
                 if isinstance(handler, urllib.request.ProxyHandler):
                     owner.proxy_maps.append(dict(handler.proxies))
             # Exercise actual redirect/error dispatch without proxy_bypass/env/DNS.
-            safe_handlers = [h for h in handlers if not isinstance(h, urllib.request.ProxyHandler)]
+            safe_handlers = [
+                h for h in handlers
+                if not isinstance(h, (urllib.request.ProxyHandler, urllib.request.HTTPHandler, urllib.request.HTTPSHandler))
+            ]
             return REAL_BUILD_OPENER(
                 urllib.request.ProxyHandler({}), *safe_handlers, SyntheticHTTP(), SyntheticHTTPS(),
             )
@@ -107,8 +113,11 @@ class Fixture:
             '__name__': 'synthetic_redirect_fixture', **errors,
             'urllib': types.SimpleNamespace(error=urllib.error, request=types.SimpleNamespace(
                 HTTPRedirectHandler=urllib.request.HTTPRedirectHandler,
+                HTTPHandler=urllib.request.HTTPHandler,
+                HTTPSHandler=urllib.request.HTTPSHandler,
                 ProxyHandler=urllib.request.ProxyHandler, Request=urllib.request.Request,
                 build_opener=build_opener)),
+            'http': types.SimpleNamespace(client=http.client), 'socket': socket,
             'os': types.SimpleNamespace(environ={
                 'PAPER_ANALYZER_API_KEY': self.keys[0],
                 'PAPER_ANALYZER_ENDPOINT': 'https://first.example/v1',
@@ -252,13 +261,14 @@ class PublishRedirectSecurityTests(unittest.TestCase):
         body = b'{"error":{"message":"synthetic provider rejection"}}'
         for code in (400, 401, 403, 429, 500, 503):
             with self.subTest(code=code):
+                expected_attempts = 1 if code in (400, 422) else 2
                 fixture = Fixture([(code, body, None), (code, body, None)])
                 with self.assertRaises(fixture.ns['PublishLLMUnavailable']):
                     fixture.call(required=True, max_retries=2)
-                self.assertEqual(len(fixture.requests), 2)
-                self.assertEqual([e['status_code'] for e in fixture.events], [code, code])
+                self.assertEqual(len(fixture.requests), expected_attempts)
+                self.assertEqual([e['status_code'] for e in fixture.events], [code] * expected_attempts)
                 self.assertIn('synthetic provider rejection', fixture.output.getvalue())
-                self.assertEqual(fixture.sleep.call_count, 1)
+                self.assertEqual(fixture.sleep.call_count, expected_attempts - 1)
                 fixture.mark_quota.assert_not_called()
 
     def test_go_authentication_failure_still_stops_without_switching_accounts(self):

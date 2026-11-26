@@ -60,7 +60,7 @@ import org.json.JSONObject
             LazyColumn(Modifier.fillMaxSize(),state=listState,contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
                 item("heading") { Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                     IconButton({action("ui.library",JSONObject())}){Icon(Icons.Outlined.ArrowBack,"返回论文列表")}
-                    Text(when(filter){"daily"->"每日论文速递";"conference"->"会议论文集";else->"网站页面"},style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold,modifier=Modifier.weight(1f))
+                    Text(when(filter){"daily"->"每日音频研究";"conference"->"会议论文集";else->"网站页面"},style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold,modifier=Modifier.weight(1f))
                     IconButton({action("ui.resources",JSONObject())}){Icon(Icons.Outlined.Language,"网站全部成果")}
                 } }
                 item("scope"){Text("与网站同步浏览日更、会议论文集和说明。会议先列总览，再列各研究方向。",style=MaterialTheme.typography.bodySmall)}

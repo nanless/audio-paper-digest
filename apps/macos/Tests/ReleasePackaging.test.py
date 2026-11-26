@@ -29,7 +29,7 @@ class Packaging(unittest.TestCase):
         if os.environ.get('CODEX_SANDBOX'):raise RuntimeError('请在本机正常开发环境执行测试')
         if platform.system()!='Darwin':raise unittest.SkipTest('真实codesign/ditto/DMG验收需要macOS，不伪造通过')
         cls.base=tempfile.TemporaryDirectory(prefix='paperdigest-release-test-template-');cls.template=pathlib.Path(cls.base.name)
-        repo=cls.template/'repo';repo.mkdir();app=cls.template/'论文速递工作台.app';resources=app/'Contents/Resources'
+        repo=cls.template/'repo';repo.mkdir();app=cls.template/'音频研究工作台.app';resources=app/'Contents/Resources'
         cls.arch=platform.machine()
         cls.fixed={'Seed/assets/fixture.pdf':b'Explicit public fixture PDF bytes.','Seed/assets/fixture.png':b'Explicit public fixture image bytes.','Web/vendor/katex/katex.min.js':b'// Explicit pinned public fixture math library.','Web/vendor/katex/fonts/fixture.woff2':b'Explicit fixture font bytes.','Web/vendor/katex/LICENSE':b'Explicit public fixture MIT license.'}
         sample={'pdf':{'src':'fixture.pdf','sha256':sha(cls.fixed['Seed/assets/fixture.pdf'])},'figures':[{'src':'fixture.png','sha256':sha(cls.fixed['Seed/assets/fixture.png'])}]}
@@ -44,7 +44,7 @@ class Packaging(unittest.TestCase):
         files['apps/macos/build_resources.py']=SCRIPT.with_name('build_resources.py').read_bytes()
         for notice in (SCRIPT.parent/'Resources').rglob('*'):
             if notice.is_file():files['apps/macos/Resources/'+notice.relative_to(SCRIPT.parent/'Resources').as_posix()]=notice.read_bytes()
-        plist={'CFBundleIdentifier':'com.nanless.PaperDigest','CFBundleName':'论文速递工作台','CFBundleDisplayName':'论文速递工作台','CFBundleExecutable':'PaperDigest','CFBundlePackageType':'APPL','CFBundleShortVersionString':'1.0.1','CFBundleVersion':'1','LSMinimumSystemVersion':'15.0'}
+        plist={'CFBundleIdentifier':'com.nanless.PaperDigest','CFBundleName':'音频研究工作台','CFBundleDisplayName':'音频研究工作台','CFBundleExecutable':'PaperDigest','CFBundlePackageType':'APPL','CFBundleShortVersionString':'1.0.1','CFBundleVersion':'1','LSMinimumSystemVersion':'15.0'}
         files['apps/macos/Info.plist']=plistlib.dumps(plist)
         for name,raw in files.items():write(repo/name,raw)
         success(['git','init','-q',repo]);success(['git','config','user.name','Isolated Release Fixture'],repo);success(['git','config','user.email','fixture@example.invalid'],repo);success(['git','add','.'],repo);success(['git','commit','-qm','Isolated public fixture'],repo)
@@ -87,7 +87,7 @@ class Packaging(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='paperdigest-release-test-');self.root=pathlib.Path(self.temp.name)
         self.repo=self.root/'repo';shutil.copytree(self.template/'repo',self.repo)
-        self.app=self.root/'论文速递工作台.app';success(['/usr/bin/ditto',self.template/'论文速递工作台.app',self.app])
+        self.app=self.root/'音频研究工作台.app';success(['/usr/bin/ditto',self.template/'音频研究工作台.app',self.app])
         self.record=self.root/'record.json';shutil.copy2(self.template/'record.json',self.record);self.output=self.root/'out'
         self.cache=self.root/'cache';shutil.copytree(self.template/'cache',self.cache)
 
@@ -136,7 +136,7 @@ class Packaging(unittest.TestCase):
     def test_joint_release_notes_bind_android_claims_to_actual_android_evidence(self):
         self.make_formal();self.prepare()
         notes=(self.output/'RELEASE_NOTES.md').read_text()
-        for required in ['论文速递工作台 1.0.1','macOS 15 及以上','本地签名，未经过 Apple 公证','应用程序文件夹','Android 安装与升级','正式发行签名','android-build-info.json','Android 版本、系统要求、签名和验证范围见该版本的','https://github.com/nanless/audio-research-workbench/blob/main/apps/android/README.md','应用标识和签名一致','内部版本号递增','保留本机资料','由用户在设备上配置','Zotero HTML 与外部附件的支持格式见客户端说明','旧版是调试包或签名不同','先在旧版导出完整备份并确认可恢复，再卸载旧版','恢复资料后，在当前设备重新配置凭据','SHA256SUMS','ANDROID-SHA256SUMS','shasum -a 256']:
+        for required in ['音频研究工作台 1.0.1','macOS 15 及以上','本地签名，未经过 Apple 公证','应用程序文件夹','Android 安装与升级','正式发行签名','android-build-info.json','Android 版本、系统要求、签名和验证范围见该版本的','https://github.com/nanless/audio-research-workbench/blob/main/apps/android/README.md','应用标识和签名一致','内部版本号递增','保留本机资料','由用户在设备上配置','Zotero HTML 与外部附件的支持格式见客户端说明','旧版是调试包或签名不同','先在旧版导出完整备份并确认可恢复，再卸载旧版','恢复资料后，在当前设备重新配置凭据','SHA256SUMS','ANDROID-SHA256SUMS','shasum -a 256']:
             self.assertIn(required,notes)
         for unsupported in ['所有 Zotero HTML 均兼容','已通过实体机验收','已在 Google Play 发布','Android versionCode: 1']:
             self.assertNotIn(unsupported,notes)

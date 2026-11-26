@@ -2,7 +2,7 @@
 
 ## 这份文件给谁
 
-本文供进入本仓库运行或修改论文速递的执行者使用，只保留不可绕过的操作限制与验收标准。按顺序操作见 [SKILL.md](SKILL.md)，按任务查文档见 [docs/README.md](docs/README.md)，定位代码见 [scripts/README.md](scripts/README.md)。
+本文供进入本仓库运行或修改音频研究工作台（Audio Research Workbench）的执行者使用，只保留不可绕过的操作限制与验收标准。按顺序操作见 [SKILL.md](SKILL.md)，按任务查文档见 [docs/README.md](docs/README.md)，定位代码见 [scripts/README.md](scripts/README.md)。
 
 修改说明文字时同时遵循[把技术写清楚](skills/clear-technical-writing/SKILL.md)和[项目写作约定](docs/writing-guide.md)，不能借精简文案改变约束。多个条件须同时满足时不能只选其中一条；只读核验通过不自动授予模型请求、写入或发布权限。术语见[写作约定](docs/writing-guide.md#术语先解释再统一称呼)。
 
@@ -23,7 +23,7 @@
 
 - 三条流程统一在 `$HOME/code/github_repos/audio-research-workbench` 执行，开跑前展开并核对 `pwd`；角色保持 `daily`，本机 `.env` 的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 允许历史命令在此运行，反向放行仍然禁止。旧 `audio-paper-digest-rewrite-all` 工作区已废弃，不再进入或复制数据。
 - 运行数据保存在 `data/runtime/`。日更、会议、历史任务的生成、审查与推送必须错峰；共享博客锁防止并发修改。历史发布前须同步代码仓与博客仓远端 `main`，以同步后的博客提交重新生成审查与发布凭证。
-- 用户要求“运行/进行 YYYY-MM-DD 论文速递”时，默认执行完整 LLM/API 日更：
+- 用户要求“运行/进行 YYYY-MM-DD 日更（或音频研究日报 / 论文速递）”时，默认执行完整 LLM/API 日更：
 
 ```bash
 npm run digest:prepare -- YYYY-MM-DD
@@ -75,7 +75,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 - **代理与超时**：Muse 与 arXiv 强制走项目 HTTP CONNECT 代理，每次请求建独立连接对象并用后销毁，禁止静默直连；Node CONNECT+TLS 握手共用 60 秒有效预算（不含长时间系统挂起），arXiv 源站通过 `arxiv-origin-gate.js` 限制并发（默认 `PD_ARXIV_MAX_CONCURRENCY=3`）并共享 `Retry-After` 退避。外部图片/Demo 仅允许 HTTPS，每次重定向拒绝私网/保留地址并固定已核验公网 IP。
 - **等权账号池与认证排障**：OpenCode Go 同池所有 key 等权，按 `affinityKey`（如 `paperId`）稳定哈希映射槽位提升前缀缓存命中；仅 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 允许同请求内换号并落盘冷却。普通 401 立即停止生产并保存在途结果，随后在独立诊断中逐号探测完整账号池，禁止因单号 401 要求用户更换全部密钥，且严禁展示密钥或稳定凭据指纹。
-- **留账与保存故障**：请求开始与终态以同一 `eventId` 落盘，新记录按北京时间 `YYYY-MM-DD/` 分片写入；终态或采用记录保存失败须停止新派发并保全真实响应，不返还已发次数。
+- **留账与保存故障**：请求开始与终态以同一 `eventId` 落盘，支持按北京时间 `YYYY-MM-DD/` 目录分片（`PD_LLM_USAGE_SHARD_BY_DATE=1`）并同步维护日索引；终态或采用记录保存失败须停止新派发并保全真实响应，不返还已发次数。
 - **分级推理与缓存**：`PD_OPENAI_RESPONSES_STREAM=1` 启用 SSE 并开启阶段稳定 `prompt_cache_key`（`PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=0` 可关）。按用户 2026-11-24 与 2026-11-26 授权，默认启用按阶段分级推理（`PD_TIERED_REASONING_EFFORT=0` 可关），且不超过环境上限：
   - `xhigh`：主分析（`primaryAnalysis`）、API Reader 长文（`apiReaderArticle`）
   - `high`：评分审计（`scoringAudit`）、Reader 局部修复（`apiReaderRepair`）、全文审校（`revision`）

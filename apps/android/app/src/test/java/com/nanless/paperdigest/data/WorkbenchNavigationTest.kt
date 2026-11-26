@@ -11,6 +11,10 @@ class WorkbenchNavigationTest {
         assertTrue(workbenchAggregateInSection(directory,"conference"))
         assertFalse(workbenchAggregateInSection(directory,"page"))
         assertEquals("page",directory.kind)
+        val legacyDirectory=PublishedAggregate("page:/audio-paper-digest-blog/conferences/","page",null,"conferences","会议目录","","2026-10-30","2026-10-30",emptyList(),emptyList(),"https://nanless.github.io/audio-paper-digest-blog/conferences/",source)
+        assertTrue(workbenchConferenceDirectory(legacyDirectory))
+        assertTrue(workbenchAggregateInSection(legacyDirectory,"conference"))
+        assertFalse(workbenchAggregateInSection(legacyDirectory,"page"))
     }
     @Test fun conferenceOverviewPrecedesTaskEvenWithMissingOldScope() {
         val task=row("posts/conference-interspeech-2026-task-speech-recognition","conference","2026-10-31")

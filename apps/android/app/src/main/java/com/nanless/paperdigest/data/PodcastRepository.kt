@@ -493,7 +493,7 @@ class PodcastRepository(
             val text = rawBytes.toString(Charsets.UTF_8)
             val root = runCatching { JSONObject(text) }.getOrNull()
                 ?: throw IllegalArgumentException("播客订阅清单不是有效 JSON 对象。")
-            require(ClientProtocols.isCurrentHeader(root, "paper-daily-podcast-feed")) {
+            require(ClientProtocols.hasValidHeader(root, "paper-daily-podcast-feed")) {
                 "播客订阅清单协议头或 schemaFingerprint 无效。"
             }
             require(root.keys().asSequence().all { it in ALLOWED_ROOT_KEYS }) {

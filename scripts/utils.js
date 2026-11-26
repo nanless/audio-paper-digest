@@ -871,7 +871,12 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
         if (reasoningEffort) {
             body.reasoning = { effort: reasoningEffort };
         }
-        const rawCacheKey = typeof options.promptCacheKey === 'string' ? options.promptCacheKey.trim() : '';
+        const explicitCacheKey = typeof options.promptCacheKey === 'string' ? options.promptCacheKey.trim() : '';
+        const cacheStage = String(options.reasoningStage || options.usageContext?.stage || options.stage || '').trim();
+        const derivedCacheKey = cacheStage
+            ? `pd:${cacheStage}:${String(model || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 24)}`
+            : '';
+        const rawCacheKey = explicitCacheKey || derivedCacheKey;
         if (rawCacheKey && !isEnvFlagDisabled(process.env.PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY)) {
             body.prompt_cache_key = rawCacheKey.slice(0, 64);
         }
@@ -1318,7 +1323,8 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
                     pendingRequest = require('./lib/llm-pending-request').beginPendingLlmRequest({
                         protocol: resolveRequestProtocol(endpoint, model, options), model, request: bodyObj,
                         context: options.usageContext
-                    }, { enabled: options.recordUsage !== false, directory: options.usageDirectory });
+                    }, { enabled: options.recordUsage !== false, directory: options.usageDirectory,
+                        ...(options.usageShardByDate === false ? { shardByDate: false } : {}) });
                     transportStarted = true;
                     return transportRequestFn(apiUrl, bodyObj, headers, { ...options, timeoutMs, agent });
                 },
@@ -1354,7 +1360,8 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
                     usageEvent = buildLlmUsageEvent(input);
                     options.usageSink(usageEvent);
                 }
-                else recordLlmUsage(input, { enabled: options.recordUsage !== false, directory: options.usageDirectory });
+                else recordLlmUsage(input, { enabled: options.recordUsage !== false, directory: options.usageDirectory,
+                    ...(options.usageShardByDate === false ? { shardByDate: false } : {}) });
             } catch (cause) {
                 if (cause?.code === 'LLM_USAGE_NOT_PERSISTED') throw cause;
                 // Custom sinks have the same durable-storage obligation as the

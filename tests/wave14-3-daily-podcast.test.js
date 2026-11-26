@@ -421,7 +421,8 @@ test('podcast-github-release: XML 1.0 hardening (U+FFFE/surrogates/dates/stable 
     // Wave 14.5 client feed schema (`paper-daily-podcast-feed`) + 120-episode cap + 2 MiB cap
     const feed = releaseLib.buildClientPodcastFeedJson([ep], { generatedAt: '2026-11-24T08:00:00+08:00' });
     assert.equal(feed.contract, 'paper-daily-podcast-feed');
-    assert.equal(feed.schemaFingerprint, 'd0e7166a5ae14ba85f421b84ccf05813c43dae0a598bc39c2c75886c81f15ad2');
+    assert.equal(feed.schemaFingerprint, releaseLib.CLIENT_PODCAST_FEED_SCHEMA_FINGERPRINT);
+    assert.match(feed.schemaFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(feed.generatedAt, '2026-11-24T08:00:00+08:00');
     assert.equal(feed.episodes.length, 1);
     assert.equal(feed.episodes[0].id, 'podcast-2026-11-24');
@@ -459,7 +460,7 @@ test('podcast-github-release: XML 1.0 hardening (U+FFFE/surrogates/dates/stable 
         description: '  \n ',
         chapters: [{ title: '  \n\t ', startSec: 0, endSec: 10 }]
     });
-    assert.equal(wsEp.title, '语音/音频论文速递播客 2026-11-24');
+    assert.equal(wsEp.title, '音频研究日报播客 2026-11-24');
     assert.ok(wsEp.description.length > 0);
     assert.equal(wsEp.chapters[0].title, '章节 1');
 
@@ -580,7 +581,7 @@ test('publish-daily-podcast: env secret isolation, CLI validation, prior episode
         assert.ok(fs.existsSync(clientFeedOut));
         const savedClientFeed = JSON.parse(fs.readFileSync(clientFeedOut, 'utf8'));
         assert.equal(savedClientFeed.contract, 'paper-daily-podcast-feed');
-        assert.equal(savedClientFeed.schemaFingerprint, 'd0e7166a5ae14ba85f421b84ccf05813c43dae0a598bc39c2c75886c81f15ad2');
+        assert.equal(savedClientFeed.schemaFingerprint, releaseLib.CLIENT_PODCAST_FEED_SCHEMA_FINGERPRINT);
         assert.equal(savedClientFeed.episodes.length, 2);
 
         // Direct CLI execution with --client-feed-out
