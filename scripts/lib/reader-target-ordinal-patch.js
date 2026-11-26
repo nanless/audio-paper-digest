@@ -397,10 +397,11 @@ function validateSealRecords(seal,expected) {
     if(!format.isRecord(seal,expected.request.readerTargetOrdinalRequest)||seal.id!==expected.requestId||seal.identitySha256!==repair.hashDraft(expected.identity)
         ||seal.requestSha256!==expected.requestSha256||seal.responseSha256!==expected.responseSha256||seal.compilationSha256!==expected.compilationSha256
         ||!Array.isArray(seal.usageRecords)||!Array.isArray(seal.witnesses))fail('seal identity mismatch');
+    const { isUsageLedgerFile, resolveUsageLedgerFile } = require('./llm-usage-ledger');
     const usageDir=path.resolve(require('../config').FILES.llmUsageDir),events=[],usageFiles=new Set();
     for(const ref of seal.usageRecords){
-        const usageFile=relocatePathWithinRoot(ref.file,usageDir)||path.resolve(ref.file);
-        if(path.dirname(usageFile)!==usageDir||!/^[a-f0-9-]{36}\.json$/.test(path.basename(usageFile)))fail('usage outside normal ledger');
+        const usageFile=resolveUsageLedgerFile(usageDir,ref?.file);
+        if(!usageFile||!isUsageLedgerFile(usageFile,usageDir))fail('usage outside normal ledger');
         const event=read(usageFile,ref.sha256).value;
         if(event.eventId!==ref.eventId||event.kind!==ref.kind||event.paperId!==expected.identity.paperId||!['apiReaderRepair','apiReaderImageProbe'].includes(event.stage))fail('normal usage identity mismatch');
         usageFiles.add(usageFile);
@@ -744,8 +745,17 @@ function matchesArchivedOrdinaryCompletion(paper, attempts, actualRun, runFile) 
         });
         if (!validFeedback) return false;
     }
+    const deferredTx = require('./reader-candidate-transactions.js').deferredReaderCandidateTransactions.get(paper);
+    const activeDeferredFileName = deferredTx
+        && require('../analysis-engine').paperAnalysisLockHeld(paper)
+        && typeof deferredTx.candidateDirectory === 'string'
+        && path.resolve(deferredTx.candidateDirectory) === path.resolve(attempts)
+        && deferredTx.identity
+        ? `${repair.hashDraft(deferredTx.identity)}.json`
+        : null;
     for (const name of fs.readdirSync(attempts)) {
-        const active = signed && /^[a-f0-9]{64}\.json$/.test(name);
+        const active = (signed && /^[a-f0-9]{64}\.json$/.test(name))
+            || (activeDeferredFileName !== null && name === activeDeferredFileName);
         if (!active && !/^[a-f0-9]{64}\.[a-f0-9-]{36}\.resolved\.json$/.test(name)) continue;
         const filename = path.join(attempts, name);
         const initial = read(filename);

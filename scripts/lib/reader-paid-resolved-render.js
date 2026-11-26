@@ -408,11 +408,16 @@ async function currentSignedPaidResolvedRender(paperId, options, previewOnly) {
     if (feedbackMap.contract !== 'daily-blog-review-reader-feedback-map-v1'
         || parent?.length !== 1 || feedback?.length !== 1 || dispatched?.length !== 1
         || dispatched[0].feedbackSha256 !== sha(feedback[0].reviewFeedback)) fail('原派发父稿和反馈成员不是唯一');
-    const request = pinned(options.requestUsageFile, options.requestUsageSha256);
-    const accepted = pinned(options.acceptedUsageFile, options.acceptedUsageSha256);
+    const { isUsageLedgerFile, resolveUsageLedgerFile } = require('./llm-usage-ledger');
     const usageDirectory = path.resolve(require('../config').FILES.llmUsageDir);
-    if ([options.requestUsageFile, options.acceptedUsageFile].some(file => path.dirname(path.resolve(file)) !== usageDirectory))
+    const requestUsageFile = resolveUsageLedgerFile(usageDirectory, options.requestUsageFile);
+    const acceptedUsageFile = resolveUsageLedgerFile(usageDirectory, options.acceptedUsageFile);
+    if (!requestUsageFile || !acceptedUsageFile
+        || !isUsageLedgerFile(requestUsageFile, usageDirectory)
+        || !isUsageLedgerFile(acceptedUsageFile, usageDirectory))
         fail('须读取正常实际用量目录中的原记录');
+    const request = pinned(requestUsageFile, options.requestUsageSha256);
+    const accepted = pinned(acceptedUsageFile, options.acceptedUsageSha256);
     let previewResult = null;
     const previewStop = new Error('只读纯重渲染预检已结束，不保存正式稿');
     try {

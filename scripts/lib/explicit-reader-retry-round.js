@@ -101,7 +101,7 @@ function assertLocalRepairParent(directory, grant, currentPayload, currentIdenti
             const draft = repair.parseRecoveryDraft(currentPayload.draft) || repair.parseRecoveryDraft(currentPayload.rawDraft);
             if (currentPayload.explicitReaderRetryRound?.roundId !== grant.parentRoundId
                 || currentPayload.status !== 'failed'
-                || !draft || draft.sections.length < 12
+                || !draft || draft.sections.length < repair.limitsForDraftFormat(draft).minimumSections
                 || draft.sections.some(section => !section || ['kind', 'heading', 'body'].some(key =>
                     typeof section[key] !== 'string' || !section[key].trim()))) {
                 throw localRepairError('局部修复只接受父轮已保存的完整失败稿');
@@ -529,7 +529,7 @@ function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, 
         throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的封存来源、实际输入或恢复epoch已变化');
     }
     const draft = repair.parseRecoveryDraft(original.payload?.draft) || repair.parseRecoveryDraft(original.payload?.rawDraft);
-    if (!draft || draft.sections.length < 12 || draft.sections.some(section => !section
+    if (!draft || draft.sections.length < repair.limitsForDraftFormat(draft).minimumSections || draft.sections.some(section => !section
         || ['kind', 'heading', 'body'].some(key => typeof section[key] !== 'string' || !section[key].trim()))) return payload;
     // 恢复已有稿件不安装新轮；实际长文输入已在上方逐项核验。
     // 主文中的评分和资源可达状态可以更新，但四份来源、论文锁和原调用账仍须完全一致。

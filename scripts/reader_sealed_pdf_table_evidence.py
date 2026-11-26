@@ -4,8 +4,12 @@ if __name__ == '__main__':
  require_external_runtime('reader-sealed-pdf-table-evidence')
 import json,re,unicodedata,fitz
 from pathlib import Path
-import hashlib,base64,sys,os,stat
+import hashlib,base64,sys,os,stat,threading
 from reader_proof_format import grid_header, grid_profile
+try:
+ from pdf_author_extract import PYMUPDF_LOCK
+except ImportError:
+ PYMUPDF_LOCK = threading.RLock()
 CONTRACT=grid_header()['contract']
 def need(condition,reason):
  if not condition:raise ValueError(reason)
@@ -100,25 +104,27 @@ def prove_table(doc,table):
 def prove_pdf_bytes(pdf_bytes,tables,proof_header=None):
  proof_header=grid_header(proof_header)
  need(isinstance(pdf_bytes,bytes) and len(pdf_bytes)<=64*1024*1024 and pdf_bytes.startswith(b'%PDF-'),'pdf_bytes_invalid');need(isinstance(tables,list) and len(tables)<=256,'tables_input_invalid')
- try:doc=fitz.open(stream=pdf_bytes,filetype='pdf')
- except fitz.FileDataError:
-  return[{'sourceTableOrdinal':table.get('ordinal'),'sourceTableDomSha256':table.get('sourceDomSha256'),'eligible':False,'reason':'pdf_document_unreadable'}for table in tables]
- results=[]
- for table in tables:
-  entry={'sourceTableOrdinal':table.get('ordinal'),'sourceTableDomSha256':table.get('sourceDomSha256')}
+ with PYMUPDF_LOCK:
   try:
-   result=prove_table(doc,table)
-   matrix=result['displayMatrix'];need(len(matrix)==len(table['matrix']) and all(len(row)==len(table['matrix'][0]) for row in matrix),'display_shape_changed')
-   cell_by_coord={(cell['row'],cell['column']):cell for cell in table['cells']}
-   for cell in result['cells']:
-    original=cell_by_coord[(cell['row'],cell['column'])];cell.update(sourceDomSha256=original['sourceDomSha256'],sourceHtmlText=original['text'],pdfText=matrix[cell['row']][cell['column']],valueOrigin='sealed_pdf')
-   result.update(proof_header)
-   result.update(valueOrigin='sealed_pdf',pdfSha256=hashlib.sha256(pdf_bytes).hexdigest(),sourceTableSha256=stable(table),sourceTableDomSha256=table['sourceDomSha256'],sourceTableOrdinal=table['ordinal'],backend={'name':'pymupdf','version':fitz.version[0]},normalizationProfile=grid_profile(proof_header))
-   result['differences']=[{'row':r,'column':c,'sourceHtmlText':table['matrix'][r][c],'pdfText':value,'originDifference':True}for r,row in enumerate(matrix)for c,value in enumerate(row)if value!=table['matrix'][r][c]]
-   result['evidenceSha256']=stable(result);entry.update(eligible=True,evidence=result)
-  except (ValueError,TypeError,KeyError,IndexError)as error:entry.update(eligible=False,reason=str(error))
-  results.append(entry)
- doc.close();return results
+   with fitz.open(stream=pdf_bytes,filetype='pdf') as doc:
+    results=[]
+    for table in tables:
+     entry={'sourceTableOrdinal':table.get('ordinal'),'sourceTableDomSha256':table.get('sourceDomSha256')}
+     try:
+      result=prove_table(doc,table)
+      matrix=result['displayMatrix'];need(len(matrix)==len(table['matrix']) and all(len(row)==len(table['matrix'][0]) for row in matrix),'display_shape_changed')
+      cell_by_coord={(cell['row'],cell['column']):cell for cell in table['cells']}
+      for cell in result['cells']:
+       original=cell_by_coord[(cell['row'],cell['column'])];cell.update(sourceDomSha256=original['sourceDomSha256'],sourceHtmlText=original['text'],pdfText=matrix[cell['row']][cell['column']],valueOrigin='sealed_pdf')
+      result.update(proof_header)
+      result.update(valueOrigin='sealed_pdf',pdfSha256=hashlib.sha256(pdf_bytes).hexdigest(),sourceTableSha256=stable(table),sourceTableDomSha256=table['sourceDomSha256'],sourceTableOrdinal=table['ordinal'],backend={'name':'pymupdf','version':fitz.version[0]},normalizationProfile=grid_profile(proof_header))
+      result['differences']=[{'row':r,'column':c,'sourceHtmlText':table['matrix'][r][c],'pdfText':value,'originDifference':True}for r,row in enumerate(matrix)for c,value in enumerate(row)if value!=table['matrix'][r][c]]
+      result['evidenceSha256']=stable(result);entry.update(eligible=True,evidence=result)
+     except (ValueError,TypeError,KeyError,IndexError)as error:entry.update(eligible=False,reason=str(error))
+     results.append(entry)
+    return results
+  except fitz.FileDataError:
+   return[{'sourceTableOrdinal':table.get('ordinal'),'sourceTableDomSha256':table.get('sourceDomSha256'),'eligible':False,'reason':'pdf_document_unreadable'}for table in tables]
 
 def main():
  from runtime_guard import require_external_runtime,require_workspace_role

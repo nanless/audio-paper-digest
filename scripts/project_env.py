@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """项目内环境变量加载器。
 
-项目脚本读取 Paper Digest 配置时必须用当前仓库的 .env，避免混入从
+项目脚本读取 Audio Research Workbench 配置时必须用当前仓库的 .env，避免混入从
 启动程序或终端继承来的变量。
 唯一例外是显式出版恢复清单路径；它是受严格来源核验的进程输入，不改变模型或代理配置。
 """
 
+import errno
 import os
 import stat
 import sys
@@ -64,29 +65,26 @@ def is_project_env_key(key):
 def parse_env_file(env_file=None):
     parsed = {}
     env_file = resolve_env_file(env_file)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        before = env_file.lstat()
+        fd = os.open(env_file, flags)
     except FileNotFoundError:
         return parsed
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode) \
-            or (os.name != "nt" and before.st_nlink != 1):
-        raise RuntimeError(f"项目 .env 必须是无硬链接的普通文件，禁止符号链接: {env_file}")
-
-    if os.name == "nt" or stat.S_IMODE(before.st_mode) != 0o600:
-        try:
-            env_file.chmod(0o600)
-        except OSError:
-            if os.name != "nt":
-                raise
-
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(env_file, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise RuntimeError(f"项目 .env 必须是无硬链接的普通文件，禁止符号链接: {env_file}") from exc
+        raise
     try:
         opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) \
-                or (os.name != "nt" and opened.st_nlink != 1) \
-                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            raise RuntimeError(f"项目 .env 打开后文件身份不一致: {env_file}")
+        if not stat.S_ISREG(opened.st_mode) or (os.name != "nt" and opened.st_nlink != 1):
+            raise RuntimeError(f"项目 .env 必须是无硬链接的普通文件，禁止符号链接: {env_file}")
+        if os.name == "nt":
+            try:
+                env_file.chmod(0o600)
+            except OSError:
+                pass
+        elif stat.S_IMODE(opened.st_mode) != 0o600 and hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
         max_bytes = 2 * 1024 * 1024
         if opened.st_size > max_bytes:
             raise RuntimeError(f"项目 .env 超过大小限制 ({max_bytes} bytes): {env_file}")
@@ -112,7 +110,7 @@ def parse_env_file(env_file=None):
         key, value = stripped.split("=", 1)
         key = key.strip()
         value = value.strip()
-        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        if len(value) >= 2 and ((value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'"))):
             value = value[1:-1]
         if key:
             if key in first_lines:

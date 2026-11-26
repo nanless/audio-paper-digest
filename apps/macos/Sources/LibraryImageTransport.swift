@@ -5,7 +5,7 @@ extension LibraryService {
     private static let approvedHosts: Set<String> = [
         "arxiv.org", "export.arxiv.org", "www.isca-archive.org", "isca-archive.org",
         "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc",
-        "aclanthology.org"
+        "aclanthology.org", "zenodo.org"
     ]
 
     // These are published image layouts, not a grant to arbitrary GitHub content.
@@ -18,7 +18,13 @@ extension LibraryService {
         let path = components.percentEncodedPath
         if url.host?.lowercased() == "raw.githubusercontent.com" {
             let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-            let conferences: Set<String> = ["interspeech-2026", "dafx-2026", "acl-2026", "eusipco-2026", "cvpr-2026", "nime-2026", "speechprosody-2026", "aaai-2026", "odyssey-2026", "icmc-2026", "jep-2026", "eacl-2026", "iwslt-2026", "chime-2026", "uai-2026", "aistats-2026"]
+            let conferences: Set<String> = [
+                "interspeech-2026", "dafx-2026", "acl-2026", "eusipco-2026", "cvpr-2026",
+                "nime-2026", "speechprosody-2026", "aaai-2026", "odyssey-2026", "icmc-2026",
+                "jep-2026", "eacl-2026", "iwslt-2026", "chime-2026", "uai-2026", "aistats-2026",
+                "icml-2026", "emnlp-2026", "ismir-2026", "dcase-2026", "neurips-2026",
+                "waspaa-2025", "asru-2025"
+            ]
             guard parts.count == 7, parts[0].isEmpty, parts[1] == "nanless", parts[2] == "audio-paper-digest-images", parts[3] == "main", conferences.contains(String(parts[4])) else { return false }
             return parts[5].range(of: #"\A[a-f0-9]{12}\z"#, options: .regularExpression) != nil && parts[6].range(of: #"\Afigure-[1-9][0-9]*\.png\z"#, options: .regularExpression) != nil
         }
@@ -31,14 +37,28 @@ extension LibraryService {
         return false
     }
 
+    static func isOwnedRawBlog(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              url.host?.lowercased() == "raw.githubusercontent.com",
+              url.user == nil, url.password == nil,
+              url.port == nil || url.port == 443,
+              url.query == nil, url.fragment == nil,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
+        let path = components.percentEncodedPath
+        guard !path.contains("%"), !path.contains("\\"), !path.contains("//"),
+              path.hasPrefix("/nanless/audio-research-portal/main/") || path.hasPrefix("/nanless/audio-paper-digest-blog/main/") else { return false }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        return parts.count >= 5 && !parts.contains(".") && !parts.contains("..") && !(parts.last?.isEmpty ?? true)
+    }
+
     static func isApprovedExternalResource(_ url: URL) -> Bool {
         guard url.scheme == "https", let host = url.host?.lowercased(), url.user == nil, url.password == nil, url.port == nil || url.port == 443 else { return false }
-        return approvedHosts.contains(host) || isOwnedPublishedImage(url)
+        return approvedHosts.contains(host) || isOwnedPublishedImage(url) || isOwnedRawBlog(url)
     }
 
     static func externalResourceProxy(_ url: URL, configured: URL?) -> URL? {
         let host = url.host?.lowercased()
-        return host == "arxiv.org" || host == "export.arxiv.org" || isOwnedPublishedImage(url) ? configured : nil
+        return host == "arxiv.org" || host == "export.arxiv.org" || isOwnedPublishedImage(url) || isOwnedRawBlog(url) ? configured : nil
     }
 
     func configureNetwork(httpProxy: String?) throws {

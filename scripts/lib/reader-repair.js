@@ -2261,8 +2261,9 @@ function buildMissingConceptBridgesOperation(draft, issues) {
     if (!issues.some(issue => issue?.diagnosticOnly !== true
         && /conceptBridges 必须包含 4-10 个术语组合解释/.test(String(issue?.message || '')))) return null;
     const bridges = draft.conceptBridges;
+    const limits = limitsForDraftFormat(draft);
     if (!Array.isArray(bridges) || bridges.length < 1 || bridges.length >= 4
-        || !Array.isArray(draft.sections) || draft.sections.length < 12 || draft.sections.length > 18
+        || !Array.isArray(draft.sections) || draft.sections.length < limits.minimumSections || draft.sections.length > limits.maximumSections
         || draft.sections.some(section => !section || typeof section !== 'object' || Array.isArray(section)
             || ['kind', 'heading', 'body'].some(field => typeof section[field] !== 'string' || !section[field].trim()))) return null;
     for (const [index, bridge] of bridges.entries()) {
@@ -4438,7 +4439,7 @@ function compileConceptTermsPatch(draft, response, context) {
 }
 
 module.exports = { readTopLevelMembers, READER_VERSION_METADATA_KIND, buildReaderVersionMetadataRepairContext, parseReaderVersionMetadataPatch, applyReaderVersionMetadataRepair, budgetReaderRepairSourceEvidence, repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, conceptTermsRepairPromptBindings, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, verifiedCompiledReaderTableFactIssues, displayAlignedReaderTable, REPAIR_CONTRACT, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
-    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, hasImplementationAllowanceLineage, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
+    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, hasImplementationAllowanceLineage, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE, TABLE_BINDING_ORDER_ERROR_CODE, limitsForDraftFormat,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,
     readTableCountIssue, hashRecoveryIssues, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,

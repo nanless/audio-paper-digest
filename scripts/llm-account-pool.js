@@ -116,12 +116,17 @@ function resolveApiKeyPool(primaryKey, fallbackValue) {
     return rawKeys;
 }
 
+function splitRawApiKeys(value) {
+    if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean);
+    return String(value || '').split(',').map(item => item.trim()).filter(Boolean);
+}
+
 // 保留原有的逗号分隔备用账号设置。可选的那个尾随凭据有意追加在它后面，
 // 既不参与负载均衡，也不会被提到已有备用账号前面。
 function resolvePrimaryApiKeyPool(primaryKey, fallbackValue, tertiaryFallbackValue = '') {
     return resolveApiKeyPool(primaryKey, [
-        ...parseFallbackApiKeys(fallbackValue),
-        ...parseFallbackApiKeys(tertiaryFallbackValue)
+        ...splitRawApiKeys(fallbackValue),
+        ...splitRawApiKeys(tertiaryFallbackValue)
     ]);
 }
 
@@ -322,6 +327,7 @@ function writeLockOwnerJson(lockPath, createdDirStat, value) {
             throw openError;
         }
         fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+        if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
         fs.fsyncSync(fd);
         try { fs.closeSync(fd); } finally { closed = true; }
         if (!sameCreatedDir()) {
@@ -329,7 +335,6 @@ function writeLockOwnerJson(lockPath, createdDirStat, value) {
         }
         try {
             fs.renameSync(temp, ownerPath);
-            fs.chmodSync(ownerPath, 0o600);
         } catch (renameError) {
             if (renameError.code === 'ENOENT') return null;
             throw renameError;
@@ -538,11 +543,19 @@ function removeLockDirChecked(lockPath, expectedSnapshot) {
     }
 }
 
+function minimalSystemProbeEnv() {
+    return {
+        PATH: process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin',
+        LC_ALL: 'C'
+    };
+}
+
 function readSystemBootTimeSeconds() {
     if (process.platform === 'darwin') {
         try {
             const out = require('node:child_process').execFileSync('sysctl', ['-n', 'kern.boottime'], {
-                encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore']
+                encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'],
+                env: minimalSystemProbeEnv()
             });
             const m = /sec\s*=\s*(\d+)/.exec(out);
             if (m) return Number.parseInt(m[1], 10);
@@ -571,7 +584,8 @@ function readPidStartTime(pid) {
     }
     try {
         const out = require('node:child_process').execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
-            encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore']
+            encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'],
+            env: minimalSystemProbeEnv()
         });
         const norm = out.trim().replace(/\s+/g, ' ');
         return norm || null;
@@ -813,11 +827,11 @@ function writeDurableJson(filePath, value) {
     try {
         fd = fs.openSync(temp, 'wx', 0o600);
         fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+        if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
         fs.fsyncSync(fd);
         fs.closeSync(fd);
         fd = undefined;
         fs.renameSync(temp, filePath);
-        fs.chmodSync(filePath, 0o600);
         try {
             const dirFd = fs.openSync(dir, 'r');
             try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
@@ -847,7 +861,6 @@ function readStateStrict(stateFile) {
             throw new LlmAccountPoolStateError(`LLM 账号池状态路径禁止使用 symlink: ${stateFile}`);
         }
         state = JSON.parse(readRegularStateText(stateFile));
-        fs.chmodSync(stateFile, 0o600);
     } catch (error) {
         if (error.code === 'ENOENT') return newState();
         if (error instanceof LlmAccountPoolStateError) throw error;
@@ -1011,7 +1024,7 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
             const group = service?.groups?.[identity.groupId];
             const groupCount = service?.groups ? Object.keys(service.groups).length : 0;
             const stalePruneNeeded = groupCount > 1 && Object.entries(service.groups).some(
-                ([gid, g]) => gid !== identity.groupId && (nowMs - Number(g?.lastSelectedAtMs || 0)) > STALE_GROUP_TTL_MS
+                ([gid, g]) => gid !== identity.groupId && (nowMs - Number(g?.lastSelectedAtMs || 0)) > STALE_GROUP_MS
             );
             if (service && group && Number.isSafeInteger(group.rotationCursor) && !stalePruneNeeded) {
                 const startIndex = parseInt(sha256(affinityKey).slice(0, 8), 16) % orderedAccountIds.length;

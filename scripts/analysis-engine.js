@@ -386,18 +386,22 @@ function sameReclaimMarker(left, right) {
         && left.value?.hostname === right.value?.hostname);
 }
 
-function reclaimMarkerIsStale(marker, staleMs) {
-    if (!marker || Date.now() - marker.mtimeMs <= staleMs) return false;
+const LOCAL_DEAD_RECLAIM_MARKER_GRACE_MS = 5000;
+
+function reclaimMarkerIsStale(marker, staleMs, options = {}) {
+    if (!marker) return false;
     const owner = marker.value;
     if (typeof owner?.hostname !== 'string' || !owner.hostname
         || !Number.isInteger(owner.pid) || owner.pid <= 0 || typeof owner.token !== 'string') return false;
-    if (!ownerIsOnThisMachine(owner)) return true;
-    try { process.kill(owner.pid, 0); return false; }
-    catch (error) {
-        if (error.code === 'ESRCH') return true;
-        if (error.code === 'EPERM') return false;
-        throw error;
+    const ageMs = Date.now() - marker.mtimeMs;
+    if (ownerIsOnThisMachine(owner)) {
+        if (!localOwnerIsConfirmedDead(owner)) return false;
+        const localDeadRecovery = options.recoveryPolicy === LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY
+            || options.recoveryPolicy === OPERATOR_CONFIRMED_DEAD_OPERATION_LOCK_RECOVERY;
+        if (localDeadRecovery) return ageMs > LOCAL_DEAD_RECLAIM_MARKER_GRACE_MS;
+        return ageMs > staleMs;
     }
+    return ageMs > staleMs;
 }
 
 function unlinkMatchingReclaimMarker(marker) {
@@ -407,7 +411,7 @@ function unlinkMatchingReclaimMarker(marker) {
     catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
-function acquireReclaimMarker(lockPath, staleMs, targetSnapshot, staleMarkerRemoved = false) {
+function acquireReclaimMarker(lockPath, staleMs, targetSnapshot, staleMarkerRemoved = false, options = {}) {
     const filename = path.join(lockPath, '.reclaiming.json');
     const value = { pid: process.pid, hostname: os.hostname(), token: crypto.randomUUID(),
         acquiredAt: new Date().toISOString(),
@@ -424,10 +428,10 @@ function acquireReclaimMarker(lockPath, staleMs, targetSnapshot, staleMarkerRemo
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
         const stale = readReclaimMarker(filename);
-        if (!staleMarkerRemoved && reclaimMarkerIsStale(stale, staleMs)) {
+        if (!staleMarkerRemoved && reclaimMarkerIsStale(stale, staleMs, options)) {
             const confirmed = readReclaimMarker(filename);
             if (sameReclaimMarker(stale, confirmed) && unlinkMatchingReclaimMarker(confirmed)) {
-                return acquireReclaimMarker(lockPath, staleMs, targetSnapshot, true);
+                return acquireReclaimMarker(lockPath, staleMs, targetSnapshot, true, options);
             }
         }
         return null;
@@ -440,7 +444,7 @@ function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
     const historicalDirectLegacyRecovery = historicalDirectRemoteLegacyLockMayReclaim(
         first, Date.now(), options
     );
-    const marker = acquireReclaimMarker(lockPath, staleMs, first);
+    const marker = acquireReclaimMarker(lockPath, staleMs, first, false, options);
     if (!marker) return false;
     try {
         const second = readFileLockSnapshot(lockPath);
@@ -2986,7 +2990,7 @@ async function analyzeBatchInternal(papers, options = {}) {
             }
             if (onPaperResultLocked) {
                 await onPaperResultLocked(paperForAnalysis, result);
-                if (checkpointFilePath && require('./lib/reader-candidate-transactions.js').hasDeferredReaderCandidate(paperForAnalysis)) {
+                if (result.success && checkpointFilePath && require('./lib/reader-candidate-transactions.js').hasDeferredReaderCandidate(paperForAnalysis)) {
                     const saved = readJsonFileStrict(checkpointFilePath);
                     const rows = Array.isArray(saved) ? saved : saved.papers;
                     const matched = rows.filter(item => normalizedId(item) === normalizedId(paperForAnalysis));

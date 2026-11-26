@@ -354,7 +354,7 @@ extension LibraryService {
             }
         }
         try data.write(to: cursor, options: [.atomic])
-        if relative.hasPrefix("desktop-details/articles/") {
+        if relative.hasPrefix("desktop-details/articles/") || relative.hasPrefix("desktop-details/papers/") {
             cachedDemoPaperIDs = nil
         }
     }
@@ -2959,6 +2959,7 @@ extension LibraryService {
         if let previous { try preserveRevision(previous, blogURL: paper.blogURL) }
         try preserveRevision(article, blogURL: paper.blogURL)
         try atomicWrite(try JSONEncoder().encode(article), to: cache)
+        cachedDemoPaperIDs = nil
         indexText(article)
         return article
     }

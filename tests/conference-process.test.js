@@ -2693,8 +2693,15 @@ test('会议保存完成状态失败时停止派发，并等待已经开始的�
     for (const companionAuthenticationFailure of [false, true]) {
         await t.test(companionAuthenticationFailure ? '保留同伴认证错误和带 cause 的写入错误' : '保留原写入错误和同伴成功结果', async t => {
             const f = fixture(t, 3);
+            const originalOpen = fs.openSync;
+            const originalClose = fs.closeSync;
             const originalWrite = fs.writeFileSync;
-            t.after(() => { fs.writeFileSync = originalWrite; });
+            const restoreFs = () => {
+                fs.openSync = originalOpen;
+                fs.closeSync = originalClose;
+                fs.writeFileSync = originalWrite;
+            };
+            t.after(restoreFs);
             const storageCause = Object.assign(new Error('测试模拟状态写入失败'), {
                 code: companionAuthenticationFailure ? 'EIO' : 'ENOSPC'
             });
@@ -2704,11 +2711,22 @@ test('会议保存完成状态失败时停止派发，并等待已经开始的�
                 code: 'AUTH_TEST_ONLY'
             });
             const failedPaperId = f.members[companionAuthenticationFailure ? 1 : 0].paperId;
+            const isStateTmp = target => typeof target === 'string' && path.basename(target).startsWith('.state.json.')
+                && target.startsWith(f.files.conferenceProcessDir + path.sep);
+            const stateTmpFds = new Set();
             let writesAttempted = 0;
             let injected = false;
+            fs.openSync = (target, ...args) => {
+                const fd = originalOpen(target, ...args);
+                if (isStateTmp(target)) stateTmpFds.add(fd);
+                return fd;
+            };
+            fs.closeSync = fd => {
+                stateTmpFds.delete(fd);
+                return originalClose(fd);
+            };
             fs.writeFileSync = (target, bytes, ...args) => {
-                if (typeof target === 'string' && path.basename(target).startsWith('.state.json.')
-                    && target.startsWith(f.files.conferenceProcessDir + path.sep)) {
+                if (isStateTmp(target) || stateTmpFds.has(target)) {
                     let next;
                     try { next = JSON.parse(bytes); } catch {}
                     if (next?.items?.[failedPaperId]?.status === 'complete') {
@@ -2737,7 +2755,7 @@ test('会议保存完成状态失败时停止派发，并等待已经开始的�
                     }
                 });
             } catch (error) { caught = error; }
-            finally { fs.writeFileSync = originalWrite; }
+            finally { restoreFs(); }
             assert.equal(injected, true);
             assert.ok(caught instanceof AggregateError);
             assert.ok(caught.errors.includes(writeFailure), '返回的错误集合必须保留实际写入异常对象');

@@ -41,16 +41,17 @@ function unpack(record) {
     return { bytes, sha256: record.sha256, value: JSON.parse(bytes) };
 }
 function usageRows(identity, since) {
+    const { listUsageLedgerFiles } = require('./llm-usage-ledger');
     const root = require('../config').FILES.llmUsageDir, rows = [];
     if (fs.lstatSync(root).isSymbolicLink()) fail('unsafe usage directory');
-    for (const basename of fs.readdirSync(root).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
-        const record = checked(path.join(root, basename)), event = record.value;
+    for (const entry of listUsageLedgerFiles(root)) {
+        const record = checked(entry.file), event = record.value;
         if (!['request', 'request_started'].includes(event.kind)
             || canonical(event.paperId) !== canonical(identity.paperId)
             || !['apiReaderArticle', 'apiReaderRepair'].includes(event.stage)) continue;
         const at = Date.parse(event.at);
         if (!Number.isFinite(at)) fail('unknown request time');
-        if (at >= since) rows.push({ basename, sha256: record.sha256, event });
+        if (at >= since) rows.push({ basename: entry.relativePath, sha256: record.sha256, event });
     }
     return rows.sort((a, b) => Date.parse(a.event.at) - Date.parse(b.event.at));
 }
@@ -172,9 +173,12 @@ function read(directory, parent) {
     const before = unpack(receipt.parentSnapshot), candidate = unpack(receipt.candidateSnapshot);
     if (before.sha256 !== grant.parentReceiptSha256 || candidate.sha256 !== grant.candidateEnvelopeSha256
         || hash(candidate.value.identity) !== grant.identitySha256 || hash(candidate.value.payload) !== grant.payloadSha256) fail('snapshot CAS differs');
+    const { isUsageLedgerFile, resolveUsageLedgerFile } = require('./llm-usage-ledger');
+    const usageDir = require('../config').FILES.llmUsageDir;
     const rows = grant.usage?.map(item => {
-        if (!/^[a-f0-9-]{36}\.json$/.test(item.basename || '') || !hex.test(item.sha256 || '')) fail('usage proof path differs');
-        return { ...item, event: checked(path.join(require('../config').FILES.llmUsageDir, item.basename), item.sha256).value };
+        const resolved = resolveUsageLedgerFile(usageDir, item?.basename || '');
+        if (!resolved || !isUsageLedgerFile(resolved, usageDir) || !hex.test(item.sha256 || '')) fail('usage proof path differs');
+        return { ...item, event: checked(resolved, item.sha256).value };
     });
     if (!Array.isArray(rows)) fail('missing real usage');
     const original = basis(before, candidate, directory, rows);
@@ -204,16 +208,16 @@ function paidAnchorFile(directory, roundId) {
     return path.join(path.dirname(location(directory, roundId)), roundId + '.consumed-paid-anchor.json');
 }
 function anchorPaidRows(files, identity, receipt, rawSha256) {
+    const { isUsageLedgerFile, resolveUsageLedgerFile } = require('./llm-usage-ledger');
     const root = path.resolve(require('../config').FILES.llmUsageDir);
     if (!Array.isArray(files) || files.length !== 3) fail('consumed paid anchor requires the original three saved fee records');
-    const { matchesRelocatedRepoPath } = require('./repo-rename-path');
     const rows = files.map(file => {
-        const base = typeof file?.file === 'string' ? path.basename(file.file) : '';
-        const dir = typeof file?.file === 'string' ? path.dirname(file.file) : '';
-        if (!matchesRelocatedRepoPath(dir, root) || !uuid.test(path.basename(base,'.json'))
-            || path.join(dir, base) !== file.file
-            || !hex.test(file.sha256 || '')) fail('consumed paid anchor fee path differs');
-        const record = checked(path.join(root, base), file.sha256); return { ...file, event: record.value };
+        const rawFile = typeof file?.file === 'string' ? file.file : '';
+        const resolved = rawFile && path.isAbsolute(rawFile) && path.resolve(rawFile) === rawFile
+            ? resolveUsageLedgerFile(root, rawFile)
+            : null;
+        if (!resolved || !isUsageLedgerFile(resolved, root) || !hex.test(file.sha256 || '')) fail('consumed paid anchor fee path differs');
+        const record = checked(resolved, file.sha256); return { ...file, event: record.value };
     });
     const starts = rows.filter(row => row.event.kind === 'request_started'), terminals = rows.filter(row => row.event.kind === 'request');
     const dispositions = rows.filter(row => row.event.kind === 'disposition');

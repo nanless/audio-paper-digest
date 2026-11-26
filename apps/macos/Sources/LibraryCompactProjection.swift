@@ -304,8 +304,31 @@ extension LibraryService {
         }
         if let state = activeDesktopDetails() {
             for (paperID, entry) in state.paperDetails where !hits.contains(paperID) {
-                let rel = "desktop-details/articles/\(entry.primaryArticleRevisionId).html"
-                if let hit = try? Self.verifiedOptionalLocalFile(relative: rel, directory: directory, maxBytes: Self.maxDesktopArticleBytes),
+                guard Self.isValidSHA256(entry.primaryDetail.sha256) else { continue }
+                let detailRel = "desktop-details/papers/\(entry.primaryDetail.sha256).json"
+                guard let detailHit = try? Self.verifiedOptionalLocalFile(
+                    relative: detailRel,
+                    directory: directory,
+                    expectedBytes: entry.primaryDetail.bytes,
+                    maxBytes: Self.maxDesktopDetailBytes,
+                    expectedSHA256: entry.primaryDetail.sha256
+                ),
+                      let detailObj = try? JSONSerialization.jsonObject(with: detailHit.bytes) as? [String: Any],
+                      let revObj = detailObj["articleRevision"] as? [String: Any],
+                      let descObj = revObj["articleDescriptor"] as? [String: Any],
+                      let articleSHA = descObj["sha256"] as? String,
+                      Self.isValidSHA256(articleSHA) else { continue }
+                let rel = "desktop-details/articles/\(articleSHA).html"
+                let expectedArticleBytes: Int? = (descObj["bytes"] as? NSNumber).flatMap {
+                    CFGetTypeID($0) != CFBooleanGetTypeID() ? $0.intValue : nil
+                }
+                if let hit = try? Self.verifiedOptionalLocalFile(
+                    relative: rel,
+                    directory: directory,
+                    expectedBytes: expectedArticleBytes,
+                    maxBytes: Self.maxDesktopArticleBytes,
+                    expectedSHA256: articleSHA
+                ),
                    let html = String(data: hit.bytes, encoding: .utf8),
                    html.contains("audio-demo-cta-btn") {
                     hits.insert(paperID)

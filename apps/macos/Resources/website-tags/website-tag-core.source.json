@@ -1,7 +1,7 @@
 {
-  "sourceRepository": "audio-paper-digest-blog",
+  "sourceRepository": "audio-research-portal",
   "sourcePath": "assets/js/tag-core.js",
-  "sourceCommit": "dbfba447cc5b4f697fb77ebbcb3d166f812186f8",
+  "sourceCommit": "ef496bcfdc77f66c9391b5e5c8d7dfbf6159ed2d",
   "sha256": "6254d324051e159fd85ef5c22a186feffce40c503792dd91cd6d6c2c0646d6da",
   "purpose": "Unmodified website classification display dependency"
 }

@@ -97,10 +97,13 @@ function validateHistory(directory, identity, payload) {
         if (hash(archived.identity) !== hash(history.identity) || archived.payloadSha256 !== hash(archived.payload)
             || !isEmpty(archived.payload) || archived.payload.transportFailures !== history.transportFailures)
             fail('archived empty failure differs');
+        const { isUsageLedgerFile, resolveUsageLedgerFile } = require('./llm-usage-ledger');
+        const usageDir = require('../config').FILES.llmUsageDir;
         let blockedAt=[],blockedEvents=[];
         for (const record of history.blockedUsage) {
-            if (!uuid.test(record.basename || '')) fail('usage filename differs');
-            const event = proof(path.join(require('../config').FILES.llmUsageDir, record.basename), record.sha256).value;
+            const resolved = resolveUsageLedgerFile(usageDir, record.basename || '');
+            if (!resolved || !isUsageLedgerFile(resolved, usageDir)) fail('usage filename differs');
+            const event = proof(resolved, record.sha256).value;
             if (!isUnsent(event) || event.paperId !== identity.paperId || event.runId !== identity.freshAnalysis.runId
                 || !['apiReaderArticle','apiReaderRepair'].includes(event.stage)
                 || event.model !== identity.model?.model || event.protocol !== identity.model?.protocol
@@ -109,8 +112,9 @@ function validateHistory(directory, identity, payload) {
             blockedAt.push(Date.parse(event.at));
             blockedEvents.push(event);
         }
-        if (!uuid.test(history.lastRealRequest.basename || '')) fail('last request filename differs');
-        const paid = proof(path.join(require('../config').FILES.llmUsageDir, history.lastRealRequest.basename), history.lastRealRequest.sha256).value;
+        const paidFile = resolveUsageLedgerFile(usageDir, history.lastRealRequest.basename || '');
+        if (!paidFile || !isUsageLedgerFile(paidFile, usageDir)) fail('last request filename differs');
+        const paid = proof(paidFile, history.lastRealRequest.sha256).value;
         if (paid.outcome !== 'completed' || paid.statusCode !== 200 || paid.transportStarted !== true
             || paid.paperId !== identity.paperId || paid.runId !== identity.freshAnalysis.runId
             || !['apiReaderArticle','apiReaderRepair'].includes(paid.stage)
@@ -133,8 +137,9 @@ function validateHistory(directory, identity, payload) {
             || paid.contentAttempt!==selected.attempts || selected.clearedNoProgress!==false)
             fail('last real request does not bind retained original paid counters');
         const pending=(history.pairedPendingUsage || []).map(record=>{
-            if (!uuid.test(record.basename || '')) fail('pending usage filename differs');
-            const event=proof(path.join(require('../config').FILES.llmUsageDir,record.basename),record.sha256).value;
+            const pendingFile = resolveUsageLedgerFile(usageDir, record.basename || '');
+            if (!pendingFile || !isUsageLedgerFile(pendingFile, usageDir)) fail('pending usage filename differs');
+            const event=proof(pendingFile,record.sha256).value;
             if (event.kind!=='request_started' || event.paperId!==identity.paperId || event.runId!==identity.freshAnalysis.runId
                 || !Number.isFinite(Date.parse(event.at)) || Date.parse(event.at)<=Date.parse(paid.at))
                 fail('paired pending history differs');
@@ -158,15 +163,16 @@ function withRecovery(directory, identity, callback) {
         }
     }
     if (!empty.length) return callback();
+    const { listUsageLedgerFiles, resolveUsageLedgerFile } = require('./llm-usage-ledger');
     const usageDirectory = require('../config').FILES.llmUsageDir, events = [], allEvents=[],allRecords=[];
-    for (const name of fs.readdirSync(usageDirectory).filter(name => uuid.test(name))) {
-        const record = proof(path.join(usageDirectory, name)), event = record.value;
+    for (const entry of listUsageLedgerFiles(usageDirectory)) {
+        const record = proof(entry.file), event = record.value;
         if (!['request','request_started'].includes(event.kind) || event.paperId !== identity.paperId || event.runId !== identity.freshAnalysis.runId
             || !['apiReaderArticle','apiReaderRepair'].includes(event.stage)) continue;
         const at = Date.parse(event.at); if (!Number.isFinite(at)) fail('request date is unavailable');
         allEvents.push(event);
-        allRecords.push({basename:name,sha256:record.sha256,event,at});
-        if (event.kind === 'request') events.push({ basename:name, sha256:record.sha256, event, at });
+        allRecords.push({file:entry.file,basename:entry.relativePath,sha256:record.sha256,event,at});
+        if (event.kind === 'request') events.push({ file:entry.file, basename:entry.relativePath, sha256:record.sha256, event, at });
     }
     events.sort((a,b) => a.at-b.at);
     if (events.some((event,index) => index && event.at === events[index-1].at)) fail('ambiguous request order');
@@ -175,7 +181,7 @@ function withRecovery(directory, identity, callback) {
         // Recheck the source/CAS and every real terminal before the unchanged
         // normal callback. This branch writes no archive, receipt or allowance.
         if (!safeScope(directory, identity)) fail('transport-only recovery lost its sealed source scope');
-        for (const record of allRecords) proof(path.join(usageDirectory, record.basename), record.sha256);
+        for (const record of allRecords) proof(record.file, record.sha256);
         const original = empty[0];
         if (repair.readFailedCandidateEnvelope(directory, null, original.filename)?.envelopeSha256 !== original.envelopeSha256)
             fail('transport-only empty CAS changed');
@@ -207,7 +213,7 @@ function withRecovery(directory, identity, callback) {
             .map(({basename,sha256})=>({basename,sha256})),
         lastRealRequest:{basename:real.basename,sha256:real.sha256} }));
     const current = { directory:path.resolve(directory), identity, empty, histories, real,
-        excluded:new Map(blocked.map(record => [path.join(usageDirectory,record.basename),record.sha256])),
+        excluded:new Map(blocked.map(record => [path.resolve(record.file),record.sha256])),
         installed:false };
     return scope.run(current, () => {
         const result = callback();
@@ -226,7 +232,7 @@ function suppressCandidate(directory, name) {
         && current.empty.some(item=>path.basename(item.filename)===name));
 }
 function excludedUsage(file, checked) {
-    return scope.getStore()?.excluded.get(file) === checked.sha256;
+    return scope.getStore()?.excluded.get(path.resolve(file)) === checked.sha256;
 }
 function beforeInstall(directory, identity, updated, selected) {
     const current=scope.getStore(); if (!current) return;
@@ -250,7 +256,9 @@ function beforeInstall(directory, identity, updated, selected) {
         history.selectedMigration=Object.fromEntries(['fromIdentitySha256','toIdentitySha256','oldEnvelopeSha256',
             'oldPayloadSha256','archivedName','attempts','fullAttempts','transportFailures','clearedNoProgress']
             .map(key=>[key,audit[key]]));
-        proof(path.join(require('../config').FILES.llmUsageDir,history.lastRealRequest.basename),history.lastRealRequest.sha256);
+        const lastRealFile = require('./llm-usage-ledger').resolveUsageLedgerFile(require('../config').FILES.llmUsageDir, history.lastRealRequest.basename);
+        if (!lastRealFile) fail('last request filename differs');
+        proof(lastRealFile, history.lastRealRequest.sha256);
         if (repair.readFailedCandidateEnvelope(directory,null,original.filename)?.envelopeSha256!==original.envelopeSha256)
             fail('empty CAS changed');
         const archived=path.join(directory,history.archivedName);

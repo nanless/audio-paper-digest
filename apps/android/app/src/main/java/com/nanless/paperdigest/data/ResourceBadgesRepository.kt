@@ -1,6 +1,8 @@
 package com.nanless.paperdigest.data
 
 import com.nanless.paperdigest.protocols.ClientProtocols
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
@@ -35,6 +37,7 @@ class ResourceBadgesRepository(
     private val transport: (suspend (String, Int) -> HttpBytes)? = null,
 ) {
     private val publishedHttp by lazy { SafeHttp.publishedSite() }
+    private val loadMutex = Mutex()
     @Volatile private var loaded: Boolean = false
     @Volatile private var cachedSignals: Map<String, ResourceBadgeSignals>? = null
 
@@ -51,31 +54,36 @@ class ResourceBadgesRepository(
         val desktopArticlesDir = File(publishedLibraryDir, "desktop-details/articles")
         val desktopPapersDir = File(publishedLibraryDir, "desktop-details/papers")
         if (desktopArticlesDir.isDirectory && desktopPapersDir.isDirectory) {
-            val demoRevisions = hashSetOf<String>()
+            val demoArticleShas = hashSetOf<String>()
             desktopArticlesDir.listFiles()?.filter { it.isFile && it.name.endsWith(".html") }?.forEach { htmlFile ->
                 if (htmlFile.length() > 16L * 1024L * 1024L) return@forEach
                 val raw = runCatching { htmlFile.readText(Charsets.UTF_8) }.getOrNull() ?: return@forEach
                 if (raw.contains("audio-demo-cta-btn")) {
-                    demoRevisions.add(htmlFile.name.removeSuffix(".html"))
+                    demoArticleShas.add(htmlFile.name.removeSuffix(".html"))
                 }
             }
-            if (demoRevisions.isNotEmpty()) {
+            if (demoArticleShas.isNotEmpty()) {
                 desktopPapersDir.listFiles()?.filter { it.isFile && it.name.endsWith(".json") }?.forEach { detailFile ->
                     if (detailFile.length() > 2L * 1024L * 1024L) return@forEach
                     val obj = runCatching { JSONObject(detailFile.readText(Charsets.UTF_8)) }.getOrNull() ?: return@forEach
-                    val revId = obj.optJSONObject("articleRevision")?.nullableString("articleRevisionId").orEmpty()
-                    val pid = obj.nullableString("paperId").orEmpty()
-                    if (revId in demoRevisions && pid.isNotEmpty()) hits.add(pid)
+                    val articleSha = obj.optJSONObject("articleRevision")
+                        ?.optJSONObject("articleDescriptor")
+                        ?.nullableString("sha256")
+                        .orEmpty()
+                    val pid = obj.nullableString("paperId")?.takeIf { it.isNotBlank() }
+                        ?: obj.nullableString("appearanceId")?.takeIf { it.isNotBlank() }?.let { "page:$it" }
+                        ?: ""
+                    if (articleSha in demoArticleShas && pid.isNotEmpty()) hits.add(pid)
                 }
             }
         }
         return hits
     }
 
-    suspend fun load(forceRefresh: Boolean = false, offlineMode: Boolean = false): ResourceBadgesResult {
+    suspend fun load(forceRefresh: Boolean = false, offlineMode: Boolean = false): ResourceBadgesResult = loadMutex.withLock {
         val demoIds = scanCachedAudioDemoPaperIds()
         if (offlineMode || (!forceRefresh && loaded)) {
-            return ResourceBadgesResult(
+            return@withLock ResourceBadgesResult(
                 available = cachedSignals != null,
                 papers = cachedSignals.orEmpty(),
                 cachedDemoIds = demoIds,
@@ -90,7 +98,7 @@ class ResourceBadgesRepository(
         if (response.code == 404 || response.code == 410) {
             cachedSignals = null
             loaded = true
-            return ResourceBadgesResult(available = false, papers = emptyMap(), cachedDemoIds = demoIds)
+            return@withLock ResourceBadgesResult(available = false, papers = emptyMap(), cachedDemoIds = demoIds)
         }
         if (response.code != 200) {
             throw AppFailure("http", "开源与资源信号索引返回 HTTP ${response.code}。")
@@ -98,7 +106,7 @@ class ResourceBadgesRepository(
         val parsed = parseIndex(response.bytes)
         cachedSignals = parsed
         loaded = true
-        return ResourceBadgesResult(available = true, papers = parsed, cachedDemoIds = demoIds)
+        return@withLock ResourceBadgesResult(available = true, papers = parsed, cachedDemoIds = demoIds)
     }
 
     companion object {

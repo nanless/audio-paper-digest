@@ -25,6 +25,11 @@ def _trusted_renderers():
     if not re.fullmatch(r'[a-f0-9]{40}|[a-f0-9]{64}', head):
         raise ValueError('SVG renderer Git commit is invalid')
     revisions = _git('rev-list', '--max-count=32', head, '--', RENDERER_PATH).decode().splitlines()
+    worktree_digest = None
+    try:
+        worktree_digest = hashlib.sha256((REPOSITORY / RENDERER_PATH).read_bytes()).hexdigest()
+    except OSError:
+        worktree_digest = None
     seen = set()
     for commit in dict.fromkeys([head, *revisions]):
         blob = _git('rev-parse', f'{commit}:{RENDERER_PATH}').decode().strip()
@@ -37,12 +42,16 @@ def _trusted_renderers():
         if digest in seen:
             continue
         seen.add(digest)
+        if commit == head and worktree_digest is not None and digest == worktree_digest:
+            continue
         yield code, {'gitCommitOid': commit, 'rendererBlobOid': blob,
                     'rendererSha256': digest}
 
 
 def replay_saved_inline_svg_pixels(raw, expected_sha256, *, contract=None):
-    from reader_inline_svg import validate_svg, render_svg, MAX_OUTPUT_BYTES, CONTRACT as V2_CONTRACT
+    from reader_inline_svg import (
+        UnsupportedSvgDependency, validate_svg, render_svg, MAX_OUTPUT_BYTES, CONTRACT as V2_CONTRACT,
+    )
     if not re.fullmatch(r'[a-f0-9]{64}', str(expected_sha256 or '')):
         raise ValueError('Saved SVG pixel SHA is invalid')
     # The current security validator still gates every historical producer.
@@ -54,19 +63,31 @@ def replay_saved_inline_svg_pixels(raw, expected_sha256, *, contract=None):
                 v2_actual = render_svg(raw, hidpi=True, deterministic_v2=True)
                 if hashlib.sha256(v2_actual).hexdigest() == expected_sha256:
                     return v2_actual, None
+            except (UnsupportedSvgDependency, ValueError):
+                if contract == V2_CONTRACT:
+                    raise
+                break
             except Exception:
                 if contract == V2_CONTRACT and attempt + 1 >= v2_attempts:
                     raise
                 if contract != V2_CONTRACT:
                     break
-    actual = render_svg(raw)
-    if hashlib.sha256(actual).hexdigest() == expected_sha256:
-        return actual, None
+    try:
+        actual = render_svg(raw)
+        if hashlib.sha256(actual).hexdigest() == expected_sha256:
+            return actual, None
+    except Exception:
+        pass
     # macOS Chromium HiDPI rasterization can occasionally vary by a few subpixel AA bytes
     # across launches; retry the exact current renderer a bounded number of times while
     # still requiring an exact byte-for-byte SHA-256 match.
     for _ in range(24):
-        hidpi_actual = render_svg(raw, hidpi=True)
+        try:
+            hidpi_actual = render_svg(raw, hidpi=True)
+        except (UnsupportedSvgDependency, ValueError):
+            break
+        except Exception:
+            continue
         if hashlib.sha256(hidpi_actual).hexdigest() == expected_sha256:
             return hidpi_actual, None
     for code, provenance in _trusted_renderers():

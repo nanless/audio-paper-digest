@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Paper Digest 发布公共模块 (Python)
+Audio Research Workbench 发布公共模块 (Python)
 统一封装：数据加载、评分排序、标签提取、格式化工具
 三流程共用的发布请求、来源核验与审查工具
 """
@@ -326,10 +326,12 @@ def _is_table_identifier_header(value):
     if raw_header.strip() == '对比':
         return False
     normalized = raw_header.strip()
+    if re.fullmatch(r'推理窗长', normalized):
+        return True
     if re.fullmatch(r'(?:(?:检验|统计检验)?统计量|统计检验结果|(?:F|t|z|χ²)\s*统计量|(?:test\s+)?statistics?|[Ftzp][ -]?(?:values?|statistics?))', normalized, flags=re.IGNORECASE):
         return False
     # 与 Node 显式列出的训练条件识别符保持一致。
-    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|评测对象|量化水平|操作|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|(?:潜|隐|表征|嵌入|特征|语义)空间|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r'(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|选择器|selector|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比|对比对象|评测对象|量化水平|操作|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|(?:潜|隐|表征|嵌入|特征|语义)空间|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
         return True
     if not normalized:
         return True
@@ -5633,14 +5635,40 @@ def validate_manual_reader_quality(analysis):
         ),
         re.compile(r'(?:\d+(?:\.\d+)?(?:D|B|K|M|G|bit|DoF|FPS|Vpp|MHz|GB|TB))(?=[\u4e00-\u9fff])', re.I),
     )
+    def _mask_non_newlines(match):
+        return re.sub(r'[^\r\n]', ' ', match.group(0))
+
     for section, body in sections.items():
         body = unicodedata.normalize('NFKC', body)
+        # 等长空格屏蔽围栏代码、行内代码、LaTeX 公式、URL 与百分号，避免
+        # 代码/公式/链接触发中文数值排版规则，同时保持其余字符偏移不变。
+        typography_body = re.sub(
+            r'(?m)^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]{0,3}\1[ \t]*$|\Z)',
+            _mask_non_newlines,
+            body,
+        )
+        inline_spans = markdown_inline_code_ranges(typography_body)
+        if inline_spans:
+            chars = list(typography_body)
+            for span_start, span_end in inline_spans:
+                for idx in range(span_start, span_end):
+                    if chars[idx] not in ('\r', '\n'):
+                        chars[idx] = ' '
+            typography_body = ''.join(chars)
+        typography_body = re.sub(
+            r'(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\\\[[\s\S]*?\\\]|'
+            r'(?<!\\)\$\$[\s\S]*?(?<!\\)\$\$|'
+            r'(?<![\\$])\$(?!\$)[^\s$\n](?:[^$\n]*?[^\s$\n])?(?<!\\)\$(?![\d$])|'
+            r'https?://[^\s<>()\[\]]+',
+            _mask_non_newlines,
+            typography_body,
+        )
         # 百分号属于数值本身；“前10% / 提升19.5%”保留中文常用写法，
         # 不交给连接词粘连规则。等长屏蔽避免改变其余诊断位置。
         typography_body = re.sub(
             r'(?:[\u4e00-\u9fff])?[-+]?\d+(?:\.\d+)?\s*%',
             lambda match: ' ' * len(match.group(0)),
-            body,
+            typography_body,
         )
         # 这段归一化要与 editorial-quality.js/findQuantitativeChineseNumerals 保持
         # 一致。Markdown 标题是给读者看的标签，不是实证结论（例如“从 306 通道
@@ -7261,8 +7289,10 @@ STAGE_REASONING_EFFORT_TIERS = {
     'openSourceScan': 'minimal',
     'tagSelection': 'minimal',
     'apiReaderConceptTerms': 'minimal',
+    'apiReaderImageProbe': 'minimal',
     'repair_review_payload': 'minimal',
     'dailyFilter': 'low',
+    'conference-filter': 'low',
     'publish.text': 'low',
     'publish.review_text': 'low',
     'publish.index_text': 'low',
@@ -7342,6 +7372,15 @@ def parse_publish_sse_response(raw_text):
             else:
                 fallback_status = event_type.split('.', 1)[1]
                 terminal_failure = event if event.get('status') else {**event, 'status': fallback_status}
+        elif event_type == 'error':
+            error_obj = event.get('error')
+            terminal_failure = {
+                'status': 'failed',
+                'error': error_obj if isinstance(error_obj, dict) else {
+                    'message': str(event.get('message') or error_obj or 'SSE error event'),
+                    'code': event.get('code'),
+                },
+            }
     if terminal_failure is not None:
         return terminal_failure
     if completed is not None:
@@ -7466,6 +7505,7 @@ def _sanitize_publish_llm_error(value, api_keys=()):
             text = text.replace(str(secret), '[REDACTED]')
     text = re.sub(r'\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+', '[REDACTED]', text,
                   flags=re.IGNORECASE)
+    text = re.sub(r'(://)[^/@\s]+@', r'\1[REDACTED]@', text)
     return text[:1200]
 
 
@@ -7552,20 +7592,36 @@ def _open_publish_json_with_account_pool(
                 is_streamed_responses = (api_type == 'openai_responses' and payload.get('stream') is True)
                 response_limit = 16 * 1024 * 1024 if is_streamed_responses else 2 * 1024 * 1024
                 read_deadline = started + float(timeout)
+                raw_sock = None
+                fp_obj = getattr(response, 'fp', None)
+                if fp_obj is not None:
+                    raw_sock = getattr(getattr(fp_obj, 'raw', None), '_sock', None) or getattr(fp_obj, '_sock', None)
+
+                def _tighten_read_socket_timeout():
+                    remaining_read = read_deadline - time.monotonic()
+                    if remaining_read <= 0:
+                        raise TimeoutError(f'LLM 响应读取超过 {timeout}s 总墙钟上限')
+                    if raw_sock is not None and hasattr(raw_sock, 'settimeout'):
+                        try:
+                            raw_sock.settimeout(max(0.05, remaining_read))
+                        except OSError:
+                            pass
+
                 if is_streamed_responses and isinstance(response, http.client.HTTPResponse):
                     chunks = []
                     total_read = 0
                     while total_read <= response_limit:
-                        if time.monotonic() > read_deadline:
-                            raise TimeoutError(f'LLM 响应读取超过 {timeout}s 总墙钟上限')
+                        _tighten_read_socket_timeout()
                         want = min(65536, response_limit + 1 - total_read)
-                        chunk = response.read(want)
+                        read_fn = getattr(response, 'read1', None)
+                        chunk = read_fn(want) if callable(read_fn) else response.read(want)
                         if not chunk:
                             break
                         chunks.append(chunk)
                         total_read += len(chunk)
                     raw_response = b''.join(chunks)
                 else:
+                    _tighten_read_socket_timeout()
                     raw_response = response.read(response_limit + 1)
                     if time.monotonic() > read_deadline:
                         raise TimeoutError(f'LLM 响应读取超过 {timeout}s 总墙钟上限')
@@ -7609,7 +7665,17 @@ def _open_publish_json_with_account_pool(
                 f'已确认额度耗尽{limit_name}，冷却至 {blocked_until}'
             )
         except Exception as exc:
-            usage_error = type(exc).__name__
+            inner_exc = (
+                exc.reason
+                if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, BaseException)
+                else exc
+            )
+            custom_code = getattr(inner_exc, 'code', None) or getattr(exc, 'code', None)
+            usage_error = (
+                str(custom_code)
+                if isinstance(custom_code, str) and custom_code
+                else type(inner_exc).__name__
+            )
             raise
         finally:
             try:
@@ -7846,6 +7912,7 @@ def call_publish_llm_api(
                     usage_directory=usage_directory,
                 )
             content = parse_publish_response_text(api_type, data)
+            reasoning_tokens = 0
             if api_type == 'anthropic':
                 finish_reason = data.get('stop_reason')
                 content_blocks = data.get('content') if isinstance(data.get('content'), list) else []
@@ -7863,11 +7930,21 @@ def call_publish_llm_api(
                     for summary in item.get('summary') or []
                     if isinstance(summary, dict)
                 )
+                usage_obj = data.get('usage') if isinstance(data.get('usage'), dict) else {}
+                output_details = usage_obj.get('output_tokens_details') if isinstance(usage_obj.get('output_tokens_details'), dict) else {}
+                raw_reasoning_tokens = output_details.get('reasoning_tokens')
+                if isinstance(raw_reasoning_tokens, int) and not isinstance(raw_reasoning_tokens, bool) and raw_reasoning_tokens > 0:
+                    reasoning_tokens = raw_reasoning_tokens
             else:
                 choice = (data.get('choices') or [{}])[0] or {}
                 finish_reason = choice.get('finish_reason')
                 message = choice.get('message') or {}
                 reasoning_chars = len(str(message.get('reasoning_content') or ''))
+                usage_obj = data.get('usage') if isinstance(data.get('usage'), dict) else {}
+                comp_details = usage_obj.get('completion_tokens_details') if isinstance(usage_obj.get('completion_tokens_details'), dict) else {}
+                raw_reasoning_tokens = comp_details.get('reasoning_tokens')
+                if isinstance(raw_reasoning_tokens, int) and not isinstance(raw_reasoning_tokens, bool) and raw_reasoning_tokens > 0:
+                    reasoning_tokens = raw_reasoning_tokens
             response_status = data.get('status') if api_type == 'openai_responses' else None
             # 兼容未提供终态的旧网关；明确返回的失败、未完成或截断状态
             # 必须先检查，即使正文看起来是完整 JSON，也不能当作成功。
@@ -7905,7 +7982,7 @@ def call_publish_llm_api(
                 and (response_status is None or response_status == 'incomplete')
             )
             if can_recover_empty_output:
-                if structured_output and reasoning_chars > 0:
+                if structured_output and (reasoning_chars > 0 or reasoning_tokens > 0):
                     if structured_recovery_used:
                         print(
                             f'  [publish-api] ⛔ {context} 结构化响应再次被隐藏推理耗尽，'
@@ -7956,8 +8033,9 @@ def call_publish_llm_api(
             if isinstance(exc, _PublishLLMRedirectError):
                 # An explicit redirect denial is terminal, not a transport retry.
                 break
-            if exc.code in (400, 422):
-                # Deterministic client payload/schema errors will not succeed on identical retries.
+            if 400 <= exc.code < 500 and exc.code not in (401, 403, 408, 409, 425, 429):
+                # Deterministic client payload/schema/resource errors will not succeed on identical retries;
+                # keep bounded retry on non-Go 401/403 per redirect-security contract (Go 401 already aborts above).
                 break
         except (
             LlmUsagePersistenceError,
@@ -8683,10 +8761,63 @@ def fix_latex_delimiters(text):
     return ''.join(output)
 
 
+def _split_starting_frontmatter(text):
+    """只切分文首真正的 YAML frontmatter（支持 LF 与 CRLF），不触碰正文中的 --- 分隔线。"""
+    value = str(text or '')
+    match = re.match(r'\A(---\r?\n)(?:([\s\S]*?)(\r?\n))?(---(?:\r?\n|\Z))', value)
+    if not match:
+        return '', '', '', '', value
+    return (
+        match.group(1),
+        match.group(2) or '',
+        match.group(3) or '',
+        match.group(4),
+        value[match.end():],
+    )
+
+
+def _protect_markdown_fences(text, marker_prefix, protected_fences):
+    """按 CommonMark 围栏规则保护 ``` 与 ~~~ 代码块，避免内部文本被正则误改。"""
+    lines = str(text or '').splitlines(keepends=True)
+    output = []
+    fence = None
+    buf = []
+    for line in lines:
+        marker = re.match(r'^[ \t]{0,3}(`{3,}|~{3,})', line)
+        if fence is None:
+            if marker:
+                token = marker.group(1)
+                fence = (token[0], len(token))
+                buf = [line]
+            else:
+                output.append(line)
+        else:
+            buf.append(line)
+            if (
+                marker
+                and marker.group(1)[0] == fence[0]
+                and len(marker.group(1)) >= fence[1]
+                and not line[marker.end():].strip()
+            ):
+                protected_fences.append(''.join(buf))
+                output.append(f'{marker_prefix}FENCE_{len(protected_fences) - 1}_END')
+                fence = None
+                buf = []
+    if buf:
+        protected_fences.append(''.join(buf))
+        output.append(f'{marker_prefix}FENCE_{len(protected_fences) - 1}_END')
+    return ''.join(output)
+
+
 def escape_html_like_tags(text):
     r"""转义论文中可能被 Hugo 解析为 HTML 的标记。"""
     if not text:
         return text
+    marker_prefix = 'PD_PUBLISH_HTML_LITERAL_'
+    while marker_prefix in text:
+        marker_prefix += 'X'
+    protected_fences = []
+    text = _protect_markdown_fences(text, marker_prefix, protected_fences)
     # 幂等：只把自己上次产出的、且会被下方规则重新转义的实体还原成字面尖括号
     # （含空白的迷你记号、形如 <EOT> 的控制记号）。比较用的 &lt;1 这类实体保持原样，
     # 否则二次调用会把它变成裸 <，与保存稿比较时判成渲染结果不一致。
@@ -8720,18 +8851,25 @@ def escape_html_like_tags(text):
         text,
     )
     protected_code = []
-    marker_prefix = 'PD_PUBLISH_HTML_LITERAL_'
-    while marker_prefix in text:
-        marker_prefix += 'X'
 
     def protect_inline_code(match):
         protected_code.append(match.group(0))
         return f'{marker_prefix}CODE_{len(protected_code) - 1}_END'
 
-    # 先保护完整的单行行内代码段，再去找原始 HTML 式标签。否则像
-    # `` `turn off <EOT>` `` 这样的合法代码段会被当成正文，标签处理再插一对
+    # 先保护完整的行内代码段（包含多行代码 span 与单行反引号），再去找原始 HTML 式标签。
+    # 否则像 `` `turn off <EOT>` `` 这样的合法代码段会被当成正文，标签处理再插一对
     # 反引号，得到非法的 `` `turn off `<EOT>`` 形态。
-    text = re.sub(r'(?<!`)(`+)(?!`)([^`\n]*?)\1(?!`)', protect_inline_code, text)
+    inline_spans = markdown_inline_code_ranges(text)
+    if inline_spans:
+        rebuilt = []
+        cursor = 0
+        for span_start, span_end in inline_spans:
+            rebuilt.append(text[cursor:span_start])
+            protected_code.append(text[span_start:span_end])
+            rebuilt.append(f'{marker_prefix}CODE_{len(protected_code) - 1}_END')
+            cursor = span_end
+        rebuilt.append(text[cursor:])
+        text = ''.join(rebuilt)
     # ``publish-to-blog.py`` 为可折叠的评分区刻意输出这两个不含属性的容器
     # 标签。要在下面通用的论文记号转义之前保护它们；否则后面的通用转义会把
     # 我们自己的 UI 标记（``<details>``）变成行内代码，评分区不再折叠。
@@ -8765,6 +8903,8 @@ def escape_html_like_tags(text):
         text
     )
     literals = {
+        **{f'{marker_prefix}FENCE_{index}_END': fence
+           for index, fence in enumerate(protected_fences)},
         **{f'{marker_prefix}CONTAINER_{index}_END': tag
            for index, tag in enumerate(safe_containers)},
         **{f'{marker_prefix}CODE_{index}_END': code
@@ -8772,7 +8912,7 @@ def escape_html_like_tags(text):
     }
     # Restore whole tokens once: a token for index 1 must never replace the
     # prefix of index 10, and original literal marker text must stay literal.
-    text = re.sub(re.escape(marker_prefix) + r'(?:CODE|CONTAINER)_\d+_END',
+    text = re.sub(re.escape(marker_prefix) + r'(?:FENCE|CODE|CONTAINER)_\d+_END',
                   lambda match: literals[match.group(0)], text)
     return text
 
@@ -8813,28 +8953,67 @@ def truncate_base64_datauri(text, max_chars=50000):
 
 
 def fix_yaml_double_commas(text):
-    r"""修复 YAML frontmatter 中的双逗号问题。"""
+    r"""修复文首 YAML frontmatter 中 tags/categories 流式数组行的双逗号问题。"""
     if not text:
         return text
-    parts = text.split('---\n', 2)
-    if len(parts) >= 3:
-        frontmatter = parts[1]
-        frontmatter = re.sub(r',\s*,+', ',', frontmatter)
-        frontmatter = re.sub(r'tags:\s*\[([^\]]*?),\s*\]', r'tags: [\1]', frontmatter)
-        text = parts[0] + '---\n' + frontmatter + '---\n' + parts[2]
-    return text
+    opening, frontmatter, sep, closing, body = _split_starting_frontmatter(text)
+    if not opening:
+        return text
+    changed = False
+    fixed_lines = []
+    for line in frontmatter.splitlines(keepends=True):
+        if re.match(r'^[ \t]*(?:tags|categories)[ \t]*:[ \t]*\[.*\][ \t]*\r?\n?$', line):
+            updated = re.sub(r',\s*,+', ',', line)
+            updated = re.sub(r',\s*\]', ']', updated)
+            if updated != line:
+                changed = True
+                line = updated
+        fixed_lines.append(line)
+    if not changed:
+        return text
+    return opening + ''.join(fixed_lines) + sep + closing + body
 
 
 def strip_raw_inline_html(text):
-    r"""去掉裸行内 HTML 样式标签，避免 Hugo/浏览器误渲染。"""
+    r"""去掉裸行内 HTML 样式标签（b/i/u），保护代码块与行内代码，不跨行匹配。"""
     if not text:
         return text
-    return re.sub(
-        r'<(s|e|b|i|u)(?:\s+[^>]*)?>(.*?)</\1>',
+    marker_prefix = 'PD_PUBLISH_INLINE_HTML_'
+    while marker_prefix in text:
+        marker_prefix += 'X'
+    protected_fences = []
+    working = _protect_markdown_fences(text, marker_prefix, protected_fences)
+    protected_code = []
+    inline_spans = markdown_inline_code_ranges(working)
+    if inline_spans:
+        rebuilt = []
+        cursor = 0
+        for span_start, span_end in inline_spans:
+            rebuilt.append(working[cursor:span_start])
+            protected_code.append(working[span_start:span_end])
+            rebuilt.append(f'{marker_prefix}CODE_{len(protected_code) - 1}_END')
+            cursor = span_end
+        rebuilt.append(working[cursor:])
+        working = ''.join(rebuilt)
+    working = re.sub(
+        r'<(b|i|u)(?:\s+[^>\n]*)?>([^\n]*?)</\1>',
         lambda m: m.group(2),
-        text,
-        flags=re.IGNORECASE | re.DOTALL
+        working,
+        flags=re.IGNORECASE,
     )
+    literals = {
+        **{f'{marker_prefix}FENCE_{index}_END': fence
+           for index, fence in enumerate(protected_fences)},
+        **{f'{marker_prefix}CODE_{index}_END': code
+           for index, code in enumerate(protected_code)},
+    }
+    if literals:
+        working = re.sub(
+            re.escape(marker_prefix) + r'(?:FENCE|CODE)_\d+_END',
+            lambda match: literals[match.group(0)],
+            working,
+        )
+    return working
 
 
 def fix_extraction_diacritic_damage(text):
@@ -8845,12 +9024,32 @@ def fix_extraction_diacritic_damage(text):
     Concrète → "Concr`ete"）。行内成对的反引号才是代码边界；字母夹住且
     左侧词干不是代码闭合符的反引号属于提取损伤，会打开永不闭合的代码段，
     最终 Markdown 检查会因此失败。此处只删除这类损伤反引号，并清理同源的
-    游离锐音符与"空格 + 组合音标"孤儿，不触碰合法的成对行内代码。
+    游离锐音符与"空格 + 组合音标"孤儿，不触碰 YAML frontmatter、围栏代码
+    和合法的成对行内代码。
     """
     if not text:
         return text
+    opening, frontmatter, sep, closing, body = _split_starting_frontmatter(text)
+    prefix = opening + frontmatter + sep + closing
+    marker_prefix = 'PD_PUBLISH_DIACRITIC_'
+    while marker_prefix in body:
+        marker_prefix += 'X'
+    protected_fences = []
+    working = _protect_markdown_fences(body, marker_prefix, protected_fences)
+    protected_code = []
+    inline_spans = markdown_inline_code_ranges(working)
+    if inline_spans:
+        rebuilt = []
+        cursor = 0
+        for span_start, span_end in inline_spans:
+            rebuilt.append(working[cursor:span_start])
+            protected_code.append(working[span_start:span_end])
+            rebuilt.append(f'{marker_prefix}CODE_{len(protected_code) - 1}_END')
+            cursor = span_end
+        rebuilt.append(working[cursor:])
+        working = ''.join(rebuilt)
     repaired_lines = []
-    for line in str(text).split('\n'):
+    for line in str(working).split('\n'):
         removals = []
         for match in re.finditer(r'([A-Za-z]+)`([A-Za-z]+)', line):
             run_start = match.start(1)
@@ -8864,19 +9063,31 @@ def fix_extraction_diacritic_damage(text):
             line = line[:index] + line[index + 1:]
         line = re.sub(r'(?<=[A-Za-z])´(?=[A-Za-z])', '', line)
         repaired_lines.append(line)
-    text = '\n'.join(repaired_lines)
+    working = '\n'.join(repaired_lines)
     # 提取器会把重音撕成“空格 + 组合音标”的孤儿。锐音/扬抑符（U+0300/U+0301）
     # 处于这种孤儿位置时是撕裂的字母重音，连同空格一起删除即可还原干净拼写
     # （Yorub ́a → Yoruba）；其余组合符（如数学 tilde “ ̃vf”）只去掉游离标记
     # 本身并保留空格，避免 where ̃vf 被粘成 wherevf。数学否定斜线
     # U+0337/U+0338 有独立语义，即使提取时出现在空格后也必须原样保留。
-    text = re.sub(
+    working = re.sub(
         r' [̀-ͯ]',
         lambda match: match.group(0) if match.group(0)[1] in '\u0337\u0338'
         else ('' if match.group(0)[1] in '̀́' else ' '),
-        text,
+        working,
     )
-    return text
+    literals = {
+        **{f'{marker_prefix}FENCE_{index}_END': fence
+           for index, fence in enumerate(protected_fences)},
+        **{f'{marker_prefix}CODE_{index}_END': code
+           for index, code in enumerate(protected_code)},
+    }
+    if literals:
+        working = re.sub(
+            re.escape(marker_prefix) + r'(?:FENCE|CODE)_\d+_END',
+            lambda match: literals[match.group(0)],
+            working,
+        )
+    return prefix + working
 
 
 def fix_empty_markdown_links(text):
@@ -8937,24 +9148,40 @@ def normalize_arxiv_math_double_extraction(text):
 
 
 def fix_yaml_unbalanced_quotes(text):
-    r"""修复 frontmatter 中未闭合双引号。"""
+    r"""修复文首 YAML frontmatter 中未闭合双引号（忽略转义引号，不触碰正文横线）。"""
     if not text:
         return text
-    parts = text.split('---\n', 2)
-    if len(parts) < 3:
+    opening, frontmatter, sep, closing, body = _split_starting_frontmatter(text)
+    if not opening:
         return text
+    unescaped_quote_re = re.compile(r'(?<!\\)(?:\\\\)*"')
     fixed_lines = []
     changed = False
-    for line in parts[1].split('\n'):
-        if ':' in line and '"' in line and line.count('"') % 2 != 0 and '[' not in line and ']' not in line:
+    for raw_line in frontmatter.splitlines(keepends=True):
+        ending = ''
+        if raw_line.endswith('\r\n'):
+            line, ending = raw_line[:-2], '\r\n'
+        elif raw_line.endswith('\n'):
+            line, ending = raw_line[:-1], '\n'
+        else:
+            line = raw_line
+        if (
+            ':' in line
+            and '"' in line
+            and len(unescaped_quote_re.findall(line)) % 2 != 0
+            and '[' not in line
+            and ']' not in line
+        ):
             key, value = line.split(':', 1)
-            fixed_lines.append(f"{key}: {json.dumps(value.strip().strip(chr(34)), ensure_ascii=False)}")
+            fixed_lines.append(
+                f"{key}: {json.dumps(value.strip().strip(chr(34)), ensure_ascii=False)}{ending}"
+            )
             changed = True
         else:
-            fixed_lines.append(line)
+            fixed_lines.append(raw_line)
     if not changed:
         return text
-    return parts[0] + '---\n' + '\n'.join(fixed_lines) + '---\n' + parts[2]
+    return opening + ''.join(fixed_lines) + sep + closing + body
 
 
 def strip_internal_scoring_anchors(text):
@@ -9134,11 +9361,13 @@ def escape_technical_notation_asterisks(text):
     把这个记号与周围的粗体标记配成一对。YAML frontmatter 保持字节不变，
     因为双引号 YAML 标量里的反斜杠会改变含义。这个操作是幂等的。
     """
-    frontmatter_match = re.match(r'^---\n.*?\n---\n', str(text or ''), flags=re.DOTALL)
-    prefix = frontmatter_match.group(0) if frontmatter_match else ''
-    body = str(text or '')[len(prefix):]
+    opening, frontmatter, sep, closing, body = _split_starting_frontmatter(text)
+    prefix = opening + frontmatter + sep + closing
     literal_kern = re.compile(r'(?<![A-Za-z0-9_\\*])\*\*kern(?![A-Za-z0-9_*])')
-    protected = markdown_inline_code_ranges(body)
+    code_math_url_protected = markdown_inline_code_ranges(body)
+    code_math_url_protected.extend((match.start(), match.end()) for match in re.finditer(
+        r'(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\\\[[\s\S]*?\\\]|https?://[^\s<>]+', body))
+    protected = list(code_math_url_protected)
     # Use the same closed **...** shape as the format gate, with nonblank
     # content edges, permitting a soft line break and nested single emphasis.
     # Never cross a blank paragraph or an intervening double-star delimiter;
@@ -9152,8 +9381,6 @@ def escape_technical_notation_asterisks(text):
         r'(?<![\\*])\*\*(?=\S)(?:(?!\r?\n[ \t]*\r?\n)[^*])+?'
         r'(?<!\\)\*(?!\*)(?=\S)(?:(?!\r?\n[ \t]*\r?\n)[^*])+?'
         r'(?<!\\)(?<=\S)\*{3}(?!\*)', body))
-    protected.extend((match.start(), match.end()) for match in re.finditer(
-        r'(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\\\[[\s\S]*?\\\]|https?://[^\s<>]+', body))
     output = []
     fence = None
     offset = 0
@@ -9170,10 +9397,19 @@ def escape_technical_notation_asterisks(text):
             offset += original_length
             continue
         if fence is None:
-            line = literal_kern.sub(
-                lambda match: match[0] if any(start <= offset + match.start() < end
-                                             for start, end in protected) else r'\*\*kern', line)
-            line = _TECHNICAL_NOTATION_ASTERISK.sub(r'\g<token>\\\g<star>', line)
+            edits = []
+            for match in literal_kern.finditer(line):
+                pos = offset + match.start()
+                if not any(start <= pos < end for start, end in protected):
+                    edits.append((match.start(), match.end(), r'\*\*kern'))
+            for match in _TECHNICAL_NOTATION_ASTERISK.finditer(line):
+                pos = offset + match.start()
+                if not any(start <= pos < end for start, end in code_math_url_protected):
+                    edits.append((match.start(), match.end(), f"{match.group('token')}\\{match.group('star')}"))
+            if edits:
+                edits.sort(key=lambda item: item[0], reverse=True)
+                for start_i, end_i, replacement in edits:
+                    line = line[:start_i] + replacement + line[end_i:]
         output.append(line)
         offset += original_length
     return prefix + ''.join(output)
@@ -9436,9 +9672,8 @@ def sanitize_markdown_for_publish(text):
     # 发布前统一去除：零宽空格/连接符、词连接符、BOM。这里与来源单元格比较
     # 共用 PUBLISH_ZERO_WIDTH_CHARACTERS，避免两处集合漂移。
     text = re.sub('[' + PUBLISH_ZERO_WIDTH_CHARACTERS + ']', '', text)
-    frontmatter_match = re.match(r'^---\n.*?\n---\n', text, flags=re.DOTALL)
-    latex_prefix = frontmatter_match.group(0) if frontmatter_match else ''
-    latex_body = text[len(latex_prefix):]
+    opening, frontmatter, sep, closing, latex_body = _split_starting_frontmatter(text)
+    latex_prefix = opening + frontmatter + sep + closing
     latex_body = escape_literal_source_figure_caption_dollars(latex_body)
     latex_body = normalize_arxiv_math_double_extraction(latex_body)
     latex_body = fix_latex_delimiters(latex_body)
@@ -9471,9 +9706,11 @@ def sanitize_markdown_for_publish(text):
         r'平均意见分平均意见分（Mean Opinion Score, MOS）',
         r'\1平均意见分（Mean Opinion Score, MOS）', latex_body,
     )
+    # 先剥离裸行内样式标签（b/i/u），再转义剩余尖括号控制记号，且仅作用于正文，
+    # 避免 frontmatter 被误改或 <u>x</u> 被先套反引号后剥离成空反引号。
+    latex_body = strip_raw_inline_html(latex_body)
+    latex_body = escape_html_like_tags(latex_body)
     text = latex_prefix + latex_body
-    text = escape_html_like_tags(text)
-    text = strip_raw_inline_html(text)
     text = fix_extraction_diacritic_damage(text)
     text = fix_image_markdown(text)
     text = fix_empty_markdown_links(text)

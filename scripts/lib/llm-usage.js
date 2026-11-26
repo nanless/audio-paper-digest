@@ -198,8 +198,8 @@ function writeLlmUsageEvent(event, options = {}) {
     }
     const directoryFd = fs.openSync(writeDir, 'r');
     try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
-    // 同步追加一份按北京日期分片的只读索引缓存（best-effort，绝不影响主账本原子写入与历史回放）。
-    if (writeDailyIndex && eventBjDate && event && event.kind) {
+    // 同步追加一份按北京日期分片的只读索引缓存（仅限 request 终态事件；best-effort，绝不影响主账本原子写入与历史回放）。
+    if (writeDailyIndex && eventBjDate && event && event.kind === 'request') {
         try {
             const bjDate = eventBjDate;
             if (/^\d{4}-\d{2}-\d{2}$/.test(bjDate)) {
@@ -216,7 +216,7 @@ function writeLlmUsageEvent(event, options = {}) {
                     );
                     try {
                         const fstat = fs.fstatSync(appendFd);
-                        if (fstat.isFile()) {
+                        if (fstat.isFile() && (process.platform === 'win32' || fstat.nlink === 1)) {
                             try { fs.fchmodSync(appendFd, 0o600); } catch (_) {}
                             fs.writeFileSync(appendFd, JSON.stringify(event) + '\n');
                         }

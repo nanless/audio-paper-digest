@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.dp
  val jobs=recordsNewest(state.jobs).filter {
   when(filter) {
    "进行中" -> it.optString("status") in listOf("running","pending","queued")
-   "需关注" -> it.optString("status") in listOf("failed","cancelled","interrupted")
+   "需关注" -> it.optString("status") in listOf("failed","partial","cancelled","interrupted")
    else -> true
   }
  }
@@ -159,7 +159,7 @@ internal fun pendingExportStatus(p:org.json.JSONObject):String = when(p.optStrin
 }
 
 internal fun jobStatus(value:String):String = when(value){"queued","pending"->"等待执行";"running"->"进行中";"complete","completed"->"已完成";"partial"->"部分完成";"failed"->"未完成";"cancelled"->"已取消";"interrupted"->"已中断，可检查原记录";else->value.ifBlank{"状态未记录"}}
-internal fun jobTitle(value:String):String=when(value){"library.sync"->"同步已发布论文";"model.run"->"基于原文继续研究";"model.check"->"检查模型连接";"cloud.syncPersonal"->"同步个人资料到 WebDAV";"cloud.syncWorkspace"->"双向同步 WebDAV 研究资料";"cloud.upload"->"保存完整研究空间";"cloud.check"->"检查坚果云连接";"cloud.restore"->"恢复研究快照";"cloud.restore.prepare"->"下载并校验恢复快照";"cloud.automatic"->"自动保存完整研究空间";"cloud.list"->"读取云端备份版本";"zotero.archive"->"完整存档到 Zotero";"zotero.resume"->"继续 Zotero 存档并回读";"pdf.open"->"准备 PDF 原件";"pdf.import"->"导入 PDF 原件";"pdf.import.batch"->"批量导入 PDF 原件";"pdf.annotation.open"->"定位原文批注";"export.retained.prepare"->"核验保留的原完整快照";"export.retained.save"->"另存并回读保留的原快照";"export.prepare"->"准备导出原件";"retained.export.prepare"->"准备保留快照原件";"export.save"->"写出并回读原件";else->value.ifBlank{"研究任务"}}
+internal fun jobTitle(value:String):String=when(value){"library.sync"->"同步已发布论文";"library.sync.automatic"->"后台自动检查目录更新";"model.run"->"基于原文继续研究";"model.check"->"检查模型连接";"cloud.syncPersonal"->"同步个人资料到 WebDAV";"cloud.syncWorkspace"->"双向同步 WebDAV 研究资料";"cloud.upload"->"保存完整研究空间";"cloud.check"->"检查坚果云连接";"cloud.restore"->"恢复研究快照";"cloud.restore.prepare"->"下载并校验恢复快照";"cloud.automatic"->"自动保存完整研究空间";"cloud.list"->"读取云端备份版本";"storage.prepare"->"保存离线研究快照";"storage.openPackage"->"打开离线研究快照";"app.restore.prepare"->"校验本机备份材料";"zotero.prepare"->"准备 Zotero 存档材料";"zotero.check"->"检查 Zotero 连接";"zotero.archive"->"完整存档到 Zotero";"zotero.resume"->"继续 Zotero 存档并回读";"zotero.migration.preview"->"预览 Zotero 附件迁移";"zotero.migration.confirm"->"确认 Zotero 附件迁移";"pdf.open"->"准备 PDF 原件";"pdf.import"->"导入 PDF 原件";"pdf.import.batch"->"批量导入 PDF 原件";"pdf.annotation.open"->"定位原文批注";"pdf.studySource.open"->"打开研究来源 PDF";"export.retained.prepare"->"核验保留的原完整快照";"export.retained.save"->"另存并回读保留的原快照";"export.prepare"->"准备导出原件";"retained.export.prepare"->"准备保留快照原件";"export.save"->"写出并回读原件";else->value.ifBlank{"研究任务"}}
 
 /** Display ordering never rewrites the original cross-platform arrays or invents missing times. */
 internal fun recordsNewest(records:List<org.json.JSONObject>):List<org.json.JSONObject> = records.withIndex().sortedWith(compareByDescending<IndexedValue<org.json.JSONObject>>{ indexed ->

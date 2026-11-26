@@ -4,8 +4,9 @@
 这里用 publish_common.py 的同一入口重算，逐条断言两侧结论一致；不一致时打印
 「哪条语料、Node 结果、Python 结果」。
 
-当前 0 条语料登记在 KNOWN_DIVERGENCES 中，全部语料均为硬断言；
-任何新增的 JS/Python 双实现分歧都会立即让本测试失败。
+当前语料共 144 条：143 条为硬断言，1 条（`manual-numeral/排名第三`）登记在
+KNOWN_DIVERGENCES 中（Python 自 2026-09-01 起故意允许自然序数名次，Node exact_rank 未同步）；
+任何新增的未登记 JS/Python 双实现分歧都会立即让本测试失败。
 
 运行：
     bash scripts/python-runtime.sh -m unittest discover -s tests/python -p "test_parity_*.py"

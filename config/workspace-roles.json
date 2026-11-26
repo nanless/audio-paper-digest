@@ -59,7 +59,6 @@
         "conference-page-render.py"
       ],
       "daily": [
-        "full-fetch.js",
         "generate-blog.py",
         "review-blog.py",
         "push-blog.py",

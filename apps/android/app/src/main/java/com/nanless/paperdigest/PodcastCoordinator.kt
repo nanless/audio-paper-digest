@@ -14,12 +14,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -74,7 +76,11 @@ internal class PodcastCoordinator(
     private var focusRequest: AudioFocusRequest? = null
     private var progressJob: Job? = null
     private var playbackGeneration: Long = 0L
-    private var activeDownload: Deferred<File>? = null
+    private var downloadGeneration: Long = 0L
+    private var activePlayDownload: Deferred<File>? = null
+    private var activeCacheDownload: Deferred<File>? = null
+    private var playDownloadingId: String? = null
+    private var cacheDownloadingId: String? = null
     @Volatile private var currentState = PodcastUiState()
 
     private val audioManager: AudioManager?
@@ -103,12 +109,12 @@ internal class PodcastCoordinator(
         refreshStateLocked()
     }
 
-    suspend fun fetchFeed(forceRefresh: Boolean = false): JSONObject {
+    suspend fun fetchFeed(forceRefresh: Boolean = false, silent: Boolean = false): JSONObject {
         return try {
             val result = repository.fetchFeed(forceRefresh = forceRefresh, offlineMode = offlineMode())
-            val cachedIds = repository.cachedEpisodeIds()
-            val cachedBytes = repository.cachedTotalBytes()
             val episodes = result.feed?.episodes.orEmpty()
+            val cachedIds = repository.cachedEpisodeIds(episodes)
+            val cachedBytes = repository.cachedTotalBytes()
             playerMutex.withLock {
                 publishLocked(
                     currentState.copy(
@@ -116,7 +122,7 @@ internal class PodcastCoordinator(
                         episodes = episodes,
                         cachedEpisodeIds = cachedIds,
                         cachedBytes = cachedBytes,
-                        error = null,
+                        error = if (silent) currentState.error else null,
                         attemptedFeed = true,
                     )
                 )
@@ -125,7 +131,10 @@ internal class PodcastCoordinator(
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             playerMutex.withLock {
-                publishLocked(currentState.copy(error = e.message ?: "播客清单读取失败", attemptedFeed = true))
+                publishLocked(
+                    if (silent) currentState.copy(attemptedFeed = true)
+                    else currentState.copy(error = e.message ?: "播客清单读取失败", attemptedFeed = true)
+                )
             }
             throw e
         }
@@ -134,14 +143,13 @@ internal class PodcastCoordinator(
     suspend fun download(episodeId: String): JSONObject {
         val episode = findEpisode(episodeId)
             ?: throw IllegalArgumentException("未找到指定的播客节目：$episodeId")
-        val myGen: Long
         val downloadTask: Deferred<File>
         playerMutex.withLock {
-            playbackGeneration += 1L
-            myGen = playbackGeneration
-            activeDownload?.cancel()
+            downloadGeneration += 1L
+            activeCacheDownload?.cancel()
             val playingSha = currentState.activeEpisodeId?.let { id -> currentState.episodes.firstOrNull { it.id == id }?.sha256 }
-            publishLocked(currentState.copy(downloadingEpisodeId = episode.id, error = null))
+            cacheDownloadingId = episode.id
+            publishLocked(currentState.copy(downloadingEpisodeId = playDownloadingId ?: cacheDownloadingId, error = null))
             downloadTask = scope.async(Dispatchers.IO) {
                 repository.downloadEpisode(
                     episode = episode,
@@ -150,22 +158,33 @@ internal class PodcastCoordinator(
                     protectedSha = playingSha,
                 )
             }
-            activeDownload = downloadTask
+            activeCacheDownload = downloadTask
         }
         return try {
             downloadTask.await()
             playerMutex.withLock {
-                if (activeDownload === downloadTask) activeDownload = null
-                refreshStateLocked(clearDownloading = episode.id).json()
+                if (activeCacheDownload === downloadTask) {
+                    activeCacheDownload = null
+                    cacheDownloadingId = null
+                }
+                refreshStateLocked().json()
             }
         } catch (e: Exception) {
-            playerMutex.withLock {
-                if (activeDownload === downloadTask) activeDownload = null
-                val clearId = if (currentState.downloadingEpisodeId == episode.id) null else currentState.downloadingEpisodeId
-                if (e is CancellationException && playbackGeneration != myGen) {
-                    publishLocked(currentState.copy(downloadingEpisodeId = clearId))
-                } else {
-                    publishLocked(currentState.copy(downloadingEpisodeId = clearId, error = e.message ?: "播客下载失败"))
+            if (e is CancellationException) {
+                downloadTask.cancel()
+            }
+            withContext(NonCancellable) {
+                playerMutex.withLock {
+                    if (activeCacheDownload === downloadTask) {
+                        activeCacheDownload = null
+                        cacheDownloadingId = null
+                    }
+                    val nextDownloading = playDownloadingId ?: cacheDownloadingId
+                    if (e is CancellationException) {
+                        publishLocked(currentState.copy(downloadingEpisodeId = nextDownloading))
+                    } else {
+                        publishLocked(currentState.copy(downloadingEpisodeId = nextDownloading, error = e.message ?: "播客下载失败"))
+                    }
                 }
             }
             throw e
@@ -188,8 +207,9 @@ internal class PodcastCoordinator(
         playerMutex.withLock {
             playbackGeneration += 1L
             myGen = playbackGeneration
-            activeDownload?.cancel()
-            activeDownload = null
+            activePlayDownload?.cancel()
+            activePlayDownload = null
+            playDownloadingId = null
 
             val existing = mediaPlayer
             if (currentState.activeEpisodeId == episode.id && existing != null) {
@@ -206,7 +226,7 @@ internal class PodcastCoordinator(
                 val durSec = existing.duration.takeIf { it > 0 }?.div(1000.0) ?: episode.durationSeconds
                 publishLocked(
                     currentState.copy(
-                        downloadingEpisodeId = null,
+                        downloadingEpisodeId = cacheDownloadingId,
                         isPlaying = true,
                         currentTimeSeconds = posSec,
                         durationSeconds = durSec,
@@ -217,7 +237,8 @@ internal class PodcastCoordinator(
                 return currentState.json()
             }
 
-            publishLocked(currentState.copy(downloadingEpisodeId = episode.id, error = null))
+            playDownloadingId = episode.id
+            publishLocked(currentState.copy(downloadingEpisodeId = playDownloadingId, error = null))
             downloadTask = scope.async(Dispatchers.IO) {
                 repository.downloadEpisode(
                     episode = episode,
@@ -226,91 +247,133 @@ internal class PodcastCoordinator(
                     protectedSha = episode.sha256,
                 )
             }
-            activeDownload = downloadTask
+            activePlayDownload = downloadTask
         }
 
         val localFile: File = try {
             downloadTask.await()
         } catch (e: Exception) {
-            playerMutex.withLock {
-                if (activeDownload === downloadTask) activeDownload = null
-                val clearId = if (currentState.downloadingEpisodeId == episode.id) null else currentState.downloadingEpisodeId
-                if (e is CancellationException && playbackGeneration != myGen) {
-                    publishLocked(currentState.copy(downloadingEpisodeId = clearId))
-                } else {
-                    publishLocked(currentState.copy(downloadingEpisodeId = clearId, error = e.message ?: "播客下载失败"))
+            if (e is CancellationException) {
+                downloadTask.cancel()
+            }
+            withContext(NonCancellable) {
+                playerMutex.withLock {
+                    if (activePlayDownload === downloadTask) {
+                        activePlayDownload = null
+                        playDownloadingId = null
+                    }
+                    val nextDownloading = playDownloadingId ?: cacheDownloadingId
+                    if (e is CancellationException) {
+                        publishLocked(currentState.copy(downloadingEpisodeId = nextDownloading))
+                    } else {
+                        publishLocked(currentState.copy(downloadingEpisodeId = nextDownloading, error = e.message ?: "播客下载失败"))
+                    }
                 }
             }
             throw e
         }
 
-        return playerMutex.withLock {
-            if (activeDownload === downloadTask) activeDownload = null
-            if (playbackGeneration != myGen) {
-                throw CancellationException("播客播放已被更新的请求替代")
-            }
-            stopAndReleaseLocked()
-            val mp = MediaPlayer()
-            try {
-                mp.setAudioAttributes(audioAttributes)
-                mp.setDataSource(localFile.absolutePath)
-                mp.prepare()
-                mp.setOnCompletionListener {
-                    scope.launch(Dispatchers.IO) {
-                        playerMutex.withLock {
-                            if (mediaPlayer !== mp) return@withLock
-                            progressJob?.cancel()
-                            progressJob = null
-                            abandonAudioFocusLocked()
-                            val dur = mp.duration.takeIf { it > 0 }?.div(1000.0) ?: currentState.durationSeconds
-                            publishLocked(currentState.copy(isPlaying = false, currentTimeSeconds = dur))
+        return try {
+            playerMutex.withLock {
+                if (activePlayDownload === downloadTask) {
+                    activePlayDownload = null
+                    playDownloadingId = null
+                }
+                if (playbackGeneration != myGen) {
+                    publishLocked(currentState.copy(downloadingEpisodeId = playDownloadingId ?: cacheDownloadingId))
+                    throw CancellationException("播客播放已被更新的请求替代")
+                }
+                stopAndReleaseLocked()
+                val mp = MediaPlayer()
+                try {
+                    mp.setAudioAttributes(audioAttributes)
+                    mp.setDataSource(localFile.absolutePath)
+                    mp.prepare()
+                    mp.setOnCompletionListener {
+                        scope.launch(Dispatchers.IO) {
+                            playerMutex.withLock {
+                                if (mediaPlayer !== mp) return@withLock
+                                progressJob?.cancel()
+                                progressJob = null
+                                abandonAudioFocusLocked()
+                                val dur = mp.duration.takeIf { it > 0 }?.div(1000.0) ?: currentState.durationSeconds
+                                publishLocked(currentState.copy(isPlaying = false, currentTimeSeconds = dur))
+                            }
                         }
                     }
-                }
-                mp.setOnErrorListener { _, _, _ ->
-                    scope.launch(Dispatchers.IO) {
-                        playerMutex.withLock {
-                            if (mediaPlayer !== mp) return@withLock
-                            stopAndReleaseLocked()
-                            publishLocked(currentState.copy(isPlaying = false, error = "系统音频播放器播放中断"))
+                    mp.setOnErrorListener { _, _, _ ->
+                        scope.launch(Dispatchers.IO) {
+                            playerMutex.withLock {
+                                if (mediaPlayer !== mp) return@withLock
+                                stopAndReleaseLocked()
+                                publishLocked(
+                                    currentState.copy(
+                                        activeEpisodeId = null,
+                                        isPlaying = false,
+                                        currentTimeSeconds = 0.0,
+                                        durationSeconds = 0.0,
+                                        error = "系统音频播放器播放中断",
+                                    )
+                                )
+                            }
                         }
+                        true
                     }
-                    true
-                }
-                if (!requestAudioFocusLocked()) {
-                    throw AppFailure("audio-focus", "无法获取系统音频焦点，暂未开始播放。")
-                }
-                if (startSeconds != null) {
-                    val durMs = mp.duration.takeIf { it > 0 } ?: (episode.durationSeconds * 1000).toInt()
-                    mp.seekTo((startSeconds * 1000.0).toInt().coerceIn(0, durMs.coerceAtLeast(0)))
-                }
-                applyRateLocked(mp, currentState.rate)
-                mp.start()
-                mediaPlayer = mp
-                val durSec = mp.duration.takeIf { it > 0 }?.div(1000.0) ?: episode.durationSeconds
-                val posSec = mp.currentPosition.coerceAtLeast(0) / 1000.0
-                val cachedIds = repository.cachedEpisodeIds()
-                val cachedBytes = repository.cachedTotalBytes()
-                publishLocked(
-                    currentState.copy(
-                        activeEpisodeId = episode.id,
-                        downloadingEpisodeId = null,
-                        isPlaying = true,
-                        currentTimeSeconds = posSec,
-                        durationSeconds = durSec,
-                        cachedEpisodeIds = cachedIds,
-                        cachedBytes = cachedBytes,
-                        error = null,
+                    if (!requestAudioFocusLocked()) {
+                        throw AppFailure("audio-focus", "无法获取系统音频焦点，暂未开始播放。")
+                    }
+                    if (startSeconds != null) {
+                        val durMs = mp.duration.takeIf { it > 0 } ?: (episode.durationSeconds * 1000).toInt()
+                        mp.seekTo((startSeconds * 1000.0).toInt().coerceIn(0, durMs.coerceAtLeast(0)))
+                    }
+                    applyRateLocked(mp, currentState.rate)
+                    mp.start()
+                    mediaPlayer = mp
+                    val durSec = mp.duration.takeIf { it > 0 }?.div(1000.0) ?: episode.durationSeconds
+                    val posSec = mp.currentPosition.coerceAtLeast(0) / 1000.0
+                    val cachedIds = repository.cachedEpisodeIds(currentState.episodes)
+                    val cachedBytes = repository.cachedTotalBytes()
+                    publishLocked(
+                        currentState.copy(
+                            activeEpisodeId = episode.id,
+                            downloadingEpisodeId = playDownloadingId ?: cacheDownloadingId,
+                            isPlaying = true,
+                            currentTimeSeconds = posSec,
+                            durationSeconds = durSec,
+                            cachedEpisodeIds = cachedIds,
+                            cachedBytes = cachedBytes,
+                            error = null,
+                        )
                     )
-                )
-                startProgressLoopLocked(mp)
-                currentState.json()
-            } catch (e: Exception) {
-                runCatching { mp.release() }
-                abandonAudioFocusLocked()
-                publishLocked(currentState.copy(downloadingEpisodeId = null, isPlaying = false, error = e.message ?: "无法启动音频播放"))
-                throw e
+                    startProgressLoopLocked(mp)
+                    currentState.json()
+                } catch (e: Exception) {
+                    runCatching { mp.release() }
+                    abandonAudioFocusLocked()
+                    publishLocked(
+                        currentState.copy(
+                            activeEpisodeId = null,
+                            downloadingEpisodeId = playDownloadingId ?: cacheDownloadingId,
+                            isPlaying = false,
+                            currentTimeSeconds = 0.0,
+                            durationSeconds = 0.0,
+                            error = if (e is CancellationException) currentState.error else (e.message ?: "无法启动音频播放"),
+                        )
+                    )
+                    throw e
+                }
             }
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                playerMutex.withLock {
+                    if (activePlayDownload === downloadTask) {
+                        activePlayDownload = null
+                        playDownloadingId = null
+                        publishLocked(currentState.copy(downloadingEpisodeId = playDownloadingId ?: cacheDownloadingId))
+                    }
+                }
+            }
+            throw e
         }
     }
 
@@ -353,35 +416,41 @@ internal class PodcastCoordinator(
         currentState.json()
     }
 
-    suspend fun clearCache(): JSONObject {
-        playerMutex.withLock {
-            playbackGeneration += 1L
-            activeDownload?.cancel()
-            activeDownload = null
-            stopAndReleaseLocked()
-        }
+    suspend fun clearCache(): JSONObject = playerMutex.withLock {
+        playbackGeneration += 1L
+        downloadGeneration += 1L
+        activePlayDownload?.cancel()
+        activePlayDownload = null
+        playDownloadingId = null
+        activeCacheDownload?.cancel()
+        activeCacheDownload = null
+        cacheDownloadingId = null
+        stopAndReleaseLocked()
         repository.clearCache()
-        return playerMutex.withLock {
-            publishLocked(
-                currentState.copy(
-                    activeEpisodeId = null,
-                    downloadingEpisodeId = null,
-                    isPlaying = false,
-                    currentTimeSeconds = 0.0,
-                    durationSeconds = 0.0,
-                    cachedEpisodeIds = emptySet(),
-                    cachedBytes = 0L,
-                    error = null,
-                )
+        publishLocked(
+            currentState.copy(
+                activeEpisodeId = null,
+                downloadingEpisodeId = null,
+                isPlaying = false,
+                currentTimeSeconds = 0.0,
+                durationSeconds = 0.0,
+                cachedEpisodeIds = emptySet(),
+                cachedBytes = 0L,
+                error = null,
             )
-            currentState.json()
-        }
+        )
+        currentState.json()
     }
 
     suspend fun stop(): JSONObject = playerMutex.withLock {
         playbackGeneration += 1L
-        activeDownload?.cancel()
-        activeDownload = null
+        downloadGeneration += 1L
+        activePlayDownload?.cancel()
+        activePlayDownload = null
+        playDownloadingId = null
+        activeCacheDownload?.cancel()
+        activeCacheDownload = null
+        cacheDownloadingId = null
         stopAndReleaseLocked()
         publishLocked(
             currentState.copy(
@@ -398,8 +467,13 @@ internal class PodcastCoordinator(
     suspend fun release() {
         playerMutex.withLock {
             playbackGeneration += 1L
-            activeDownload?.cancel()
-            activeDownload = null
+            downloadGeneration += 1L
+            activePlayDownload?.cancel()
+            activePlayDownload = null
+            playDownloadingId = null
+            activeCacheDownload?.cancel()
+            activeCacheDownload = null
+            cacheDownloadingId = null
             stopAndReleaseLocked()
             publishLocked(
                 currentState.copy(
@@ -416,12 +490,12 @@ internal class PodcastCoordinator(
     private fun findEpisode(id: String): PodcastEpisode? =
         currentState.episodes.firstOrNull { it.id == id } ?: repository.currentFeed()?.episodes?.firstOrNull { it.id == id }
 
-    private suspend fun refreshStateLocked(clearDownloading: String? = null): PodcastUiState {
-        val cachedIds = repository.cachedEpisodeIds()
+    private suspend fun refreshStateLocked(): PodcastUiState {
+        val episodes = currentState.episodes.ifEmpty { repository.currentFeed()?.episodes.orEmpty() }
+        val cachedIds = repository.cachedEpisodeIds(episodes)
         val cachedBytes = repository.cachedTotalBytes()
-        val nextDownloading = if (clearDownloading != null && currentState.downloadingEpisodeId == clearDownloading) null else currentState.downloadingEpisodeId
         val next = currentState.copy(
-            downloadingEpisodeId = nextDownloading,
+            downloadingEpisodeId = playDownloadingId ?: cacheDownloadingId,
             cachedEpisodeIds = cachedIds,
             cachedBytes = cachedBytes,
         )

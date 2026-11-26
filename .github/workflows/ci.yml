@@ -70,6 +70,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: 安装 Python 测试依赖
         run: |
@@ -87,6 +88,7 @@ jobs:
           sudo apt-get install --yes --no-install-recommends fonts-noto-cjk
 
       - name: 安装固定版本 Hugo 并核验官方校验和
+        if: matrix.partition.suite != 'static'
         env:
           HUGO_VERSION: '0.160.1'
         run: |
@@ -184,6 +186,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: 'gradle'
 
       - uses: actions/setup-node@v4
         with:

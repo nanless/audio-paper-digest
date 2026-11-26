@@ -137,12 +137,16 @@ function paidCandidateProof(entries, identity, payload, source, usageDirectory, 
         matches.push({ entry, responseEntry, request, response, replayed });
     }
     if (matches.length !== 1) return null;
+    const { listUsageLedgerFiles } = require('./llm-usage-ledger');
     const selected = matches[0], events = [];
     const usageRoot = fs.realpathSync(usageDirectory);
     if (fs.lstatSync(usageDirectory).isSymbolicLink()) integrity('原用量目录不安全');
+    let usageEntries;
+    try { usageEntries = listUsageLedgerFiles(usageRoot); }
+    catch { integrity('原费用记录不安全'); }
     // 原费用目录很大；只对匹配原响应SHA的文件解析并签住精确字节，不建立持久索引。
-    for (const name of fs.readdirSync(usageRoot).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
-        const filename = path.join(usageRoot, name);
+    for (const entry of usageEntries) {
+        const filename = entry.file;
         const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         let bytes;
         try {

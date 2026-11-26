@@ -2,9 +2,13 @@
 if __name__ == '__main__':
     from runtime_guard import require_external_runtime
     require_external_runtime('reader-sealed-pdf-column-units')
-import base64, hashlib, itertools, json, os, re, stat, sys, unicodedata
+import base64, hashlib, itertools, json, os, re, stat, sys, threading, unicodedata
 import fitz
 from reader_sealed_pdf_quote_evidence import extract_pdf_quote_document, quote_evidence
+try:
+    from pdf_author_extract import PYMUPDF_LOCK
+except ImportError:
+    PYMUPDF_LOCK = threading.RLock()
 CONTRACT = 'reader-sealed-pdf-column-units-v1'
 def need(ok, why):
     if not ok: raise ValueError(why)
@@ -132,8 +136,8 @@ def prove_pdf_bytes(pdf_bytes,tables,view,quotes):
     full=norm(' '.join(v for row in view for v in row))
     valid=[q for q in valid if norm(q['quote']).count(full)==1]
     need(valid,'complete_matrix_not_in_bound_pdf_quote')
-    doc=fitz.open(stream=pdf_bytes,filetype='pdf');results=[]
-    try:
+    results=[]
+    with PYMUPDF_LOCK, fitz.open(stream=pdf_bytes,filetype='pdf') as doc:
         for table in tables:
             try:
                 proof=table_proofs(doc,table,view)
@@ -141,7 +145,6 @@ def prove_pdf_bytes(pdf_bytes,tables,view,quotes):
                 proof['differences']=[{'row':r,'column':c,'sourceHtmlText':table['matrix'][r][c],'pdfText':v,'valueOrigin':'sealed_pdf'} for r,row in enumerate(proof['displayMatrix']) for c,v in enumerate(row) if v!=table['matrix'][r][c]]
                 proof['evidenceSha256']=stable(proof);results.append(proof)
             except (ValueError,KeyError,TypeError,IndexError):continue
-    finally:doc.close()
     need(len(results)==1,'source_table_not_unique:'+str(len(results)))
     return results[0]
 

@@ -38,6 +38,7 @@ CONTRACT = CONTRACT_V2
 _V3_GUARDS_ENABLED = False
 # PyMuPDF (fitz) 全局上下文非线程安全，且 v3 使用模块级守卫开关，多线程并发重放必须串行化。
 _PDF_AUTHOR_EXTRACT_LOCK = threading.RLock()
+PYMUPDF_LOCK = _PDF_AUTHOR_EXTRACT_LOCK
 MAX_PDF_BYTES = 512 * 1024 * 1024
 
 ICON_FONT_RE = re.compile(
@@ -3672,24 +3673,24 @@ def extract_pdf_page1_authors_v1(pdf_bytes: bytes) -> dict | None:
 
 
 def extract_pdf_page1_authors_v2(pdf_bytes: bytes) -> dict | None:
+    with _PDF_AUTHOR_EXTRACT_LOCK:
+        return _extract_pdf_page1_authors_v2_locked(pdf_bytes)
+
+
+def _extract_pdf_page1_authors_v2_locked(pdf_bytes: bytes) -> dict | None:
     if not isinstance(pdf_bytes, (bytes, bytearray)) or len(pdf_bytes) < 5 or len(pdf_bytes) > MAX_PDF_BYTES or not pdf_bytes.startswith(b"%PDF-"):
         return None
     pdf_sha = _sha256_bytes(bytes(pdf_bytes))
-    doc = None
-    with _PDF_AUTHOR_EXTRACT_LOCK:
-        try:
-            doc = fitz.open(stream=bytes(pdf_bytes), filetype="pdf")
+    try:
+        with fitz.open(stream=bytes(pdf_bytes), filetype="pdf") as doc:
             if doc.needs_pass or len(doc) == 0:
                 return None
             page = doc[0]
             if page.rect.width <= 0 or page.rect.height <= 0:
                 return None
             header_lines, footnote_lines, page_w, _page_h = _extract_page1_lines(page)
-        except Exception:
-            return None
-        finally:
-            if doc is not None:
-                doc.close()
+    except Exception:
+        return None
 
     if not header_lines:
         return None

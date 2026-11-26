@@ -10,7 +10,12 @@ import os
 import re
 import stat
 import sys
+import threading
 import fitz
+try:
+    from pdf_author_extract import PYMUPDF_LOCK
+except ImportError:
+    PYMUPDF_LOCK = threading.RLock()
 
 CONTRACT = 'reader-sealed-pdf-quotes-v1'
 PROJECTION = 'unicode-whitespace-collapse-and-trim-v1'
@@ -78,26 +83,24 @@ def _projection(raw):
 def extract_pdf_quote_document(pdf_bytes):
     need(isinstance(pdf_bytes, bytes) and 5 <= len(pdf_bytes) <= 64 * 1024 * 1024
          and pdf_bytes.startswith(b'%PDF-'), 'pdf_bytes_invalid')
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype='pdf')
-    except fitz.FileDataError:
-        return {'contract': CONTRACT, 'available': False, 'reason': 'pdf_document_unreadable',
-                'pdfSha256': sha(pdf_bytes)}
     raw_parts, ranges, offset = [], [], 0
-    try:
-        for page in doc:
-            text = page.get_text('text', sort=False, flags=fitz.TEXTFLAGS_TEXT)
-            need(isinstance(text, str), 'pdf_page_text_invalid')
-            need(offset + len(text) <= MAX_TEXT_CHARS, 'pdf_text_exceeds_limit')
-            ranges.append({'page': page.number + 1, 'rawStartCodePoint': offset,
-                           'rawEndCodePoint': offset + len(text), 'pageTextSha256': sha(text.encode())})
-            raw_parts.append(text)
-            offset += len(text)
-            # An explicit page separator is whitespace, never a synthesized word.
-            raw_parts.append('\n\f\n')
-            offset += 3
-    finally:
-        doc.close()
+    with PYMUPDF_LOCK:
+        try:
+            with fitz.open(stream=pdf_bytes, filetype='pdf') as doc:
+                for page in doc:
+                    text = page.get_text('text', sort=False, flags=fitz.TEXTFLAGS_TEXT)
+                    need(isinstance(text, str), 'pdf_page_text_invalid')
+                    need(offset + len(text) <= MAX_TEXT_CHARS, 'pdf_text_exceeds_limit')
+                    ranges.append({'page': page.number + 1, 'rawStartCodePoint': offset,
+                                   'rawEndCodePoint': offset + len(text), 'pageTextSha256': sha(text.encode())})
+                    raw_parts.append(text)
+                    offset += len(text)
+                    # An explicit page separator is whitespace, never a synthesized word.
+                    raw_parts.append('\n\f\n')
+                    offset += 3
+        except fitz.FileDataError:
+            return {'contract': CONTRACT, 'available': False, 'reason': 'pdf_document_unreadable',
+                    'pdfSha256': sha(pdf_bytes)}
     raw = ''.join(raw_parts)
     normalized = normalize_quote(raw)
     return {'contract': CONTRACT, 'available': bool(normalized), 'pdfSha256': sha(pdf_bytes),
@@ -207,7 +210,7 @@ def _scientific_glyph_atoms(pdf_bytes, document):
     units = re.compile(r'^\s*(?P<unit>kHz|MHz|Hz|dB|GB|MB|KB|ms|pp|s|h|%)(?![A-Za-z0-9_/%])')
     boundary = re.compile(r'^(?:$|[,;:!?)]|\.(?![0-9])|\s+(?:$|[,;:!?)]|\.(?![0-9])|and\b|for\b|of\b|in\b|with\b|respectively\b))')
     output = []
-    with fitz.open(stream=pdf_bytes, filetype='pdf') as doc:
+    with PYMUPDF_LOCK, fitz.open(stream=pdf_bytes, filetype='pdf') as doc:
         for page, page_range in zip(doc, document['pageRanges']):
             page_text = page.get_text('text', sort=False, flags=fitz.TEXTFLAGS_TEXT)
             need(sha(page_text.encode()) == page_range['pageTextSha256'], 'scientific_page_changed')

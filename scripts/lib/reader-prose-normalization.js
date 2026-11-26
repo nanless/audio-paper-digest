@@ -1151,7 +1151,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
                 if (new RegExp(
                     `[${chineseNumeralChars}\\d]+\\s*(?:与|和|或|至|到)\\s*$`
                 ).test(before)) return surface;
-                const parsed = /^[负正]?\\d/.test(coefficient)
+                const parsed = /^[负正]?\d/.test(coefficient)
                     ? coefficient
                     : chineseNumber(coefficient);
                 if (parsed === null) return surface;

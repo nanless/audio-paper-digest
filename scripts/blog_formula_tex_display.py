@@ -1275,7 +1275,7 @@ def _collapse_parenthesized_signed_double_write(text):
         start, end = match.start(), match.end()
         if start > 0:
             prev = source[start - 1]
-            if unicodedata.category(prev)[0] in ('L', 'N') or prev in '_^\\.\])}+−=*×÷-/\x00':
+            if unicodedata.category(prev)[0] in ('L', 'N') or prev in r'_^.\])}+−=*×÷-/' + '\x00':
                 return match.group(0)
         if end < len(source):
             nxt = source[end]
@@ -1456,7 +1456,7 @@ def reader_cell_comparison(value, *, normalize_source_cell=None, hooks: Mapping 
 
 
 def _rendered_table_bare_tex(article):
-    """返回渲染后表格里仍未解释的裸 TeX（排除 \(...\)、$...$、\[...\] 与转义竖线）。"""
+    r"""返回渲染后表格里仍未解释的裸 TeX（排除 \(...\)、$...$、\[...\] 与转义竖线）。"""
     for line in str(article or '').splitlines():
         if not line.startswith('|'):
             continue

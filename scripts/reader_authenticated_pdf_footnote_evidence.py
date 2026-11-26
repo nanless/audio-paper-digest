@@ -10,7 +10,12 @@ import os
 import re
 import stat
 import sys
+import threading
 import fitz
+try:
+    from pdf_author_extract import PYMUPDF_LOCK
+except ImportError:
+    PYMUPDF_LOCK = threading.RLock()
 
 CONTRACT = 'reader-authenticated-pdf-footnote-extraction-v1'
 REPOSITORY = re.compile(r'https://(?:github\.com|gitlab\.com|huggingface\.co|modelscope\.cn)/[A-Za-z0-9._~-]+/[A-Za-z0-9._~/-]+')
@@ -128,83 +133,81 @@ def page_lines(page):
 
 def extract(pdf):
     need(isinstance(pdf, bytes) and pdf.startswith(b'%PDF-') and len(pdf) <= 64 * 1024 * 1024, 'pdf_invalid')
-    doc = fitz.open(stream=pdf, filetype='pdf')
-    need(len(doc) <= 256, 'pdf_page_limit')
     candidates, rejected = [], []
-    try:
-        for page in doc:
-            lines = page_lines(page)
-            need(len(lines) <= 3000, 'pdf_line_limit')
-            notes, calls = [], []
-            for line in lines:
-                spans = line['spans']
-                for index, marker in enumerate(spans):
-                    if not re.fullmatch(r'[1-9]\d{0,2}', marker['text']) or line['column'] is None:
-                        continue
-                    prior = next((span for span in reversed(spans[:index]) if span['text'].strip()), None)
-                    following = ''.join(span['text'] for span in spans[index+1:]).strip()
-                    # Footnote marker must start its own lower-page URL line.
-                    if prior is None and line['bbox'][1] >= page.rect.height * .65:
-                        url_match = REPOSITORY.fullmatch(following.rstrip('.,;'))
-                        if url_match and marker['size'] <= max(span['size'] for span in spans[index+1:]) * .9:
-                            notes.append({'marker': marker, 'line': line, 'url': url_match.group()})
-                        continue
-                    if prior is None or marker['size'] > prior['size'] * .85 or marker['bbox'][0] - prior['bbox'][2] > max(4, prior['size'] * .6):
-                        continue
-                    if marker['origin'][1] >= prior['origin'][1] - .5:
-                        continue
-                    column_lines = sorted([row for row in lines if row['column'] == line['column']], key=lambda row: (round(row['bbox'][1], 1), row['bbox'][0]))
-                    position = column_lines.index(line)
-                    preceding = []
-                    # Only adjacent lines from the same physical column.
-                    for row in reversed(column_lines[max(0,position-16):position]):
-                        next_row = preceding[-1] if preceding else line
-                        if next_row['bbox'][1] - row['bbox'][3] > max(16, prior['size'] * 2.2):
-                            break
-                        preceding.append(row)
-                    preceding.reverse()
-                    prefix = ''.join(span['text'] for span in spans[:index])
-                    raw = '\n'.join([row['rawText'] for row in preceding] + [prefix]).rstrip()
-                    # A terminal period before a superscript is part of this sentence.
-                    content = raw.rstrip('.!? ')
-                    boundaries = list(re.finditer(r'[.!?](?:\d{1,3})?\s+(?=[A-Z])', content))
-                    start = boundaries[-1].end() if boundaries else 0
-                    statement = content[start:].strip()
-                    if not RESOURCE.search(normalized(statement)) or not re.search(r'available|released|open[- ]source', statement, re.I):
-                        continue
-                    before = content[:start]
-                    tail = ''.join(span['text'] for span in spans[index+1:]).lstrip('.!? ')
-                    next_rows = column_lines[position+1:position+4]
-                    after = '\n'.join([tail] + [row['rawText'] for row in next_rows])
-                    facets, reason = facets_for(statement, before, after)
-                    call = {'marker': marker, 'line': line, 'statementRawText': statement,
-                            'statementNormalizedText': normalized(statement), 'contextBeforeRaw': before[-2000:],
-                            'contextAfterRaw': after[:500], 'statementLines': preceding + [line], 'facets': facets, 'reason': reason}
-                    calls.append(call)
-            for call in calls:
-                number = call['marker']['text']
-                matching_notes = [note for note in notes if note['marker']['text'] == number]
-                same_calls = [other for other in calls if other['marker']['text'] == number]
-                reason = call['reason']
-                if len(matching_notes) != 1 or len(same_calls) != 1:
-                    reason = reason or 'marker_or_footnote_not_unique'
-                note = matching_notes[0] if len(matching_notes) == 1 else None
-                if note and (note['line']['column'] != call['line']['column'] or note['line']['bbox'][1] <= call['line']['bbox'][3]):
-                    reason = reason or 'footnote_not_below_same_column'
-                result = {'page': page.number + 1, 'pageWidth': round(page.rect.width,5), 'pageHeight': round(page.rect.height,5),
-                          'column': call['line']['column'], 'marker': number, 'statementMarker': call['marker'],
-                          'statementRawText': call['statementRawText'], 'statementNormalizedText': call['statementNormalizedText'],
-                          'contextBeforeRaw': call['contextBeforeRaw'], 'contextAfterRaw': call['contextAfterRaw'],
-                          'statementLines': call['statementLines'], 'resourceFacets': call['facets'],
-                          'pageTextSha256': sha(page.get_text('text', sort=False, flags=fitz.TEXTFLAGS_TEXT).encode())}
-                if note:
-                    result.update({'url': note['url'], 'footnoteMarker': note['marker'], 'footnoteLine': note['line']})
-                if reason:
-                    rejected.append({**result, 'reason': reason})
-                else:
-                    candidates.append(result)
-    finally:
-        doc.close()
+    with PYMUPDF_LOCK:
+        with fitz.open(stream=pdf, filetype='pdf') as doc:
+            need(len(doc) <= 256, 'pdf_page_limit')
+            for page in doc:
+                lines = page_lines(page)
+                need(len(lines) <= 3000, 'pdf_line_limit')
+                notes, calls = [], []
+                for line in lines:
+                    spans = line['spans']
+                    for index, marker in enumerate(spans):
+                        if not re.fullmatch(r'[1-9]\d{0,2}', marker['text']) or line['column'] is None:
+                            continue
+                        prior = next((span for span in reversed(spans[:index]) if span['text'].strip()), None)
+                        following = ''.join(span['text'] for span in spans[index+1:]).strip()
+                        # Footnote marker must start its own lower-page URL line.
+                        if prior is None and line['bbox'][1] >= page.rect.height * .65:
+                            url_match = REPOSITORY.fullmatch(following.rstrip('.,;'))
+                            if url_match and marker['size'] <= max(span['size'] for span in spans[index+1:]) * .9:
+                                notes.append({'marker': marker, 'line': line, 'url': url_match.group()})
+                            continue
+                        if prior is None or marker['size'] > prior['size'] * .85 or marker['bbox'][0] - prior['bbox'][2] > max(4, prior['size'] * .6):
+                            continue
+                        if marker['origin'][1] >= prior['origin'][1] - .5:
+                            continue
+                        column_lines = sorted([row for row in lines if row['column'] == line['column']], key=lambda row: (round(row['bbox'][1], 1), row['bbox'][0]))
+                        position = column_lines.index(line)
+                        preceding = []
+                        # Only adjacent lines from the same physical column.
+                        for row in reversed(column_lines[max(0,position-16):position]):
+                            next_row = preceding[-1] if preceding else line
+                            if next_row['bbox'][1] - row['bbox'][3] > max(16, prior['size'] * 2.2):
+                                break
+                            preceding.append(row)
+                        preceding.reverse()
+                        prefix = ''.join(span['text'] for span in spans[:index])
+                        raw = '\n'.join([row['rawText'] for row in preceding] + [prefix]).rstrip()
+                        # A terminal period before a superscript is part of this sentence.
+                        content = raw.rstrip('.!? ')
+                        boundaries = list(re.finditer(r'[.!?](?:\d{1,3})?\s+(?=[A-Z])', content))
+                        start = boundaries[-1].end() if boundaries else 0
+                        statement = content[start:].strip()
+                        if not RESOURCE.search(normalized(statement)) or not re.search(r'available|released|open[- ]source', statement, re.I):
+                            continue
+                        before = content[:start]
+                        tail = ''.join(span['text'] for span in spans[index+1:]).lstrip('.!? ')
+                        next_rows = column_lines[position+1:position+4]
+                        after = '\n'.join([tail] + [row['rawText'] for row in next_rows])
+                        facets, reason = facets_for(statement, before, after)
+                        call = {'marker': marker, 'line': line, 'statementRawText': statement,
+                                'statementNormalizedText': normalized(statement), 'contextBeforeRaw': before[-2000:],
+                                'contextAfterRaw': after[:500], 'statementLines': preceding + [line], 'facets': facets, 'reason': reason}
+                        calls.append(call)
+                for call in calls:
+                    number = call['marker']['text']
+                    matching_notes = [note for note in notes if note['marker']['text'] == number]
+                    same_calls = [other for other in calls if other['marker']['text'] == number]
+                    reason = call['reason']
+                    if len(matching_notes) != 1 or len(same_calls) != 1:
+                        reason = reason or 'marker_or_footnote_not_unique'
+                    note = matching_notes[0] if len(matching_notes) == 1 else None
+                    if note and (note['line']['column'] != call['line']['column'] or note['line']['bbox'][1] <= call['line']['bbox'][3]):
+                        reason = reason or 'footnote_not_below_same_column'
+                    result = {'page': page.number + 1, 'pageWidth': round(page.rect.width,5), 'pageHeight': round(page.rect.height,5),
+                              'column': call['line']['column'], 'marker': number, 'statementMarker': call['marker'],
+                              'statementRawText': call['statementRawText'], 'statementNormalizedText': call['statementNormalizedText'],
+                              'contextBeforeRaw': call['contextBeforeRaw'], 'contextAfterRaw': call['contextAfterRaw'],
+                              'statementLines': call['statementLines'], 'resourceFacets': call['facets'],
+                              'pageTextSha256': sha(page.get_text('text', sort=False, flags=fitz.TEXTFLAGS_TEXT).encode())}
+                    if note:
+                        result.update({'url': note['url'], 'footnoteMarker': note['marker'], 'footnoteLine': note['line']})
+                    if reason:
+                        rejected.append({**result, 'reason': reason})
+                    else:
+                        candidates.append(result)
     need(len(candidates) <= 128 and len(rejected) <= 512, 'pdf_candidate_limit')
     return {'contract': CONTRACT, 'pdfSha256': sha(pdf), 'backend': {'name': 'pymupdf', 'version': fitz.version[0],
             'method': 'dict_spans_and_original_words_same_page_same_half_column_v1', 'flags': fitz.TEXTFLAGS_TEXT},

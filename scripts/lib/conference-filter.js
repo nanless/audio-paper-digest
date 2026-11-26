@@ -1689,7 +1689,7 @@ function parseLlmRequestBody(bytes, protocol) {
     const body = parseStrictJson(source, 'preserved LLM request');
     let user;
     if (protocol === 'openai-responses') {
-        const allowed = new Set(['model', 'input', 'max_output_tokens', 'temperature', 'reasoning', 'stream']);
+        const allowed = new Set(['model', 'input', 'max_output_tokens', 'temperature', 'reasoning', 'stream', 'prompt_cache_key']);
         if (!isPlainObject(body) || Object.keys(body).some(key => !allowed.has(key)) || !Array.isArray(body.input)
             || body.input.length !== 1) fail('OpenAI Responses 请求必须恰好含一条 user 消息');
         const read = (message, role) => {
@@ -1707,6 +1707,10 @@ function parseLlmRequestBody(bytes, protocol) {
                 || !require('../utils.js').REASONING_EFFORTS.includes(body.reasoning.effort)
                 || Object.keys(body.reasoning).length !== 1)) fail('OpenAI Responses 的 reasoning 选项格式不正确');
         if (body.stream !== undefined && body.stream !== true) fail('OpenAI Responses 的 stream 选项格式不正确');
+        if (body.prompt_cache_key !== undefined
+            && (typeof body.prompt_cache_key !== 'string' || !body.prompt_cache_key.trim() || body.prompt_cache_key.length > 64)) {
+            fail('OpenAI Responses 的 prompt_cache_key 选项格式不正确');
+        }
     } else if (protocol === 'anthropic-messages') {
         const allowed = new Set(['model', 'max_tokens', 'messages', 'temperature']);
         if (!isPlainObject(body) || Object.keys(body).some(key => !allowed.has(key)) || !Array.isArray(body.messages)
@@ -1993,12 +1997,21 @@ function createIntent({ directory, state, paperId, owner, discoveryHandle, evide
     const messages = [{ role: 'user', content: renderDeclaredDailyFilterPrompt(envelope) }];
     const attemptNumber = state.attempts.filter(item => item.paperId === paperId).length + 1;
     const attemptMaxTokens = utilsApi.getFilterAttemptMaxTokens(llm.apiType, llm.maxTokens, attemptNumber);
-    const requestBody = utilsApi.buildRequestBody(llm.apiType, llm.model, messages, attemptMaxTokens, llm.temperature);
+    const operationId = crypto.randomUUID();
+    const usageContext = {
+        stage: 'conference-filter',
+        unitId: stableHash({
+            filterId: state.filterId,
+            paperId,
+            sourceSha256: state.decisions[paperId].sourceSha256,
+            operationId
+        })
+    };
+    const requestBody = utilsApi.buildRequestBody(
+        llm.apiType, llm.model, messages, attemptMaxTokens, llm.temperature, { usageContext }
+    );
     const requestBytes = Buffer.from(JSON.stringify(requestBody), 'utf8');
     if (!requestBytes.length || requestBytes.length > MAX_LLM_REQUEST_BYTES) fail('LLM 请求在传输前已超过持久证据上限');
-    const operationId = crypto.randomUUID(); const usageContext = {
-        stage: 'conference-filter', unitId: stableHash({ filterId: state.filterId, paperId,
-            sourceSha256: state.decisions[paperId].sourceSha256, operationId }) };
     const body = { ...codec.recordHeader(LLM_INTENT_CONTRACT, 'conference-filter-llm-intent'), filterId: state.filterId, operationId,
         expectedStateSha256: state.stateSha256, paperId, sourceSha256: state.decisions[paperId].sourceSha256,
         actorId: owner, endpointIdentitySha256: state.input.endpointIdentitySha256,

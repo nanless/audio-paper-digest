@@ -176,10 +176,27 @@ async function main() {
         }
         const beforeCapture = captureCalls;
         let auditFailureInjected = false;
+        const originalOpen = fs.openSync;
+        const originalClose = fs.closeSync;
         const originalWrite = fs.writeFileSync;
+        const restoreAuditFs = () => {
+            fs.openSync = originalOpen;
+            fs.closeSync = originalClose;
+            fs.writeFileSync = originalWrite;
+        };
+        const recheckFds = new Set();
         if (scenario === 'audit-write-failed') {
+            fs.openSync = function(filename, ...args) {
+                const fd = originalOpen.call(this, filename, ...args);
+                if (typeof filename === 'string' && filename.includes('recheck.json')) recheckFds.add(fd);
+                return fd;
+            };
+            fs.closeSync = function(fd) {
+                recheckFds.delete(fd);
+                return originalClose.call(this, fd);
+            };
             fs.writeFileSync = function(filename, bytes, ...args) {
-                if (!auditFailureInjected && String(filename).includes('recheck.json')
+                if (!auditFailureInjected && (String(filename).includes('recheck.json') || recheckFds.has(filename))
                     && String(bytes).includes('重新核验0')) {
                     auditFailureInjected = true;
                     throw Object.assign(new Error('本地审计保存失败'), { code: 'EIO' });
@@ -212,7 +229,7 @@ async function main() {
                 assert.equal(auditFailureInjected, true);
                 assert.equal(captureCalls, beforeCapture, '审计保存失败不能继续抓取来源');
                 assert.deepEqual(requests, [ids[0]]);
-            } finally { fs.writeFileSync = originalWrite; }
+            } finally { restoreAuditFs(); }
             return;
         }
         if (scenario === 'failure') await assert.rejects(invocation, /本地认证失败/);

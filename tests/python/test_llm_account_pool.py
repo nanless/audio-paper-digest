@@ -1001,6 +1001,25 @@ class LlmAccountPoolTest(unittest.TestCase):
             self.assertFalse(mod._remove_lock_dir_checked(lock_path, stale_snap))
             self.assertTrue((lock_path / 'owner.json').exists())
 
+    def test_duplicate_keys_rejected_and_affinity_key_normalized(self):
+        from llm_account_pool import LlmAccountPoolConfigError
+        with self.assertRaises(LlmAccountPoolConfigError):
+            resolve_primary_api_key_pool('dup-secret', 'dup-secret,other-secret')
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'pool.json'
+            keys = ['k-one-secret', 'k-two-secret', 'k-three-secret']
+            first = select_api_key(keys, ENDPOINT, state_file, now_ms=1000, affinity_key='arXiv:2611.12345v2')
+            second = select_api_key(keys, ENDPOINT, state_file, now_ms=2000, affinity_key='2611.12345')
+            self.assertEqual(first['api_key'], second['api_key'])
+            # Trigger stale group cleanup with affinity_key (must use STALE_GROUP_MS, not STALE_GROUP_TTL_MS)
+            other_keys = ['k-one-secret', 'k-four-secret']
+            third = select_api_key(
+                other_keys, ENDPOINT, state_file,
+                now_ms=1000 + STALE_GROUP_MS + 100,
+                affinity_key='2611.99999v1',
+            )
+            self.assertIn(third['api_key'], other_keys)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -585,24 +585,29 @@ describe('Wave 11 Track 11C: equal-weight paper-sticky account affinity & scorec
 });
 
 describe('Wave 11 Track 11C: KV prefix caching prompt ordering invariants', () => {
-    it('keeps >= 85% static prefix before the first dynamic placeholder on all 12 reordered prompt templates', () => {
+    it('keeps static prefix before the first dynamic placeholder on all 15 reordered prompt templates', () => {
         const prompts = [
-            'api-reader-article.md',
-            'deep-analysis.md',
-            'scoring-audit.md',
-            'gap-fill.md',
-            'core-summary-repair.md',
-            'filter.md',
-            'tag-repair.md',
-            'structure-repair.md',
-            'image-supplement.md',
-            'opensource-scan.md',
-            'method-fill.md',
-            'table-fill.md'
+            { name: 'api-reader-article.md', minRatio: 0.85 },
+            // Locked patch-protocol suffix after <repair_input> is pinned by prompt-writing-guide-version.test.js (~81.8% static prefix)
+            { name: 'api-reader-repair.md', minRatio: 0.80 },
+            { name: 'api-reader-fact-local.md', minRatio: 0.85 },
+            // Short template (594 chars): 100% of static instructions & JSON schema precede <concept_terms_input> (~75.1%)
+            { name: 'api-reader-concept-terms.md', minRatio: 0.75 },
+            { name: 'deep-analysis.md', minRatio: 0.85 },
+            { name: 'scoring-audit.md', minRatio: 0.85 },
+            { name: 'gap-fill.md', minRatio: 0.85 },
+            { name: 'core-summary-repair.md', minRatio: 0.85 },
+            { name: 'filter.md', minRatio: 0.85 },
+            { name: 'tag-repair.md', minRatio: 0.85 },
+            { name: 'structure-repair.md', minRatio: 0.85 },
+            { name: 'image-supplement.md', minRatio: 0.85 },
+            { name: 'opensource-scan.md', minRatio: 0.85 },
+            { name: 'method-fill.md', minRatio: 0.85 },
+            { name: 'table-fill.md', minRatio: 0.85 }
         ];
         // Batch-static placeholders (identical across every paper in a batch) are part of the cacheable prefix.
         const BATCH_STATIC_PLACEHOLDERS = new Set(['{tagPromptText}']);
-        for (const name of prompts) {
+        for (const { name, minRatio } of prompts) {
             const template = loadPrompt(`prompts/current/${name}`, {});
             const matches = [...template.matchAll(/(?<![\\A-Za-z])\{[a-z][A-Za-z0-9_]*\}/g)]
                 .filter(m => !BATCH_STATIC_PLACEHOLDERS.has(m[0]));
@@ -611,8 +616,8 @@ describe('Wave 11 Track 11C: KV prefix caching prompt ordering invariants', () =
             assert.ok(firstDynamic.index > 0, `${name} must place static instructions before ${firstDynamic[0]}`);
             const ratio = firstDynamic.index / template.length;
             assert.ok(
-                ratio >= 0.85,
-                `${name} static prefix ratio ${(ratio * 100).toFixed(1)}% < 85% (first per-paper placeholder ${firstDynamic[0]} at ${firstDynamic.index}/${template.length})`
+                ratio >= minRatio,
+                `${name} static prefix ratio ${(ratio * 100).toFixed(1)}% < ${(minRatio * 100).toFixed(0)}% (first per-paper placeholder ${firstDynamic[0]} at ${firstDynamic.index}/${template.length})`
             );
         }
     });

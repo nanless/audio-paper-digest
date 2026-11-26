@@ -38,20 +38,23 @@ test('current templates preserve original text apart from the declared changes; 
             assert.match(text, /超过 950 个汉字/);
             assert.match(text, /严禁在全文中连续 3 节及以上套用/);
             assert.doesNotMatch(text, /"version":\s*3/);
-        } else if (['prompts/current/api-reader-fact-local.md', 'prompts/current/api-reader-concept-terms.md'].includes(current)) {
-            const fact = current.endsWith('/api-reader-fact-local.md');
-            const header = require('../scripts/lib/protocol-codec').record(fact ? 'reader-fact-sentence-patch' : 'reader-concept-term-patch');
-            let expected = originalBytes.toString().replace('{"version":1,"draftSha256"',
-                JSON.stringify(header).slice(0, -1) + ',"draftSha256"')
-                .replace('# Reader 已核验事实原句修订 v3', '# 已核验事实的原句修订');
-            if (fact) {
-                expected = expected.replace(
-                    '不能返回完整正文、解释标题、Markdown标题、terms标题、换行、图表公式标记、表格或链接。',
-                    '不能返回完整正文、解释标题、Markdown标题、terms标题、换行、图表公式标记、表格、链接、行内反引号 ` 或加粗标记 ** / __。'
-                );
-            }
-            assert.notEqual(expected, originalBytes.toString());
-            assert.equal(actual.toString(), expected);
+        } else if (current === 'prompts/current/api-reader-fact-local.md') {
+            const header = require('../scripts/lib/protocol-codec').record('reader-fact-sentence-patch');
+            const text = actual.toString();
+            assert.notEqual(text, originalBytes.toString());
+            assert.match(text, /^# 已核验事实的原句修订/m);
+            assert.ok(text.includes(JSON.stringify(header).slice(0, -1) + ',"draftSha256"'));
+            assert.match(text, /行内反引号 ` 或加粗标记 \*\* \/ __/);
+            assert.match(text, /<fact_repair_input>[\s\S]*\{title\}[\s\S]*\{arxivId\}[\s\S]*\{factFeedback\}[\s\S]*\{repairTargets\}[\s\S]*<\/fact_repair_input>/);
+            assert.doesNotMatch(text, /\{"version":1,"draftSha256"/);
+        } else if (current === 'prompts/current/api-reader-concept-terms.md') {
+            const header = require('../scripts/lib/protocol-codec').record('reader-concept-term-patch');
+            const text = actual.toString();
+            assert.notEqual(text, originalBytes.toString());
+            assert.ok(text.includes(JSON.stringify(header).slice(0, -1) + ',"draftSha256"'));
+            assert.match(text, /2–48个字符/);
+            assert.match(text, /<concept_terms_input>[\s\S]*\{title\}[\s\S]*\{arxivId\}[\s\S]*\{validationFeedback\}[\s\S]*\{termsTargets\}[\s\S]*\{explanationContext\}[\s\S]*\{sourceQuotes\}[\s\S]*<\/concept_terms_input>/);
+            assert.doesNotMatch(text, /\{"version":1,"draftSha256"/);
         } else if (current === 'prompts/current/api-reader-repair.md') {
             const header = require('../scripts/lib/protocol-codec').record('reader-node-patch');
             const text = actual.toString();
@@ -61,7 +64,10 @@ test('current templates preserve original text apart from the declared changes; 
             assert.match(text, /散文超过 950 汉字的小节须使用 `####` 子标题或结构化列表/);
             assert.match(text, /`chineseCaption`/);
             assert.match(text, /`implementationSpecs`/);
+            assert.match(text, /`audioSignalSpecs`/);
+            assert.match(text, /不对精简子表宣称“列出全部 N 项”/);
             assert.match(text, /不得连续 3 节及以上套用/);
+            assert.match(text, /<repair_input>[\s\S]*\{title\}[\s\S]*\{arxivId\}[\s\S]*\{mechanicalContract\}[\s\S]*\{sourceEvidence\}[\s\S]*\{repairTargets\}[\s\S]*\{validationFeedback\}[\s\S]*<\/repair_input>[\s\S]*\{operationProtocol\}/);
             assert.doesNotMatch(text, /\{"version":1,"draftSha256"/);
         } else if (current === 'prompts/current/primary-fact-local-repair.md') {
             const expected = originalBytes.toString().replace('主文局部事实纠错 v1', '主文局部事实纠错')

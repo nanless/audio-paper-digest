@@ -31,4 +31,4 @@ if not ssl.OPENSSL_VERSION.startswith("OpenSSL "):
   export PD_PYTHON_RUNTIME_VERIFIED_BIN="$python_bin"
 fi
 
-exec "$python_bin" "$@"
+exec "$python_bin" ${1+"$@"}

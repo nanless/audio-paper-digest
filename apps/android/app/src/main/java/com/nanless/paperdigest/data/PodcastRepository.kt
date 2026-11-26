@@ -101,8 +101,19 @@ class PodcastRepository(
 
     fun episodeFile(sha256: String): File = File(episodesDir, "$sha256.mp3")
 
-    suspend fun cachedEpisodeIds(): Set<String> = mutex.withLock {
-        cacheEntries.filter { isValidSha256(it.sha256) && episodeFile(it.sha256).isFile }.mapTo(linkedSetOf()) { it.episodeId }
+    suspend fun cachedShas(): Set<String> = mutex.withLock {
+        cacheEntries.filter { isValidSha256(it.sha256) && episodeFile(it.sha256).isFile }.mapTo(linkedSetOf()) { it.sha256 }
+    }
+
+    suspend fun cachedEpisodeIds(episodes: List<PodcastEpisode>? = cachedFeed?.episodes): Set<String> = mutex.withLock {
+        val validShas = cacheEntries
+            .filter { isValidSha256(it.sha256) && episodeFile(it.sha256).isFile }
+            .mapTo(hashSetOf()) { it.sha256 }
+        if (episodes != null) {
+            episodes.filter { it.sha256 in validShas }.mapTo(linkedSetOf()) { it.id }
+        } else {
+            cacheEntries.filter { it.sha256 in validShas }.mapTo(linkedSetOf()) { it.episodeId }
+        }
     }
 
     suspend fun cachedTotalBytes(): Long = mutex.withLock {

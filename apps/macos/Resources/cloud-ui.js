@@ -18,11 +18,11 @@ export function mountCloud(app){
  [data-setting-pane="cloud"] .cloud-inline{display:flex;align-items:center;gap:8px}
  [data-setting-pane="cloud"] .cloud-inline input{width:auto}
  [data-setting-pane="cloud"] .cloud-version{padding:14px 0;border-bottom:1px solid var(--line,#ddd)}
- [data-setting-pane="cloud"] .cloud-error{color:var(--danger,#a83f36);white-space:pre-wrap}
+ [data-setting-pane="cloud"] .cloud-error{color:var(--red,#a83f36);white-space:pre-wrap}
  [data-setting-pane="cloud"] h2{font-size:15px;margin:0 0 8px}
  [data-setting-pane="cloud"] .cloud-fields{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px}
  [data-setting-pane="cloud"] .cloud-fields label{margin:0}
- [data-setting-pane="cloud"] .cloud-primary{background:var(--accent,#3468cf);color:#fff;border-color:transparent}
+ [data-setting-pane="cloud"] .cloud-primary{background:var(--accent,#3468cf);color:var(--on-accent,#fff);border-color:transparent}
  [data-setting-pane="cloud"] button.cloud-primary:not(:disabled):hover{background:var(--accent,#3468cf);filter:brightness(.92)}
  [data-setting-pane="cloud"] .cloud-primary:disabled{background:var(--soft,#eceeed);color:var(--muted,#888);border-color:var(--line,#ddd)}
  [data-setting-pane="cloud"] .cloud-check-row{display:flex;gap:12px;align-items:center}

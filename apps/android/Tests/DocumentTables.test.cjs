@@ -25,7 +25,7 @@ const output=process.env.PD_DOCUMENT_TABLE_OUTPUT||fs.mkdtempSync(path.join(mac,
 fs.mkdirSync(output,{recursive:true});assert.equal(fs.existsSync(path.join(output,'result.json')),false);
 const results=[];let browser;
 (async()=>{try{
- browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+ browser=await chromium.launch({headless:true,executablePath:process.env.PD_MAC_BROWSER||(fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')?'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome':undefined)});
  for(const width of [360,840])for(const font of [18,36])for(const scheme of ['light','dark']){
   const page=await browser.newPage({viewport:{width,height:800},colorScheme:scheme}),result={width,font,scheme,passed:false},requests=[];
   try{

@@ -2388,20 +2388,38 @@ describe('阶段记录保存失败必须停止批次', () => {
             const filename = path.join(directory, 'results.json');
             const papers = [{ arxivId: '2610.98761', title: '第一篇' },
                 { arxivId: '2610.98762', title: '第二篇' }];
+            const originalOpen = fs.openSync;
+            const originalClose = fs.closeSync;
             const originalWrite = fs.writeFileSync;
             const failure = Object.assign(new Error('测试中模拟阶段记录保存失败'), { code: 'ENOSPC' });
             const calls = [];
+            const targetFds = new Set();
             let writes = 0;
             let retries = 0;
+            const isTargetTmp = target => typeof target === 'string' && path.dirname(target) === directory
+                && path.basename(target).startsWith('.results.json.');
+            const restoreFs = () => {
+                fs.openSync = originalOpen;
+                fs.closeSync = originalClose;
+                fs.writeFileSync = originalWrite;
+            };
+            fs.openSync = (target, ...options) => {
+                const fd = originalOpen(target, ...options);
+                if (isTargetTmp(target)) targetFds.add(fd);
+                return fd;
+            };
+            fs.closeSync = fd => {
+                targetFds.delete(fd);
+                return originalClose(fd);
+            };
             fs.writeFileSync = (target, content, ...options) => {
-                if (typeof target === 'string' && path.dirname(target) === directory
-                    && path.basename(target).startsWith('.results.json.')) {
+                if (isTargetTmp(target) || targetFds.has(target)) {
                     writes++;
                     if (writes === 1) throw failure;
                 }
                 return originalWrite(target, content, ...options);
             };
-            t.after(() => { fs.writeFileSync = originalWrite; fs.rmSync(directory, { recursive: true, force: true }); });
+            t.after(() => { restoreFs(); fs.rmSync(directory, { recursive: true, force: true }); });
             try {
                 await assert.rejects(analyzeBatch(papers, {
                     concurrency: 1, maxRetries: 2, retryDelayMs: 0,
@@ -2425,7 +2443,7 @@ describe('阶段记录保存失败必须停止批次', () => {
                     return true;
                 });
             } finally {
-                fs.writeFileSync = originalWrite;
+                restoreFs();
             }
             assert.deepEqual(calls, [papers[0].arxivId]);
             assert.equal(writes, 1, '首次保存失败后不得再次写入掩盖错误');

@@ -88,6 +88,19 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
     val pendingActions=remember{mutableStateMapOf<String,Boolean>()}
     var restoreCommand by rememberSaveable { mutableStateOf("app.restore.commit") }
     val snackbar = remember { SnackbarHostState() }
+    var badgesSyncStamp by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.notice) {
+        val message = state.notice?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        snackbar.currentSnackbarData?.dismiss()
+        snackbar.showSnackbar(message)
+    }
+    LaunchedEffect(state.nativeResourceBadgesEnabled, state.catalogSyncedAt, state.workspaceEpoch) {
+        if (state.nativeResourceBadgesEnabled) {
+            val isPostSyncRefresh = badgesSyncStamp != null && badgesSyncStamp != state.catalogSyncedAt && !state.settings.optBoolean("offlineMode")
+            badgesSyncStamp = state.catalogSyncedAt ?: ""
+            runCatching { controller.execute("library.resourceBadges", obj("refresh" to isPostSyncRefresh)) }
+        }
+    }
     var routeRevision by remember { mutableLongStateOf(0) }
     val renderedRouteRevision=routeRevision
     val renderedAggregateLease=controller.captureAggregateView()

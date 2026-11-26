@@ -148,27 +148,88 @@ def _reader_table_header_unit_evidence_failures(table, quotes, *, hooks: Mapping
         def surface(value):
             text = unicodedata.normalize('NFKC', str(value or '')).lower()
             return re.sub(r'\s+', ' ', re.sub(r'[`*_↑↓]', '', text)).strip()
+        extra_unit_re = re.compile(
+            r'(?<![a-z0-9_.])([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(gib|mib|kib|mb|kb|tb|ghz|kbps|mbps|h)(?![a-z0-9_])',
+            re.I,
+        )
+
+        def find_explicit_extra_units_for_value(raw_text, numeric_value_str):
+            cleaned = surface(raw_text).replace('−', '-').replace('－', '-')
+            found = set()
+            for m in extra_unit_re.finditer(cleaned):
+                if _H._normalize_api_reader_numeric_token(m.group(1)) == numeric_value_str:
+                    found.add(m.group(2).lower())
+            return found
+
+        def quote_covers_explicit_extra_unit(quote, numeric_value_str, target_unit):
+            target = str(target_unit or '').lower()
+            for clause in re.split(r'(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)|[,，]', unicodedata.normalize('NFKC', str(quote or ''))):
+                text = surface(clause).replace('−', '-').replace('－', '-')
+                if re.search(r'\b(?:not|no|never|unavailable|unknown|missing)\b|未报告|未提供|不可得|未知|没有|并非|不是|未达到|不等于|不超过', text):
+                    continue
+                if target in find_explicit_extra_units_for_value(text, numeric_value_str):
+                    return True
+            return False
+
+        zh_si_unit_map = {
+            '毫秒': 'ms', '秒': 's', '小时': 'h', '赫兹': 'hz',
+            '千赫兹': 'khz', '兆赫兹': 'mhz', '分贝': 'db', '百分比': '%',
+        }
+        zh_unit_pattern = r'毫秒|秒|小时|赫兹|千赫兹|兆赫兹|分贝|百分比'
         failures = []
-        unit_pattern = r'%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp'
+        unit_pattern = r'%|db|ms|khz|mhz|ghz|hz|gib|mib|kib|gb|mb|kb|tb|kbps|mbps|pp|s|h'
         for column, original_header in enumerate(table.get('header', [])):
             header = surface(original_header)
             match = re.fullmatch(rf'(.*?)(?:\(\s*({unit_pattern})\s*\)|\[\s*({unit_pattern})\s*\]|\s+({unit_pattern}))', header)
+            mapped_zh_unit = None
+            if not match:
+                # 仅对含 ASCII 指标名的表头放行括号内中文 SI 单位（如 "Latency (毫秒)"），
+                # 绝不把纯中文译名表头（如 "相对最强基线提升 (百分点)"）误判为未核验单位声明。
+                zh_match = re.fullmatch(rf'(.*?)(?:\(\s*({zh_unit_pattern})\s*\)|\[\s*({zh_unit_pattern})\s*\])', header)
+                if zh_match and re.search(r'[a-z]', zh_match.group(1), re.I):
+                    mapped_zh_unit = zh_si_unit_map[zh_match.group(2) or zh_match.group(3)]
+                    match = zh_match
             if not match:
                 continue
             quantity_condition = re.search(r'(?:^|\s)[-+−－]?\d+(?:\.\d+)?\s*$', match.group(1))
-            if quantity_condition and (match.group(4)
+            if quantity_condition and ((not mapped_zh_unit and match.group(4))
                     or re.search(r'(?:^|\s)[-+−－]\d+(?:\.\d+)?\s*$', match.group(1))):
                 continue
-            unit = next(value for value in match.groups()[1:] if value)
+            unit = (mapped_zh_unit or next(value for value in match.groups()[1:] if value)).lower()
             metric = match.group(1).strip()
             declaration = re.escape(re.sub(r'\s*([([])', r' \1', header)).replace(r'\ ', r'\s*')
             declared_unit = re.compile(rf'(?<![a-z0-9_])' + declaration + r'(?![a-z0-9_])')
+            zh_ascii_header_unit_re = (
+                re.compile(rf'(?<![a-z0-9_]){re.escape(metric)}\s*[(\[]\s*{re.escape(unit)}\s*[)\]]', re.I)
+                if mapped_zh_unit and metric else None
+            )
             for row, cells in enumerate(table.get('rows', [])):
-                for token in _H._api_reader_numeric_tokens(cells[column] if column < len(cells) else ''):
+                raw_cell = cells[column] if column < len(cells) else ''
+                for token in _H._api_reader_numeric_tokens(raw_cell):
                     number = re.fullmatch(r'([-+]?\d+(?:\.\d+)?)([a-z%]*)', token, re.I)
                     if not number:
                         continue
-                    consistent = not number.group(2) or number.group(2).lower() == unit
+                    explicit_extra_cell_units = (
+                        find_explicit_extra_units_for_value(raw_cell, number.group(1))
+                        if not number.group(2) else set()
+                    )
+                    consistent = (
+                        number.group(2).lower() == unit
+                        if number.group(2)
+                        else (not explicit_extra_cell_units or unit in explicit_extra_cell_units)
+                    )
+                    covered_by_explicit_cell_unit = (
+                        not number.group(2)
+                        and unit in explicit_extra_cell_units
+                        and any(quote_covers_explicit_extra_unit(quote, number.group(1), unit) for quote in quotes)
+                    )
+                    covered_by_zh_table_header = bool(
+                        zh_ascii_header_unit_re and any(
+                            zh_ascii_header_unit_re.search(surface(quote))
+                            and token in _H._api_reader_numeric_tokens(surface(quote))
+                            for quote in quotes
+                        )
+                    )
                     def directly_declared(quote):
                         for sentence in re.split(r'(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)', unicodedata.normalize('NFKC', quote)):
                             text = surface(sentence)
@@ -179,7 +240,13 @@ def _reader_table_header_unit_evidence_failures(table, quotes, *, hooks: Mapping
                                 if (_H._api_reader_numeric_tokens(clause) or [None])[0] == token:
                                     return True
                         return False
-                    covered = consistent and (bool(number.group(2)) or any(_H._reader_adjacent_metric_unit_evidence(quote, metric, number.group(1), unit) for quote in quotes) or (metric and any(directly_declared(quote) for quote in quotes)))
+                    covered = consistent and (
+                        bool(number.group(2))
+                        or covered_by_explicit_cell_unit
+                        or covered_by_zh_table_header
+                        or any(_H._reader_adjacent_metric_unit_evidence(quote, metric, number.group(1), unit) for quote in quotes)
+                        or (metric and any(directly_declared(quote) for quote in quotes))
+                    )
                     if not covered:
                         failures.append((row + 1, column, token, unit))
         return failures

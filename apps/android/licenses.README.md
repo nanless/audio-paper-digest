@@ -12,8 +12,8 @@
 
 | 材料 | SHA-256 |
 |---|---|
-| [manifest.json](<licenses/manifest.json>) | `b00a26f828bf9ddbca32caa2078ec75ffc3b1d04b281812dcfd6c0d2c788ac9d` |
-| [bundle-files.json](<licenses/bundle-files.json>) | `b112c4d21a03940be8b52b470412ee7e390d1b0c3985c8215e9cb623f8dcecf4` |
+| [manifest.json](<licenses/manifest.json>) | `ea8aa0d1157b3cf43181080f3a0b03f98f3b0467dfcd23f301bd3ecd8ab344e7` |
+| [bundle-files.json](<licenses/bundle-files.json>) | `1d62682954c8b018128f965057f7483669be8fea1dd941b35a5c7f5bae55a4b2` |
 | 运行依赖列表的规范化指纹，保留重复项 | `56423d42321b81dc83f6ff384b728d1b29e0ebe326e05faf5a5ec2980c392d3f` |
 
 许可目录共 632 个文件。文件清单本身由构建代码中的固定值约束；运行物料的字段、排序和重复规则见完整清单的 `runtimeMaterialFingerprint`。

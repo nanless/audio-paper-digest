@@ -282,6 +282,32 @@ class ReaderInlineSvgDependencyTest(unittest.TestCase):
                     raw, expected_sha, contract=renderer.CONTRACT
                 )
 
+    def test_replay_breaks_early_on_deterministic_svg_error_and_normalizes_line_breaks(self):
+        from unittest import mock
+        import reader_inline_svg_pixel_replay as replay_mod
+
+        raw = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40" viewBox="0 0 80 40">'
+            b'<defs><rect x="0" y="0" width="9999" height="9999"/></defs>'
+            b'<rect x="2" y="2" width="76" height="36" fill="#336699"/></svg>'
+        )
+        png = renderer.render_svg(raw, hidpi=False)
+        self.assertTrue(png.startswith(b'\x89PNG\r\n\x1a\n'))
+
+        # Deterministic UnsupportedSvgDependency breaks out immediately instead of looping 16x
+        calls = 0
+
+        def fail_once(_svg_bytes, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise renderer.UnsupportedSvgDependency('external_css')
+
+        with mock.patch.object(renderer, 'render_svg', side_effect=fail_once), \
+             mock.patch.object(replay_mod, '_trusted_renderers', return_value=iter(())):
+            with self.assertRaises(renderer.UnsupportedSvgDependency):
+                replay_mod.replay_saved_inline_svg_pixels(raw, '0' * 64, contract=renderer.CONTRACT)
+        self.assertEqual(calls, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

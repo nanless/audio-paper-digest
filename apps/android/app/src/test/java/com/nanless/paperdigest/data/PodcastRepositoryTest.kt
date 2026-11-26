@@ -318,6 +318,67 @@ class PodcastRepositoryTest {
         assertTrue(res200.papers.getValue("arxiv:2611.00001").hasCode)
         assertTrue(res200.papers.getValue("arxiv:2611.00001").hasProjectPage)
         assertEquals(setOf("arxiv:2611.00099"), res200.cachedDemoIds)
+
+        // CL-P1-3: desktop-details/ lookup matches articleRevision.articleDescriptor.sha256
+        // and falls back to page:<appearanceId> when paperId is null.
+        val ddArticlesDir = File(libDir, "desktop-details/articles").also { it.mkdirs() }
+        val ddPapersDir = File(libDir, "desktop-details/papers").also { it.mkdirs() }
+        val shaVerified = "1".repeat(64)
+        val shaUnverified = "2".repeat(64)
+        File(ddArticlesDir, "$shaVerified.html").writeText("<div class=\"audio-demo-cta-btn\">试听</div>")
+        File(ddArticlesDir, "$shaUnverified.html").writeText("<div class=\"audio-demo-cta-btn\">试听</div>")
+        File(ddPapersDir, "d1.json").writeText(
+            JSONObject()
+                .put("paperId", "conference:interspeech:2026:demo-1")
+                .put("appearanceId", "posts/demo-1/")
+                .put(
+                    "articleRevision",
+                    JSONObject()
+                        .put("articleRevisionId", "9".repeat(64))
+                        .put("articleDescriptor", JSONObject().put("sha256", shaVerified))
+                )
+                .toString()
+        )
+        File(ddPapersDir, "d2.json").writeText(
+            JSONObject()
+                .put("paperId", JSONObject.NULL)
+                .put("appearanceId", "/audio-research-portal/posts/unverified-demo/")
+                .put(
+                    "articleRevision",
+                    JSONObject()
+                        .put("articleRevisionId", "8".repeat(64))
+                        .put("articleDescriptor", JSONObject().put("sha256", shaUnverified))
+                )
+                .toString()
+        )
+        val ddScan = repo.scanCachedAudioDemoPaperIds()
+        assertTrue("conference:interspeech:2026:demo-1" in ddScan)
+        assertTrue("page:/audio-research-portal/posts/unverified-demo/" in ddScan)
+    }
+
+    @Test
+    fun republishedEpisodeWithNewSha256IsNotMarkedCached() = runBlocking {
+        val mp3V1 = makeMp3(71, 320)
+        val mp3V2 = makeMp3(92, 320)
+        val url = "https://github.com/nanless/audio-paper-digest-blog/releases/download/v1.5/repub.mp3"
+        var feedBytes = makeFeedBytes(episodeJson("ep-repub", "2026-11-25", "Repub V1", url, mp3V1))
+        var audioBytes = mp3V1
+        val repo = PodcastRepository(
+            cacheDir = temp.newFolder("podcast-repub-sha"),
+            feedTransport = { _, _ -> HttpBytes(200, emptyMap(), feedBytes) },
+            audioTransport = { _, _ -> HttpBytes(200, emptyMap(), audioBytes) },
+        )
+        val v1Feed = repo.fetchFeed(forceRefresh = true).feed!!
+        repo.downloadEpisode(v1Feed.episodes.single())
+        assertEquals(setOf("ep-repub"), repo.cachedEpisodeIds())
+
+        // Feed re-publishes ep-repub with new audio bytes & SHA-256
+        feedBytes = makeFeedBytes(episodeJson("ep-repub", "2026-11-25", "Repub V2", url, mp3V2))
+        audioBytes = mp3V2
+        val v2Feed = repo.fetchFeed(forceRefresh = true).feed!!
+        assertTrue("re-published episode with new sha256 must NOT be marked cached", repo.cachedEpisodeIds(v2Feed.episodes).isEmpty())
+        assertTrue("default cachedEpisodeIds() must also reflect new feed sha256", repo.cachedEpisodeIds().isEmpty())
+        assertFalse(v2Feed.episodes.single().sha256 in repo.cachedShas())
     }
 
     @Test

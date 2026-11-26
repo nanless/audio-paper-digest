@@ -226,7 +226,7 @@ function restoreUnfundedDiagnosticFailureState(directory, identity, payload) {
         originalFailureState: originalState, previousEnvelopeSha256: checked.envelopeSha256,
         archiveChain: chain.map(edge => ({ archivedName: path.basename(edge.file), originalEnvelopeSha256: edge.sha256,
             originalPayloadSha256: edge.oldPayloadSha256, migrationAuditSha256: hashDraft(edge.audit) })),
-        latestUsageFileName: path.basename(latest.file), latestUsageSha256: latest.sha256, latestUsageEventId: latest.value.eventId
+        latestUsageFileName: latest.relativePath || path.basename(latest.file), latestUsageSha256: latest.sha256, latestUsageEventId: latest.value.eventId
     }];
     for (const edge of chain) if (readEnvelope(edge.file).envelopeSha256 !== edge.sha256) throw new Error('Original diagnostic archive changed before restoration');
     require('./reader-proof-read-scope').readReaderProofJson(latest.file, { expectedSha256: latest.sha256 });

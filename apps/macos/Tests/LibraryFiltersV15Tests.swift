@@ -439,6 +439,84 @@ private actor FiltersFixtureTransport {
         let rescanned = await service.scanCachedAudioDemoPaperIDs(forceRescan: true)
         try check(rescanned == ["arxiv:2611.00001", "arxiv:2611.00004"], "forceRescan picks up newly written demo article")
 
+        // CL-P1-3: desktop-details/ cache detection resolves articleRevision.articleDescriptor.sha256
+        // even when primaryArticleRevisionId differs from articleDescriptor.sha256.
+        let desktopHTML = Data("<div id='article-body'><a class=\"audio-demo-cta-btn\" href=\"https://demo.example\">试听</a></div>".utf8)
+        let desktopArticleSHA = sha(desktopHTML)
+        let distinctRevisionID = sha(Data("distinct-revision-id-v2".utf8))
+        try check(distinctRevisionID != desktopArticleSHA, "fixture revision ID differs from article descriptor SHA")
+        var desktopDetailObj = detailObj
+        desktopDetailObj["paperId"] = "conference:interspeech:2026:asr-42"
+        desktopDetailObj["appearanceId"] = "posts/p2/"
+        desktopDetailObj["articleRevision"] = [
+            "articleRevisionId": distinctRevisionID,
+            "appearanceId": "posts/p2/",
+            "articleDescriptor": [
+                "url": "client/details/articles/\(desktopArticleSHA).html",
+                "bytes": desktopHTML.count,
+                "sha256": desktopArticleSHA
+            ] as [String: Any],
+            "hasGuideContent": true,
+            "resourceCount": 0
+        ] as [String: Any]
+        let desktopDetailBytes = try jsonBytes(desktopDetailObj)
+        let desktopDetailSHA = sha(desktopDetailBytes)
+        let pubDir = root.appendingPathComponent("PublishedLibrary", isDirectory: true)
+        let ddRootDir = pubDir.appendingPathComponent("desktop-details", isDirectory: true)
+        let ddPapersDir = ddRootDir.appendingPathComponent("papers", isDirectory: true)
+        let ddArticlesDir = ddRootDir.appendingPathComponent("articles", isDirectory: true)
+        try FileManager.default.createDirectory(at: ddPapersDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: ddArticlesDir, withIntermediateDirectories: true)
+        try desktopDetailBytes.write(to: ddPapersDir.appendingPathComponent("\(desktopDetailSHA).json"))
+        try desktopHTML.write(to: ddArticlesDir.appendingPathComponent("\(desktopArticleSHA).html"))
+        let snap = await service.snapshot
+        let snapID = snap.summary.snapshotID
+        guard let snapEpoch = snap.validationEpoch else {
+            throw LibraryService.ServiceError.invalid("TEST FAIL: synced snapshot must have validationEpoch")
+        }
+        let ddDesc = LibraryService.DesktopFileDescriptor(url: "client/details/papers/\(desktopDetailSHA).json", bytes: desktopDetailBytes.count, sha256: desktopDetailSHA)
+        let ddApp = LibraryService.DesktopAppearanceEntry(
+            appearanceId: "posts/p2/",
+            blogURL: "posts/p2/",
+            pageType: "paper",
+            publicationStatus: "active",
+            blogPublishedAt: "2026-11-20",
+            articleUpdatedAt: nil,
+            sourceVersionId: nil,
+            articleRevisionId: distinctRevisionID,
+            detail: ddDesc
+        )
+        let ddEntry = LibraryService.DesktopPaperDetailEntry(
+            paperID: "conference:interspeech:2026:asr-42",
+            primaryAppearanceId: "posts/p2/",
+            primaryBlogURL: "posts/p2/",
+            primaryArticleRevisionId: distinctRevisionID,
+            primaryPublicationStatus: "active",
+            primaryDetail: ddDesc,
+            appearances: [ddApp]
+        )
+        let ddState = LibraryService.DesktopDetailsState(
+            snapshotID: snapID,
+            validationEpoch: snapEpoch,
+            sourceCommit: String(repeating: "a", count: 40),
+            generatedAt: "2026-11-24T06:00:00Z",
+            basePath: "/blog/",
+            paperDetails: ["conference:interspeech:2026:asr-42": ddEntry],
+            aggregateDetails: [:],
+            activeTombstones: [],
+            tombstoneHistory: []
+        )
+        try JSONEncoder().encode(ddState).write(to: ddRootDir.appendingPathComponent("state.json"))
+        let reloaded = try LibraryService(dataDirectory: root, siteBaseURL: base, transport: { url, limit in
+            try await transport.read(url, limit)
+        })
+        try await reloaded.waitUntilReady()
+        let activeDD = await reloaded.activeDesktopDetails()
+        try check(activeDD != nil, "reloaded service activates matching desktop-details state")
+        let desktopDemoScan = await reloaded.scanCachedAudioDemoPaperIDs(forceRescan: true)
+        try check(desktopDemoScan.contains("conference:interspeech:2026:asr-42"), "desktop-details demo scan resolves articleDescriptor.sha256 even when primaryArticleRevisionId differs")
+        await reloaded.invalidateSession()
+
         print("LibraryFiltersV15Tests: ALL CHECKS PASSED")
     }
 }

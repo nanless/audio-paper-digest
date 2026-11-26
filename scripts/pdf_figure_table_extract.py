@@ -27,6 +27,11 @@ from pathlib import Path
 from typing import Any
 
 import fitz  # PyMuPDF
+import threading
+try:
+    from pdf_author_extract import PYMUPDF_LOCK
+except ImportError:
+    PYMUPDF_LOCK = threading.RLock()
 
 from runtime_guard import require_external_runtime
 
@@ -1465,8 +1470,7 @@ def extract_pdf_figures_and_tables(pdf_bytes: bytes, arxiv_id: str = "") -> dict
     clean_id = re.sub(r"^arxiv:", "", str(arxiv_id or "").strip(), flags=re.IGNORECASE)
     clean_id = re.sub(r"v\d+$", "", clean_id, flags=re.IGNORECASE).lower()
 
-    doc = fitz.open(stream=raw, filetype="pdf")
-    try:
+    with PYMUPDF_LOCK, fitz.open(stream=raw, filetype="pdf") as doc:
         if doc.needs_pass or len(doc) == 0:
             return {"pdfSha256": pdf_sha, "figures": [], "tables": []}
 
@@ -1571,8 +1575,6 @@ def extract_pdf_figures_and_tables(pdf_bytes: bytes, arxiv_id: str = "") -> dict
             "figures": figures,
             "tables": tables,
         }
-    finally:
-        doc.close()
 
 
 def render_pdf_figure_crop_png(
@@ -1591,8 +1593,7 @@ def render_pdf_figure_crop_png(
         raise ValueError("Invalid crop bbox")
     target_dpi = max(72, min(432, int(dpi or DEFAULT_DPI)))
 
-    doc = fitz.open(stream=bytes(pdf_bytes), filetype="pdf")
-    try:
+    with PYMUPDF_LOCK, fitz.open(stream=bytes(pdf_bytes), filetype="pdf") as doc:
         if page_num > len(doc):
             raise ValueError(f"Page {page_num} out of range (1..{len(doc)})")
         page = doc[page_num - 1]
@@ -1617,8 +1618,6 @@ def render_pdf_figure_crop_png(
                     return png
             scale *= 0.78
         raise ValueError("Rendered PDF figure crop exceeded size limit")
-    finally:
-        doc.close()
 
 
 def _parse_crop_spec(spec: str) -> tuple[int, list[float]]:

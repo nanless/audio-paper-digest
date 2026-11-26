@@ -134,8 +134,8 @@ const STRUCTURED_V5_PERCENT_METRICS_RE = /(?:准确率|正确率|召回率|错�
 const AUDIO_METRIC_WHITELIST = Object.freeze([
     'UTMOS', 'DNSMOS', 'NISQA', 'ViSQOL', 'STOI', 'ESTOI',
     'FAD', 'CLAP', 'RTF', 'TTFA', 'EER', 'SI-SDR', 'SI-SDRi',
-    'MCD', 'LSD', 'WV-MOS', 'PESQ', 'MOS', 'WER', 'CER', 'PER',
-    'DER', 'JER', 'SIM', 'SECS', 'SDR', 'SNR'
+    'MCD', 'LSD', 'WV-MOS', 'PESQ', 'MOS', 'SMOS', 'CMOS', 'DMOS',
+    'WER', 'CER', 'PER', 'DER', 'JER', 'SIM', 'SECS', 'SDR', 'SNR'
 ]);
 const DIRECTION_RE = /(?:提高|提升|增加|改善|下降|降低|减少|相差|差距|高于|低于|从.+(?:到|降至|升至))/;
 const STRUCTURED_V5_DIRECTION_RE = /(?:提高|提升|增加|改善|下降|降低|减少|升至|降至|相差|差距|高于|低于|从.+(?:到|降至|升至))/;
@@ -1026,9 +1026,32 @@ function findBrokenProse(text) {
 
 function findNumericTypographyDefects(text) {
     const value = normalizeNfkc(text);
+    const maskKeepNewlines = match => match.replace(/[^\r\n]/g, ' ');
+    // 等长空格屏蔽围栏代码块、行内反引号、LaTeX 公式（\[...\]、\(...\)、$$...$$、$...$）
+    // 及 URL（https?://...），严格保留原始下标与行号。
+    let fence = null;
+    const maskedNonProse = value.split(/(?<=\n)/).map(line => {
+        const trimmed = line.trim();
+        const marker = /^(`{3,}|~{3,})/.exec(trimmed);
+        if (fence) {
+            if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length
+                && trimmed.slice(marker[1].length).trim() === '') fence = null;
+            return maskKeepNewlines(line);
+        }
+        if (marker) {
+            if (trimmed.indexOf(marker[1], marker[1].length) < 0) fence = marker[1];
+            return maskKeepNewlines(line);
+        }
+        return line;
+    }).join('')
+        .replace(/(`+)[^`\n]*?\1/gu, maskKeepNewlines)
+        .replace(/\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$/gu, maskKeepNewlines)
+        .replace(/\\\([^\n]*?\\\)/gu, maskKeepNewlines)
+        .replace(/(?<!\\)\$(?!\s)(?:[^$\n]|\\\$)+?(?<!\s)\$/gu, maskKeepNewlines)
+        .replace(/https?:\/\/[^\s)）\]】>"'`]+/gu, maskKeepNewlines);
     // 百分号是数字自身的技术单位；“前10% / 提升19.5%”不应被连接词
     // 粘连规则拆开。用等长屏蔽保留后续命中的原始下标。
-    const typographyValue = value.replace(
+    const typographyValue = maskedNonProse.replace(
         /(?:[\p{Script=Han}])?[-+]?\d+(?:\.\d+)?\s*[%％]/gu,
         match => ' '.repeat(match.length)
     );
@@ -1469,9 +1492,7 @@ function findMissingComparisonUnits(text, options = {}) {
         const sentenceStart = Math.max(value.lastIndexOf('。', match.index), value.lastIndexOf('；', match.index)) + 1;
         const sentenceEnd = value.slice(end).search(/[。！？!?；;]/u);
         const context = value.slice(sentenceStart, sentenceEnd < 0 ? value.length : end + sentenceEnd);
-        const zeroPairMetricRe = isStructuredV5
-            ? /(?:比分|得分|准确率|错误率|百分|\b(?:WER|CER|PER|EER)\b)/iu
-            : /(?:比分|得分|准确率|错误率|百分|\b(?:WER|CER|PER)\b)/iu;
+        const zeroPairMetricRe = /(?:比分|得分|准确率|错误率|百分|\b(?:WER|CER|PER)\b)/iu;
         if (/对\s*零点$/u.test(match.match)
             && /(?:共轭|极点|鼻音|反共振|滤波器|传递函数)/u.test(context)
             && !zeroPairMetricRe.test(context)) continue;
@@ -1493,8 +1514,8 @@ function findMissingComparisonUnits(text, options = {}) {
             + `|${percentMetricsRe.source}[^。！？\\n]{0,120}?(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)\\s*(?:%|个百分点|点|分|无量纲|比率|比例))`,
             'iu'
         );
-        if (explicitScoreUnit.test(sentence.text)
-            || metricUnitDeclaration.test(sentence.text)) continue;
+        if (metricUnitDeclaration.test(sentence.text)) continue;
+        const hasSentenceExplicitScoreUnit = explicitScoreUnit.test(sentence.text);
         // 模型名或产品名里的数字（例如 wav2vec-U、Qwen2-Audio）不算裸露的百分比数值。
         // 图表编号和“第 2 至 3 位”这类序号不是指标值。先做等长屏蔽，
         // 避免一句定性比较仅因包含图号/排名位置就被误判为缺少单位。
@@ -1731,10 +1752,10 @@ function findMissingComparisonUnits(text, options = {}) {
             const postUnitMetricNames = '(?:CIDEr|SPIDEr|METEOR|SPICE|BLEU(?:-[1-4])?|ROUGE(?:-[12L])?|FENSE)';
             numericText = numericText
                 // 仅在 STRUCTURED_V5 屏蔽已知非百分比音频与描述指标（1–5 感知打分、声学客观指标、无量纲描述指标）的直接取值/变化区间，
-                // 以及显式带非百分比时延/容量/码率单位的数值；EER 属于百分率指标故不在此屏蔽，且严格保留同句否定归属保护。
+                // 以及显式带非百分比时延/容量/码率/采样率/声学单位的数值；EER 属于百分率指标故不在此屏蔽，且严格保留同句否定归属保护。
                 .replace(
                     new RegExp(
-                        `(?<![A-Za-z0-9_.-])(?:UTMOS|DNSMOS|NISQA|ViSQOL|WV-MOS|PESQ|MOS)\\s*(?:反而\\s*)?(?:(?:从|由)\\s*${mosVal}\\s*${rangeVerb}\\s*|${singleVerb}\\s*|[ \\t]+)${mosVal}(?![A-Za-z0-9_.])` + audioDelim,
+                        `(?<![A-Za-z0-9_.-])(?:UTMOS|DNSMOS|NISQA|ViSQOL|WV-MOS|SMOS|CMOS|DMOS|PESQ|MOS)\\s*(?:反而\\s*)?(?:(?:从|由)\\s*${mosVal}\\s*${rangeVerb}\\s*|${singleVerb}\\s*|[ \\t]+)${mosVal}(?![A-Za-z0-9_.])` + audioDelim,
                         'giu'
                     ),
                     negateGuard
@@ -1754,7 +1775,7 @@ function findMissingComparisonUnits(text, options = {}) {
                     negateGuard
                 )
                 .replace(
-                    /(?<![A-Za-z0-9_.+−-])(?:\d+(?:\.\d+)?[ \t]*(?:[-–—]|至|到)[ \t]*)?\d+(?:\.\d+)?[ \t]*(?:ms|毫秒|GB|MB|KB|kbps|Mbps)(?:[ \t]*(?:[-–—]|至|到)[ \t]*\d+(?:\.\d+)?[ \t]*(?:ms|毫秒|GB|MB|KB|kbps|Mbps))?(?=$|[^A-Za-z0-9_.])/giu,
+                    /(?<![A-Za-z0-9_.+−-])(?:[-+−]?\d+(?:\.\d+)?[ \t]*(?:[-–—]|至|到)[ \t]*)?[-+−]?\d+(?:\.\d+)?[ \t]*(?:ms|毫秒|GiB|MiB|KiB|GB|MB|KB|TB|Gbps|Mbps|kbps|bps|FPS|RTFx|dB|MHz|kHz|Hz|s|秒)(?:[ \t]*(?:[-–—]|至|到)[ \t]*[-+−]?\d+(?:\.\d+)?[ \t]*(?:ms|毫秒|GiB|MiB|KiB|GB|MB|KB|TB|Gbps|Mbps|kbps|bps|FPS|RTFx|dB|MHz|kHz|Hz|s|秒))?(?=$|[^A-Za-z0-9_.])/giu,
                     (match, offset, whole) => {
                         const prefix = whole.slice(0, offset).split(/[；;：:\n]/u).at(-1);
                         if (/(?<![A-Za-z0-9_.])\d+(?:\.\d+)?[ \t]*(?:[-–—]|至|到)[ \t]*$/u.test(prefix)) return match;
@@ -1762,6 +1783,76 @@ function findMissingComparisonUnits(text, options = {}) {
                         return directMetricAssignment.test(prefix) ? match : ' '.repeat(match.length);
                     }
                 );
+        }
+        if (hasSentenceExplicitScoreUnit) {
+            // 同句他处出现的条件百分数（如“在 100% 干净语音条件下”）不能掩盖
+            // 后续百分比指标变化区间（如“WER 从 12.4 降至 8.3”）自身缺失单位。
+            const isPctScaleRaw = raw => (
+                /^\d/.test(raw)
+                    ? Number.parseFloat(raw.replace(/,/g, '')) > 1
+                    : /[十百千万亿]/.test(raw)
+                        || (raw.includes('点') && !/^[负正]?零点/.test(raw))
+            );
+            const nonPctFollowingUnitRe = /^\s*(?:%|个百分点|pp(?![A-Za-z])|点|分|倍|个|条|段|篇|张|种|类|组|套|块|步|轮|层|题|份|例|名|人|台|所|对|阶段|数据集|测试集|验证集|时|小时|路|模型|系统|骨干|样本|片段|词元|接口|分支|特征|维度|维|模态|bins?|位小数|句(?=$|[^A-Za-z0-9_.])|位\s*(?:评分者|评审者|受试者))/iu;
+            const otherNonPercentMetricRe = /\b(?:UTMOS|DNSMOS|NISQA|ViSQOL|WV-MOS|SMOS|CMOS|DMOS|PESQ|MOS|SI-SDRi?|SDR|SNR|STOI|ESTOI|FAD|CLAP|RTF|TTFA|MCD|LSD|SIM|SECS|CIDEr|SPIDEr|METEOR|SPICE|BLEU(?:-[1-4])?|ROUGE(?:-[12L])?|FENSE)\b/i;
+            const hasPercentMetricContext = offset => {
+                const beforeDelta = numericText.slice(0, offset);
+                const clausePrefix = beforeDelta.split(/[，,；;]/u).at(-1);
+                if (percentMetricsRe.test(clausePrefix)) return true;
+                const semiSeg = beforeDelta.split(/[；;]/u).at(-1);
+                const metricMatches = [...semiSeg.matchAll(new RegExp(percentMetricsRe.source, 'gi'))];
+                if (!metricMatches.length) return false;
+                const lastMetric = metricMatches.at(-1);
+                const between = semiSeg.slice(lastMetric.index + lastMetric[0].length);
+                return !explicitScoreUnit.test(between) && !otherNonPercentMetricRe.test(between);
+            };
+            const unitSuffixOpt = '(?:\\s*(?:%|个百分点|pp(?![A-Za-z])|点|分))?';
+            const rangeDeltaRe = new RegExp(
+                `(?:从|由)\\s*(${quantity})${unitSuffixOpt}\\s*(?:提高到|提升到|提升至|增加到|增至|下降到|下降至|降低到|降低至|减少到|减至|降至|升至|降到|升到|到|至)\\s*(${quantity})${unitSuffixOpt}`,
+                'giu'
+            );
+            const singleDeltaRe = new RegExp(
+                `(?:提高到|提升至|提升到|增加到|增至|升至|升到|降低到|降低至|下降到|下降至|减少到|减至|降至|降到|(?:提高|提升|增加|改善|下降|降低|减少|相差|差距|高于|低于)(?:了|约)?)\\s*(${quantity})${unitSuffixOpt}`,
+                'giu'
+            );
+            const coveredRangeSpans = [];
+            let hasUnboundDelta = false;
+            for (const m of numericText.matchAll(rangeDeltaRe)) {
+                const spanStart = m.index;
+                const spanEnd = m.index + m[0].length;
+                if (!hasPercentMetricContext(spanStart)) continue;
+                coveredRangeSpans.push([spanStart, spanEnd]);
+                if (explicitScoreUnit.test(m[0]) || /\bpp(?![A-Za-z])/i.test(m[0])) continue;
+                const afterSpan = numericText.slice(spanEnd);
+                if (nonPctFollowingUnitRe.test(afterSpan)) continue;
+                if (isPctScaleRaw(m[1]) || isPctScaleRaw(m[2])) {
+                    hasUnboundDelta = true;
+                    break;
+                }
+            }
+            if (!hasUnboundDelta) {
+                for (const m of numericText.matchAll(singleDeltaRe)) {
+                    const spanStart = m.index;
+                    const spanEnd = m.index + m[0].length;
+                    if (coveredRangeSpans.some(([s, e]) => spanStart >= s && spanEnd <= e)) continue;
+                    if (!hasPercentMetricContext(spanStart)) continue;
+                    if (explicitScoreUnit.test(m[0]) || /\bpp(?![A-Za-z])/i.test(m[0])) continue;
+                    const afterSpan = numericText.slice(spanEnd);
+                    if (nonPctFollowingUnitRe.test(afterSpan)) continue;
+                    if (isPctScaleRaw(m[1])) {
+                        hasUnboundDelta = true;
+                        break;
+                    }
+                }
+            }
+            if (hasUnboundDelta) {
+                findings.push({
+                    match: sentence.text,
+                    line: sentence.line,
+                    reason: 'percentage_metric_delta_without_unit'
+                });
+            }
+            continue;
         }
         const barePattern = new RegExp(`(?<![A-Za-z0-9_.])${quantity}(?![A-Za-z0-9_.])`, 'gu');
         const bareMatches = [...numericText.matchAll(barePattern)]

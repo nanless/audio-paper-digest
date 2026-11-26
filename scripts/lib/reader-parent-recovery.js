@@ -38,7 +38,7 @@ function fullReason(payload) {
     const repeatedValidation = Number.isSafeInteger(payload?.validationFailureStreak)
         && payload.validationFailureStreak >= 2 && typeof payload.validationFailureSignature === 'string'
         && payload.validationFailureSignature === repair.validationFailureSignature(payload.issues);
-    if (payload?.status === 'failed' && complete?.sections?.length >= 12
+    if (payload?.status === 'failed' && complete && complete.sections?.length >= repair.limitsForDraftFormat(complete).minimumSections
         && complete.sections.every(section => section && ['kind', 'heading', 'body']
             .every(key => typeof section[key] === 'string' && section[key].trim()))
         && Number.isSafeInteger(payload.attempts) && payload.attempts >= 2
@@ -175,7 +175,7 @@ function assertParent(directory, grant, payload, identity) {
         if (!eligible) fail('完整再生只接受有真实连续无进展补丁账，或已用完全文额度且缺失或不可解析正文的失败稿');
     } else {
         const draft = repair.parseRecoveryDraft(payload.draft) || repair.parseRecoveryDraft(payload.rawDraft);
-        if (!draft || draft.sections.length < 12 || draft.sections.some(section => !section
+        if (!draft || draft.sections.length < repair.limitsForDraftFormat(draft).minimumSections || draft.sections.some(section => !section
             || ['kind', 'heading', 'body'].some(key => typeof section[key] !== 'string' || !section[key].trim()))) fail('追加局部轮只接受完整可修的父失败稿');
         if (payload.attempts < parent.grant.maxResponses && parent.physicalRequests < parent.grant.maxPhysicalRequests
             && parent.reservedOutputTokens < parent.grant.maxReservedOutputTokens

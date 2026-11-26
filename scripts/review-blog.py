@@ -364,13 +364,15 @@ def _run_review(module, date_str):
                 page_artifacts=page_artifacts,
             )
             combined_results.update(current_results)
+            page_blocking = blocking + len(plan['unchangedFailed'])
+            asset_blocking = 0
             attest_assets = getattr(module, 'attest_api_reader_assets', None)
             if attest_assets:
-                blocking += attest_assets(
+                asset_blocking = attest_assets(
                     date_str, paths, manifest_path, combined_results,
                 )
-            blocking += len(plan['unchangedFailed'])
-            if blocking:
+            total_blocking = page_blocking + asset_blocking
+            if total_blocking:
                 failure_path = module.save_review_failure_state(
                     date_str,
                     paths,
@@ -379,7 +381,13 @@ def _run_review(module, date_str):
                     combined_results,
                 )
                 print(f'💾 已保存失败集续审状态: {failure_path}')
-                raise module.PublishDataValidationError(f'审查仍有 {blocking} 个未解决阻断问题')
+                if page_blocking and asset_blocking:
+                    blocking_summary = f'{page_blocking} 个页面阻断与 {asset_blocking} 个关联资产阻断（共 {total_blocking} 个）'
+                elif asset_blocking:
+                    blocking_summary = f'{asset_blocking} 个关联资产阻断'
+                else:
+                    blocking_summary = f'{page_blocking} 个未解决阻断问题'
+                raise module.PublishDataValidationError(f'审查仍有 {blocking_summary}')
             if fixed:
                 print(f'✅ review 自动修复 {fixed} 个文件')
             try:
@@ -490,7 +498,7 @@ def main():
     write_stage_summary('审查', 'ok', f'审查通过 {page_count} 个文件并签发凭证',
                         elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
     print(f'🧾 审查凭证: {receipt}')
-    print(f'\n✅ 审查完成；下一步: python3 scripts/push-blog.py --date {date_str}')
+    print(f'\n✅ 审查完成；下一步: npm run blog:push -- --date {date_str}')
 
 
 if __name__ == '__main__':

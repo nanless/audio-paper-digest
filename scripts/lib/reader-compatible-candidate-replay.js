@@ -30,9 +30,10 @@ function readProof(file, expectedSha256) {
     return require('./reader-proof-read-scope').readReaderProofJson(file, { expectedSha256 });
 }
 function latestReaderRequest(usageDirectory, paperId, runId) {
+    const { listUsageLedgerFiles } = require('./llm-usage-ledger');
     let latest = null, ambiguous = false;
-    for (const name of fs.readdirSync(safeDirectory(usageDirectory)).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
-        const file = path.join(usageDirectory, name);
+    for (const entry of listUsageLedgerFiles(safeDirectory(usageDirectory))) {
+        const file = entry.file;
         const checked = readProof(file);
         const event = checked.value;
         if (event.kind !== 'request' || event.paperId !== paperId || event.runId !== runId
@@ -40,7 +41,7 @@ function latestReaderRequest(usageDirectory, paperId, runId) {
         if (require('./reader-unsent-empty-candidate').excludedUsage(file, checked)) continue;
         const at = Date.parse(event.at);
         if (!Number.isFinite(at)) return null;
-        if (!latest || at > latest.at) { latest = { ...checked, file, at }; ambiguous = false; }
+        if (!latest || at > latest.at) { latest = { ...checked, file, relativePath: entry.relativePath, at }; ambiguous = false; }
         else if (at === latest.at && event.eventId !== latest.value.eventId) ambiguous = true;
     }
     return ambiguous ? null : latest;
@@ -84,12 +85,13 @@ function latestReaderRequestForInput(directory, identity, latest) {
     const unprovenOwnFees = [];
     const snapshots = [[latest.file, latest.sha256], ...globalMatches.flatMap(record =>
         [[record.requestFile, record.request.sha256], [record.responseFile, record.response.sha256]])];
-    for (const name of fs.readdirSync(require('../config').FILES.llmUsageDir).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
-        const file = path.join(require('../config').FILES.llmUsageDir, name), proof = readProof(file), event = proof.value;
+    const { listUsageLedgerFiles } = require('./llm-usage-ledger');
+    for (const entry of listUsageLedgerFiles(safeDirectory(require('../config').FILES.llmUsageDir))) {
+        const file = entry.file, proof = readProof(file), event = proof.value;
         if (event.kind !== 'request' || event.paperId !== identity.paperId || event.runId !== identity.freshAnalysis?.runId
             || !['apiReaderArticle','apiReaderRepair'].includes(event.stage)) continue;
         const at = Date.parse(event.at); if (!Number.isFinite(at)) return null;
-        proof.file = file; proof.at = at;
+        proof.file = file; proof.relativePath = entry.relativePath; proof.at = at;
         const bound = matches(proof), own = bound.filter(record => sameInput(record.request.value.identity, identity));
         if (!own.length) {
             if (!bound.length && knownRequests.some(record => sameInput(record.request.value.identity, identity)
@@ -197,8 +199,11 @@ function restoredMigrationAncestor(directory, child) {
             throw new Error('Reader intermediate restoration archive changed failure state');
         archives.push({ ...parent, restorationMigrationAt: Date.parse(audit.revisedAt) }); node = parent;
     }
-    if (!/^[a-f0-9-]{36}\.json$/.test(record.latestUsageFileName || '')) throw new Error('Reader restoration fee filename is invalid');
-    const file = path.join(require('../config').FILES.llmUsageDir, record.latestUsageFileName), usage = readProof(file, record.latestUsageSha256), event = usage.value;
+    const { isUsageLedgerFile, resolveUsageLedgerFile } = require('./llm-usage-ledger');
+    const usageDir = require('../config').FILES.llmUsageDir;
+    const file = resolveUsageLedgerFile(usageDir, record.latestUsageFileName || '');
+    if (!file || !isUsageLedgerFile(file, usageDir)) throw new Error('Reader restoration fee filename is invalid');
+    const usage = readProof(file, record.latestUsageSha256), event = usage.value;
     const eventAt = Date.parse(event.at);
     if (!isUsageEventFormat(event) || event.kind !== 'request' || event.eventId !== record.latestUsageEventId
         || event.paperId !== child.identity.paperId || event.runId !== child.identity.freshAnalysis.runId
@@ -465,10 +470,10 @@ function resolveCompatibleCandidates(directory, identity, compatible, options = 
         selectedEnvelopeSha256: match.selected.envelopeSha256, selectedPayloadSha256: repair.hashDraft(match.selected.payload),
         requestFileName: path.basename(match.requestFile), requestSha256: match.request.sha256,
         responseFileName: path.basename(match.responseFile), responseSha256: match.response.sha256,
-        usageFileName: path.basename(usage.file), usageFileSha256: usage.sha256, usageEventId: event.eventId,
+        usageFileName: usage.relativePath || path.basename(usage.file), usageFileSha256: usage.sha256, usageEventId: event.eventId,
         usageAt: event.at, contentAttempt: event.contentAttempt, outputTextSha256: event.outputTextSha256,
         replay: match.replay, actualInputFingerprint: identity.inputFingerprint,
-        ...(globalLatest?.value.eventId !== event.eventId ? { globalLatestOtherInputUsageFileName: path.basename(globalLatest.file),
+        ...(globalLatest?.value.eventId !== event.eventId ? { globalLatestOtherInputUsageFileName: globalLatest.relativePath || path.basename(globalLatest.file),
             globalLatestOtherInputUsageSha256: globalLatest.sha256 } : {}),
         archivedAncestorIdentitySha256: repair.hashDraft(match.recorded.identity),
         archivedMigrationEdges: match.lineage.edges, paidMigrationFrontiers: graph.paidFrontiers, retainedAttempts: match.selected.payload.attempts,

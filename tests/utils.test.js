@@ -1770,3 +1770,29 @@ describe('isWithinBatchDateGrace 跨零点宽限与非法日历日期拦截', ()
         assert.strictEqual(isWithinBatchDateGrace(' 2026-10-19 12:00:00+08:00 ', '2026-10-19'), true);
     });
 });
+
+describe('W3 LLM infra & summary parsing regressions', () => {
+    it('parseSseResponse 捕获 SSE type=error 事件且分级推理包含 apiReaderImageProbe 与 conference-filter', () => {
+        const utils = require('../scripts/utils.js');
+        const sseErr = 'event: error\ndata: {"type":"error","error":{"message":"upstream overloaded"}}\n\n';
+        const parsed = utils.parseSseResponse(sseErr);
+        assert.strictEqual(parsed.status, 'failed');
+        assert.strictEqual(parsed.error.message, 'upstream overloaded');
+        assert.strictEqual(utils.STAGE_REASONING_EFFORT_TIERS.apiReaderImageProbe, 'minimal');
+        assert.strictEqual(utils.STAGE_REASONING_EFFORT_TIERS['conference-filter'], 'low');
+    });
+
+    it('parseMachineSummary 识别大小写无关的 rank_bucket 与 unclear 开源状态', () => {
+        const utils = require('../scripts/utils.js');
+        const text = [
+            '### 机器摘要',
+            '- rank_bucket: Top 10%',
+            '- has_code: unclear',
+            '- has_model: unclear'
+        ].join('\n');
+        const parsed = utils.parseMachineSummary(text);
+        assert.strictEqual(parsed.rankBucket, '前10%');
+        assert.strictEqual(parsed.hasCode, 'unclear');
+        assert.strictEqual(parsed.hasModel, 'unclear');
+    });
+});

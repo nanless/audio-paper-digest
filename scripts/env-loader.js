@@ -133,7 +133,7 @@ function parseEnvContent(envContent) {
 
         const key = trimmed.substring(0, eq).trim();
         let val = trimmed.substring(eq + 1).trim();
-        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        if (val.length >= 2 && ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'")))) {
             val = val.slice(1, -1);
         }
         if (key) {
@@ -152,35 +152,33 @@ function parseEnvContent(envContent) {
 }
 
 function readEnvFileStrict(envFile, { enforcePermissions = false } = {}) {
-    let statBefore;
+    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+    let fd;
     try {
-        statBefore = fs.lstatSync(envFile);
+        fd = fs.openSync(envFile, flags);
     } catch (error) {
         if (error?.code === 'ENOENT') return null;
+        if (error?.code === 'ELOOP') {
+            throw new Error(`项目 .env 必须是无硬链接的普通文件，禁止符号链接: ${envFile}`);
+        }
         throw error;
     }
-    if (statBefore.isSymbolicLink() || !statBefore.isFile()
-        || (process.platform !== 'win32' && statBefore.nlink !== 1)) {
-        throw new Error(`项目 .env 必须是无硬链接的普通文件，禁止符号链接: ${envFile}`);
-    }
-    if (enforcePermissions) {
-        try {
-            // 已经是 0600 时不再写元数据，保证只读监控（如 --watch）不产生写副作用。
-            if (process.platform === 'win32' || (statBefore.mode & 0o777) !== 0o600) {
-                fs.chmodSync(envFile, 0o600);
-            }
-        } catch (error) {
-            if (process.platform !== 'win32') throw error;
-        }
-    }
-    const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
-    const fd = fs.openSync(envFile, flags);
     try {
         const opened = fs.fstatSync(fd);
-        if (!opened.isFile()
-            || (process.platform !== 'win32' && opened.nlink !== 1)
-            || opened.dev !== statBefore.dev || opened.ino !== statBefore.ino) {
-            throw new Error(`项目 .env 打开后文件身份不一致: ${envFile}`);
+        if (!opened.isFile() || (process.platform !== 'win32' && opened.nlink !== 1)) {
+            throw new Error(`项目 .env 必须是无硬链接的普通文件，禁止符号链接: ${envFile}`);
+        }
+        if (enforcePermissions) {
+            try {
+                // 已经是 0600 时不再写元数据，保证只读监控（如 --watch）不产生写副作用。
+                if (process.platform === 'win32') {
+                    fs.chmodSync(envFile, 0o600);
+                } else if ((opened.mode & 0o777) !== 0o600) {
+                    fs.fchmodSync(fd, 0o600);
+                }
+            } catch (error) {
+                if (process.platform !== 'win32') throw error;
+            }
         }
         const MAX_ENV_BYTES = 2 * 1024 * 1024;
         if (opened.size > MAX_ENV_BYTES) {

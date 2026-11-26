@@ -133,7 +133,7 @@ function buildReaderContractNotice(options = {}) {
             : `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符；focusPoints 应提供 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察提示。`;
     return [
         `本次文章检查要求（${READER_MECHANICAL_CONTRACT}）：`,
-        `散文汉字（不含表格、图注、看图路径与术语组合块）建议不少于 ${Math.round(rules.minimumChineseChars * 0.9)} 个；`
+        `散文汉字（不含表格、图注、看图路径与术语组合块）建议不少于 ${Math.min(rules.minimumProseChineseChars, Math.round(rules.minimumChineseChars * 0.9))} 个；`
             + '靠术语卡和表格单元格凑满总字数不算实质讲解。',
         sectionAndBridgeRule,
         rules.minimumTables > 0

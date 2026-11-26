@@ -1653,3 +1653,20 @@ test('URL 规范化拒绝控制字符、制表符点段、三斜杠与 Unicode �
             err => err.code === 'LLM_ACCOUNT_POOL_STATE_ERROR');
     }
 });
+
+test('resolvePrimaryApiKeyPool 拒绝重复密钥且 selectApiKey 清理过期分组不触发 STALE_GROUP_TTL_MS', () => {
+    const pool = require('../scripts/llm-account-pool.js');
+    assert.throws(
+        () => pool.resolvePrimaryApiKeyPool('dup-key-1', 'dup-key-1,other-key-2'),
+        err => err instanceof pool.LlmAccountPoolConfigError
+    );
+    const { file } = tempState();
+    const keys = ['k-alpha-1', 'k-beta-2'];
+    pool.selectApiKey(keys, ENDPOINT, file, { nowMs: 1000, affinityKey: '2611.00001v1' });
+    const laterKeys = ['k-alpha-1', 'k-gamma-3'];
+    const picked = pool.selectApiKey(laterKeys, ENDPOINT, file, {
+        nowMs: 1000 + pool.STALE_GROUP_MS + 10,
+        affinityKey: 'arXiv:2611.00001v2'
+    });
+    assert.ok(laterKeys.includes(picked.apiKey));
+});

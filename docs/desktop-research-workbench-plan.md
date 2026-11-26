@@ -6,7 +6,7 @@
 
 | 范围 | 当前实现与后续目标 |
 |---|---|
-| 版本与验收 | 当前源码与已公开发行版本均为 1.4.6（构建号 22，2026-11-20 发布，以发行页为准）；1.4.6 的改动与验证范围见[1.4.6 记录](workbench-1.4.6-review.md)，1.4.5 见[1.4.5 记录](workbench-1.4.5-review.md)，1.4.4 见[1.4.4 记录](workbench-1.4.4-review.md)，1.4.3 见[1.4.3 记录](workbench-1.4.3-review.md)，安装、升级与人工界面操作的最新完整范围仍属 1.3.0（[本轮记录](workbench-1.3.0-review.md)）。下文设计场景不授予验收通过 |
+| 版本与验收 | 当前源码与已公开发行版本均为 **1.5.0（构建号 24，2026-11-26 发布，来源提交 `5b5a8e79`，以发行页为准）**；1.5.0 的改动与验证范围见[1.5.0 记录](workbench-1.5.0-review.md)，1.4.7 见[1.4.7 记录](workbench-1.4.7-review.md)，1.4.6 见[1.4.6 记录](workbench-1.4.6-review.md)，1.4.5 见[1.4.5 记录](workbench-1.4.5-review.md)，1.4.4 见[1.4.4 记录](workbench-1.4.4-review.md)，1.4.3 见[1.4.3 记录](workbench-1.4.3-review.md)，安装、升级与人工界面操作的最新完整范围仍属 1.3.0（[本轮记录](workbench-1.3.0-review.md)）。下文设计场景不授予验收通过 |
 | PDF | Mac 使用 PDFKit，Android 使用 Jetpack PDF 与 PDFBox |
 | 模型材料 | 两端当前仅发送提取文字；图片、原生 PDF 上传、OCR 与外网检索属于后续能力设计 |
 | Zotero | Mac 使用 Zotero 10+ 本地写入 API，Android 使用 Web API v3；Zotero 9 插件兼容尚未实现 |

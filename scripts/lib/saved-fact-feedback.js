@@ -318,8 +318,12 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
     if (!source) throw new Error('Reader纠错缺少当前已核验封存来源');
     const reviewFeedback = facts.reviewFeedback('apiReaderArticle', require('../utils').normalizedId(paper));
     const local = options.readerFactLocalRevision === true;
-    if (local && !require('../deep-analyzer').hasReviewedReaderFactLocalSeed(target, source.text, reviewFeedback))
-        throw new Error('Reader事实局部修订缺少当前已核完整签名稿，不能回退source-only生成');
+    if (local && !require('../deep-analyzer').hasReviewedReaderFactLocalSeed(target, source.text, reviewFeedback)) {
+        const error = new Error('Reader事实局部修订缺少当前已核完整签名稿，不能回退source-only生成');
+        error.code = 'READER_FACT_LOCAL_SEED_MISSING';
+        error.retryable = false;
+        throw error;
+    }
     const correction = require('./reader-fact-table-claim-location');
     const corrected = target[correction.FIELD] !== undefined;
     const recoveryReaderResources = local || corrected ? null : require('./reader-failed-bundle-resource-replay').prepareRecoveryReaderResources(

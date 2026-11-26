@@ -362,6 +362,13 @@ function applyEnvOverrides() {
         const val = parseInt(process.env[name], 10);
         return !Number.isNaN(val) && val > 0 ? val : null;
     };
+    const readNonNegativeInt = (name) => {
+        if (process.env[name] === undefined || process.env[name] === '') return null;
+        const raw = String(process.env[name]).trim();
+        if (!/^\d+$/.test(raw)) return null;
+        const val = Number.parseInt(raw, 10);
+        return Number.isSafeInteger(val) && val >= 0 ? val : null;
+    };
 
     // 分析并发度
     const analysisConcurrency = readPositiveInt('PD_ANALYSIS_CONCURRENCY');
@@ -510,20 +517,20 @@ function applyEnvOverrides() {
     if (arxivFetchMaxRetries) {
         ARXIV_CONFIG.fetchMaxRetries = arxivFetchMaxRetries;
     }
-    const arxivFetchRetryBaseDelayMs = readPositiveInt('PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS');
-    if (arxivFetchRetryBaseDelayMs) {
+    const arxivFetchRetryBaseDelayMs = readNonNegativeInt('PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS');
+    if (arxivFetchRetryBaseDelayMs !== null) {
         ARXIV_CONFIG.fetchRetryBaseDelayMs = arxivFetchRetryBaseDelayMs;
     }
-    const arxivRateLimitBaseDelayMs = readPositiveInt('PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS');
-    if (arxivRateLimitBaseDelayMs) {
+    const arxivRateLimitBaseDelayMs = readNonNegativeInt('PD_ARXIV_RATE_LIMIT_BASE_DELAY_MS');
+    if (arxivRateLimitBaseDelayMs !== null) {
         ARXIV_CONFIG.fetchRateLimitBaseDelayMs = arxivRateLimitBaseDelayMs;
     }
-    const arxivRateLimitMaxWait = readPositiveInt('PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS');
-    if (arxivRateLimitMaxWait) {
+    const arxivRateLimitMaxWait = readNonNegativeInt('PD_ARXIV_RATE_LIMIT_MAX_WAIT_MS');
+    if (arxivRateLimitMaxWait !== null) {
         ARXIV_CONFIG.fetchRateLimitMaxWaitMs = arxivRateLimitMaxWait;
     }
-    const arxivFetchMaxWaitMs = readPositiveInt('PD_ARXIV_FETCH_MAX_WAIT_MS');
-    if (arxivFetchMaxWaitMs) {
+    const arxivFetchMaxWaitMs = readNonNegativeInt('PD_ARXIV_FETCH_MAX_WAIT_MS');
+    if (arxivFetchMaxWaitMs !== null) {
         ARXIV_CONFIG.fetchMaxWaitMs = arxivFetchMaxWaitMs;
     }
     const arxivMetadataTimeoutMs = readPositiveInt('PD_ARXIV_METADATA_TIMEOUT_MS');
@@ -534,20 +541,20 @@ function applyEnvOverrides() {
     if (arxivMetadataMaxBytes) {
         ARXIV_CONFIG.fetchMaxResponseBytes = arxivMetadataMaxBytes;
     }
-    const arxivHealthyCooldownMs = readPositiveInt('PD_ARXIV_HEALTHY_COOLDOWN_MS');
-    if (arxivHealthyCooldownMs) {
+    const arxivHealthyCooldownMs = readNonNegativeInt('PD_ARXIV_HEALTHY_COOLDOWN_MS');
+    if (arxivHealthyCooldownMs !== null) {
         ARXIV_CONFIG.hostHealthyCooldownMs = arxivHealthyCooldownMs;
     }
-    const arxivTransientCooldownMs = readPositiveInt('PD_ARXIV_TRANSIENT_COOLDOWN_MS');
-    if (arxivTransientCooldownMs) {
+    const arxivTransientCooldownMs = readNonNegativeInt('PD_ARXIV_TRANSIENT_COOLDOWN_MS');
+    if (arxivTransientCooldownMs !== null) {
         ARXIV_CONFIG.hostTransientCooldownMs = arxivTransientCooldownMs;
     }
-    const arxivRateLimitedCooldownMs = readPositiveInt('PD_ARXIV_RATE_LIMIT_COOLDOWN_MS');
-    if (arxivRateLimitedCooldownMs) {
+    const arxivRateLimitedCooldownMs = readNonNegativeInt('PD_ARXIV_RATE_LIMIT_COOLDOWN_MS');
+    if (arxivRateLimitedCooldownMs !== null) {
         ARXIV_CONFIG.hostRateLimitedCooldownMs = arxivRateLimitedCooldownMs;
     }
-    const arxivCooldownJitterMs = readPositiveInt('PD_ARXIV_COOLDOWN_JITTER_MS');
-    if (arxivCooldownJitterMs) {
+    const arxivCooldownJitterMs = readNonNegativeInt('PD_ARXIV_COOLDOWN_JITTER_MS');
+    if (arxivCooldownJitterMs !== null) {
         ARXIV_CONFIG.hostCooldownJitterMs = arxivCooldownJitterMs;
     }
     if (process.env.PD_ARXIV_USER_AGENT?.trim()) {

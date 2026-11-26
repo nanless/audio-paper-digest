@@ -6102,13 +6102,33 @@ has_dataset: 否
                 prompts.push(messages[0].content);
                 return `## 核心摘要\n${existingSummary}`;
             } }
-        ), /原文无可核定量结果/);
-        // 核心摘要修复机会已从 3 提到 5（推理型模型收敛更慢）。
-        assert.strictEqual(prompts.length, 5);
+        ), error => {
+            assert.match(error.message, /原文无可核定量结果/);
+            assert.strictEqual(error.retryable, false);
+            return true;
+        });
+        // 连续 2 次产出完全相同的摘要与校验错误时在第 3 次尝试后提前终止（无进展保护）。
+        assert.strictEqual(prompts.length, 3);
         assert.match(prompts[1], /删除不能由原文核对的实验数值断言/);
         assert.match(prompts[1], /原文未提供可核对的关键定量结果/);
         assert.match(prompts[1], /不得同时保留或新增实验数字/);
         assert.doesNotMatch(prompts[1], /量化句须在同一句内闭合/);
+
+        // 当候选摘要每次确有变动时，仍保留全部 5 次修复机会。
+        const distinctPrompts = [];
+        let distinctCall = 0;
+        await assert.rejects(repairCoreSummarySection(
+            { arxivId: '2609.99968', title: 'No quantitative result distinct retries' },
+            original,
+            'The paper describes its method and limitations but reports no experiment, benchmark, metric, or numeric result.',
+            '原文只含方法和局限说明，没有实验数值。',
+            { callModelFn: async messages => {
+                distinctCall += 1;
+                distinctPrompts.push(messages[0].content);
+                return `## 核心摘要\n${existingSummary}\n补充说明第${distinctCall}版。`;
+            } }
+        ), /原文无可核定量结果/);
+        assert.strictEqual(distinctPrompts.length, 5);
     });
 
     it('Reader 内部尝试耗尽后只抑制本次 outer retry', () => {

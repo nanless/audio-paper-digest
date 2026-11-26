@@ -304,7 +304,7 @@ npm run digest:status -- --date YYYY-MM-DD
 npm run verify
 ```
 
-完成判定按 [AGENTS.md 的六项完成定义](AGENTS.md#日更完成的六项)逐项核对：数据与来源、审查、远端发布、部署、网页核验、不生图登记与重读状态；上面几段只是执行顺序，不另立一套编号。状态报告不自动检查部署与网页，不能据其complete单独宣告上线。`verify` 的验证计划是固定Hugo、全仓语法、JavaScript测试、两处Python单测和只读数据检查，不含客户端构建或测试；客户端版本一致性由 `npm test` 里的 `tests/docs-consistency-real.test.js` 核对，Android 与 macOS 客户端测试分别由独立作业 `client-android`、`client-macos` 覆盖（均不进 `verify` 分片矩阵，也不并入 `test` 汇总检查）。只有CI/干净检出显式允许空数据。
+完成判定按 [AGENTS.md 的六项完成定义](AGENTS.md#日更完成的六项)逐项核对：数据与来源、审查、远端发布、部署、网页核验、不生图登记与重读状态；上面几段只是执行顺序，不另立一套编号。状态报告不自动检查部署与网页，不能据其complete单独宣告上线。`verify` 的验证计划是固定Hugo（`--suite static` 与 `--quick` 跳过）、全仓语法、JavaScript测试、三组Python单测（`tests/python`、`manual/tests/python` 与顶层 `tests/reader_pdf_*_test.py`）、文档一致性检查（`docs-consistency.js`）和只读数据检查，不含客户端构建或测试；客户端版本一致性由 `npm run docs:check` 与 `tests/docs-consistency-real.test.js` 核对，Android 与 macOS 客户端测试分别由独立作业 `client-android`、`client-macos` 覆盖（均不进 `verify` 分片矩阵，也不并入 `test` 汇总检查）。只有CI/干净检出显式允许空数据。
 
 用 `npm run verify:web -- --date YYYY-MM-DD --deploy OID` 将网页记录和正式发布提交绑定。需要等待时加 `--wait` 并按实际部署耗时设置等待上限。结束前确认部署任务通过、记录为完整验收、所有目标页面已检查，并按[维护指南](docs/maintenance.md#发布后网页核验与收尾)核对完整标题等网页要求。
 

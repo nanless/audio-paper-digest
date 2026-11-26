@@ -83,6 +83,12 @@ class PersonalAndCatalogTest {
     }
     @Test fun scientificImageValidationRejectsActiveSvg() {
         assertEquals("image/png", CatalogRepository.imageMime(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 1)))
+        val webpUtf8Shift = "RIFF".toByteArray(Charsets.US_ASCII) + byteArrayOf(0xC2.toByte(), 0xA0.toByte(), 0x00, 0x00) + "WEBP".toByteArray(Charsets.US_ASCII) + byteArrayOf(0x56, 0x50, 0x38, 0x20)
+        assertEquals("image/webp", CatalogRepository.imageMime(webpUtf8Shift))
+        val webpNonUtf8 = "RIFF".toByteArray(Charsets.US_ASCII) + byteArrayOf(0xFF.toByte(), 0xFE.toByte(), 0x80.toByte(), 0x81.toByte()) + "WEBP".toByteArray(Charsets.US_ASCII)
+        assertEquals("image/webp", CatalogRepository.imageMime(webpNonUtf8))
+        val gifBinary = "GIF89a".toByteArray(Charsets.US_ASCII) + byteArrayOf(0xFF.toByte(), 0xFE.toByte())
+        assertEquals("image/gif", CatalogRepository.imageMime(gifBinary))
         assertThrows(AppFailure::class.java) { CatalogRepository.imageMime("<svg><script>bad()</script></svg>".toByteArray()) }
         assertThrows(AppFailure::class.java) { CatalogRepository.imageMime("<svg xmlns='http://www.w3.org/2000/svg' xmlns:s='http://www.w3.org/2000/svg'><s:script>bad()</s:script></svg>".toByteArray()) }
         assertThrows(AppFailure::class.java) { CatalogRepository.imageMime("<svg xmlns='http://www.w3.org/2000/svg'><style>@import 'https://evil.invalid/x.css';</style></svg>".toByteArray()) }
@@ -92,8 +98,13 @@ class PersonalAndCatalogTest {
         assertEquals("image/svg+xml", CatalogRepository.imageMime("<svg xmlns='http://www.w3.org/2000/svg'><path d='M0 0'/></svg>".toByteArray()))
     }
     @Test fun ownedPublishedConferenceImagesAndMathMLAndTableAlignmentArePreserved() {
-        // E-H7: audio-paper-digest-images parity + case-insensitive host + traversal rejection on externalResourceProxy
+        // E-H7 + CL-P2-8: audio-paper-digest-images parity + zenodo.org + case-insensitive host + traversal rejection on externalResourceProxy
         assertTrue(CatalogRepository.approvedResource(java.net.URI("https://RAW.GITHUBUSERCONTENT.COM/nanless/audio-paper-digest-images/main/interspeech-2026/11ff0ce7b961/figure-1.png")))
+        for (slug in listOf("icml-2026", "emnlp-2026", "ismir-2026", "dcase-2026", "neurips-2026", "waspaa-2025", "asru-2025")) {
+            assertTrue("expected conference slug allowed: $slug", CatalogRepository.approvedResource(java.net.URI("https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/$slug/0123456789ab/figure-1.png")))
+        }
+        assertTrue(CatalogRepository.approvedResource(java.net.URI("https://zenodo.org/records/1234567/files/paper.pdf")))
+        assertTrue("zenodo.org" in SafeHttp.APPROVED_SYNTHETIC_HOSTS)
         assertTrue(CatalogRepository.approvedResource(java.net.URI("https://nanless.github.io/audio-paper-digest-images/icassp-2026/2026-04-29/11462137-0.png")))
         assertFalse(CatalogRepository.approvedResource(java.net.URI("https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/unknown-2026/11ff0ce7b961/figure-1.png")))
         assertNull(CatalogRepository.externalResourceProxy(java.net.URI("https://raw.githubusercontent.com/nanless/audio-paper-digest-blog/main/../../other/repo/file"), "http://127.0.0.1:7890"))

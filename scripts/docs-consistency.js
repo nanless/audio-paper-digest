@@ -13,15 +13,18 @@ const ROOT_DOCS = [
 const MARKDOWN_DIRS = ['docs', 'skills'];
 const COMMAND = /npm run ([a-z][a-z0-9:_-]*)/g;
 const VERSION_CLAIMS = [
-    /(\d+\.\d+\.\d+)（构建号\s*(\d+)）/g,
+    /(\d+\.\d+\.\d+)（构建号\s*(\d+)[^）\n]*）/g,
+    /(\d+\.\d+\.\d+)\s*是当前[^。\n（(]{0,24}[（(]构建号\s*(\d+)[^）)\n]*[）)]/g,
     /(\d+\.\d+\.\d+)[、,，]\s*构建号\s*(\d+)/g,
     /(\d+\.\d+\.\d+)\s+构建号\s*(\d+)/g,
-    /(\d+\.\d+\.\d+)\s*\(build\s*(\d+)\)/gi,
+    /(\d+\.\d+\.\d+)\s*\(build\s*(\d+)[^)\n]*\)/gi,
     /(\d+\.\d+\.\d+),\s*build\s*(\d+)/gi
 ];
 // 只写构建号、版本在同句省略的写法，例如「当前构建号为 19」。
 const BUILD_ONLY = /(?:构建号为|build\s+is)\s*(\d+)/i;
 const CURRENT_MARKER = /当前|目前|现在|\b(?:current|currently|now)\b/i;
+const UNPUBLISHED_CLAIM = /尚未公开发布|未公开发布|\bnot\s+yet\s+published\b/i;
+const PUBLISHED_CURRENT_MARKER = /(?:当前(?:公开)?发行版本|当前公开版本|current\s+published\s+release|已于\s*\d{4}-\d{2}-\d{2}[^。\n]{0,24}公开发布)/i;
 const HISTORICAL_REVIEW_FILE = /^docs\/(?:workbench|android)-[\d.]+-review\.md$/;
 const VERSION_DOCS = ['docs/README.md', 'docs/README.en.md'];
 const VERSION_LIST = /工作台版本|Workbench versions/;
@@ -73,12 +76,33 @@ function readVersionSources() {
     };
 }
 
+function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isCurrentVersionPublished(files, current, versions) {
+    if (versions && typeof versions.published === 'boolean') return versions.published;
+    const versionPattern = new RegExp(`(?<![\\d.])${escapeRegExp(current.version)}(?![\\d.])`);
+    for (const file of files) {
+        const text = fs.readFileSync(path.resolve(ROOT, file), 'utf8');
+        for (const rawLine of text.split('\n')) {
+            if (!versionPattern.test(rawLine)) continue;
+            if (UNPUBLISHED_CLAIM.test(rawLine)) continue;
+            if (PUBLISHED_CURRENT_MARKER.test(rawLine)) return true;
+        }
+    }
+    return false;
+}
+
 // 历史评审记录保留当时的版本和结论，不参与核对。当前发行线内的“版本（构建号）”
 // 写法，以及同一行明说“当前/目前/现在/current/currently/now”的旧版本写法，按当前实际值核对。
 function checkVersionClaims(files, versions) {
     const issues = [];
     const current = versions.mac;
     const line = current.version.split('.').slice(0, 2).join('.');
+    const currentPublished = isCurrentVersionPublished(files, current, versions);
+    const currentVersionPattern = new RegExp(`(?<![\\d.])${escapeRegExp(current.version)}(?![\\d.])`);
+    const staleLatestPublishedPattern = /最近(?:已)?公开发行版本为\s*(\d+\.\d+\.\d+)/;
     if (current.version !== versions.android.version || current.build !== versions.android.build) {
         issues.push({
             file: `${PLIST} / ${GRADLE}`,
@@ -91,10 +115,32 @@ function checkVersionClaims(files, versions) {
         const text = fs.readFileSync(path.resolve(ROOT, file), 'utf8');
         const lines = text.split('\n');
         for (let index = 0; index < lines.length; index += 1) {
-            const claims = VERSION_CLAIMS.flatMap(pattern => [...lines[index].matchAll(pattern)]);
-            const currentState = CURRENT_MARKER.test(lines[index]);
+            const rawLine = lines[index];
+            const claims = VERSION_CLAIMS.flatMap(pattern => [...rawLine.matchAll(pattern)]);
+            const currentState = CURRENT_MARKER.test(rawLine);
+            if (currentPublished && currentVersionPattern.test(rawLine)) {
+                const clauses = rawLine.split(/[。；;]/);
+                const claimsCurrentUnpublished = clauses.some(
+                    clause => currentVersionPattern.test(clause) && UNPUBLISHED_CLAIM.test(clause)
+                );
+                if (claimsCurrentUnpublished) {
+                    issues.push({
+                        file,
+                        line: index + 1,
+                        message: `将已公开发布的 ${current.version}（构建号 ${current.build}）写成了未公开发布`
+                    });
+                }
+                const staleLatest = staleLatestPublishedPattern.exec(rawLine);
+                if (staleLatest && staleLatest[1] !== current.version) {
+                    issues.push({
+                        file,
+                        line: index + 1,
+                        message: `将最近公开发行版本写成 ${staleLatest[1]}，但 ${current.version}（构建号 ${current.build}）已公开发布`
+                    });
+                }
+            }
             if (!claims.length) {
-                const buildOnly = BUILD_ONLY.exec(lines[index]);
+                const buildOnly = BUILD_ONLY.exec(rawLine);
                 if (buildOnly && currentState && buildOnly[1] !== current.build) {
                     issues.push({ file, line: index + 1, message: `写的是构建号 ${buildOnly[1]}，实际为 ${current.build}` });
                 }

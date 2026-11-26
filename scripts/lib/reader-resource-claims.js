@@ -257,8 +257,8 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const conceptList = '(' + conceptProperty + '(?:\\s*[、和与及]\\s*' + conceptProperty + '){1,2})';
         const countedDistinctions = [
             { pattern: new RegExp(conceptList + '\\s*是\\s*([三两二32])\\s*件\\s*(?:不同的?|独立的?)?(?:事项|事)(?=[\\s，,:：。！？!?；;]|$)', 'gu'), listGroup: 1, countGroup: 2 },
-            { pattern: new RegExp('(?:(?:复现(?:时)?(?:要|应|需))|需要)?(?:先)?分清\\s*([三两二32])\\s*件事\\s*[，,:：]\\s*'
-                + conceptList + '\\s*(?:是(?:相互)?独立的|是不同(?:的)?主张)', 'gu'), listGroup: 2, countGroup: 1 },
+            { pattern: new RegExp('(?:(?:复现(?:时|前)?(?:要|应|需))|(?:需要|需|应|要))?(?:先)?(?:分清|区分)\\s*([三两二32])\\s*件(?:不同的?|独立的?)?事\\s*[，,:：]\\s*'
+                + conceptList + '(?:\\s*(?:是(?:相互)?独立的|是不同(?:的)?主张))?(?=[\\s，,:：。！？!?；;]|$)', 'gu'), listGroup: 2, countGroup: 1 },
             { pattern: new RegExp(conceptList + '\\s*(?:要|应|需)?(?:分开|分别)(?:看|确认|核实|核对|验证|判断)', 'gu'), listGroup: 1 },
             { pattern: new RegExp('复现(?:时)?(?:要|应|需)把' + conceptList + '\\s*([三两二32])\\s*件事分开', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp('(?:(?:复现(?:前|时)?(?:要|应|需))|应|要|需|并)?(?:把|将)' + conceptList
@@ -268,6 +268,15 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 + '\\s*当作\\s*([三两二32])\\s*件(?:相互)?独立的事(?:分别|逐项)(?:确认|核实|核对|验证)', 'gu'), listGroup: 1, countGroup: 2 },
             { pattern: new RegExp(conceptList + '\\s*(?:需要|仍需)(?:另行|分别|逐项)(?:确认|核对)', 'gu'), listGroup: 1, closedPending: true }
         ];
+        const affirmativeCollectiveFollowup = /^(?:(?:它们|三者|两者|这三项|这两项|这些资源|上述资源|全部|所有|均已|都已)[^。！？!?；;，,]{0,28}(?:公开|开源|可用|可下载|可获取|发布|提供)|(?:目前|当前|现)?(?:均|都|全部|所有)?(?:已经|现已|已)(?:正式)?(?:公开|开源|可用|可下载|可获取|发布|提供))/u;
+        const retractionFollowup = /^[“”‘’「」"'`]|^(?:(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|区分|否定))?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)|^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:本身|其实|实际)?(?:并不成立|从未成立)|^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定)/u;
+        const tailHasUnsafeFollowup = rawTail => String(rawTail || '')
+            .split(/[，,；;]/u)
+            .map(part => part.trim()
+                .replace(/^(?:但是?|不过|然而|可是)[\s，,:：]*/u, '')
+                .replace(/^(?:要|应|需)(?:分别|分开)(?:核实|核对|确认|验证|判断)[\s，,:：]*/u, ''))
+            .filter(Boolean)
+            .some(part => retractionFollowup.test(part) || affirmativeCollectiveFollowup.test(part));
         for (const { pattern, listGroup, countGroup, closedPending, countedMatters } of countedDistinctions) for (const span of value.matchAll(pattern)) {
             const list = span[listGroup];
             const count = countGroup ? span[countGroup] ?? null : null;
@@ -282,30 +291,40 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
                 before.lastIndexOf(open) > before.lastIndexOf(close))
                 || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
-            const after = value.slice(span.index + span[0].length).replace(/^[\s，,:：]+/u, '')
+            const rawAfter = value.slice(span.index + span[0].length);
+            const after = rawAfter.replace(/^[\s，,:：]+/u, '')
                 .replace(/^(?:但是?|不过|然而|可是)[\s，,:：]*/u, '');
-            const collectiveAfter = after.replace(/^[\s，,:：；;]+/u, '')
-                .replace(/^(?:要|应|需)(?:分别|分开)(?:核实|核对|确认|验证|判断)[\s，,:：；;]*/u, '');
             if (closedPending) {
-                const tail = value.slice(span.index + span[0].length);
+                const tail = rawAfter;
                 const nonEquivalenceInstruction = /^[，,]\s*(?:不能|不应|不可)(?:把|将)(?:代码|权重|数据|系统)(?:开源|公开|可用|可下载|可获取|可运行)(?:直接)?(?:等同于|视为|当作)(?:开箱即用|系统可运行|资源齐全)[。！？!?]?\s*$/u;
                 if (!/^[。！？!?]?\s*$/u.test(tail) && !nonEquivalenceInstruction.test(tail)) continue;
             }
             if (countedMatters && declared === 3 && /[；;]\s*$/u.test(value)) continue;
             if (quoted || !/^(?:\s*(?:但|因此))?\s*$/u.test(prefix)
-                || /^[“”‘’「」"'`]|^(?:(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|区分|否定))?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)/u.test(after)
-                || /^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:本身|其实|实际)?(?:并不成立|从未成立)/u.test(after)
-                || /^(?:这(?:一|种|个)?|该|上述)?(?:说法|判断|结论|声明|区分|否定)(?:已经|已)?(?:被)?(?:撤回|撤销|推翻|否定)/u.test(after)
-                || /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;，,]{0,28}(?:公开|开源|可用|可下载|可获取|发布|提供)/u.test(collectiveAfter)) continue;
+                || retractionFollowup.test(after)
+                || tailHasUnsafeFollowup(rawAfter)) continue;
             return true;
         }
         const prefix = value.slice(0, matchIndex);
         const markers = [...prefix.matchAll(/(?:区分|区别|辨别|分开看待|分开说|分三件(?:不同的)?事)/g)];
         const marker = markers.at(-1);
         if (!marker || matchIndex - marker.index > 180) return false;
-        const end = /[，,；;]/.exec(value.slice(marker.index));
-        const scope = value.slice(marker.index, end ? marker.index + end.index : undefined);
-        if (matchIndex > marker.index + scope.length) return false;
+        const beforeMarker = value.slice(0, marker.index);
+        const markerQuoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
+            beforeMarker.lastIndexOf(open) > beforeMarker.lastIndexOf(close))
+            || ['"', "'", '`'].some(quote => beforeMarker.split(quote).length % 2 === 0);
+        if (markerQuoted) return false;
+        const tailAfterMarker = value.slice(marker.index);
+        const intro = /^(?:区分|区别|辨别|分开看待|分开说|分(?:清)?)\s*[三两二32]\s*件(?:不同的?|独立的?)?事\s*[，,:：]\s*/u.exec(tailAfterMarker);
+        const scanOffset = intro ? intro[0].length : 0;
+        const end = /[，,；;。！？!?]/.exec(tailAfterMarker.slice(scanOffset));
+        const scope = tailAfterMarker.slice(0, end ? scanOffset + end.index : undefined);
+        if (matchIndex >= marker.index + scope.length) return false;
+        if (/(?:本文|本论文|本研究|本工作|作者团队|论文作者|我们)/u.test(scope)) return false;
+        const rawAfterScope = value.slice(marker.index + scope.length);
+        const afterScope = rawAfterScope.replace(/^[\s，,:：；;]+/u, '')
+            .replace(/^(?:但是?|不过|然而|可是)[\s，,:：]*/u, '');
+        if (retractionFollowup.test(afterScope) || tailHasUnsafeFollowup(rawAfterScope)) return false;
         const contrastedProperties = [
             /(?:源代码|代码仓库|代码)[^。！？!?；;]{0,20}(?:开源|公开|可用|可运行|可访问)/,
             /(?:模型)?权重[^。！？!?；;]{0,20}(?:可下载|下载|可获取|获取|公开|开放|可用)/,
@@ -1209,7 +1228,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         return /(?:experiments?\s+(?:use|run)|we\s+(?:use|run|evaluate|adopt))[^.]{0,160}(?:public\s+(?:checkpoints?|teachers?)|released\s+checkpoints?|open[- ]weight\s+checkpoints?)/i.test(source)
             || /(?:public\s+(?:checkpoints?|teachers?)|released\s+checkpoints?|open[- ]weight\s+checkpoints?)[^.]{0,160}(?:are\s+used|used\s+for|run\s+with)/i.test(source);
     };
-    const isBoundedResourceMeaningNonClaim = (value, type, matchIndex, matchEnd) => {
+    const isBoundedResourceMeaningNonClaim = (value, type, matchIndex, matchEnd, { qualificationResource = null } = {}) => {
         // Only the matched predicate's complete local grammatical span can be
         // non-assertive. Another resource assertion in this sentence stays live.
         const contains = span => matchIndex >= span.index && matchEnd <= span.index + span[0].length;
@@ -1345,9 +1364,42 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 || /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;，,]{0,28}(?:公开|开源|可用|可下载|可获取|发布|提供)/u.test(followup)) continue;
             return true;
         }
-        for (const span of value.matchAll(new RegExp('复现(?:前)?(?:要|应|需)(?:分清三件事[：:]|区分)(' + properties + ')(?:三件事)?(?=[。！？!?；;]|$)', 'gu'))) {
+        for (const span of value.matchAll(new RegExp('复现(?:前|时)?(?:要|应|需)(?:(?:分清|区分)(?:三|3)?件事[：:，,]|区分)(' + properties + ')(?:三件事)?(?=[，,。！？!?；;]|$)', 'gu'))) {
             const items = span[1].split(/、|与|和/u);
-            if (contains(span) && safe(span) && new Set(items).size === items.length) return true;
+            if (!contains(span) || !safe(span) || new Set(items).size !== items.length) continue;
+            const before = value.slice(0, span.index);
+            const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
+                before.lastIndexOf(open) > before.lastIndexOf(close))
+                || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
+            if (quoted) continue;
+            const rawTail = value.slice(span.index + span[0].length);
+            const tail = rawTail.split(/[。！？!?；;]/u)[0];
+            const tailParts = rawTail.split(/[，,；;]/u).map(part => part.trim()
+                .replace(/^(?:但是?|不过|然而|可是)[\s，,:：]*/u, '')
+                .replace(/^(?:要|应|需)(?:分别|分开)(?:核实|核对|确认|验证|判断)[\s，,:：]*/u, ''))
+                .filter(Boolean);
+            const unsafeCollectiveRe = /^(?:(?:它们|三者|两者|这三项|这两项|这些资源|上述资源|全部|所有|均已|都已)[^。！？!?；;，,]{0,28}(?:公开|开源|可用|可下载|可获取|发布|提供)|(?:目前|当前|现)?(?:均|都|全部|所有)?(?:已经|现已|已)(?:正式)?(?:公开|开源|可用|可下载|可获取|发布|提供))/u;
+            if (/(?:它们|三者|这三项|这些资源|上述资源|全部|所有|均已|都已)[^。！？!?；;]{0,28}(?:公开|开源|可用|可下载|可获取)/u.test(tail)
+                || tailParts.some(part => unsafeCollectiveRe.test(part))) continue;
+            return true;
+        }
+        // 受控访问数据集落地页仅在核验清单中确实存在已验证 available 的对应数据集/资源 URL，
+        // 且不在 unavailable 资源窗口内时，窄范围豁免“数据集页面当前可访问但需...协议”这一句内谓词；
+        // 后续任何无条件公开/下载断言仍独立受检并 fail-closed。
+        if (type === 'dataset' && !qualificationResource) {
+            const hasVerifiedAvailableDatasetUrl = verified.resources.some(resource => {
+                if (resource.availability !== 'available') return false;
+                if (resource.type === 'dataset') return true;
+                const tokens = [resource.originalUrl, resource.finalUrl, resource.sourceUrlToken].filter(Boolean);
+                if (tokens.some(token => value.includes(token))) return true;
+                return /(?:dataset|corpus|corpora|benchmark|zenodo|kaggle|figshare|dataverse|openslr|physionet|数据集|语料)/i
+                    .test(`${resource.originalUrl || ''} ${resource.finalUrl || ''} ${resource.sourceQuote || ''}`);
+            });
+            if (hasVerifiedAvailableDatasetUrl) {
+                for (const span of value.matchAll(/数据集页面当前可访问[，,]?但需(?:邮件验证|申请|注册|审核|签署)[^。！？!?；;\n]{0,24}协议/gu)) {
+                    if (contains(span) && safe(span)) return true;
+                }
+            }
         }
         // 接口访问和权重下载是两个裸概念；只放过完整区分中的谓词，
         // 不让作者归属、引述否认或后续真正的权重声明借此获得可用资格。
@@ -1565,7 +1617,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             if (/(?:不能|无法|不可|不应)(?:否认|否定)[^。！？!?；;，,]{0,16}(?:作者|本文|本论文|本研究|本工作)?[^。！？!?；;，,]{0,40}$/u.test(assertionPrefix)
                 && !/(?:尚未|并未|未曾|没有|未公开|未发布|未确认|未验证|未发现|未找到|不存在|尚无)/u.test(assertionPrefix)) return true;
             if (/(?:不能|无法|不可|不应)(?:说|声称|断言|认为)(?:证据)?不支持(?:作者|本文|本论文|本研究|本工作)?$/u.test(assertionPrefix)) return true;
-            if (isBoundedResourceMeaningNonClaim(value, type, match.index, match.index + match[0].length)
+            if (isBoundedResourceMeaningNonClaim(value, type, match.index, match.index + match[0].length, { qualificationResource })
                 || isThirdPartyTypeAttribution(segment, type, mentions, localMatchIndex, localMatchEnd)
                 || isDataSourceRepositoryAttribution(segment, type)
                 || isExistingDatasetAttribution(segment, type)

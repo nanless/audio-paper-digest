@@ -10071,6 +10071,97 @@ body
                 self.assertIn('缺少完整关键定量结果',
                               publish_to_blog._detailed_core_summary_semantic_issue(changed))
 
+    def test_w3_review_filters_yaml_escaping_and_asset_attestation_regressions(self):
+        # 1. has_unconverted_dollar_math handles 1-char $x$, ignores multiline/code/currency
+        self.assertTrue(publish_to_blog.has_unconverted_dollar_math('模型损失函数为 $x$。'))
+        self.assertFalse(publish_to_blog.has_unconverted_dollar_math('预算约 $5 到 $10 美元。'))
+        self.assertFalse(publish_to_blog.has_unconverted_dollar_math('`$x$` 与\n~~~text\n$y$\n~~~'))
+        self.assertFalse(publish_to_blog.has_unconverted_dollar_math('第一行 $a\n第二行 b$'))
+
+        # 2. filter_false_positive_review_issues preserves real \(...\) LaTeX & $ currency factual errors
+        clean_md = '---\ntitle: "Test"\n---\n本文成本为 $10，公式 \\(\\alpha + \\beta\\)。\n~~~html\n<raw>\n~~~\n'
+        kept = publish_to_blog.filter_false_positive_review_issues(
+            clean_md,
+            [
+                {'type': 'latex_error', 'severity': 'error', 'location': 'p1', 'description': '公式 \\(\\alpha\\) 缺少右括号'},
+                {'type': 'factual_error', 'severity': 'error', 'location': 'p1', 'description': '成本 $10 与原文不符'},
+                {'type': 'latex_error', 'severity': 'error', 'location': 'p1', 'description': '存在未转换的 $ 美元符号数学公式'},
+                {'type': 'html_error', 'severity': 'error', 'location': 'p1', 'description': '发现未转义 HTML 标签 <raw>'},
+            ],
+        )
+        descs = [item['description'] for item in kept]
+        self.assertIn('公式 \\(\\alpha\\) 缺少右括号', descs)
+        self.assertIn('成本 $10 与原文不符', descs)
+        self.assertNotIn('存在未转换的 $ 美元符号数学公式', descs)
+        self.assertNotIn('发现未转义 HTML 标签 <raw>', descs)
+
+        # 3. Selective YAML quoting + table cell / link label escaping
+        self.assertEqual(publish_to_blog._yaml_flow_scalar('语音识别'), '语音识别')
+        self.assertEqual(publish_to_blog._yaml_flow_scalar('语音: 识别'), '"语音: 识别"')
+        self.assertEqual(publish_to_blog._escape_markdown_table_cell('A | B'), r'A \| B')
+        self.assertEqual(publish_to_blog._escape_markdown_link_label('Paper [v2]'), r'Paper \[v2\]')
+
+        # 4. split_review_content accounts for frontmatter overhead on chunk 0 and ignores fence with trailing text
+        fm = '---\ntitle: "Long"\ndate: 2026-11-26\n---\n'
+        body = '```python\nx = 1\n``` not-a-closing-fence\ny = 2\n```\n' + ('段落内容。\n\n' * 30)
+        chunks = publish_to_blog.split_review_content(fm + body, limit=160)
+        self.assertGreaterEqual(len(chunks), 3)
+        self.assertIn('``` not-a-closing-fence\ny = 2\n```', chunks[1])
+        # When limit >= 12000 and visible frontmatter + chunks[0] exceeds limit, frontmatter stays separate
+        big_fm = '---\ntitle: "' + ('T' * 200) + '"\ndate: 2026-11-26\n---\n'
+        big_body = ('段落内容。\n\n' * 1700)  # ~11900 chars (< 12000 alone, > 12000 with big_fm)
+        big_chunks = publish_to_blog.split_review_content(big_fm + big_body, limit=12000)
+        self.assertEqual(big_chunks[0], big_fm)
+
+        # 5. attest_api_reader_assets requires ALL referencing pages to pass for PNG attestation
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'blog'
+            posts = repo / 'content' / 'posts'
+            assets_dir = repo / 'static' / 'images' / 'papers' / '2611.00001'
+            posts.mkdir(parents=True)
+            assets_dir.mkdir(parents=True)
+            png_bytes = publish_to_blog.PNG_SIGNATURE + b'fake-png-body'
+            png_path = assets_dir / 'figure-1-0123456789abcdef.png'
+            png_path.write_bytes(png_bytes)
+            png_sha = hashlib.sha256(png_bytes).hexdigest()
+            rel_png = png_path.relative_to(repo).as_posix()
+            img_url = f'{publish_to_blog.BASE_PATH.rstrip("/")}/{rel_png[len("static/"):]}'
+            p1 = posts / '2026-11-26-p1.md'
+            p2 = posts / '2026-11-26-p2.md'
+            p1.write_text(f'---\ntitle: "P1"\n---\n![fig]({img_url})\n', encoding='utf-8')
+            p2.write_text(f'---\ntitle: "P2"\n---\n![fig]({img_url})\n', encoding='utf-8')
+            p1_sha = hashlib.sha256(p1.read_bytes()).hexdigest()
+            p2_sha = hashlib.sha256(p2.read_bytes()).hexdigest()
+            manifest_path = Path(tmp) / 'manifest.json'
+            manifest_path.write_text(json.dumps({
+                'files': [
+                    {'path': p1.relative_to(repo).as_posix(), 'sha256': p1_sha, 'deleted': False},
+                    {'path': p2.relative_to(repo).as_posix(), 'sha256': p2_sha, 'deleted': False},
+                    {'path': rel_png, 'sha256': png_sha, 'deleted': False},
+                ],
+                'publishedPapers': [],
+            }), encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
+                partial_results = {
+                    str(p1.resolve()): {'passed': True, 'reviewedSha256': p1_sha, 'imageReviewMode': 'multimodal'},
+                    str(p2.resolve()): {'passed': False, 'reviewedSha256': p2_sha, 'imageReviewMode': 'multimodal'},
+                }
+                blocking_partial = publish_to_blog.attest_api_reader_assets(
+                    '2026-11-26', [str(p1), str(p2), str(png_path)], manifest_path, partial_results
+                )
+                self.assertEqual(blocking_partial, 1)
+                self.assertFalse(partial_results[str(png_path.resolve())]['passed'])
+
+                full_results = {
+                    str(p1.resolve()): {'passed': True, 'reviewedSha256': p1_sha, 'imageReviewMode': 'multimodal'},
+                    str(p2.resolve()): {'passed': True, 'reviewedSha256': p2_sha, 'imageReviewMode': 'multimodal'},
+                }
+                blocking_full = publish_to_blog.attest_api_reader_assets(
+                    '2026-11-26', [str(p1), str(p2), str(png_path)], manifest_path, full_results
+                )
+                self.assertEqual(blocking_full, 0)
+                self.assertTrue(full_results[str(png_path.resolve())]['passed'])
+
 
 if __name__ == '__main__':
     unittest.main()

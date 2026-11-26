@@ -86,10 +86,10 @@ npm run digest:prepare -- YYYY-MM-DD
 
 | 能力 | 默认值 | 覆写变量 |
 |---|---:|---|
-| 整篇分析并发 / Reader 并发 | 3 / 5（1–60） | `PD_ANALYSIS_CONCURRENCY` / `PD_API_READER_CONCURRENCY` |
-| 筛选批次 / 批次总轮数 | 5 / 3（1–10） | `PD_FILTER_BATCH_SIZE` / `PD_ANALYSIS_BATCH_MAX_ROUNDS` |
+| 整篇分析并发 / Reader 并发 | 3（≥1）/ 5（1–60） | `PD_ANALYSIS_CONCURRENCY` / `PD_API_READER_CONCURRENCY` |
+| 筛选批次 / 批次总轮数 | 5（≥1）/ 3（1–10） | `PD_FILTER_BATCH_SIZE` / `PD_ANALYSIS_BATCH_MAX_ROUNDS` |
 | 主分析尝试 / Reader 传输尝试 | 3 / 2（固定） | `PD_ANALYSIS_API_MAX_RETRIES` |
-| 博客独立页审查并发 | 日更历史 16（1–32），会议上限 5 | `PD_BLOG_REVIEW_CONCURRENCY` |
+| 博客独立页审查并发 | 日更 16（1–32），会议上限 5；历史 5（1–16） | `PD_BLOG_REVIEW_CONCURRENCY` / `PD_HISTORY_REVIEW_CONCURRENCY` |
 | arXiv 源站并发闸门 | 3（1–6） | `PD_ARXIV_MAX_CONCURRENCY` |
 | 日更人工修正名额 | `min(15, max(10, floor(N/10)))` | `PD_DAILY_CORRECTION_LIMIT`（1–15，只允许抬高） |
 

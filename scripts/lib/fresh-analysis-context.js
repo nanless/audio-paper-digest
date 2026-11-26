@@ -382,13 +382,20 @@ function writeExact(directory, filename, bytes) {
     }
 }
 
+function cloneVerifiedSource(source) {
+    const cloned = structuredClone(source);
+    const proof = verifiedBundleAuthorSources.get(source);
+    if (proof) verifiedBundleAuthorSources.set(cloned, { ...proof });
+    return cloned;
+}
+
 async function fetchFreshSource(arxivId, fetchOriginal) {
     const context = getFreshAnalysisContext();
     if (!context) return fetchOriginal(arxivId);
     const id = paperId(arxivId);
     const cached = readFreshSource(context.runDir, id, context);
     if (cached) return cached;
-    if (context.pendingSources.has(id)) return structuredClone(await context.pendingSources.get(id));
+    if (context.pendingSources.has(id)) return cloneVerifiedSource(await context.pendingSources.get(id));
     const pending = (async () => {
         const expectation = context.sourceExpectations[id];
         if (isBundleExpectation(expectation)) {
@@ -422,7 +429,7 @@ async function fetchFreshSource(arxivId, fetchOriginal) {
         return readFreshSource(context.runDir, id, context);
     })();
     context.pendingSources.set(id, pending);
-    try { return structuredClone(await pending); } finally { context.pendingSources.delete(id); }
+    try { return cloneVerifiedSource(await pending); } finally { context.pendingSources.delete(id); }
 }
 
 function resolveFreshSource(runDir, paper, identity) {

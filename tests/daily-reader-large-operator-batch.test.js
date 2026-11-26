@@ -81,3 +81,37 @@ test('用户明确授权的 PD_DAILY_CORRECTION_LIMIT 只能把名额抬高到�
         assert.throws(() => operator.largeBatchCorrectionLimit(plan, papers), /PD_DAILY_CORRECTION_LIMIT/);
     }
 });
+
+test('CP-P1-9: largeBatchCorrectionLimit 扣除 daily-source-skips.json 中的 PDF 404 跳过论文', t => {
+    const savedLimit = process.env.PD_DAILY_CORRECTION_LIMIT;
+    delete process.env.PD_DAILY_CORRECTION_LIMIT;
+    t.after(() => {
+        if (savedLimit === undefined) delete process.env.PD_DAILY_CORRECTION_LIMIT;
+        else process.env.PD_DAILY_CORRECTION_LIMIT = savedLimit;
+    });
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'operator-skip-batch-'));
+    const previous = Config.FILES.dailyFreshSourceRunsDir;
+    Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'daily-runs');
+    t.after(() => {
+        Config.FILES.dailyFreshSourceRunsDir = previous;
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+    const dailySourceSkip = require('../scripts/lib/daily-source-skip');
+    const allPapers = Array.from({ length: 121 }, (_, i) => ({ arxivId: `2611.${70000 + i}v1` }));
+    const plan = daily.createDailyFreshSourcePlan({
+        batchDate: '2026-11-26',
+        batchId: 'synthetic-operator-skip-121',
+        papers: allPapers
+    });
+    dailySourceSkip.writeDailySourceSkips(plan, [{
+        arxivId: '2611.70000',
+        errorCode: 'ARXIV_PDF_NOT_FOUND',
+        status: 404,
+        message: 'arXiv PDF 2611.70000 download failed: HTTP 404'
+    }], { limit: dailySourceSkip.MAX_LIMIT });
+
+    const remainingPapers = allPapers.slice(1); // 120 papers
+    assert.equal(operator.largeBatchCorrectionLimit(plan, remainingPapers), 12);
+    // Passing the full 121 including the skipped paper must fail exact set equality.
+    assert.throws(() => operator.largeBatchCorrectionLimit(plan, allPapers), /complete original sealed batch/);
+});

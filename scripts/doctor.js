@@ -192,6 +192,37 @@ function expandHomePath(value, homeDirectory = os.homedir()) {
     return text;
 }
 
+function addProxyUrlSecrets(value, secrets) {
+    const addCandidate = (rawPart) => {
+        if (!rawPart) return;
+        if (rawPart.length >= 4) secrets.add(rawPart);
+        try {
+            const decoded = decodeURIComponent(rawPart);
+            if (decoded && decoded.length >= 4) secrets.add(decoded);
+        } catch (_error) {
+            // 非法百分号编码时保留原始片段即可。
+        }
+    };
+    try {
+        const parsed = new URL(value);
+        for (const part of [parsed.username, parsed.password]) {
+            addCandidate(part || '');
+        }
+    } catch (_error) {
+        // 非法代理 URL 已在代理检查里报告；仍尝试兜底提取 authority 凭据避免泄漏。
+    }
+    const authorityMatch = value.match(/^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#\s]+)@/);
+    if (authorityMatch) {
+        const userinfo = authorityMatch[1];
+        addCandidate(userinfo);
+        const colonIdx = userinfo.indexOf(':');
+        if (colonIdx >= 0) {
+            addCandidate(userinfo.slice(0, colonIdx));
+            addCandidate(userinfo.slice(colonIdx + 1));
+        }
+    }
+}
+
 /**
  * 把密钥值从任意输出里抹掉。API Key、备用 Key、代理密码都算。
  */
@@ -207,19 +238,27 @@ function collectSecretValues(env) {
                 if (candidate.length >= 4) secrets.add(candidate);
             }
         }
-        if (/^(HTTPS?_PROXY|https?_proxy)$/.test(key)) {
-            try {
-                const parsed = new URL(value);
-                for (const part of [parsed.username, parsed.password]) {
-                    const decoded = decodeURIComponent(part || '');
-                    if (decoded && decoded.length >= 4) secrets.add(decoded);
-                }
-            } catch (_error) {
-                // 非法代理 URL 已在代理检查里报告。
-            }
+        if (/^(?:https?|all)_proxy$/i.test(key)) {
+            addProxyUrlSecrets(value, secrets);
         }
     }
     return [...secrets].sort((a, b) => b.length - a.length);
+}
+
+function collectRuntimeSecrets(projectRoot = PROJECT_ROOT, envEntries = null, processEnv = process.env) {
+    const merged = new Set();
+    for (const secret of collectSecretValues(processEnv)) merged.add(secret);
+    let dotEnvEntries = envEntries;
+    if (dotEnvEntries === null) {
+        try {
+            const envInfo = readEnvFileReadOnly(path.join(projectRoot, ENV_FILE_NAME));
+            dotEnvEntries = isPlainObject(envInfo?.entries) ? envInfo.entries : {};
+        } catch (_error) {
+            dotEnvEntries = {};
+        }
+    }
+    for (const secret of collectSecretValues(dotEnvEntries)) merged.add(secret);
+    return [...merged].sort((a, b) => b.length - a.length);
 }
 
 function redactText(value, secrets) {
@@ -1044,29 +1083,50 @@ function evaluateBlogRepo(input) {
 // LLM 账号池状态（只读 JSON，不取锁、不发请求）
 // ═══════════════════════════════════════════════════════
 
+const MAX_ACCOUNT_POOL_STATE_BYTES = 16 * 1024 * 1024;
+
 function readAccountPoolState(stateFile, nowMs = Date.now()) {
-    let stat;
+    const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+    let fd;
     try {
-        stat = fs.lstatSync(stateFile);
+        fd = fs.openSync(stateFile, openFlags);
     } catch (error) {
         if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
             return { exists: false, valid: true, error: null, mode: null };
         }
+        if (error?.code === 'ELOOP') {
+            return { exists: true, valid: false, error: '状态路径是符号链接（生产读取会拒绝）', mode: null };
+        }
         return { exists: true, valid: false, error: `无法读取: ${error?.code || error?.message || error}`, mode: null };
     }
-    // 生产读取（readStateStrict）拒绝 symlink；体检也不能跟随它。
-    if (stat.isSymbolicLink()) {
-        return { exists: true, valid: false, error: '状态路径是符号链接（生产读取会拒绝）', mode: null };
-    }
-    if (!stat.isFile()) {
-        return { exists: true, valid: false, error: '状态路径不是普通文件', mode: null };
-    }
-    const mode = stat.mode & 0o777;
+    let mode = null;
     let raw;
     try {
-        raw = fs.readFileSync(stateFile, 'utf8');
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile()) {
+            return { exists: true, valid: false, error: '状态路径不是普通文件', mode: null };
+        }
+        mode = stat.mode & 0o777;
+        if (stat.size > MAX_ACCOUNT_POOL_STATE_BYTES) {
+            return { exists: true, valid: false, error: `状态文件过大（${stat.size} 字节，上限 ${MAX_ACCOUNT_POOL_STATE_BYTES}）`, mode };
+        }
+        const chunks = [];
+        let total = 0;
+        const buffer = Buffer.allocUnsafe(64 * 1024);
+        for (;;) {
+            const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+            if (bytesRead === 0) break;
+            total += bytesRead;
+            if (total > MAX_ACCOUNT_POOL_STATE_BYTES) {
+                return { exists: true, valid: false, error: `状态文件过大（超过 ${MAX_ACCOUNT_POOL_STATE_BYTES} 字节上限）`, mode };
+            }
+            chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+        }
+        raw = Buffer.concat(chunks, total).toString('utf8');
     } catch (error) {
         return { exists: true, valid: false, error: `无法读取: ${error?.code || error?.message || error}`, mode };
+    } finally {
+        try { fs.closeSync(fd); } catch (_error) { /* 已关闭 */ }
     }
     let state;
     try {
@@ -1275,6 +1335,21 @@ function evaluateRssProbe(probe, targetDate, options = {}) {
 }
 
 const MAX_PROBE_REDIRECTS = 3;
+const ALLOWED_PROBE_HOST_SUFFIXES = Object.freeze(['arxiv.org']);
+
+function isAllowedProbeHost(hostname, allowedHostSuffixes = ALLOWED_PROBE_HOST_SUFFIXES) {
+    if (!Array.isArray(allowedHostSuffixes) || allowedHostSuffixes.length === 0) return true;
+    const host = String(hostname == null ? '' : hostname)
+        .trim()
+        .toLowerCase()
+        .replace(/^\[|\]$/g, '')
+        .replace(/\.+$/, '');
+    if (!host) return false;
+    return allowedHostSuffixes.some(rawSuffix => {
+        const suffix = String(rawSuffix || '').trim().toLowerCase().replace(/^\.+|\.+$/g, '');
+        return Boolean(suffix) && (host === suffix || host.endsWith(`.${suffix}`));
+    });
+}
 
 function isPrivateOrReservedHost(hostname) {
     const host = String(hostname == null ? '' : hostname)
@@ -1296,7 +1371,7 @@ function isPrivateOrReservedHost(hostname) {
     return false;
 }
 
-function assertAllowedProbeUrl(rawUrl) {
+function assertAllowedProbeUrl(rawUrl, options = {}) {
     const raw = String(rawUrl == null ? '' : rawUrl);
     if (!raw || /[\u0000-\u0020\u007f\\]/.test(raw)) {
         throw Object.assign(new Error(`探测 URL 非法: ${truncatedText(rawUrl, 80)}`), { code: 'PROBE_URL_INVALID' });
@@ -1323,6 +1398,12 @@ function assertAllowedProbeUrl(rawUrl) {
     const normalizedHost = String(parsed.hostname || '').replace(/\.+$/, '');
     if (isPrivateOrReservedHost(normalizedHost)) {
         throw Object.assign(new Error(`探测拒绝私网/保留地址: ${parsed.hostname}`), { code: 'PROBE_URL_PRIVATE' });
+    }
+    const allowedHostSuffixes = options.allowedHostSuffixes === undefined
+        ? ALLOWED_PROBE_HOST_SUFFIXES
+        : options.allowedHostSuffixes;
+    if (allowedHostSuffixes !== null && !isAllowedProbeHost(normalizedHost, allowedHostSuffixes)) {
+        throw Object.assign(new Error(`探测只允许 arXiv 主机: ${parsed.hostname}`), { code: 'PROBE_HOST_DISALLOWED' });
     }
     return parsed;
 }
@@ -1368,9 +1449,12 @@ async function fetchProbeText(fetchImpl, url, headers, options = {}) {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
         let currentUrl = String(url);
+        const urlCheckOptions = options.allowedHostSuffixes === undefined
+            ? {}
+            : { allowedHostSuffixes: options.allowedHostSuffixes };
         for (let hop = 0; hop <= maxRedirects; hop += 1) {
-            // 手动处理重定向：每一跳都重新校验 HTTPS 与非私网/保留地址。
-            const parsed = assertAllowedProbeUrl(currentUrl);
+            // 手动处理重定向：每一跳都重新校验 HTTPS、非私网/保留地址与允许主机白名单。
+            const parsed = assertAllowedProbeUrl(currentUrl, urlCheckOptions);
             const response = await fetchImpl(parsed.toString(), {
                 method: 'GET',
                 headers,
@@ -1429,10 +1513,11 @@ async function probeNetwork(options = {}) {
             dispatcher = new ProxyAgent(resolved.url);
         }
         const headers = { 'User-Agent': ARXIV_USER_AGENT };
+        const probeOptions = { timeoutMs, maxBytes, dispatcher, allowedHostSuffixes: ALLOWED_PROBE_HOST_SUFFIXES };
         const [atom, oai, rss] = await Promise.all([
-            fetchProbeText(fetchImpl, ARXIV_ATOM_URL, { ...headers, Accept: 'application/atom+xml' }, { timeoutMs, maxBytes, dispatcher }),
-            fetchProbeText(fetchImpl, ARXIV_OAI_URL, { ...headers, Accept: 'text/xml' }, { timeoutMs, maxBytes, dispatcher }),
-            fetchProbeText(fetchImpl, ARXIV_RSS_URL, { ...headers, Accept: 'application/rss+xml' }, { timeoutMs, maxBytes, dispatcher })
+            fetchProbeText(fetchImpl, ARXIV_ATOM_URL, { ...headers, Accept: 'application/atom+xml' }, probeOptions),
+            fetchProbeText(fetchImpl, ARXIV_OAI_URL, { ...headers, Accept: 'text/xml' }, probeOptions),
+            fetchProbeText(fetchImpl, ARXIV_RSS_URL, { ...headers, Accept: 'application/rss+xml' }, probeOptions)
         ]);
         return { proxyError: null, atom, oai, rss };
     } finally {
@@ -1640,7 +1725,7 @@ async function main(argv = process.argv.slice(2)) {
     const { checks } = await runDoctor({ parsed });
     const envInfo = safeCollect('.env', () => readEnvFileReadOnly(path.join(PROJECT_ROOT, ENV_FILE_NAME)))[0];
     const envEntries = isPlainObject(envInfo?.entries) ? envInfo.entries : {};
-    const redacted = redactChecks(checks, collectSecretValues(envEntries));
+    const redacted = redactChecks(checks, collectRuntimeSecrets(PROJECT_ROOT, envEntries, process.env));
     if (parsed.json) {
         console.log(JSON.stringify(redacted, null, 2));
     } else {
@@ -1667,6 +1752,7 @@ module.exports = {
     maskTextPaths,
     sanitizeUrlForDisplay,
     collectSecretValues,
+    collectRuntimeSecrets,
     redactText,
     redactChecks,
     countStatuses,
@@ -1709,6 +1795,7 @@ module.exports = {
     findHugoConfig,
     inspectBlogRepo,
     evaluateBlogRepo,
+    MAX_ACCOUNT_POOL_STATE_BYTES,
     readAccountPoolState,
     evaluateAccountPool,
     parseRssPubDate,
@@ -1717,6 +1804,8 @@ module.exports = {
     evaluateOaiProbe,
     evaluateRssProbe,
     MAX_PROBE_REDIRECTS,
+    ALLOWED_PROBE_HOST_SUFFIXES,
+    isAllowedProbeHost,
     isPrivateOrReservedHost,
     assertAllowedProbeUrl,
     readProbeBody,
@@ -1731,7 +1820,7 @@ module.exports = {
 
 if (require.main === module) {
     main().catch(error => {
-        const secrets = collectSecretValues(process.env);
+        const secrets = collectRuntimeSecrets(PROJECT_ROOT, null, process.env);
         console.error(`[doctor] ${redactText(maskTextPaths(error?.stack || error?.message || error), secrets)}`);
         process.exitCode = 2;
     });

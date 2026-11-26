@@ -7,11 +7,12 @@
  */
 
 const DEFAULT_MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 6;
 const MAX_COOLDOWN_MS = 120_000;
 
 function resolveMaxConcurrency() {
     const raw = Number.parseInt(String(process.env.PD_ARXIV_MAX_CONCURRENCY || ''), 10);
-    if (Number.isInteger(raw) && raw >= 1 && raw <= 8) return raw;
+    if (Number.isInteger(raw) && raw >= 1 && raw <= MAX_CONCURRENCY) return raw;
     return DEFAULT_MAX_CONCURRENCY;
 }
 
@@ -62,11 +63,19 @@ class ArxivOriginGate {
     }
 
     async acquire(sleepFn = ms => new Promise(resolve => setTimeout(resolve, ms))) {
-        const limit = this.maxConcurrency || resolveMaxConcurrency();
-        if (this.active >= limit) {
-            await new Promise(resolve => this.queue.push(resolve));
+        let acquired = false;
+        while (!acquired) {
+            const limit = this.maxConcurrency || resolveMaxConcurrency();
+            if (this.active < limit) {
+                this.active += 1;
+                acquired = true;
+            } else {
+                const handedOff = await new Promise(resolve => this.queue.push(resolve));
+                if (handedOff === true) {
+                    acquired = true;
+                }
+            }
         }
-        this.active += 1;
         try {
             while (true) {
                 const remain = this.remainingCooldownMs();
@@ -80,10 +89,14 @@ class ArxivOriginGate {
     }
 
     release() {
-        this.active = Math.max(0, this.active - 1);
-        if (this.queue.length > 0 && this.active < (this.maxConcurrency || resolveMaxConcurrency())) {
+        const limit = this.maxConcurrency || resolveMaxConcurrency();
+        if (this.active > 0) this.active -= 1;
+        while (this.queue.length > 0 && this.active < limit) {
             const next = this.queue.shift();
-            if (typeof next === 'function') next();
+            if (typeof next === 'function') {
+                this.active += 1;
+                next(true);
+            }
         }
     }
 
@@ -107,6 +120,8 @@ module.exports = {
     ArxivOriginGate,
     sharedArxivOriginGate,
     parseRetryAfterMs,
+    resolveMaxConcurrency,
     DEFAULT_MAX_CONCURRENCY,
+    MAX_CONCURRENCY,
     MAX_COOLDOWN_MS
 };

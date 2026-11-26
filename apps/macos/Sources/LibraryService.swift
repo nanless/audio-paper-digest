@@ -415,6 +415,10 @@ actor LibraryService {
     func cancelSync() {
         syncTask?.cancel()
     }
+    func invalidateSession() {
+        syncTask?.cancel()
+        session.invalidateAndCancel()
+    }
 
     private func performSync(identifier: UUID, progress: @escaping @Sendable (Progress) -> Void) async throws -> Summary {
         progress(Progress(phase: "manifest", message: "正在读取网站目录清单", completed: 0, total: 0))
@@ -755,6 +759,7 @@ actor LibraryService {
         if let previous { try preserveRevision(previous, blogURL: paper.blogURL) }
         try preserveRevision(article, blogURL: paper.blogURL)
         try atomicWrite(try JSONEncoder().encode(article), to: cache)
+        cachedDemoPaperIDs = nil
         indexText(article)
         return article
     }

@@ -944,9 +944,16 @@ function formatDigestRunSummary(report) {
     for (const error of report.errors) lines.push(`  错误: ${error}`);
     // 文件存在却读不出来时要说出来。文件不存在不会进这个数组，也不该报成错误。
     for (const problem of report.readProblems || []) {
-        const what = problem?.kind === 'invalid-json'
-            ? '存在，但 JSON 解析失败'
-            : `存在，但无法读取（${problem?.code || '未知错误'}）`;
+        let what;
+        if (problem?.kind === 'invalid-json') {
+            what = '存在，但 JSON 解析失败';
+        } else if (problem?.kind === 'daily-source-skip') {
+            what = problem?.message
+                ? `来源跳过记录校验失败（${problem.message}）`
+                : '来源跳过记录校验失败';
+        } else {
+            what = `存在，但无法读取（${problem?.code || '未知错误'}）`;
+        }
         lines.push(`  读取告警: ${problem?.path} ${what}`);
     }
     return lines.join('\n');
@@ -1070,8 +1077,9 @@ async function runWatch(options = {}) {
                 else print(formatLiveStatus(snapshot));
             } catch (error) {
                 if (stopped) return;
+                iterations += 1;
                 const message = error?.message || String(error);
-                // 一次快照读失败不应结束 watch；按同一输出格式继续下一轮。
+                // 一次快照读失败不应结束 watch；按同一输出格式继续下一轮，同时计入轮次上限。
                 if (json) print(JSON.stringify(formats.record('digest-status-error', { error: message })));
                 else print(`[digest-live] 快照失败: ${message}`);
             } finally {

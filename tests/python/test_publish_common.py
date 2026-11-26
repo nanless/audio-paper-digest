@@ -4788,6 +4788,62 @@ ZETA 与 MusicMagus 的 ΔBPM 数值与两个全局适配系统分成两组，�
                 delay = sleep_mock.call_args.args[0]
                 self.assertTrue(math.isfinite(delay) and 0.0 <= delay <= 61.0)
 
+    def test_w3_sanitize_crlf_ordering_yaml_and_llm_infra_regressions(self):
+        from publish_common import (
+            _is_table_identifier_header,
+            _sanitize_publish_llm_error,
+            fix_extraction_diacritic_damage,
+            fix_yaml_double_commas,
+            fix_yaml_unbalanced_quotes,
+            parse_publish_sse_response,
+            STAGE_REASONING_EFFORT_TIERS,
+        )
+        # CRLF frontmatter preserved; strip_raw_inline_html runs before escape_html_like_tags;
+        # speech control tokens <s>/<e> kept & escaped cleanly, fenced/inline code untouched.
+        md = (
+            '---\r\n'
+            'title: "A \\"quoted\\" title,, ok"\r\n'
+            'tags: [语音识别,, 音频生成]\r\n'
+            '---\r\n'
+            '正文含 <b>粗体</b> 与 `<b>inline</b>` 与 <s>token</s>。\r\n'
+            '```html\r\n<b>fenced</b>\r\n```\r\n'
+            '---\r\n'
+            '正文含 "非 frontmatter 引号\r\n'
+        )
+        sanitized = sanitize_markdown_for_publish(md)
+        self.assertIn('title: "A \\"quoted\\" title,, ok"', sanitized)
+        self.assertIn('tags: [语音识别, 音频生成]', sanitized)
+        self.assertIn('正文含粗体与 `<b>inline</b>`', sanitized)
+        self.assertIn('`<s>`', sanitized)
+        self.assertIn('```html\r\n<b>fenced</b>\r\n```', sanitized)
+        # fix_yaml_unbalanced_quotes does not corrupt escaped quotes or body horizontal rules
+        self.assertEqual(fix_yaml_unbalanced_quotes('---\ntitle: "a \\"b\\" c"\n---\nbody\n---\n"unclosed'),
+                         '---\ntitle: "a \\"b\\" c"\n---\nbody\n---\n"unclosed')
+        # fix_yaml_double_commas does not touch title/description/paper_digest_* JSON
+        json_fm = '---\npaper_digest_meta: "{\"a\":\",,\"}"\ntags: [A,, B]\n---\nbody,, here'
+        fixed_commas = fix_yaml_double_commas(json_fm)
+        self.assertIn('paper_digest_meta: "{\"a\":\",,\"}"', fixed_commas)
+        self.assertIn('tags: [A, B]', fixed_commas)
+        self.assertIn('body,, here', fixed_commas)
+        # escape_technical_notation_asterisks protects inline code, LaTeX math, and URLs
+        star_md = '行内 `H1*-H2*` 与 \\(H1*-H2*\\) 与 https://example.com/H1*-H2* 与正文 H1*-H2*。'
+        escaped_stars = escape_technical_notation_asterisks(star_md)
+        self.assertIn('`H1*-H2*`', escaped_stars)
+        self.assertIn('\\(H1*-H2*\\)', escaped_stars)
+        self.assertIn('https://example.com/H1*-H2*', escaped_stars)
+        self.assertIn(r'正文 H1\*-H2\*。', escaped_stars)
+        # fix_extraction_diacritic_damage skips frontmatter and code
+        diacritic = '---\ntitle: "na ıve"\n---\n`na ıve` 与 ```\nna ıve\n```'
+        self.assertEqual(fix_extraction_diacritic_damage(diacritic), diacritic)
+        # Table identifier header parity + LLM infra
+        self.assertTrue(_is_table_identifier_header('推理窗长'))
+        self.assertTrue(_is_table_identifier_header('评价项目，N = 12'))
+        self.assertEqual(STAGE_REASONING_EFFORT_TIERS.get('apiReaderImageProbe'), 'minimal')
+        self.assertEqual(STAGE_REASONING_EFFORT_TIERS.get('conference-filter'), 'low')
+        sse_err = parse_publish_sse_response('event: error\ndata: {"type":"error","error":{"message":"boom"}}\n\n')
+        self.assertEqual(sse_err.get('status'), 'failed')
+        self.assertNotIn('secretpass', _sanitize_publish_llm_error('proxy http://user:secretpass@127.0.0.1:7897 failed'))
+
 
 if __name__ == '__main__':
     unittest.main()

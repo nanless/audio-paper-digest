@@ -8,13 +8,16 @@ const path = require('node:path');
 const YAML = require('yaml');
 const { spawnSync } = require('node:child_process');
 const {
-    HUGO_VERSION, parseOptions, collectSourceFiles, buildVerificationPlan, executeCommand, assertPinnedHugo, javascriptShardArguments
+    HUGO_VERSION, parseOptions, collectSourceFiles, buildVerificationPlan, requiresPinnedHugo, executeCommand, assertPinnedHugo, javascriptShardArguments
 } = require('../scripts/verify-project.js');
 
 test('完整计划让每个套件恰好覆盖一次，绝不默认允许空数据', () => {
     const plan = buildVerificationPlan(parseOptions([]), { javascript: ['a.js'], python: ['b.py'], shell: ['c.sh'] });
     assert.deepEqual(plan.filter(step => step.command === 'npm').map(step => step.args), [['test']]);
-    assert.equal(plan.filter(step => step.args.includes('unittest')).length, 3);
+    const unittestSteps = plan.filter(step => step.args.includes('unittest'));
+    assert.equal(unittestSteps.length, 3);
+    assert.equal(unittestSteps.some(step => step.args.includes('reader_pdf_*_test.py')), true);
+    assert.equal(plan.some(step => step.args.includes('scripts/docs-consistency.js')), true);
     assert.deepEqual(plan.at(-1).args, ['scripts/validate-data-files.js']);
     assert.deepEqual(plan.at(-1).env, { VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' });
     assert.equal(plan.some(step => /generate|review|push|fetch/.test(step.args.join(' '))), false);
@@ -22,8 +25,9 @@ test('完整计划让每个套件恰好覆盖一次，绝不默认允许空数�
 
 test('快速计划是显式的语法与数据子集；非法参数直接失败', () => {
     const plan = buildVerificationPlan(parseOptions(['--quick', '--allow-empty']), { javascript: ['a.js'], python: ['b.py'], shell: ['c.sh'] });
-    assert.equal(plan.length, 4);
+    assert.equal(plan.length, 5);
     assert.equal(plan.some(step => step.command === 'npm' || step.args.includes('unittest')), false);
+    assert.equal(plan.some(step => step.args.includes('scripts/docs-consistency.js')), true);
     assert.deepEqual(plan.at(-1).args, ['scripts/validate-data-files.js', '--allow-empty']);
     assert.deepEqual(plan.at(-1).env, { VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' });
     assert.throws(() => parseOptions(['--skip-hugo']), /未知验证参数/);
@@ -215,7 +219,12 @@ test('分套件并集保持完整计划覆盖，非法分片不能伪装完整�
     const stat = buildVerificationPlan(parseOptions(['--suite', 'static']), files);
     assert.deepEqual([...stat, ...js, ...py].map(step => JSON.stringify(step)).sort(),
         buildVerificationPlan(parseOptions([]), files).map(step => JSON.stringify(step)).sort());
-    assert.equal(js.length, 1); assert.equal(py.length, 3); assert.equal(stat.length, 4);
+    assert.equal(js.length, 1); assert.equal(py.length, 3); assert.equal(stat.length, 5);
+    assert.equal(requiresPinnedHugo(parseOptions([])), true);
+    assert.equal(requiresPinnedHugo(parseOptions(['--suite', 'javascript'])), true);
+    assert.equal(requiresPinnedHugo(parseOptions(['--suite', 'python'])), true);
+    assert.equal(requiresPinnedHugo(parseOptions(['--suite', 'static'])), false);
+    assert.equal(requiresPinnedHugo(parseOptions(['--quick'])), false);
     for (const args of [ ['--shard', '1/4'], ['--suite', 'python', '--shard', '1/4'], ['--suite', 'javascript', '--shard', '0/4'],
         ['--suite', 'javascript', '--shard', '5/4'], ['--suite', 'javascript', '--shard', '1/33'], ['--suite', 'unknown'],
         ['--suite', 'static', '--quick'], ['--suite', 'all', '--suite', 'python'] ]) assert.throws(() => parseOptions(args));

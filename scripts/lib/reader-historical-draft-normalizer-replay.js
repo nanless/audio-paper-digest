@@ -20,7 +20,8 @@ const transportChanges = new Map([
         'a074a66a3561c65017b9dea50fa911d74dd062d122219a4cb915ecdd5d1a4874',
         '7165fe6907186133001a36bcd9c26abc9197e89ef093e9266970e16acee0d73f']],
     [pdfWorkerPath, ['0ed8b2df8869d62e05b97c14ef7fc4a49436898378556428de4292e2cd387da3',
-        'b3d42c339796790212d5b64750e93962927ee4c1a417a5c399be8af497c0de23']]
+        'b3d42c339796790212d5b64750e93962927ee4c1a417a5c399be8af497c0de23',
+        'ed56fdfc5d17ef8460e9597d380fa0a1c2c4baed3dc8d2e07dde1f536e1009cb']]
 ]);
 const pdfBuiltins = new Set(['node:fs', 'node:path', 'node:crypto', 'node:child_process', 'node:async_hooks', 'node:util']);
 class UnsupportedHistoricalDependencyError extends Error {}

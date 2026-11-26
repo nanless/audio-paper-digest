@@ -1957,6 +1957,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         // 摘要读取官方 Atom 返回内容，同批跨分类论文在本层合并。
         const arxivRequestScheduler = createProductionArxivRequestScheduler();
         const arxivStrategyState = {};
+        let step1HadArxiv429 = false;
         for (let i = 0; i < shuffledCategories.length; i++) {
             const category = shuffledCategories[i];
             const cachedCategory = fetchCheckpoint.arxiv[category.id];
@@ -2019,6 +2020,13 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 sourceHealth.arxiv.categories.push(categoryHealth);
                 fetchCheckpoint.arxiv[category.id] = { status: 'failed', papers: [], health: categoryHealth };
                 saveFetchCheckpoint(fetchCheckpoint);
+                if (fetchError?.status === 429
+                    || categoryFetchHealth?.statusCode === 429
+                    || categoryFetchHealth?.rateLimited === true
+                    || /(?:HTTP\s*429|429|rate limit|限流)/i.test(String(fetchError?.message || ''))) {
+                    step1HadArxiv429 = true;
+                    require('./lib/arxiv-origin-gate.js').sharedArxivOriginGate.recordCooldown(30000);
+                }
                 if (isDailyXmlOperationalError(fetchError)) throw fetchError;
             }
 
@@ -2063,6 +2071,11 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         }
 
         console.log(`\narxiv 抓取完成: ${arxivPapers.length} 篇`);
+        const step1ArxivClean = sourceHealth.arxiv.categories.every(item => item?.ok === true);
+        if (sourceHealth.arxiv.categories.some(item => item?.ok !== true
+            && /(?:HTTP\s*429|429|rate limit|限流)/i.test(String(item?.error || '')))) {
+            step1HadArxiv429 = true;
+        }
 
         // ========== 第二步：从 HuggingFace Papers 抓取 ==========
         console.log('\n📥 第二步：从 HuggingFace Papers 抓取论文');
@@ -2073,6 +2086,22 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             hfPapers = cachedHf.papers;
             sourceHealth.huggingface = cachedHf.health;
             console.log(`  复用已有的 HuggingFace 抓取结果，共 ${hfPapers.length} 篇`);
+            if (cachedHf.health?.arxivBackfillComplete === false && step1ArxivClean && !step1HadArxiv429) {
+                const arxivFetchedIdSet = new Set(arxivPapers.map(normalizedId).filter(Boolean));
+                const hfBackfill = await enrichHfOnlyPapersWithArxivMetadata(hfPapers, arxivFetchedIdSet, {
+                    requestScheduler: arxivRequestScheduler
+                });
+                if (hfBackfill.enrichedCount > 0) {
+                    console.log(`  🏷️ 续跑已为 ${hfBackfill.enrichedCount}/${hfBackfill.attemptedCount} 篇 HF-only 论文补齐官方 arXiv 分类与生命周期元数据`);
+                }
+                pinPapersToBatch(hfPapers, batchStartedAt, batchDate);
+                sourceHealth.huggingface = {
+                    ...cachedHf.health,
+                    arxivBackfillComplete: Boolean((hfBackfill.failedCount || 0) === 0)
+                };
+                fetchCheckpoint.huggingface = { status: 'complete', papers: hfPapers, health: sourceHealth.huggingface };
+                saveFetchCheckpoint(fetchCheckpoint);
+            }
         } else try {
             hfPapers = await fetchHuggingFacePapers(historicalExistingIds, {
                 days: Config.HUGGINGFACE_CONFIG.defaultDays,
@@ -2085,11 +2114,26 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 throw new Error('HuggingFace 抓取未证明完整补更日期范围');
             }
             const arxivFetchedIdSet = new Set(arxivPapers.map(normalizedId).filter(Boolean));
-            const hfBackfill = await enrichHfOnlyPapersWithArxivMetadata(hfPapers, arxivFetchedIdSet, {
-                requestScheduler: arxivRequestScheduler
+            const hfOnlyNeedingBackfill = hfPapers.filter(p => {
+                const nid = normalizedId(p);
+                return nid && !arxivFetchedIdSet.has(nid) && (!Array.isArray(p.categories) || p.categories.length === 0);
             });
-            if (hfBackfill.enrichedCount > 0) {
-                console.log(`  🏷️ 已为 ${hfBackfill.enrichedCount}/${hfBackfill.attemptedCount} 篇 HF-only 论文回填官方 arXiv 分类与生命周期元数据`);
+            let hfBackfill;
+            if (step1HadArxiv429 && hfOnlyNeedingBackfill.length > 0) {
+                console.log(`  ⏭️ Step 1 已触发 arXiv 429 限流，跳过本轮 ${hfOnlyNeedingBackfill.length} 篇 HF-only 论文的 arXiv 元数据回填，待续跑补齐`);
+                hfBackfill = {
+                    enrichedCount: 0,
+                    attemptedCount: hfOnlyNeedingBackfill.length,
+                    failedCount: hfOnlyNeedingBackfill.length,
+                    skippedDueToArxiv429: true
+                };
+            } else {
+                hfBackfill = await enrichHfOnlyPapersWithArxivMetadata(hfPapers, arxivFetchedIdSet, {
+                    requestScheduler: arxivRequestScheduler
+                });
+                if (hfBackfill.enrichedCount > 0) {
+                    console.log(`  🏷️ 已为 ${hfBackfill.enrichedCount}/${hfBackfill.attemptedCount} 篇 HF-only 论文回填官方 arXiv 分类与生命周期元数据`);
+                }
             }
             pinPapersToBatch(hfPapers, batchStartedAt, batchDate);
             sourceHealth.huggingface = {
@@ -2098,7 +2142,8 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 fetched: hfPapers.length,
                 days: Config.HUGGINGFACE_CONFIG.defaultDays,
                 minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes,
-                durationMs: Date.now() - hfStartTime
+                durationMs: Date.now() - hfStartTime,
+                arxivBackfillComplete: Boolean((hfBackfill.failedCount || 0) === 0)
             };
             fetchCheckpoint.huggingface = { status: 'complete', papers: hfPapers, health: sourceHealth.huggingface };
             saveFetchCheckpoint(fetchCheckpoint);

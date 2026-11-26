@@ -74,10 +74,11 @@ function assertCurrent({ directory, paper, source, resourceRecoveryHandle, targe
 function read(file, expected) { return require('./reader-proof-read-scope').readReaderProofJson(file, { expectedSha256: expected }); }
 function receiptFile(directory, scopeSha256) { return path.join(directory, 'resource-input-admissions', scopeSha256 + '.json'); }
 function latestUsage(identity) {
+    const { listUsageLedgerFiles } = require('./llm-usage-ledger');
     const directory = require('../config').FILES.llmUsageDir;
     let latest = null, ambiguous = false; const eventIds = new Set();
-    for (const name of fs.readdirSync(directory).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
-        const file = path.join(directory, name), checked = read(file), event = checked.value;
+    for (const entry of listUsageLedgerFiles(directory)) {
+        const file = entry.file, checked = read(file), event = checked.value;
         if (event.kind !== 'request' || event.paperId !== identity.paperId || event.runId !== identity.freshAnalysis.runId
             || !['apiReaderArticle', 'apiReaderRepair'].includes(event.stage)) continue;
         if (!/^[a-f0-9-]{36}$/.test(event.eventId || '') || eventIds.has(event.eventId)) return null;
@@ -141,8 +142,13 @@ function receiptProof(receipt, source, expectedScope) {
         || proof.resourceIdentitySha256 !== receipt.resources.identitySha256
         || proof.resourceFactsSha256 !== hash(resourceFacts(receipt.resources, source.text)) || !isDeepStrictEqual(receipt.budget, proof.budget))
         throw new Error('Resource input admission receipt identity or integrity failed');
+    const { isUsageLedgerFile, resolveUsageLedgerFile } = require('./llm-usage-ledger');
+    const usageDir = require('../config').FILES.llmUsageDir;
+    const resolvedUsageFile = resolveUsageLedgerFile(usageDir, proof.usageFile);
+    if (!resolvedUsageFile || !isUsageLedgerFile(resolvedUsageFile, usageDir))
+        throw new Error('Resource input admission original request/response/fee/candidate proof changed');
     const request = read(proof.requestFile, proof.requestSha256), response = read(proof.responseFile, proof.responseSha256);
-    const usage = read(proof.usageFile, proof.usageSha256), candidate = read(proof.candidateFile, proof.candidateEnvelopeSha256);
+    const usage = read(resolvedUsageFile, proof.usageSha256), candidate = read(proof.candidateFile, proof.candidateEnvelopeSha256);
     const req = request.value, res = response.value, event = usage.value;
     if (hash(req.identity) !== proof.oldIdentitySha256 || req.identity.inputFingerprint !== proof.oldInputFingerprint
         || !isDeepStrictEqual(semantic(req.identity), semantic(receipt.identity))

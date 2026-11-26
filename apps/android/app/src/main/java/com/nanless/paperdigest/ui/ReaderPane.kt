@@ -140,7 +140,8 @@ import org.json.JSONObject
     val rankBucket=assessment?.optString("rankBucket")?.takeIf{it.isNotBlank()&&it!="null"}
     val documentType=assessment?.optString("documentType")?.takeIf{it.isNotBlank()&&it!="null"}
     val readerVenue=parseConferenceVenue(paper.id)
-    val readerResources=resolvePaperResources(paper,state.resourceBadges,state.cachedDemoIds)
+    val readerDemoIds=if(state.article?.paperID==paper.id&&state.article.html.contains("audio-demo-cta-btn"))state.cachedDemoIds+paper.id else state.cachedDemoIds
+    val readerResources=resolvePaperResources(paper,state.resourceBadges,readerDemoIds)
     if(readerVenue!=null||rankBucket!=null||documentType!=null||readerResources.hasAny){
      Box(Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=2.dp)){
       PaperMetadataBadgesRow(venue=readerVenue,resources=readerResources,rankBucket=rankBucket,documentType=documentType)
@@ -197,7 +198,8 @@ import org.json.JSONObject
     val infoRankBucket=infoAssessment?.optString("rankBucket")?.takeIf{it.isNotBlank()&&it!="null"}
     val infoDocType=infoAssessment?.optString("documentType")?.takeIf{it.isNotBlank()&&it!="null"}
     val infoVenue=parseConferenceVenue(paper.id)
-    val infoResources=resolvePaperResources(paper,state.resourceBadges,state.cachedDemoIds)
+    val infoDemoIds=if(state.article?.paperID==paper.id&&state.article.html.contains("audio-demo-cta-btn"))state.cachedDemoIds+paper.id else state.cachedDemoIds
+    val infoResources=resolvePaperResources(paper,state.resourceBadges,infoDemoIds)
     paper.score?.let{ScoreTierBadge(it)}
     if(infoVenue!=null||infoRankBucket!=null||infoDocType!=null||infoResources.hasAny){
      PaperMetadataBadgesRow(venue=infoVenue,resources=infoResources,rankBucket=infoRankBucket,documentType=infoDocType)

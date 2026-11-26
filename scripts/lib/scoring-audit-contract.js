@@ -114,27 +114,44 @@ function extractJsonObjectText(raw) {
     return text;
 }
 
-function findForbiddenDeductionClauses(reason, patterns) {
+function findForbiddenDeductionClauses(reason, patterns, options = {}) {
+    const dimensionKey = options?.dimensionKey || '';
     return String(reason || '').split(/[。！？；;\n]/).map(clause => clause.trim()).filter(clause => {
         if (!clause) return false;
         if (EXPLICIT_NON_DEDUCTION.test(clause)) return false;
         return patterns.some(pattern => {
             pattern.lastIndex = 0;
-            const checked = pattern === OPEN_SOURCE_DEFICIT
-                ? clause.replace(/((?:领先|优于|超过|对比|比较|相比)(?:当前|现有|主流|其他|部分|已有|最强|多种|多个|所有|的|了|于){0,3})闭源((?:(?:与|和|及)开源)?(?:基线|竞品))/gu,
+            let checked = clause;
+            if (pattern === OPEN_SOURCE_DEFICIT) {
+                checked = clause.replace(/((?:领先|优于|超过|对比|比较|相比)(?:当前|现有|主流|其他|部分|已有|最强|多种|多个|所有|的|了|于){0,3})闭源((?:(?:与|和|及)开源)?(?:基线|竞品))/gu,
                     '$1对照$2')
                     .replace(/([，,]与依赖\s*[A-Z][A-Za-z0-9 .+-]{0,79}等)闭源(教师的做法形成差异化组合)(?=[，,]|$)/gu,
                         '$1对照$2')
                     .replace(/(^|[，,、]|\[[A-Z][A-Z0-9_/-]*\]\s*|(?:涵盖|包含|覆盖|包括|比较|对比|针对|按|分|报告|给出|统计|测量|记录|列出))闭源((?:(?:与|和|及)开源)(?:分组|排序|系统|模型|基线|竞品|对照|方案|两类|两组|两套)|(?:API|商业|商用|专有)?(?:API|系统|模型)(?:[^，,。；;\n]{0,20})(?:与|和|及)开源)/gu,
                         '$1对照$2')
-                : clause;
+                    .replace(/((?:与|相比|对比|比较|超越|超过|逼近|接近|赶超|媲美|领先|优于|对标|匹敌)(?:当前|现有|主流|商用|商业|大型|顶级|头部|其他|部分|已有|最强|多种|多个|多项|所有|同类|工业级|外部|第三方|的|了|于|较){0,4})闭源((?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集|基线|竞品))/giu,
+                        '$1对照$2')
+                    .replace(/(对照(?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集|基线|竞品)\s*(?:、|与|和|及|以及)\s*)闭源((?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集|基线|竞品))/giu,
+                        '$1对照$2')
+                    .replace(/((?:^|[，,、在的]|(?:公开|开源)(?:与|和|及)))闭源((?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集)(?:评测|测试)?基准)/giu,
+                        (full, lead, tail, offset, whole) => (/(?:本文|本论文|本研究|本工作|自身|作者|该文)(?:的)?$/u.test(whole.slice(0, offset + lead.length)) ? full : `${lead}对照${tail}`))
+                    .replace(/(^|[，,、]|与|和|及|将|把|对|用|以|多个|主流|外部|第三方|既有|现有)闭源((?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集)(?:[^，,。；;\n]{0,12}(?:相比|对比|比较|基准|对照|作为基准)))/giu,
+                        (full, lead, tail, offset, whole) => (/(?:本文|本论文|本研究|本工作|自身|作者|该文)(?:的)?$/u.test(whole.slice(0, offset + lead.length)) ? full : `${lead}对照${tail}`));
+            } else if (pattern === REPRODUCIBILITY_DEFICIT && dimensionKey === 'engineering') {
+                // 工程/实践价值维度允许指出缺失“推理/实测/实时/流式/部署”硬件配置，
+                // 但训练硬件配置、超参数与复现步骤仍严格归可复现性维度，不得跨维扣分。
+                checked = clause.replace(
+                    /(?<!(?:训练|预训练|微调)[和与及、/])((?:推理|实测|实时|流式|部署)(?:(?![.。；;，,]|训练).){0,12})硬件配置/gu,
+                    '$1部署平台'
+                );
+            }
             return pattern.test(checked);
         });
     });
 }
 
-function reasonUsesForbiddenDeduction(reason, patterns) {
-    return findForbiddenDeductionClauses(reason, patterns).length > 0;
+function reasonUsesForbiddenDeduction(reason, patterns, options = {}) {
+    return findForbiddenDeductionClauses(reason, patterns, options).length > 0;
 }
 
 const BLIND_AUDIT_ALLOWED_MACHINE_KEYS = new Set([
@@ -367,6 +384,12 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null, options = {}) {
             || !boundaryIds.some(id => evidenceProfile.evidenceIds.includes(id))) {
             throw new Error('评分证据画像 evidenceBoundary 必须引用 evidenceIds 中的账本 ID');
         }
+        if (allowedEvidenceIds instanceof Set) {
+            const unknownBoundaryIds = boundaryIds.filter(id => !allowedEvidenceIds.has(id));
+            if (unknownBoundaryIds.length > 0) {
+                throw new Error(`评分证据画像 evidenceBoundary 引用了账本外 ID: ${[...new Set(unknownBoundaryIds)].join(', ')}`);
+            }
+        }
         if (profileIsV2) {
             validateEvidenceClaimList(evidenceProfile.primaryStrengths, 'primaryStrengths', 1, 3, allowedEvidenceIds);
             validateEvidenceClaimList(evidenceProfile.primaryDefects, 'primaryDefects', 0, 3, allowedEvidenceIds);
@@ -414,7 +437,7 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null, options = {}) {
             }
         }
         const forbiddenPatterns = FORBIDDEN_SCORING_REASON_PATTERNS[spec.key] || [];
-        const forbiddenClauses = findForbiddenDeductionClauses(reason, forbiddenPatterns);
+        const forbiddenClauses = findForbiddenDeductionClauses(reason, forbiddenPatterns, { dimensionKey: spec.key });
         if (forbiddenClauses.length > 0) {
             throw new Error(
                 `评分审计维度 ${spec.key} 使用了属于其他维度的扣分事实；` +
@@ -833,8 +856,14 @@ const VERIFIED_TYPE_DENIAL_PATTERNS = Object.freeze({
     dataset: /(?:完全闭源|闭源|不开源|未开源|没有开源|数据集未提供|(?:未|没有|尚未|缺少)[^.。；;]{0,16}(?:数据集|语料)|(?:数据集|语料)(?:未|没有|尚未)(?:公开|发布|提供))/
 });
 
+const BLANKET_CORE_MATERIAL_DENIAL = /(?:缺少核心(?:材料|产物)|核心(?:材料|产物)(?:未|没有|尚未)(?:公开|发布|提供))/;
+
 function reasonDeniesVerifiedAvailableResourceType(reason, verifiedAvailableTypes) {
     const clauses = String(reason || '').split(/[。！？；;\n]/).map(c => c.trim()).filter(Boolean);
+    const hasVerifiedCore = ['code', 'model', 'dataset'].some(type => verifiedAvailableTypes.has(type));
+    if (hasVerifiedCore && clauses.some(clause => !EXPLICIT_NON_DEDUCTION.test(clause) && BLANKET_CORE_MATERIAL_DENIAL.test(clause))) {
+        return true;
+    }
     for (const type of ['code', 'model', 'dataset']) {
         if (!verifiedAvailableTypes.has(type)) continue;
         const pattern = VERIFIED_TYPE_DENIAL_PATTERNS[type];
@@ -1032,15 +1061,9 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
             return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
         }
         const reasonText = String(openSource.reason || '');
-        const preserveAccurateProbePartialReason = artifactProbes.length > 0
-            && isV2
-            && openSource.score === scores.partial
-            && /\[A_ARTIFACT_PROBE\]/.test(reasonText)
-            && !reasonDeniesVerifiedAvailableResourceType(reasonText, verifiedAvailableTypes);
-        if (!allAvailableCorePlaceholder && !preserveAccurateProbePartialReason && (
+        if (!allAvailableCorePlaceholder && (
             openSource.score < scores.partial
-            || OPEN_SOURCE_DEFICIT.test(reasonText)
-            || VERIFIED_RESOURCE_DENIAL.test(reasonText)
+            || reasonDeniesVerifiedAvailableResourceType(reasonText, verifiedAvailableTypes)
         )) {
             const labels = { code: '代码', model: '模型权重', dataset: '数据集' };
             const available = ['code', 'model', 'dataset']

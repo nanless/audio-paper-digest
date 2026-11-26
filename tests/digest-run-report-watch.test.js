@@ -710,7 +710,7 @@ describe('digest-run-report --watch 参数与循环', () => {
         const result = await runWatch({
             targetDate: DATE,
             intervalMs: 1,
-            maxSnapshots: 1,
+            maxSnapshots: 2,
             print: line => lines.push(line),
             buildSnapshot: () => {
                 calls += 1;
@@ -724,9 +724,47 @@ describe('digest-run-report --watch 参数与循环', () => {
             }
         });
         assert.strictEqual(calls, 2);
-        assert.strictEqual(result.iterations, 1);
+        assert.strictEqual(result.iterations, 2);
+        assert.strictEqual(result.stoppedBy, 'maxSnapshots');
         assert.match(lines[0], /快照失败: boom/);
         assert.match(lines[1], /^\[digest-live\]/);
+    });
+
+    it('持续快照失败受 maxSnapshots 限制，不会无限循环', async () => {
+        let calls = 0;
+        const lines = [];
+        const result = await runWatch({
+            targetDate: DATE,
+            intervalMs: 1,
+            maxSnapshots: 3,
+            print: line => lines.push(line),
+            buildSnapshot: () => {
+                calls += 1;
+                throw new Error(`persistent-${calls}`);
+            }
+        });
+        assert.strictEqual(calls, 3);
+        assert.strictEqual(result.iterations, 3);
+        assert.strictEqual(result.stoppedBy, 'maxSnapshots');
+        assert.strictEqual(lines.length, 3);
+        assert.match(lines[2], /快照失败: persistent-3/);
+    });
+
+    it('formatDigestRunSummary 清晰呈现 daily-source-skip 读取告警', () => {
+        const report = {
+            batchDate: DATE,
+            overallStatus: 'incomplete',
+            errors: ['sources skipped'],
+            readProblems: [{ kind: 'daily-source-skip', path: 'data/current/daily-source-skips.json', message: 'checksum mismatch' }],
+            fetch: { complete: true, rawCandidateCount: 1 },
+            filter: { complete: true, selectedCount: 1, totalCandidates: 1, pendingDecisions: 0 },
+            analysis: { complete: false, successful: 0, total: 1, expected: 1, missing: 0, skipped: 1, waived: 0, failed: 0 },
+            blog: { complete: false, strictReview: false, remoteOidVerified: false, publicationVerified: false },
+            visuals: { waived: true, gateComplete: false, status: 'missing' },
+            cover: { waived: true, complete: false, status: 'missing' }
+        };
+        const summary = formatDigestRunSummary(report);
+        assert.match(summary, /读取告警: data\/current\/daily-source-skips\.json 来源跳过记录校验失败（checksum mismatch）/);
     });
 
     it('缺 --date 时 watch 给出友好提示', async () => {

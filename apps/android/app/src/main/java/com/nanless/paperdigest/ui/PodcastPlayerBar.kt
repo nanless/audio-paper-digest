@@ -132,6 +132,15 @@ internal fun PodcastPlayerBar(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    podcast.error?.takeIf { it.isNotBlank() }?.let { err ->
+                        Text(
+                            text = err,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 TextButton(
                     onClick = { action("podcast.rate", obj("rate" to nextPodcastRate(podcast.rate).toDouble())) },

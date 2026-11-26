@@ -959,6 +959,8 @@ class CatalogRepository(private val context: Context?, private val personal: Per
             "interspeech-2026", "dafx-2026", "acl-2026", "eusipco-2026", "cvpr-2026", "nime-2026",
             "speechprosody-2026", "aaai-2026", "odyssey-2026", "icmc-2026", "jep-2026", "eacl-2026",
             "iwslt-2026", "chime-2026", "uai-2026", "aistats-2026",
+            "icml-2026", "emnlp-2026", "ismir-2026", "dcase-2026", "neurips-2026",
+            "waspaa-2025", "asru-2025",
         )
         private val OWNED_RAW_HASH_DIR = Regex("^[a-f0-9]{12}$")
         private val OWNED_RAW_FIG_FILE = Regex("^figure-[1-9][0-9]*\\.png$")
@@ -1006,17 +1008,20 @@ class CatalogRepository(private val context: Context?, private val personal: Per
         fun approvedResource(uri: URI): Boolean {
             if (uri.scheme?.lowercase() != "https" || uri.host == null || uri.userInfo != null || uri.port !in listOf(-1, 443) || uri.fragment != null) return false
             val host = uri.host.lowercase()
-            if (host in setOf("arxiv.org", "export.arxiv.org", "isca-archive.org", "www.isca-archive.org", "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org")) return true
+            if (host in setOf("arxiv.org", "export.arxiv.org", "isca-archive.org", "www.isca-archive.org", "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org", "zenodo.org")) return true
             if (isOwnedPublishedImage(uri)) return true
             if (host == "nanless.github.io") return runCatching { sameSite(uri.toASCIIString()); true }.getOrDefault(false)
             return isOwnedRawBlog(uri)
         }
         fun imageMime(data: ByteArray): String {
-            if (data.size >= 4 && data.copyOfRange(0, 4).contentEquals(byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47))) return "image/png"
+            if (data.size >= 4 && data[0] == 0x89.toByte() && data[1] == 0x50.toByte() && data[2] == 0x4e.toByte() && data[3] == 0x47.toByte()) return "image/png"
             if (data.size >= 3 && data[0] == 0xff.toByte() && data[1] == 0xd8.toByte() && data[2] == 0xff.toByte()) return "image/jpeg"
+            if (data.size >= 4 && data[0] == 'G'.code.toByte() && data[1] == 'I'.code.toByte() && data[2] == 'F'.code.toByte() && data[3] == '8'.code.toByte()) return "image/gif"
+            if (data.size >= 12 &&
+                data[0] == 'R'.code.toByte() && data[1] == 'I'.code.toByte() && data[2] == 'F'.code.toByte() && data[3] == 'F'.code.toByte() &&
+                data[8] == 'W'.code.toByte() && data[9] == 'E'.code.toByte() && data[10] == 'B'.code.toByte() && data[11] == 'P'.code.toByte()
+            ) return "image/webp"
             val text = data.toString(Charsets.UTF_8)
-            if (text.startsWith("GIF8")) return "image/gif"
-            if (data.size > 12 && text.take(4) == "RIFF" && text.substring(8, 12) == "WEBP") return "image/webp"
             if (text.contains("<svg", ignoreCase = true)) {
                 try {
                     DesktopDetailsRepository.validateSafeStaticSvgBytes(data)

@@ -137,11 +137,17 @@ def resolve_api_key_pool(primary_key, fallback_value):
     return keys
 
 
+def _split_raw_api_keys(value):
+    if isinstance(value, (list, tuple)):
+        return [str(item or '').strip() for item in value if str(item or '').strip()]
+    return [item.strip() for item in str(value or '').split(',') if item.strip()]
+
+
 def resolve_primary_api_key_pool(primary_key, fallback_value, tertiary_fallback_value=''):
     """在常规备用账号之后追加一个显式配置的第三账号。"""
     return resolve_api_key_pool(
         primary_key,
-        [*parse_fallback_api_keys(fallback_value), *parse_fallback_api_keys(tertiary_fallback_value)],
+        [*_split_raw_api_keys(fallback_value), *_split_raw_api_keys(tertiary_fallback_value)],
     )
 
 
@@ -273,6 +279,8 @@ def _write_lock_owner_json(lock_path, created_dir_stat, payload):
         written = 0
         while written < len(data):
             written += os.write(fd, view[written:])
+        if hasattr(os, 'fchmod'):
+            os.fchmod(fd, 0o600)
         os.fsync(fd)
         try:
             os.close(fd)
@@ -282,7 +290,6 @@ def _write_lock_owner_json(lock_path, created_dir_stat, payload):
             return None
         try:
             os.replace(temp, owner_path)
-            os.chmod(owner_path, 0o600)
         except FileNotFoundError:
             return None
         try:
@@ -490,10 +497,21 @@ def _remove_lock_dir_checked(lock_path, expected_snapshot):
         return False
 
 
+def _minimal_system_probe_env():
+    return {
+        'PATH': os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin'),
+        'LC_ALL': 'C',
+    }
+
+
 def _boot_time_seconds():
     if sys.platform == 'darwin':
         try:
-            res = subprocess.run(['sysctl', '-n', 'kern.boottime'], check=False, capture_output=True, text=True, timeout=2)
+            res = subprocess.run(
+                ['sysctl', '-n', 'kern.boottime'],
+                check=False, capture_output=True, text=True, timeout=2,
+                env=_minimal_system_probe_env(),
+            )
             if res.returncode == 0 and res.stdout:
                 m = re.search(r'sec\s*=\s*(\d+)', res.stdout)
                 if m:
@@ -524,7 +542,11 @@ def _pid_start_time(pid):
         except OSError:
             return None
     try:
-        res = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='], check=False, capture_output=True, text=True, timeout=2)
+        res = subprocess.run(
+            ['ps', '-p', str(pid), '-o', 'lstart='],
+            check=False, capture_output=True, text=True, timeout=2,
+            env=_minimal_system_probe_env(),
+        )
         if res.returncode == 0:
             norm = ' '.join(res.stdout.strip().split())
             return norm or None
@@ -533,14 +555,32 @@ def _pid_start_time(pid):
     return None
 
 
-_PROCESS_BOOT_TIME_SECONDS = _boot_time_seconds()
-_CURRENT_PID_START_TIME = _pid_start_time(os.getpid())
+_UNINITIALIZED = object()
+_PROCESS_BOOT_TIME_SECONDS = _UNINITIALIZED
+_CURRENT_PID_START_CACHE = None
+
+
+def _get_process_boot_time_seconds():
+    global _PROCESS_BOOT_TIME_SECONDS
+    if _PROCESS_BOOT_TIME_SECONDS is _UNINITIALIZED:
+        _PROCESS_BOOT_TIME_SECONDS = _boot_time_seconds()
+    return _PROCESS_BOOT_TIME_SECONDS
+
+
+def _get_current_pid_start_time():
+    global _CURRENT_PID_START_CACHE
+    current_pid = os.getpid()
+    if _CURRENT_PID_START_CACHE is None or _CURRENT_PID_START_CACHE[0] != current_pid:
+        _CURRENT_PID_START_CACHE = (current_pid, _pid_start_time(current_pid))
+    return _CURRENT_PID_START_CACHE[1]
 
 
 def _local_lock_owner_alive(owner):
     recorded_boot = owner.get('bootTime')
-    if type(recorded_boot) is int and _PROCESS_BOOT_TIME_SECONDS is not None and recorded_boot != _PROCESS_BOOT_TIME_SECONDS:
-        return False
+    if type(recorded_boot) is int:
+        process_boot = _get_process_boot_time_seconds()
+        if process_boot is not None and recorded_boot != process_boot:
+            return False
     owner_pid = owner.get('pid')
     try:
         os.kill(owner_pid, 0)
@@ -675,10 +715,12 @@ def _state_lock(state_file, *, timeout_seconds=LOCK_TIMEOUT_SECONDS,
                 'token': token,
                 'acquiredAt': datetime.now(timezone.utc).isoformat(),
             }
-            if _PROCESS_BOOT_TIME_SECONDS is not None:
-                owner_payload['bootTime'] = _PROCESS_BOOT_TIME_SECONDS
-            if _CURRENT_PID_START_TIME is not None:
-                owner_payload['pidStartTime'] = _CURRENT_PID_START_TIME
+            boot_time = _get_process_boot_time_seconds()
+            if boot_time is not None:
+                owner_payload['bootTime'] = boot_time
+            pid_start_time = _get_current_pid_start_time()
+            if pid_start_time is not None:
+                owner_payload['pidStartTime'] = pid_start_time
             created_owner_stat = _write_lock_owner_json(lock_path, created_dir_stat, owner_payload)
             if created_owner_stat is None:
                 if time.monotonic() - started >= timeout_seconds:
@@ -797,7 +839,6 @@ def read_state_strict(state_file=LLM_ACCOUNT_POOL_STATE_FILE):
             _read_regular_state_text(target),
             parse_constant=_reject_non_finite_json,
         )
-        target.chmod(0o600)
     except FileNotFoundError:
         return _new_state()
     except LlmAccountPoolStateError:
@@ -970,6 +1011,9 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
     now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
     excluded = set(exclude_account_ids or ())
     normalized_affinity = affinity_key.strip() if isinstance(affinity_key, str) else ''
+    if normalized_affinity:
+        normalized_affinity = re.sub(r'^arxiv:', '', normalized_affinity, flags=re.IGNORECASE)
+        normalized_affinity = re.sub(r'^(\d{4}\.\d{4,5})v\d+$', r'\1', normalized_affinity, flags=re.IGNORECASE)
     keys_by_id = dict(zip(identity['account_ids'], keys))
 
     # 5 条件只读亲和快路径：与 JS 实现保持一致，减少高并发亲和命中时的同步 fsync。
@@ -982,7 +1026,7 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
             stored_cursor = group.get('rotationCursor') if isinstance(group, dict) else None
             stale_prune_needed = len(groups) > 1 and any(
                 gid != identity['group_id']
-                and (now_ms - int((g or {}).get('lastSelectedAtMs') or 0)) > STALE_GROUP_TTL_MS
+                and (now_ms - int((g or {}).get('lastSelectedAtMs') or 0)) > STALE_GROUP_MS
                 for gid, g in groups.items()
             )
             if service and isinstance(group, dict) \

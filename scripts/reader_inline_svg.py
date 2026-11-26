@@ -105,7 +105,7 @@ def normalize_static_html_breaks(text):
             if tag != 'br':
                 return
             line, column = self.getpos()
-            offset = sum(len(part) for part in text.splitlines(keepends=True)[:line - 1]) + column
+            offset = sum(len(part) + 1 for part in text.split('\n')[:line - 1]) + column
             token = self.get_starttag_text()
             self.replacements.append((offset, token, token[:-1] + '/>'))
 
@@ -605,7 +605,7 @@ def render_svg(raw, *, hidpi=False, deterministic_v2=False):
                     painted = figure.evaluate("""svg => {
                         const boxes = [svg.getBoundingClientRect()];
                         for (const element of [svg, ...svg.querySelectorAll('*')]) {
-                            if (element.closest('defs')) continue;
+                            if (element.closest('defs, symbol, clipPath, mask, pattern, marker')) continue;
                             const style = getComputedStyle(element);
                             if (style.display === 'none' || style.visibility === 'hidden') continue;
                             if (['filter', 'boxShadow', 'textShadow'].some(key =>
@@ -623,6 +623,7 @@ def render_svg(raw, *, hidpi=False, deterministic_v2=False):
                                 }
                                 const stroke = Number(style.strokeWidth.slice(0, -2));
                                 const matrix = element.getScreenCTM();
+                                if (!matrix) continue;
                                 const miter = style.strokeLinejoin === 'miter'
                                     ? Math.max(1, Number(style.strokeMiterlimit)) : 1;
                                 const xScale = style.vectorEffect === 'non-scaling-stroke'

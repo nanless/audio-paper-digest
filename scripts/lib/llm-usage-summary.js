@@ -311,14 +311,13 @@ function missingSummary(date) {
     };
 }
 
-function directoryMtimeSignature(directory, dirStat, date) {
-    let subMtime = 'none';
+function subDirMtimeToken(directory, date) {
     const subPath = path.join(directory, date);
     try {
         const subStat = fs.lstatSync(subPath);
-        if (subStat.isDirectory() && !subStat.isSymbolicLink()) subMtime = String(subStat.mtimeMs);
+        if (subStat.isDirectory() && !subStat.isSymbolicLink()) return String(subStat.mtimeMs);
     } catch (_) {}
-    return `${dirStat.mtimeMs}|${subMtime}`;
+    return 'none';
 }
 
 function scanForDate({ state, directory, date, slackMs }) {
@@ -331,8 +330,11 @@ function scanForDate({ state, directory, date, slackMs }) {
     }
     if (!dirStat.isDirectory()) return missingSummary(date);
 
-    const dirSig = directoryMtimeSignature(directory, dirStat, date);
-    if (state && state.dirMtimeMs === dirSig) {
+    const rootMtime = dirStat.mtimeMs;
+    const subMtime = subDirMtimeToken(directory, date);
+    const rootUnchanged = Boolean(state && state.dirMtimeMs === rootMtime);
+    const subUnchanged = Boolean(state && state.subDirMtimes && state.subDirMtimes.get(date) === subMtime);
+    if (rootUnchanged && subUnchanged) {
         if (state.days.has(date)) {
             return {
                 state,
@@ -349,7 +351,7 @@ function scanForDate({ state, directory, date, slackMs }) {
                 }
             };
         }
-        // 目录没变但换了一个日期：索引已在内存里，按 mtime 补读目标日期窗口即可。
+        // 目录与目标日期子目录均未变：索引已在内存里，按 mtime 补读目标日期窗口即可。
         const range = dateRange(date);
         const counters = { read: 0, skipped: 0, invalid: 0, tooLarge: 0, date };
         collectForDate(state, directory, date, range.startMs - slackMs, range.endMs + slackMs, counters);
@@ -373,8 +375,16 @@ function scanForDate({ state, directory, date, slackMs }) {
 
     const counters = { read: 0, skipped: 0, invalid: 0, tooLarge: 0, date };
     if (!state) {
-        state = { dirMtimeMs: null, mtimes: new Map(), records: new Map(), attempted: new Set(), days: new Map() };
+        state = {
+            dirMtimeMs: null,
+            subDirMtimes: new Map(),
+            mtimes: new Map(),
+            records: new Map(),
+            attempted: new Set(),
+            days: new Map()
+        };
     }
+    if (!state.subDirMtimes) state.subDirMtimes = new Map();
     const names = listJsonNames(directory);
     const currentNames = new Set(names);
     let filesStatted = 0;
@@ -414,7 +424,16 @@ function scanForDate({ state, directory, date, slackMs }) {
         counters.date = date;
         readCandidate(state, directory, name, counters, stat);
     }
-    state.dirMtimeMs = dirSig;
+    state.dirMtimeMs = rootMtime;
+    state.subDirMtimes.set(date, subMtime);
+    for (const subDate of state.subDirMtimes.keys()) {
+        if (subDate === date) continue;
+        const currentToken = subDirMtimeToken(directory, subDate);
+        if (currentToken !== state.subDirMtimes.get(subDate)) {
+            state.subDirMtimes.set(subDate, currentToken);
+            state.days.delete(subDate);
+        }
+    }
     collectForDate(state, directory, date, fromMs, toMs, counters);
     const summary = aggregateRecords(state.records, date);
     state.days.set(date, summary);

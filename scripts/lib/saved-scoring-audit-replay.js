@@ -49,22 +49,26 @@ function sourceFiles(plan, paper) {
     });
 }
 function feePair(expected) {
+    const { isUsageLedgerFile, listUsageLedgerFiles, resolveUsageLedgerFile } = require('./llm-usage-ledger');
     const directory = path.resolve(require('../config').FILES.llmUsageDir);
-    for (const reference of [expected.started, expected.completed]) {
-        if (!reference || path.dirname(reference.path || '') !== directory
-            || !/^[a-f0-9-]{36}\.json$/.test(path.basename(reference.path || ''))) reject('费用必须来自正常用量目录的原记录');
-    }
-    const start = read(expected.started), terminal = read(expected.completed);
+    const startedPath = resolveUsageLedgerFile(directory, expected?.started?.path);
+    const completedPath = resolveUsageLedgerFile(directory, expected?.completed?.path);
+    if (!startedPath || !completedPath
+        || !isUsageLedgerFile(startedPath, directory)
+        || !isUsageLedgerFile(completedPath, directory)) reject('费用必须来自正常用量目录的原记录');
+    const start = read({ ...expected.started, path: startedPath });
+    const terminal = read({ ...expected.completed, path: completedPath });
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(start.eventId || '')
         || start.eventId !== terminal.eventId) reject('费用event不一致');
     const matches = [];
     // The ledger is append-only: discover the actual event pair, rejecting duplicate
     // starts/terminals instead of trusting two caller-authored JSON references.
     if (fs.realpathSync(directory) !== directory) reject('费用目录不能经符号链接跳转');
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-        if (!/^[a-f0-9-]{36}\.json$/.test(entry.name)) continue;
-        if (!entry.isFile()) reject('正常费用记录不能是符号链接或目录');
-        const filename = path.join(directory, entry.name);
+    let entries;
+    try { entries = listUsageLedgerFiles(directory); }
+    catch { reject('正常费用记录不能是符号链接或目录'); }
+    for (const entry of entries) {
+        const filename = entry.file;
         // Other events confer no capability: inspect their bytes without repeated
         // realpath/stat walks. Every matching event receives the full private-file
         // check, including an additional read, before it participates in the proof.
@@ -76,8 +80,8 @@ function feePair(expected) {
         if (event.eventId === start.eventId) matches.push({ filename, event });
     }
     if (matches.length !== 2
-        || matches.filter(row => row.filename === expected.started.path && row.event.kind === 'request_started').length !== 1
-        || matches.filter(row => row.filename === expected.completed.path && row.event.kind === 'request').length !== 1)
+        || matches.filter(row => row.filename === startedPath && row.event.kind === 'request_started').length !== 1
+        || matches.filter(row => row.filename === completedPath && row.event.kind === 'request').length !== 1)
         reject('真实用量账中原event首终不唯一');
     return { start, terminal };
 }

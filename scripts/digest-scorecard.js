@@ -141,7 +141,16 @@ function loadEventsForDates(usageDir, targetDates, options = {}) {
     if (!canonical && !fast && uncoveredDates.length === 0 && fs.existsSync(usageDir)) {
         const rootStatPre = fs.lstatSync(usageDir);
         if (rootStatPre.isDirectory() && !rootStatPre.isSymbolicLink()) {
-            flatEntriesCount = fs.readdirSync(usageDir).length;
+            const dir = fs.opendirSync(usageDir);
+            let counted = 0;
+            try {
+                while (counted <= FLAT_SCAN_SKIP_THRESHOLD && dir.readSync() !== null) {
+                    counted += 1;
+                }
+            } finally {
+                dir.closeSync();
+            }
+            flatEntriesCount = counted;
         }
     }
     const shouldMergeSmallFlatRoot = !canonical && !fast
@@ -219,8 +228,12 @@ function filterEventsByRunAndBatch(events, options = {}) {
         out = out.filter(ev => ev && ev.runId === options.runId);
     }
     if (options.batchDate) {
-        // 按 batchDate 过滤时兼容显式 batchDate 或按论文 ID/事件日期筛选
-        out = out.filter(ev => ev && (ev.batchDate === options.batchDate || parseEventDate(ev.at) === options.batchDate));
+        // 若事件显式记录了 batchDate，严格按 batchDate 匹配；仅当历史事件未记录 batchDate 时回退事件北京日期。
+        out = out.filter(ev => ev && (
+            ev.batchDate
+                ? ev.batchDate === options.batchDate
+                : parseEventDate(ev.at) === options.batchDate
+        ));
     }
     return out;
 }

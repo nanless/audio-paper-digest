@@ -705,9 +705,22 @@ function command(action,detail={}){if(action==='storage')storageUI.show().catch(
   if(result.cancelled||!result.query)return;const q=result.query;
   if(pdf){const r=await call('pdf.find',{query:q});toast(r.count+' 处匹配');return;}
   if(state.mode==='note'){const editor=$('note-editor'),start=editor.value.toLocaleLowerCase().indexOf(q.toLocaleLowerCase());if(start<0){toast('当前笔记未找到该文字');return;}editor.focus();editor.setSelectionRange(start,start+q.length);return;}
-  const frame=state.mode==='analysis'?$('analysis-result').querySelector('iframe'):guideFrame;const doc=frame?.contentDocument;if(!doc)return;
-  const walker=doc.createTreeWalker(doc.querySelector('main'),NodeFilter.SHOW_TEXT),nodes=[];let text='';while(walker.nextNode()){const n=walker.currentNode;nodes.push({node:n,start:text.length,end:text.length+n.textContent.length});text+=n.textContent;}
-  const start=text.toLocaleLowerCase().indexOf(q.toLocaleLowerCase());if(start<0){toast('当前内容未找到该文字');return;}const from=nodes.find(n=>n.end>start),to=nodes.find(n=>n.end>=start+q.length);if(!from||!to)return;const range=doc.createRange();range.setStart(from.node,start-from.start);range.setEnd(to.node,start+q.length-to.start);const selection=doc.defaultView.getSelection();selection.removeAllRanges();selection.addRange(range);if(frame===guideFrame)navigateGuideTo(from.node.parentElement,'center');else from.node.parentElement.scrollIntoView({block:'center'});toast('已定位当前内容中的匹配文字');
+  const frames=state.mode==='analysis'?[...$('analysis-result').querySelectorAll('iframe')]:guideFrame?[guideFrame]:[];
+  if(!frames.length)return;
+  const needle=q.toLocaleLowerCase();let searched=false,matched=false;
+  for(const frame of frames){
+   const doc=frame?.contentDocument,root=doc?.querySelector('main');if(!root)continue;
+   searched=true;
+   const walker=doc.createTreeWalker(root,NodeFilter.SHOW_TEXT),nodes=[];let text='';while(walker.nextNode()){const n=walker.currentNode;nodes.push({node:n,start:text.length,end:text.length+n.textContent.length});text+=n.textContent;}
+   const start=text.toLocaleLowerCase().indexOf(needle);if(start<0)continue;
+   const from=nodes.find(n=>n.end>start),to=nodes.find(n=>n.end>=start+q.length);if(!from||!to)continue;
+   const range=doc.createRange();range.setStart(from.node,start-from.start);range.setEnd(to.node,start+q.length-to.start);
+   const selection=doc.defaultView.getSelection();selection.removeAllRanges();selection.addRange(range);
+   if(frame===guideFrame)navigateGuideTo(from.node.parentElement,'center');else from.node.parentElement.scrollIntoView({block:'center'});
+   matched=true;break;
+  }
+  if(!searched)return;
+  toast(matched?'已定位当前内容中的匹配文字':'当前内容未找到该文字');
  }).catch(error);
 }}
 

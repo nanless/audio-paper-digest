@@ -89,10 +89,11 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
         )
     }
     val venueOptions=remember(scoped){collectConferenceVenues(scoped)}
+    LaunchedEffect(venueOptions){if(venue.isNotBlank()&&venueOptions.none{it.first.key==venue})venue=""}
     val request=remember(index,scoped,criteria,direction){LibraryProjectionRequest(index,scoped,criteria,direction)}
     val projection by produceState<LibraryProjection?>(null,request){val captured=request;val current=captured.index;if(current!=null)value=withContext(Dispatchers.Default){LibraryProjection(captured,current.select(captured.papers,captured.criteria,captured.direction))}}
     val ready=projection?.request===request
-    val fallback=query.isBlank()&&source.isBlank()&&minimum.isBlank()&&venue.isBlank()&&resource.isBlank()&&direction==WebsiteDirection()
+    val fallback=query.isBlank()&&source.isBlank()&&minimum.isBlank()&&venue.isBlank()&&resource.isBlank()&&from.isBlank()&&until.isBlank()&&direction==WebsiteDirection()
     val view=if(ready)projection!!.view else WebsiteLibraryView(if(fallback)scoped else emptyList(),emptyMap(),0)
     val papers=remember(view.papers,sort,query,index){
         when {

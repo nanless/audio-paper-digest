@@ -60,9 +60,9 @@ const SCHEMA = Object.freeze([
     { name: 'WECHAT_THUMB_MEDIA_ID', required: false, type: 'string', deprecated: true, hint: '已退役：微信发布通道已移除' },
     { name: 'XIAOHONGSHU_COOKIES', required: false, type: 'string', secret: true, deprecated: true, hint: '已退役：小红书发布通道已移除' },
     // 播客生成与 GitHub Release 发布（可选 CLI：npm run podcast:generate）
-    { name: 'PD_PODCAST_GITHUB_REPO', required: false, type: 'string', hint: '播客 GitHub Release 宿主仓库 owner/repo（可选）' },
-    { name: 'PD_PODCAST_RELEASE_TAG_PREFIX', required: false, type: 'string', hint: '播客 Release tag 前缀（默认 podcast-）' },
-    { name: 'PD_PODCAST_RELEASE_TAG_GROUPING', required: false, type: 'string', allowed: ['month', 'day', 'single'], hint: '播客 Release tag 分组模式：month / day / single' },
+    { name: 'PD_PODCAST_GITHUB_REPO', required: false, type: 'string', hint: '播客 GitHub Release 宿主仓库 owner/repo（默认 nanless/audio-research-portal）' },
+    { name: 'PD_PODCAST_RELEASE_TAG_PREFIX', required: false, type: 'string', hint: '播客 Release tag 前缀（默认 podcast）' },
+    { name: 'PD_PODCAST_RELEASE_TAG_GROUPING', required: false, type: 'string', allowed: ['monthly', 'daily'], hint: '播客 Release tag 分组模式：monthly / daily' },
     { name: 'PD_INDEXTTS_MODEL_DIR', required: false, type: 'path', hint: 'IndexTTS2 本地模型目录（本地合成模式）' },
     { name: 'PD_INDEXTTS_CFG_PATH', required: false, type: 'path', hint: 'IndexTTS2 配置文件 config.yaml 路径' },
     { name: 'PD_INDEXTTS_VOICE_PROMPT', required: false, type: 'path', hint: '主讲人参考音频 WAV 路径' },
@@ -107,8 +107,8 @@ const SCHEMA = Object.freeze([
     { name: 'PD_API_READER_EVIDENCE_MAX_CHARS', required: false, type: 'int', min: 1 },
     { name: 'PD_API_READER_CONTEXT_MAX_CHARS', required: false, type: 'int', min: 1 },
     { name: 'PD_API_READER_OVERALL_TIMEOUT_MS', required: false, type: 'int', min: 1 },
-    { name: 'PD_SCORING_AUDIT_TEMPERATURE', required: false, type: 'float', min: 0, max: 2 },
-    { name: 'PD_IMAGE_PLAN_TEMPERATURE', required: false, type: 'float', min: 0, max: 2 },
+    { name: 'PD_SCORING_AUDIT_TEMPERATURE', required: false, type: 'float', min: 0, max: 1 },
+    { name: 'PD_IMAGE_PLAN_TEMPERATURE', required: false, type: 'float', min: 0, max: 1 },
     { name: 'PD_IMAGE_MAX_BYTES', required: false, type: 'int', min: 1 },
     { name: 'PD_IMAGE_INSERTION_MAX', required: false, type: 'int', min: 1 },
     { name: 'PD_IMAGE_MAX_BASE64_CHARS', required: false, type: 'int', min: 1 },
@@ -152,10 +152,10 @@ const SCHEMA = Object.freeze([
     { name: 'PD_TIERED_REASONING_EFFORT', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'],
         hint: '默认开启（1）按阶段分级推理强度（主分析与解读长文保持配置上限，审校/局部修复为 high，轻量机械阶段下调）；设为 0 恢复全阶段统一档位' },
     { name: 'PD_OPENCODE_SESSION_ID', required: false, type: 'string' },
-    { name: 'PD_API_READER_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled', 'auto'] },
-    { name: 'PD_ANALYSIS_REPAIR_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled', 'auto'] },
-    { name: 'PD_ANALYSIS_PRIMARY_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled', 'auto'] },
-    { name: 'PD_ANALYSIS_AUXILIARY_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled', 'auto'] },
+    { name: 'PD_API_READER_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'] },
+    { name: 'PD_ANALYSIS_REPAIR_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'] },
+    { name: 'PD_ANALYSIS_PRIMARY_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'] },
+    { name: 'PD_ANALYSIS_AUXILIARY_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'] },
     // Responses 推理强度；max/highest/maximum 视作 xhigh（网关支持的最高档）。
     // 取值按模型分表：muse-spark-* 最高 xhigh，deepseek-v4.1-flash 只有 low/high/max。
     // 这里登记并集；max/highest/maximum 是「最高档」的别名，运行时由 normalizeReasoningEffort
@@ -198,8 +198,8 @@ function parseEnvText(text) {
         const key = line.slice(0, eq).trim();
         if (!key) continue;
         let value = line.slice(eq + 1).trim();
-        if ((value.startsWith('"') && value.endsWith('"'))
-            || (value.startsWith("'") && value.endsWith("'"))) {
+        if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"'))
+            || (value.startsWith("'") && value.endsWith("'")))) {
             value = value.slice(1, -1);
         }
         entries[key] = value;

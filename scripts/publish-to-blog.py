@@ -107,6 +107,7 @@ if str(MANUAL_SCRIPTS_DIR) not in sys.path:
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
     mask_protected_markdown_table_regions,
+    markdown_inline_code_ranges,
     parse_markdown_images,
     extract_all_tags, score_emoji, format_medal, build_paper_meta,
     fix_latex_delimiters, escape_html_like_tags, fix_image_markdown,
@@ -920,9 +921,11 @@ def _read_review_unit_checkpoint(checkpoint):
 
 def review_cached_unit(kind, inputs, run):
     """只复用完全一致的请求成功证据；失败问题保留下来供诊断。"""
+    stage = 'publish.figure' if kind == 'image' else 'publish.text'
     context = _REVIEW_UNIT_CONTEXT.get()
     if context is None:
-        return run()
+        with with_llm_usage_context({'stage': stage}):
+            return run()
     family = 'blog-review-request-checkpoint'
     shared = {'kind': kind, 'reviewProtocolFingerprint': context['protocol'],
               'inputSha256': _stable_json_sha256(inputs)}
@@ -1073,7 +1076,12 @@ def split_review_content(content, limit=4000):
         fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
         if fence:
             block.append(line)
-            if fence_match and fence_match.group(1)[0] == fence[0] and len(fence_match.group(1)) >= len(fence):
+            if (
+                fence_match
+                and fence_match.group(1)[0] == fence[0]
+                and len(fence_match.group(1)) >= len(fence)
+                and not line[fence_match.end():].strip()
+            ):
                 blocks.append(('protected', ''.join(block)))
                 block, fence = [], None
             continue
@@ -1130,20 +1138,76 @@ def split_review_content(content, limit=4000):
     if current or not chunks:
         chunks.append(current)
     if frontmatter:
-        if limit >= 12000 and chunks and len(frontmatter) + len(chunks[0]) <= limit:
+        visible_frontmatter_len = len(_strip_machine_frontmatter_for_llm_review(frontmatter))
+        if limit >= 12000 and chunks and visible_frontmatter_len + len(chunks[0]) <= limit:
             chunks[0] = frontmatter + chunks[0]
         else:
             chunks.insert(0, frontmatter)
     return chunks
 
 
+def _strip_code_for_review_scan(content):
+    """剔除围栏代码（```/~~~）与行内代码段，并报告围栏是否闭合。"""
+    lines = str(content or '').splitlines(keepends=True)
+    non_fence_lines = []
+    fence = None
+    for line in lines:
+        fence_match = re.match(r'^[ \t]{0,3}(`{3,}|~{3,})', line)
+        if fence is None:
+            if fence_match:
+                token = fence_match.group(1)
+                fence = (token[0], len(token))
+            else:
+                non_fence_lines.append(line)
+        else:
+            if (
+                fence_match
+                and fence_match.group(1)[0] == fence[0]
+                and len(fence_match.group(1)) >= fence[1]
+                and not line[fence_match.end():].strip()
+            ):
+                fence = None
+    non_fence = ''.join(non_fence_lines)
+    inline_spans = markdown_inline_code_ranges(non_fence)
+    if inline_spans:
+        chars = list(non_fence)
+        for span_start, span_end in inline_spans:
+            for idx in range(span_start, span_end):
+                if chars[idx] not in ('\r', '\n'):
+                    chars[idx] = ' '
+        non_fence = ''.join(chars)
+    return non_fence, fence is None
+
+
 def has_unconverted_dollar_math(content):
-    """是否仍存在未转换的 $...$ / $$...$$ 公式。"""
-    if not content:
+    """是否仍存在未转换的 $...$ / $$...$$ 公式（排除代码段、URL 与货币金额）。"""
+    if not content or '$' not in content:
         return False
-    if re.search(r'(?<!\\)\$\$[\s\S]+?(?<!\\)\$\$', content):
+    _, body = _split_frontmatter_block(str(content))
+    scannable, _ = _strip_code_for_review_scan(body)
+    scannable = re.sub(
+        r'(?<!\\)\\\([\s\S]*?\\\)|(?<!\\)\\\[[\s\S]*?\\\]|https?://[^\s<>()]+',
+        ' ',
+        scannable,
+    )
+    if re.search(r'(?<!\\)\$\$[\s\S]+?(?<!\\)\$\$', scannable):
         return True
-    return bool(re.search(r'(?<!\\)\$([^\s$][^$]*?[^\s$])(?<!\\)\$', content))
+    currency_start = re.compile(
+        r'^\d[\d,]*(?:\.\d+)?(?:\s*(?:[KkMmBb]|美元|元|万|亿))?(?:\s+|[,.;，。；/])'
+    )
+    for line in scannable.splitlines():
+        is_table_line = line.lstrip().startswith('|')
+        for match in re.finditer(
+            r'(?<![\\$])\$(?!\$)([^\s$\n](?:[^$\n]*?[^\s$\n])?)(?<!\\)\$(?![\d$])',
+            line,
+        ):
+            inner = match.group(1)
+            if is_table_line and re.search(r'(?<!\\)\|', inner):
+                continue
+            if currency_start.match(inner):
+                continue
+            return True
+    return False
 
 
 def markdown_table_shapes_are_valid(content):
@@ -1209,12 +1273,11 @@ def filter_false_positive_review_issues(content, issues):
     if not issues:
         return issues
     raw_dollar_math = has_unconverted_dollar_math(content)
+    non_code_content, fences_are_balanced = _strip_code_for_review_scan(content)
     unescaped_angle_tags = set(
         m.group(0)
-        for m in re.finditer(r'(?<![a-zA-Z0-9`])<(/?)([A-Za-z][A-Za-z0-9_†-]{0,40})(?![A-Za-z0-9_†-])>', content)
+        for m in re.finditer(r'(?<![a-zA-Z0-9`])<(/?)([A-Za-z][A-Za-z0-9_†-]{0,40})(?![A-Za-z0-9_†-])>', non_code_content)
     )
-    fence_count = len(re.findall(r'^\s*`{3,}[^`]*$', content, re.MULTILINE))
-    fences_are_balanced = fence_count % 2 == 0
     frontmatter_is_closed = bool(re.match(
         r'\A---\r?\n[\s\S]*?\r?\n---(?:\r?\n|\Z)',
         str(content or ''),
@@ -1225,7 +1288,20 @@ def filter_false_positive_review_issues(content, issues):
         issue_type = str(issue.get('type', '')).lower()
         if ('反引号' in desc or 'backtick' in desc.lower()) and re.search(r'模型名|模型名称|技术术语|model name|technical term', desc, re.IGNORECASE):
             continue
-        if not raw_dollar_math and (issue_type == 'latex' or '$' in desc) and ('LaTeX' in desc or '公式' in desc or '$' in desc):
+        dollar_delimiter_claim = (
+            bool(re.search(r'\$\$?|\bdollar\b|美元符', desc, re.IGNORECASE))
+            and bool(re.search(
+                r'未转换|未转成|残留.*\$|定界符|分隔符|delimiter|unconverted|raw\s+dollar|'
+                r'行内公式|块级公式|LaTeX\s*公式|\$\.\.\.\$|\$\$\.\.\.\$\$|改为\s*\\[\(\[]|替换为\s*\\[\(\[]',
+                desc, re.IGNORECASE,
+            ))
+            and not re.search(
+                r'成本|价格|费用|售价|预算|花费|算力费|美元\s*\d|'
+                r'\$\s*\d+(?:\.\d+)?\s*(?:美元|万|亿|百万|千|对比|高于|低于|错误|不一致|矛盾)',
+                desc,
+            )
+        )
+        if not raw_dollar_math and dollar_delimiter_claim:
             continue
         mentioned_angle_tags = set(re.findall(r'</?[A-Za-z][A-Za-z0-9_†-]{0,40}>', desc))
         if mentioned_angle_tags and not (mentioned_angle_tags & unescaped_angle_tags):
@@ -1353,16 +1429,17 @@ def repair_review_payload(
 
 约束：只有 issues 中存在 severity=error 时 passed 才能为 false；没有问题时 issues 必须为空数组。"""
     try:
-        repaired = call_llm_api(
-            prompt,
-            max_tokens=min(get_blog_review_max_tokens(), 4000),
-            temperature=0.1,
-            required=True,
-            context=f'{context} 格式修复',
-            use_secondary=use_secondary,
-            max_retries=1,
-            structured_output=True,
-        )
+        with with_llm_usage_context({'stage': 'repair_review_payload'}):
+            repaired = call_llm_api(
+                prompt,
+                max_tokens=min(get_blog_review_max_tokens(), 4000),
+                temperature=0.1,
+                required=True,
+                context=f'{context} 格式修复',
+                use_secondary=use_secondary,
+                max_retries=1,
+                structured_output=True,
+            )
         review = parse_review_json(repaired)
         return validate_review_payload(
             review,
@@ -2222,12 +2299,17 @@ def multimodal_review_images(
             previous = shared['previousImageIndex'] + 1
             transition = content[shared['start']:shared['end']].strip()
             own_context = content[shared['end']:region['end']].strip()
+            own_header = (
+                '【以下为本张图片自己的看图路径、原图、图注和解释】'
+                if '看图路径' in own_context
+                else '【以下为本张图片自己的原图、图注和解释】'
+            )
             nearby = (
                 f'【相邻过渡段：正文前一图片 {previous} 的解释，同时用作本图导读】\n'
                 f'{transition}\n'
                 '【以上段落可能同时提及两图；明确指向前图的特征不能仅因本张像素未出现而判错。'
                 '如确实无条件声称本张图存在某特征，仍应核对并报告真实冲突；归属不明时说明局限，不猜测。】\n'
-                '【以下为本张图片自己的看图路径、原图、图注和解释】\n'
+                f'{own_header}\n'
                 f'{own_context}'
             )
         try:
@@ -2406,7 +2488,8 @@ def multimodal_review_images(
         )
     units = list(enumerate(zip(img_summary, image_payloads), 1))
     if image_concurrency > 1 and len(units) > 1:
-        print(f"    🔀 汇总页图片单元 review 并发度: {image_concurrency}")
+        scope_label = '汇总页' if title == '汇总页' else '页面'
+        print(f"    🔀 {scope_label}图片单元 review 并发度: {image_concurrency}")
         results = run_bounded_llm_tasks(units, review_one_image, image_concurrency)
     else:
         results = [review_one_image(unit) for unit in units]
@@ -6905,7 +6988,16 @@ def _api_reader_index_display_fields_issue(content, papers):
                 ('summary', '📌 **核心摘要**', r'\n\n🔗 \*\*开源资源\*\*'),
                 ('opensource', '🔗 **开源资源**', r'\n\n---')):
             match = re.search(re.escape(label) + r'\n\n([\s\S]*?)' + end, block)
-            expected = sanitize_markdown_for_publish(reader_display_fields[key]).strip()
+            raw_expected = reader_display_fields[key]
+            if key == 'summary' and isinstance(raw_expected, str):
+                cutoff = re.search(r'\n##\s*详细分', raw_expected)
+                if cutoff:
+                    raw_expected = raw_expected[:cutoff.start()].strip()
+            elif key == 'opensource' and isinstance(raw_expected, str):
+                supplement = re.search(r'##\s*补充信息\s*\n[\s\S]*', raw_expected)
+                if supplement:
+                    raw_expected = raw_expected[:supplement.start()].strip()
+            expected = sanitize_markdown_for_publish(raw_expected).strip()
             if not match or match.group(1).strip() != expected:
                 return f'{aid}：汇总页中 {key} 对应的摘要或资源内容缺失，或与对应读者文章记录的展示内容不一致。'
     return None
@@ -7435,6 +7527,28 @@ def _render_daily_spotlight(scored, date_str, paper_slugs):
     return '\n'.join(lines) + '\n\n'
 
 
+def _yaml_flow_scalar(value):
+    """仅在含 YAML 特殊字符或歧义字面量时加双引号，纯文本标签保持原样兼容历史页。"""
+    text = str(value or '')
+    if (
+        not text
+        or text != text.strip()
+        or text[0] in '-?:,[]{}#&*!|>\'"%@`'
+        or any(ch in text for ch in ':,[]{}#"\'\n\r\t')
+        or text.lower() in {'true', 'false', 'null', 'yes', 'no', 'on', 'off', '~'}
+    ):
+        return json.dumps(text, ensure_ascii=False)
+    return text
+
+
+def _escape_markdown_table_cell(text):
+    return re.sub(r'(?<!\\)\|', r'\\|', str(text or ''))
+
+
+def _escape_markdown_link_label(text):
+    return re.sub(r'(?<!\\)([\[\]])', r'\\\1', str(text or ''))
+
+
 def generate_index_page(
         scored, unscored, date_str, paper_slugs, category='论文速递', *,
         empty_batch_confirmed=False):
@@ -7473,8 +7587,8 @@ def generate_index_page(
 title: "{conference_title}"
 date: {date_str}
 draft: false
-tags: [{', '.join(tag_set)}]
-categories: [{category}]
+tags: [{', '.join(_yaml_flow_scalar(t) for t in tag_set)}]
+categories: [{_yaml_flow_scalar(category)}]
 description: "共分析 {total} 篇语音/AI 论文"
 layout: "posts"
 paper_digest_pipeline_owned: true
@@ -7525,24 +7639,24 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
         selection = build_flat_tag_compat_metadata(parsed_analysis)
         if selection:
             primary_task = _root_task_link(_top_level_task_concept(selection['primaryTaskId']))
-        compact_title = markdown_title_for_publish(compact_title_for_ranking(title))
+        compact_title = _escape_markdown_table_cell(markdown_title_for_publish(compact_title_for_ranking(title)))
         zh_title, has_zh = _index_paper_display_title(p, parsed_analysis, date_str, max_chars=36)
-        zh_cell = zh_title if has_zh else '-'
+        zh_cell = _escape_markdown_table_cell(zh_title) if has_zh else '-'
         badges = _paper_resource_badges(p, parsed_analysis)['text']
         if slug:
-            md += f"| {m} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {zh_cell} | {score} | {rank_bucket} | {document_type} | {primary_task} | {badges} |\n"
+            md += f"| {m} | [{_escape_markdown_link_label(compact_title)}]({BASE_PATH}/posts/{date_str}-{slug}) | {zh_cell} | {score} | {rank_bucket} | {document_type} | {primary_task} | {badges} |\n"
         else:
             md += f"| {m} | {compact_title} | {zh_cell} | {score} | {rank_bucket} | {document_type} | {primary_task} | {badges} |\n"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
-        compact_title = markdown_title_for_publish(compact_title_for_ranking(title))
+        compact_title = _escape_markdown_table_cell(markdown_title_for_publish(compact_title_for_ranking(title)))
         parsed_u = p.get('parsed') if isinstance(p.get('parsed'), dict) else {}
         zh_title, has_zh = _index_paper_display_title(p, parsed_u, date_str, max_chars=36)
-        zh_cell = zh_title if has_zh else '-'
+        zh_cell = _escape_markdown_table_cell(zh_title) if has_zh else '-'
         badges = _paper_resource_badges(p, parsed_u)['text']
         if slug:
-            md += f"| {len(scored)+i+1} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {zh_cell} | N/A | - | - | - | {badges} |\n"
+            md += f"| {len(scored)+i+1} | [{_escape_markdown_link_label(compact_title)}]({BASE_PATH}/posts/{date_str}-{slug}) | {zh_cell} | N/A | - | - | - | {badges} |\n"
         else:
             md += f"| {len(scored)+i+1} | {compact_title} | {zh_cell} | N/A | - | - | - | {badges} |\n"
 
@@ -7578,7 +7692,7 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
         reader_title = digest_index_reader_title(reader_plan['readerTitle'] if reader_article else title)
         blog_url = f'{BASE_PATH}/posts/{date_str}-{slug}' if slug else ''
         if slug:
-            md += f"### {m} [{reader_title}]({blog_url})\n\n"
+            md += f"### {m} [{_escape_markdown_link_label(reader_title)}]({blog_url})\n\n"
         else:
             md += f"### {m} {reader_title}\n\n"
         preview = _index_figure_preview(p, reader_article, api_reader)
@@ -7586,7 +7700,7 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
             md += f"{preview}\n\n"
         if reader_article:
             rendered_title = markdown_title_for_publish(plain_title_for_publish(title))
-            english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
+            english_title = f'[{_escape_markdown_link_label(rendered_title)}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
         md += render_paper_tag_hierarchy(parsed_analysis)
         
@@ -7642,11 +7756,11 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
             reader_article = api_reader['article']
         else:
             reader_plan = _manual_reader_editorial_plan(p)
-            reader_article = _manual_reader_article(p, reader_plan)
+            reader_article = _manual_reader_article(p, reader_plan, date_str)
         reader_title = digest_index_reader_title(reader_plan['readerTitle'] if reader_article else title)
         blog_url = f'{BASE_PATH}/posts/{date_str}-{slug}' if slug else ''
         if slug:
-            md += f"### {len(scored)+i+1}. [{reader_title}]({blog_url})\n\n"
+            md += f"### {len(scored)+i+1}. [{_escape_markdown_link_label(reader_title)}]({blog_url})\n\n"
         else:
             md += f"### {len(scored)+i+1}. {reader_title}\n\n"
         preview = _index_figure_preview(p, reader_article, api_reader)
@@ -7654,7 +7768,7 @@ paper_digest_reader_quality_schema_fingerprint: "{DIGEST_INDEX_READER_QUALITY_FI
             md += f"{preview}\n\n"
         if reader_article:
             rendered_title = markdown_title_for_publish(plain_title_for_publish(title))
-            english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
+            english_title = f'[{_escape_markdown_link_label(rendered_title)}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
         md += render_paper_tag_hierarchy(parsed_analysis)
         md += '评分：N/A（分析未提供可验证的八维评分）\n\n'
@@ -10038,8 +10152,8 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
 title: "{yaml_title_for_publish(display_title)}"
 date: {date_str}
 draft: false
-tags: [{', '.join([t.replace('#', '') for t in tags])}]
-categories: [{category}]
+tags: [{', '.join(_yaml_flow_scalar(t.replace('#', '')) for t in tags)}]
+categories: [{_yaml_flow_scalar(category)}]
 description: {description_yaml}
 hiddenInHomeList: true
 paper_digest_pipeline_owned: true
@@ -10052,7 +10166,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
 """
     if reader_first:
         rendered_title = markdown_title_for_publish(display_title)
-        paper_link = f'[{rendered_title}]({aurl})' if aurl else rendered_title
+        paper_link = f'[{_escape_markdown_link_label(rendered_title)}]({aurl})' if aurl else rendered_title
         # 把中文读者标题留在 H1 里，然后明确给出论文的
         # 英文原题和规范链接。只写成「论文」会让
         # reader-first 身份区块产生歧义，也会破坏
@@ -10112,7 +10226,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
 
         sections = ([
             ('📌 核心摘要', 'summary', reader_display_fields['summary']),
-            ('🔗 开源与复现资源', 'opensource', reader_display_fields['opensource']),
+            ('🔗 开源与复现资源', 'opensource', opensource_content),
             ('🧭 深度解读', 'readerArticle', reader_article),
         ] if reader_display_fields is not None else (
             [
@@ -11196,10 +11310,17 @@ _READER_AUTHOR_BATCH_PREFIX = (
 
 
 def _flush_reader_author_replay_batch(state):
-    if not state['items']:
-        return
-    items, ids = state['items'], state['ids']
-    state['items'], state['ids'], state['bytes'] = [], [], 0
+    lock = state.get('lock')
+    if lock is not None:
+        lock.acquire()
+    try:
+        if not state['items']:
+            return
+        items, ids = state['items'], state['ids']
+        state['items'], state['ids'], state['bytes'] = [], [], 0
+    finally:
+        if lock is not None:
+            lock.release()
     payload = _READER_AUTHOR_BATCH_PREFIX + b','.join(items) + b']}'
     _run_reader_author_source_replay(payload, ids)
 
@@ -11209,7 +11330,7 @@ def _reader_author_replay_batch_scope():
     if _READER_AUTHOR_REPLAY_BATCH.get() is not None:
         yield
         return
-    state = {'items': [], 'ids': [], 'bytes': 0}
+    state = {'items': [], 'ids': [], 'bytes': 0, 'lock': threading.Lock()}
     token = _READER_AUTHOR_REPLAY_BATCH.set(state)
     try:
         yield
@@ -11237,13 +11358,28 @@ def _defer_sealed_reader_author_replay(payload, paper_id):
         # Original large single requests keep their original bounded transport.
         _flush_reader_author_replay_batch(state)
         return False
-    if state['items'] and (len(state['items']) >= _READER_AUTHOR_BATCH_MAX_ITEMS
-            or state['bytes'] + len(payload) + len(state['items']) > maximum):
-        _flush_reader_author_replay_batch(state)
-    state['items'].append(payload)
-    state['ids'].append(paper_id)
-    state['bytes'] += len(payload)
-    return True
+    lock = state.get('lock')
+    while True:
+        to_flush = None
+        if lock is not None:
+            lock.acquire()
+        try:
+            if state['items'] and (len(state['items']) >= _READER_AUTHOR_BATCH_MAX_ITEMS
+                    or state['bytes'] + len(payload) + len(state['items']) > maximum):
+                to_flush = (state['items'], state['ids'])
+                state['items'], state['ids'], state['bytes'] = [], [], 0
+            else:
+                state['items'].append(payload)
+                state['ids'].append(paper_id)
+                state['bytes'] += len(payload)
+                return True
+        finally:
+            if lock is not None:
+                lock.release()
+        if to_flush is not None:
+            items, ids = to_flush
+            batch_payload = _READER_AUTHOR_BATCH_PREFIX + b','.join(items) + b']}'
+            _run_reader_author_source_replay(batch_payload, ids)
 
 
 def _validate_reader_author_source_replay(paper, source_details, paper_id, *, sealed_bundle_root=None):
@@ -11316,6 +11452,7 @@ def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_
 
 
 _READER_RESOURCE_CLAIM_REPLAY_CACHE = set()
+_READER_RESOURCE_CLAIM_REPLAY_CACHE_LOCK = threading.Lock()
 
 
 def _has_source_bound_reader_patch_completion(paper):
@@ -11398,7 +11535,12 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
            _sha256_file(cli), _sha256_file(SHARED_SCRIPTS_DIR / 'deep-analyzer.js'),
            _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-binding.js'))
     bound_patch_completion = _has_source_bound_reader_patch_completion(paper)
-    if not authenticated_footnotes and not bound_patch_completion and key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
+    cache_lock = globals().get('_READER_RESOURCE_CLAIM_REPLAY_CACHE_LOCK')
+    if cache_lock is not None:
+        with cache_lock:
+            if not authenticated_footnotes and not bound_patch_completion and key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
+                return
+    elif not authenticated_footnotes and not bound_patch_completion and key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
         return
     node = shutil.which('node')
     if not node:
@@ -11434,7 +11576,11 @@ def _validate_reader_resource_claim_source_replay(paper, source_details, paper_i
             or not accepted_response:
         raise PublishDataValidationError(f'{paper_id} 读者正文的资源可用性宣称未通过封存来源核验。')
     if not authenticated_footnotes and not bound_patch_completion:
-        _READER_RESOURCE_CLAIM_REPLAY_CACHE.add(key)
+        if cache_lock is not None:
+            with cache_lock:
+                _READER_RESOURCE_CLAIM_REPLAY_CACHE.add(key)
+        else:
+            _READER_RESOURCE_CLAIM_REPLAY_CACHE.add(key)
 
 
 
@@ -11765,7 +11911,7 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
     workers = min(8, len(papers)) if len(papers) > 1 else 1
     if workers > 1:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(validate_one, paper, paper_id)
+            futures = [pool.submit(contextvars.copy_context().run, validate_one, paper, paper_id)
                        for paper, paper_id in zip(papers, paper_ids)]
             for paper_id, future in zip(paper_ids, futures):
                 records[paper_id] = future.result()
@@ -12744,20 +12890,26 @@ def _terminate_process_group(process, grace_seconds=5):
     if os.name != 'nt':
         try:
             os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
+        except OSError:
             pass
     else:
-        process.terminate()
+        try:
+            process.terminate()
+        except OSError:
+            pass
     try:
         return process.wait(timeout=grace_seconds)
     except subprocess.TimeoutExpired:
         if os.name != 'nt':
             try:
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except OSError:
                 pass
         else:
-            process.kill()
+            try:
+                process.kill()
+            except OSError:
+                pass
         return process.wait(timeout=grace_seconds)
 
 
@@ -15948,7 +16100,7 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
                 and file_results.get(str(page), {}).get('reviewedSha256') == _sha256_file(page)
             )
         ]
-        if not reviewed_pages:
+        if not references or len(reviewed_pages) != len(references):
             blocking += 1
             file_results[str(asset)] = result
             continue
@@ -16563,7 +16715,6 @@ def generate_main(options=None):
             paper_slugs[paper.get('arxivId', '')] = slug
             if record.get('status') != 'generated':
                 paper_md, slug = generate_paper_page(paper, today, category)
-                paper_md = sanitize_markdown_for_publish(paper_md)
                 manual_reader_issue = validate_final_structured_manual_markdown(paper_md, paper)
                 if manual_reader_issue:
                     raise PublishDataValidationError(
@@ -16605,7 +16756,6 @@ def generate_main(options=None):
                 scored, unscored, today, paper_slugs, category,
                 empty_batch_confirmed=empty_daily_batch is not None,
             )
-            index_md = sanitize_markdown_for_publish(index_md)
             index_quality_issue = validate_digest_index_reader_quality(index_md, required=True)
             if index_quality_issue:
                 raise PublishDataValidationError(
@@ -16671,7 +16821,7 @@ def generate_main(options=None):
     print(f"🧾 生成清单: {manifest_path}")
     include_hint = f' --include-id {normalized_include}' if normalized_include else ''
     print(
-        f"\n✅ 博客文件生成完成；下一步: python3 scripts/review-blog.py "
+        f"\n✅ 博客文件生成完成；下一步: npm run blog:review -- "
         f"--date {today}{include_hint}"
     )
 

@@ -53,7 +53,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 ### 账号池
 
-同一路由下配置的所有密钥（`PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_FALLBACK_API_KEYS`、`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 及副模型对应配置）合并成同一个等权账号池，顺序不代表优先级。每次选择按账号指纹的稳定排序轮转，跳过本次已排除或冷却未到期的账号；冷却到期后自动回到轮转。
+同一路由下配置的所有密钥（`PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_FALLBACK_API_KEYS`、`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 及副模型对应配置）合并成同一个等权账号池，顺序不代表优先级。传入 `affinityKey`（如 `paperId`）时按稳定哈希固定映射到槽位以提升前缀缓存命中；未传 `affinityKey` 时按账号指纹的稳定排序轮转，跳过本次已排除或冷却未到期的账号；冷却到期后自动回到可用池。
 
 只有 OpenCode Go 返回 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，才允许在同一逻辑请求内切换账号，且每个账号至多尝试一次。普通认证 401 会停止本次运行；普通 429、5xx、网络或代理故障、响应截断和内容校验失败都不触发切换。全部账号不可用时，程序停止派发并保存进度。
 

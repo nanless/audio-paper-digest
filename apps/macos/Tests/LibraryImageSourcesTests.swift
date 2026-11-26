@@ -25,9 +25,14 @@ actor PublishedImageFixture {
     static func approved(_ address:String)->Bool{URL(string:address).map{LibraryService.isApprovedExternalResource($0)} ?? false}
     static func policy()throws {
         for address in images {try expect(approved(address),"actual TurnGuide public figure allowed")}
-        for conference in ["dafx-2026","acl-2026","eusipco-2026","cvpr-2026","nime-2026","speechprosody-2026","aaai-2026","odyssey-2026","icmc-2026","jep-2026","eacl-2026","iwslt-2026","chime-2026","uai-2026","aistats-2026"] {
+        for conference in ["dafx-2026","acl-2026","eusipco-2026","cvpr-2026","nime-2026","speechprosody-2026","aaai-2026","odyssey-2026","icmc-2026","jep-2026","eacl-2026","iwslt-2026","chime-2026","uai-2026","aistats-2026","icml-2026","emnlp-2026","ismir-2026","dcase-2026","neurips-2026","waspaa-2025","asru-2025"] {
             try expect(approved(prefix+conference+"/0123456789ab/figure-1.png"),"published conference image layout supported: "+conference)
         }
+        try expect(approved("https://zenodo.org/records/1234567/files/paper.pdf"),"zenodo.org official archive allowed")
+        try expect(approved("https://raw.githubusercontent.com/nanless/audio-research-portal/main/static/images/fig.png"),"owned raw audio-research-portal asset allowed")
+        try expect(approved("https://raw.githubusercontent.com/nanless/audio-paper-digest-blog/main/static/images/fig.png"),"owned raw audio-paper-digest-blog asset allowed")
+        try expect(!approved("https://raw.githubusercontent.com/nanless/audio-research-portal/main/../../other/repo/fig.png"),"owned raw blog path traversal rejected")
+        try expect(!approved("https://raw.githubusercontent.com/nanless/audio-research-portal/main/a?x=1"),"owned raw blog query rejected")
         let historical=["https://nanless.github.io/audio-paper-digest-images/icassp-2026/2026-04-29/11462137-0.png","https://nanless.github.io/audio-paper-digest-images/iclr-2026/2026-05-04/HQMVRQUEaM-11.jpg"]
         for address in historical {try expect(approved(address),"published historical GitHub Pages image allowed outside blog prefix")}
         let rejected=[

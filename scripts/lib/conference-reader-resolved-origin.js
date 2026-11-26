@@ -101,13 +101,16 @@ function originalPrompts(identity) {
     });
 }
 function uniqueUsage(identity, request, response, grantId, pins) {
+    const { listUsageLedgerFiles } = require('./llm-usage-ledger');
     const directory = path.resolve(require('../config').FILES.llmUsageDir), result = [];
     require('./fresh-rewrite-run').assertSafeDirectory(directory);
+    let entries;
+    try { entries = listUsageLedgerFiles(directory); }
+    catch { fail('unsafe fee event'); }
     // Initial proof really checks uniqueness, not a caller-supplied fee list.
     // Only the matched immutable event is retained; no persistent fee index.
-    for (const name of fs.readdirSync(directory)) {
-        if (!/^[a-f0-9-]{36}\.json$/u.test(name)) continue;
-        const file = path.join(directory, name), fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    for (const entry of entries) {
+        const file = entry.file, fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         let bytes; try { const s = fs.fstatSync(fd); if (!s.isFile() || s.nlink !== 1 || s.size > 1024 * 1024) fail('unsafe fee event'); bytes = fs.readFileSync(fd); } finally { fs.closeSync(fd); }
         if (!bytes.includes(response.outputTextSha256)) continue;
         const row = read(file), event = row.value;

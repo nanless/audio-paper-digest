@@ -78,3 +78,43 @@ test('本次原付费v9/v13模板按原路径和原整SHA恢复，不能将读�
         assert.equal(require('../scripts/lib/conference-reader-operator-correction').isVerifiedConferenceReaderPromptDeclaration(found), false);
     }
 });
+
+test('git log 中所有非 HEAD 的 prompts/current/*.md 历史 blob 均已登记在 git-prompt-evidence-index.json', () => {
+    const repoRoot = path.resolve(__dirname, '..');
+    if (!fs.existsSync(path.join(repoRoot, '.git'))) return;
+    const index = JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts/lib/git-prompt-evidence-index.json'), 'utf8'));
+    const blobKeys = Object.keys(index.blobs);
+    assert.deepEqual(blobKeys, [...blobKeys].sort(), 'git-prompt-evidence-index blobs must remain sorted');
+
+    const headBlobs = new Map();
+    const headTree = execFileSync('git', ['ls-tree', '-r', 'HEAD', '--', 'prompts/current/'], { cwd: repoRoot, encoding: 'utf8' });
+    for (const line of headTree.split('\n').filter(Boolean)) {
+        const [meta, relPath] = line.split('\t');
+        if (!relPath || !relPath.endsWith('.md')) continue;
+        headBlobs.set(relPath, meta.split(/\s+/)[2]);
+    }
+
+    const commits = execFileSync('git', ['log', '--format=%H', '--', 'prompts/current/'], { cwd: repoRoot, encoding: 'utf8' })
+        .split('\n').filter(Boolean);
+    const seen = new Set();
+    const missing = [];
+    for (const commit of commits) {
+        const tree = execFileSync('git', ['ls-tree', '-r', commit, '--', 'prompts/current/'], { cwd: repoRoot, encoding: 'utf8' });
+        for (const line of tree.split('\n').filter(Boolean)) {
+            const [meta, relPath] = line.split('\t');
+            if (!relPath || !relPath.endsWith('.md')) continue;
+            const oid = meta.split(/\s+/)[2];
+            if (headBlobs.get(relPath) === oid) continue;
+            const key = `${relPath}:${oid}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const bytes = execFileSync('git', ['cat-file', 'blob', oid], { cwd: repoRoot });
+            const digest = sha(bytes);
+            const entry = index.blobs[digest];
+            if (!entry || entry.blobOid !== oid || !Array.isArray(entry.paths) || !entry.paths.includes(relPath)) {
+                missing.push({ commit: commit.slice(0, 8), relPath, oid, digest });
+            }
+        }
+    }
+    assert.deepEqual(missing, [], `Unregistered non-HEAD prompts/current/*.md blobs: ${JSON.stringify(missing, null, 2)}`);
+});

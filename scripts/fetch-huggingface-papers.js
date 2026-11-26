@@ -521,12 +521,17 @@ async function enrichHfOnlyPapersWithArxivMetadata(hfPapers, existingArxivIds = 
         if (!nid || arxivIdSet.has(nid)) return false;
         return !Array.isArray(p.categories) || p.categories.length === 0;
     });
-    if (missing.length === 0) return { enrichedCount: 0, attemptedCount: 0 };
+    if (missing.length === 0) return { enrichedCount: 0, attemptedCount: 0, failedCount: 0 };
 
     const fetchBatchFn = options.fetchArxivMetadataBatchByIds
         || require('./fetch-papers.js').fetchArxivMetadataBatchByIds;
+    const { sharedArxivOriginGate } = require('./lib/arxiv-origin-gate.js');
+    const originGate = options.originGate !== undefined
+        ? options.originGate
+        : (!options.fetchArxivMetadataBatchByIds ? sharedArxivOriginGate : null);
     try {
-        const byId = await fetchBatchFn(missing.map(normalizedId), options);
+        const runBatch = () => fetchBatchFn(missing.map(normalizedId), options);
+        const byId = originGate ? await originGate.run(runBatch) : await runBatch();
         let enrichedCount = 0;
         for (const paper of missing) {
             const meta = byId.get(normalizedId(paper));
@@ -549,14 +554,17 @@ async function enrichHfOnlyPapersWithArxivMetadata(hfPapers, existingArxivIds = 
             }
             enrichedCount += 1;
         }
-        return { enrichedCount, attemptedCount: missing.length };
+        return { enrichedCount, attemptedCount: missing.length, failedCount: 0 };
     } catch (error) {
         if (error?.code === 'PROXY_CONFIG_ERROR'
             || /HTTP\(S\) CONNECT 代理|missing project proxy/i.test(String(error?.message || ''))) {
             throw error;
         }
+        if (originGate && /(?:429|403|rate limit|限流)/i.test(String(error?.message || ''))) {
+            originGate.recordCooldown(15000);
+        }
         console.warn(`  ⚠️ HF-only 论文 arXiv 分类回填失败（已保留原 HF 记录继续）: ${error.message}`);
-        return { enrichedCount: 0, attemptedCount: missing.length, error: error.message };
+        return { enrichedCount: 0, attemptedCount: missing.length, failedCount: missing.length, error: error.message };
     }
 }
 

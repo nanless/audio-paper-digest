@@ -1275,3 +1275,33 @@ test('doctor 沙箱检查读 processEnv、代理 fail-closed 且探测 URL 拒�
         assert.throws(() => doctor.assertAllowedProbeUrl(badProbe), Error, badProbe);
     }
 });
+
+test('doctor 探测重定向限制为 arXiv 主机，账号池读取限制大小，脱敏覆盖 ALL_PROXY 与编码凭据', async () => {
+    assert.throws(
+        () => doctor.assertAllowedProbeUrl('https://evil.example.com/api'),
+        err => err.code === 'PROBE_HOST_DISALLOWED'
+    );
+    const redirected = await doctor.fetchProbeText(
+        async () => redirectResponse('https://attacker.example.org/steal'),
+        'https://export.arxiv.org/api/query',
+        {},
+        { maxBytes: 100, timeoutMs: 1000 }
+    );
+    assert.equal(redirected.error?.code, 'PROBE_HOST_DISALLOWED');
+
+    const secrets = doctor.collectSecretValues({
+        ALL_PROXY: 'socks5h://proxyuser:p%40ss-secret-1@127.0.0.1:7897',
+        HTTPS_PROXY: 'http://bad-user:raw-pass-2@bad host:7897'
+    });
+    assert.ok(secrets.includes('p%40ss-secret-1'));
+    assert.ok(secrets.includes('p@ss-secret-1'));
+    assert.ok(secrets.includes('raw-pass-2'));
+
+    const merged = doctor.collectRuntimeSecrets(
+        '/nonexistent-dir',
+        { PAPER_ANALYZER_API_KEY: 'sk-dotenv-secret-999' },
+        { ALL_PROXY: 'socks5h://envuser:envpass-888@127.0.0.1:1080' }
+    );
+    assert.ok(merged.includes('sk-dotenv-secret-999'));
+    assert.ok(merged.includes('envpass-888'));
+});

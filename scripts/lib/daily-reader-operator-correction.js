@@ -229,8 +229,11 @@ function isCurrentFailedPaper(paper, plan, factFeedbacks = new Map()) {
 // 显式设置时只允许抬高到硬上限 15，不能降低默认值，也不能超过 15。
 function largeBatchCorrectionLimit(plan, papers) {
     const daily = require('./daily-fresh-source-plan');
+    const dailySourceSkip = require('./daily-source-skip');
     const original = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference(plan));
-    const expected = original.paperIds;
+    const skippedRecord = dailySourceSkip.readDailySourceSkips(original, { limit: dailySourceSkip.MAX_LIMIT });
+    const skippedIds = new Set((skippedRecord?.papers || []).map(item => item.arxivId));
+    const expected = original.paperIds.filter(paperId => !skippedIds.has(paperId));
     const actual = Array.isArray(papers) ? papers.map(id) : [];
     if (!expected.length || new Set(expected).size !== expected.length
         || actual.length !== expected.length || new Set(actual).size !== actual.length

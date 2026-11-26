@@ -217,6 +217,7 @@ class RootController private constructor(
                         pdfSelection = null,
                         pdfPage = 1,
                         noteConflicts = emptyList(),
+                        cachedDemoIds = emptySet(),
                     )
                 }
                 refresh(publishingRestore = true)
@@ -759,7 +760,11 @@ class RootController private constructor(
                     val force = payload.optBoolean("refresh", false)
                     val offline = personal.settings().optBoolean("offlineMode")
                     val loaded = resourceBadgesRepository.load(forceRefresh = force, offlineMode = offline)
-                    _state.update { it.copy(resourceBadges = loaded.papers, cachedDemoIds = loaded.cachedDemoIds) }
+                    dispatch.requireCurrent(dispatchAtStart)
+                    _state.update { current ->
+                        if (dispatch.epoch != dispatchAtStart) current
+                        else current.copy(resourceBadges = loaded.papers, cachedDemoIds = loaded.cachedDemoIds)
+                    }
                     JSONObject()
                         .put("available", loaded.available)
                         .put("count", loaded.papers.size)
@@ -771,11 +776,12 @@ class RootController private constructor(
                     when (command) {
                         "podcast.feed" -> {
                             val force = payload.optBoolean("refresh", false)
-                            if (payload.optBoolean("silent", false)) {
-                                runCatching { podcastCoordinator.fetchFeed(forceRefresh = force) }
+                            val silent = payload.optBoolean("silent", false)
+                            if (silent) {
+                                runCatching { podcastCoordinator.fetchFeed(forceRefresh = force, silent = true) }
                                     .getOrElse { _state.value.podcast.json() }
                             } else {
-                                podcastCoordinator.fetchFeed(forceRefresh = force)
+                                podcastCoordinator.fetchFeed(forceRefresh = force, silent = false)
                             }
                         }
                         "podcast.state" -> podcastCoordinator.state().json()
@@ -1333,9 +1339,17 @@ class RootController private constructor(
             val latest = personal.snapshot().getJSONArray("jobs").objects().firstOrNull { it.optString("id") == id } ?: row
             if (kind == "pdf.import") latest.put("paperID", result.getString("paperID"))
             if (kind in setOf("pdf.import", "pdf.open", "pdf.annotation.open", "pdf.studySource.open")) latest.put("result", result.copy())
+            val isPartial = result.optBoolean("partial")
             personal.upsertJob(
-                latest.put("status", "completed").put("endedAt", now())
-                    .put("message", if (kind.endsWith("restore.prepare")) "完整材料校验完成，等待明确确认；尚未恢复研究资料" else "已完成")
+                latest.put("status", if (isPartial) "partial" else "completed").put("endedAt", now())
+                    .put(
+                        "message",
+                        when {
+                            isPartial -> result.optString("summary", "部分完成").ifBlank { "部分完成" }
+                            kind.endsWith("restore.prepare") -> "完整材料校验完成，等待明确确认；尚未恢复研究资料"
+                            else -> "已完成"
+                        }
+                    )
             )
             return result
         } catch (e: Exception) {

@@ -49,6 +49,7 @@ _STAMP_SKIP_DIRS = frozenset({
 _STAMP_CODE_SUFFIXES = ('.js', '.cjs', '.mjs', '.json')
 
 _POOL_LOCK = threading.Lock()
+_TREE_DIGEST_CACHE_LOCK = threading.Lock()
 _IDLE_WORKERS = {}
 _TREE_DIGEST_CACHE = {}
 _TREE_DIGEST_BATCH_SCOPE = ContextVar('_TREE_DIGEST_BATCH_SCOPE', default=None)
@@ -97,10 +98,10 @@ def _project_root_for_worker(worker_realpath):
 def _tree_code_digest(project_root):
     root_key = str(project_root)
     batch = _TREE_DIGEST_BATCH_SCOPE.get()
-    if batch is not None and root_key in batch:
-        return batch[root_key]
-
-    cached = _TREE_DIGEST_CACHE.get(root_key)
+    with _TREE_DIGEST_CACHE_LOCK:
+        if batch is not None and root_key in batch:
+            return batch[root_key]
+        cached = _TREE_DIGEST_CACHE.get(root_key)
     if cached is not None:
         dir_stamps, file_stamps, cached_digest = cached
         unchanged = True
@@ -115,7 +116,8 @@ def _tree_code_digest(project_root):
                     break
         if unchanged:
             if batch is not None:
-                batch[root_key] = cached_digest
+                with _TREE_DIGEST_CACHE_LOCK:
+                    batch[root_key] = cached_digest
             return cached_digest
 
     entries = []
@@ -154,9 +156,10 @@ def _tree_code_digest(project_root):
     for sub in ('scripts', 'manual/scripts', 'config'):
         scan_dir(os.path.join(root_key, sub), sub)
     digest = hashlib.blake2b(repr(entries).encode('utf-8'), digest_size=32).hexdigest()
-    _TREE_DIGEST_CACHE[root_key] = (tuple(dir_stamps), tuple(file_stamps), digest)
-    if batch is not None:
-        batch[root_key] = digest
+    with _TREE_DIGEST_CACHE_LOCK:
+        _TREE_DIGEST_CACHE[root_key] = (tuple(dir_stamps), tuple(file_stamps), digest)
+        if batch is not None:
+            batch[root_key] = digest
     return digest
 
 
@@ -478,11 +481,46 @@ def idle_worker_count():
 
 
 if hasattr(os, 'register_at_fork'):
-    def _reset_pool_in_forked_child():
-        # Never kill parent workers in a forked child; simply drop inherited references.
-        _IDLE_WORKERS.clear()
+    def _before_fork_lock_pool():
+        _POOL_LOCK.acquire()
+        _TREE_DIGEST_CACHE_LOCK.acquire()
 
-    os.register_at_fork(after_in_child=_reset_pool_in_forked_child)
+    def _after_fork_in_parent():
+        _TREE_DIGEST_CACHE_LOCK.release()
+        _POOL_LOCK.release()
+
+    def _reset_pool_in_forked_child():
+        global _POOL_LOCK, _TREE_DIGEST_CACHE_LOCK
+        # Never kill parent workers or unlink parent temp_dirs in a forked child;
+        # close inherited pipe/file descriptors cleanly, drop references, and
+        # reinitialize locks so the child cannot deadlock on inherited state.
+        workers = [w for bucket in _IDLE_WORKERS.values() for w in bucket]
+        _IDLE_WORKERS.clear()
+        for worker in workers:
+            worker.disposed = True
+            try:
+                if worker.process.stdin is not None:
+                    worker.process.stdin.close()
+            except OSError:
+                pass
+            if not worker._resp_r_closed:
+                worker._resp_r_closed = True
+                try:
+                    os.close(worker.resp_r)
+                except OSError:
+                    pass
+            try:
+                worker.stderr_file.close()
+            except OSError:
+                pass
+        _POOL_LOCK = threading.Lock()
+        _TREE_DIGEST_CACHE_LOCK = threading.Lock()
+
+    os.register_at_fork(
+        before=_before_fork_lock_pool,
+        after_in_parent=_after_fork_in_parent,
+        after_in_child=_reset_pool_in_forked_child,
+    )
 
 atexit.register(shutdown_all_workers)
 

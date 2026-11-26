@@ -27,7 +27,7 @@ Mac 和 Android 当前公开发行版本均为 **1.5.0（构建号 24）**，于
 
 1.4.5 修复 Android 回到前台时重复触发整站同步、macOS 目录 JSON 损坏导致启动崩溃，以及 `apps/macos/test.sh` 在套件成功时静默提前退出的问题（2026-11-12 发布，提交 `f9241190`）；见[1.4.5 记录](workbench-1.4.5-review.md)。
 
-1.4.4 恢复目录载入失败后的客户端命令：`library.retryLoad` 与 `library.sync` 在启动解码失败时仍可执行，同步成功后再把失败状态改为就绪；同时把 macOS 测试读取的公开论文 PDF 与三张裁图纳入仓库，并修补 macOS 测试套件。macOS 客户端测试仍在本机通过 `bash apps/macos/test.sh` 运行，暂不接入 CI；Android 只把 Gradle 单元测试放在独立作业。改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)。
+1.4.4 恢复目录载入失败后的客户端命令：`library.retryLoad` 与 `library.sync` 在启动解码失败时仍可执行，同步成功后再把失败状态改为就绪；同时把 macOS 测试读取的公开论文 PDF 与三张裁图纳入仓库，并修补 macOS 测试套件（当时 1.4.4 阶段 macOS 测试仅在本机运行，现行 CI 已新增独立的 `client-macos` 与 `client-android` 作业，均不并入 `test` 汇总检查）。改动与验证范围见[1.4.4 记录](workbench-1.4.4-review.md)。
 
 1.4.3 的性能优化（目录紧凑投影、启动后台解码、导读与汇总解析复用、离线索引、桥接合并）见[1.4.3 记录](workbench-1.4.3-review.md)。
 

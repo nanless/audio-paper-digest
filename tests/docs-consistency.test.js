@@ -76,3 +76,23 @@ test('checkAgentsSize 与 checkEnvExampleSync 拦截超限 AGENTS.md 与未登�
     assert.deepStrictEqual(docs.checkEnvExampleSync(root), []);
     fs.rmSync(root, { recursive: true, force: true });
 });
+
+test('checkVersionClaims 拦截带分号/逗号括号的旧构建号与已发布版本的尚未公开发布矛盾', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-version-tight-'));
+    const published = path.join(dir, 'published.md');
+    const stale = path.join(dir, 'stale.md');
+    fs.writeFileSync(published, '当前公开发行版本为 **1.5.0（构建号 24）**（2026-11-26 发布）。\n');
+    fs.writeFileSync(stale, [
+        '当前两端均为 1.4.6（构建号 22；Android versionCode 22）',
+        '1.4.6 是当前公开发行版本（构建号 22）',
+        '当前源码版本为 1.5.0（构建号 24）（尚未公开发布），最近公开发行版本为 1.4.7 / 构建号 23',
+        '历史 1.3.7（未公开发行的源码中间版本）与当前公开发行版本 1.5.0（构建号 24）不冲突'
+    ].join('\n'));
+    const issues = docs.checkVersionClaims(
+        [published, stale],
+        { mac: { version: '1.5.0', build: '24' }, android: { version: '1.5.0', build: '24' } }
+    );
+    const lines = [...new Set(issues.map(item => item.line))].sort((a, b) => a - b);
+    assert.deepStrictEqual(lines, [1, 2, 3]);
+    fs.rmSync(dir, { recursive: true, force: true });
+});

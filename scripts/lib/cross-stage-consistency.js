@@ -347,12 +347,19 @@ function checkMetricScaleDrift(analysis, apiReaderArticle) {
         for (const cv of cVals) {
             if (rVals.some(rv => Math.abs(rv.value - cv.value) <= 1e-6)) continue;
             // Require the small (0..1) value NOT to carry '%' so "WER 0.85%" vs "WER 85.0%" (both %) never false-triggers!
+            // Also catch [1, 10)% vs <0.1 bare decimal (e.g. "WER 5.2%" vs "WER 0.052") strictly when the larger value carries '%'.
             const scaledMatch = rVals.find(rv => {
                 if (!cv.hasPercent && cv.value > 0 && cv.value < 1 && rv.value >= 10 && rv.value <= 100) {
                     return Math.abs(cv.value * 100 - rv.value) <= 0.05;
                 }
                 if (!rv.hasPercent && rv.value > 0 && rv.value < 1 && cv.value >= 10 && cv.value <= 100) {
                     return Math.abs(rv.value * 100 - cv.value) <= 0.05;
+                }
+                if (!cv.hasPercent && cv.value > 0 && cv.value < 0.1 && rv.hasPercent && rv.value >= 1 && rv.value < 10) {
+                    return Math.abs(rv.value / 100 - cv.value) <= 0.002;
+                }
+                if (!rv.hasPercent && rv.value > 0 && rv.value < 0.1 && cv.hasPercent && cv.value >= 1 && cv.value < 10) {
+                    return Math.abs(cv.value / 100 - rv.value) <= 0.002;
                 }
                 return false;
             });

@@ -1169,7 +1169,17 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
         const priorTables = require('../analysis-contract.js').extractMarkdownTables(prefix).length
             + [...prefix.matchAll(/\[\[TABLE_\d+\]\]/g)].length;
         if (priorTables + 1 !== binding.tableIndex) {
-            throw new Error(`读者文章 tableBindings[${targetIndex}] ${marker} 与实际正文表格顺序不一致`);
+            const { TABLE_BINDING_ORDER_ISSUE_CODE } = require('./reader-draft-order');
+            const { TABLE_BINDING_ORDER_ERROR_CODE } = require('./reader-repair');
+            const message = `读者文章 tableBindings[${targetIndex}] ${marker} 与实际正文表格顺序不一致`;
+            const error = new Error(message);
+            error.code = TABLE_BINDING_ORDER_ERROR_CODE;
+            error.readerIssues = [{
+                path: `/tableBindings/${targetIndex}`,
+                code: TABLE_BINDING_ORDER_ISSUE_CODE,
+                message
+            }];
+            throw error;
         }
         let rendered;
         try {

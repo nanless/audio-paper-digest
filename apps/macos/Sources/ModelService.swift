@@ -281,7 +281,20 @@ import Darwin
             pending["status"]="interrupted"; pending["error"]="请求已中断，实际消费可能发生；不会自动重发"; pending["endedAt"]=ISO8601DateFormatter().string(from:Date())
             try store.appendSession(pending); throw DesktopError.message(pending["error"] as! String)
         }
-        guard output.count <= 20*1024*1024,let result=try JSONSerialization.jsonObject(with:output) as? [String:Any] else { throw DesktopError.message("模型运行组件返回无效数据，原费用记录已保留") }
+        let parsedResult: [String: Any]?
+        if output.count <= maxWorkerOutputBytes {
+            parsedResult = (try? JSONSerialization.jsonObject(with: output)) as? [String: Any]
+        } else {
+            parsedResult = nil
+        }
+        guard let result = parsedResult else {
+            let errorMessage = "模型运行组件返回无效数据，原费用记录已保留"
+            pending["status"] = "failed"
+            pending["error"] = errorMessage
+            pending["endedAt"] = ISO8601DateFormatter().string(from: Date())
+            try store.appendSession(pending)
+            throw DesktopError.message(errorMessage)
+        }
         pending["endedAt"]=ISO8601DateFormatter().string(from:Date()); pending["status"]=(result["okay"] as? Bool==true) ? "complete":"failed"
         pending["response"]=result["text"] ?? ""; pending["text"]=result["text"] ?? ""; pending["usage"]=result["usage"] ?? NSNull(); pending["charge"]="amount_unknown"
         pending["actualModel"]=result["model"] ?? NSNull(); pending["protocol"]=result["protocol"] ?? "unknown"

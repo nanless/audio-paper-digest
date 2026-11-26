@@ -192,7 +192,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 - `npm run source:probe -- --date YYYY-MM-DD`：只读探测 arXiv Atom/官方 OAI/RSS 三入口，并判断 RSS 公告是否目标日；失败时给出等待/换入口/官方 OAI 的建议，不抓取、不写数据。
 - `npm run llm:accounts`：只读查看账号池每个账号的状态、冷却与最早恢复；账号只显示本次运行的序号，不显示任何密钥或稳定指纹。
-- `npm run config:check`：按 `scripts/lib/env-schema.js` 检查 `.env` 必填、类型、范围与未登记变量；不写文件、不回显密钥，参数只有 `--json`、`--env PATH` 和 `--help`，不联网，也没有 `--offline` 开关（传了会按未知参数退出 2；`--offline` 是 `doctor` 的参数）。大小写 HTTP 代理变量均逐项校验，`ALL_PROXY` 仍允许 curl 使用 SOCKS；整数须在 JavaScript 安全整数范围内。检查失败标明具体配置项，不代表每条运行路由都会选择该项，也不改变运行时的代理选择或整数解析规则。schema 之外的 `PD_*`（例如 `PD_GIT_ARCHIVE_TIMEOUT_SECONDS`、`PD_CHECKPOINT_TIMING`）由各自实现读取和校验，`config:check` 与 `doctor` 不对它们做类型或范围检查。
+- `npm run config:check`：按 `scripts/lib/env-schema.js` 检查 `.env` 必填、类型、范围与未登记变量；不写文件、不回显密钥，参数只有 `--json`、`--env PATH` 和 `--help`，不联网，也没有 `--offline` 开关（传了会按未知参数退出 2；`--offline` 是 `doctor` 的参数）。大小写 HTTP 代理变量均逐项校验，`ALL_PROXY` 仍允许 curl 使用 SOCKS；整数须在 JavaScript 安全整数范围内。检查失败标明具体配置项，不代表每条运行路由都会选择该项，也不改变运行时的代理选择或整数解析规则。`PD_GIT_ARCHIVE_TIMEOUT_SECONDS`、`PD_CHECKPOINT_TIMING` 等正式运行参数均已纳入 `scripts/lib/env-schema.js` 校验；仅未在 schema 中登记的实验或临时变量不由 `config:check` 与 `doctor` 做类型或范围检查。
 - `npm run doctor` 与这三条命令都只读；抓取失败时 full-fetch 会追加 `[下一步]` 的限流/5xx/RSS 建议。doctor 比较主副配置的唯一密钥值集合，重复列出同一个值不会误报为部分重叠；集合相同只描述配置关系，不能证明端点属于同一服务或账号可用。
 
 ## 恢复决策与清单生成
@@ -271,7 +271,7 @@ npm run verify
 git diff --check
 ```
 
-完整 `verify` 必须在沙箱外运行，先检查与博客部署一致的 Hugo **0.160.1**，再检查全仓 JS/Python/shell 语法、运行一次 `npm test`（含三流程与旧记录兼容 JS）、两处 Python 单测和只读 `validate:data`。验证计划里没有任何客户端构建或测试步骤；客户端版本一致性由 `npm test` 内的 `docs-consistency` 检查，Android 与 macOS 客户端测试分别由独立作业 `client-android`、`client-macos` 覆盖，见下文完整覆盖与并行范围。任何步骤失败都非零退出。Hugo 资源管线样例必须真正构建，缺少 Hugo 不能算完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等依赖、运行数据和 Git 记录目录，不跟随符号链接；Python 字节码写入独立临时目录。
+完整 `verify` 必须在沙箱外运行，先检查与博客部署一致的 Hugo **0.160.1**（`--suite static` 与 `--quick` 跳过 Hugo 检查），再检查全仓 JS/Python/shell 语法、运行一次 `npm test`（含三流程与旧记录兼容 JS）、三组 Python 单测（`tests/python`、`manual/tests/python` 与顶层 `tests/reader_pdf_*_test.py`）、`docs:check` 文档一致性检查和只读 `validate:data`。验证计划里没有任何客户端构建或测试步骤；客户端版本一致性由 `docs-consistency` 检查，Android 与 macOS 客户端测试分别由独立作业 `client-android`、`client-macos` 覆盖，见下文完整覆盖与并行范围。任何步骤失败都非零退出。Hugo 资源管线样例必须真正构建，缺少 Hugo 不能算完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等依赖、运行数据和 Git 记录目录，不跟随符号链接；Python 字节码写入独立临时目录。
 
 只有 CI 或无数据的干净检出仓库才显式使用 `npm run verify -- --allow-empty`。普通维护默认复验已有数据。`npm run verify -- --quick` 仅检查语法和数据，不运行单测或 Hugo，不能代替完整验收。定向调试可单独运行 `test:default`、`test:compat` 或选定测试；完整验证通过后无须重复这些子集。
 
@@ -287,7 +287,7 @@ gh workflow run ci.yml --ref main
 
 ### 完整覆盖与并行范围
 
-CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。主 `verify` 矩阵统一覆盖 Node `20.x`、`22.x`、`24.x` 各四个 `verify --suite javascript --shard I/4 --allow-empty`（Node 24 分片自动附加 `NODE_OPTIONS=--test-reporter=tap`）；Python 测试（`tests/python`、`manual/tests/python` 与 `tests/reader_pdf_steering_profile_test.py` 三步）及 `--suite static` 各在 Node 22 运行一次，且 `static` 分片跳过 Playwright Chromium 与 Noto CJK 安装以节省耗时。共十四个验证分片，加三个 `test (node-version)` 汇总检查。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22、Python 3.11 与 Android SDK，安装根与 `apps/macos` 依赖（含 `katex`）后，运行全部 11 份非设备合约/发行 Python 测试、`apps/android/AssetsChannel.test.mjs` 与 `./gradlew :app:testDebugUnitTest :app:lintDebug --no-daemon`。macOS 客户端测试由独立作业 `client-macos` 单列：固定 `macos-15-intel`（避开托管 arm64 容量排队，正式 `arm64` 发行包仍按[Mac 版构建与发行](mac-app-release.md)在本机生成），配置 Node 22 与 Python 3.11 后运行 `VERIFY_PROJECT_DISABLE_FILE_LOGS=1 bash apps/macos/test.sh`。两个客户端作业都不并入 `test` 汇总检查。
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装（`static` 分片跳过下载）。主 `verify` 矩阵统一覆盖 Node `20.x`、`22.x`、`24.x` 各四个 `verify --suite javascript --shard I/4 --allow-empty`（Node 24 分片自动附加 `NODE_OPTIONS=--test-reporter=tap`）；Python 测试（`tests/python`、`manual/tests/python` 与 `tests/reader_pdf_*_test.py` 三步）及 `--suite static`（含语法、`docs-consistency` 与只读数据校验）各在 Node 22 运行一次，且 `static` 分片跳过 Playwright Chromium、Noto CJK 与 Hugo 安装以节省耗时。共十四个验证分片，加三个 `test (node-version)` 汇总检查。Android 客户端测试由独立作业 `client-android` 单列：配置 Java 17、Node 22、Python 3.11 与 Android SDK，安装根与 `apps/macos` 依赖（含 `katex`）后，运行全部 11 份非设备合约/发行 Python 测试、`apps/android/AssetsChannel.test.mjs` 与 `./gradlew :app:testDebugUnitTest :app:lintDebug --no-daemon`。macOS 客户端测试由独立作业 `client-macos` 单列：固定 `macos-15-intel`（避开托管 arm64 容量排队，正式 `arm64` 发行包仍按[Mac 版构建与发行](mac-app-release.md)在本机生成），配置 Node 22 与 Python 3.11 后运行 `VERIFY_PROJECT_DISABLE_FILE_LOGS=1 bash apps/macos/test.sh`。两个客户端作业都不并入 `test` 汇总检查。
 
 JavaScript 文件集从权威 `npm test` 命令推导，由 Node 原生分片且片内仍串行；全部 JavaScript、Python、语法、数据和真实 Hugo 要求保留。全部验证任务成功后，`test (20.x)`、`test (22.x)`、`test (24.x)` 才报告完整通过；分支保护应把三者都设为必需；缺片、失败或取消都不能冒充通过。每片保存日志。同分支被后续验收替代的旧纯 CI 可取消，此规则不用于 Pages 发布。本地默认 `verify` 仍完整串行，本地入口仅检查已安装版本，不自动下载或升级。
 

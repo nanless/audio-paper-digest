@@ -132,18 +132,22 @@ function isVerifiedReaderFactPreRequestSeed(paper, sourceText, reviewFeedback) {
     const plan = daily.requireDailyFreshSourceRecoveryPlan(active.data, { papers: active.data.papers });
     facts.validateFeedback(feedback, plan, paper);
     validateState(active.parent, paper, current.readerBound.proof);
+    const { listUsageLedgerFiles } = require('./llm-usage-ledger');
     const directory = require('../config').FILES.llmUsageDir;
     const records = [];
-    for (const name of fs.readdirSync(directory).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
-        const event = read(path.join(directory, name));
+    for (const entry of listUsageLedgerFiles(directory)) {
+        const event = read(entry.file);
         if (paperKey(event.paperId) === paperKey(feedback.paperId) && event.runId === feedback.runId
-            && ['apiReaderArticle', 'apiReaderRepair'].includes(event.stage)) records.push({ name, event });
+            && ['apiReaderArticle', 'apiReaderRepair'].includes(event.stage)) records.push({ ...entry, event });
     }
     const events = records.map(record => record.event);
     const paid = validateUsage(events, active.parent, current.readerBound.proof);
     const paidRecord = records.find(record => record.event === paid);
-    if (!paidRecord || !active.before.originalFeeFiles[paidRecord.name]
-        || sha(fs.readFileSync(path.join(directory, paidRecord.name))) !== active.before.originalFeeFiles[paidRecord.name])
+    const expectedPaidSha = paidRecord
+        ? (active.before.originalFeeFiles[paidRecord.relativePath] ?? active.before.originalFeeFiles[paidRecord.name])
+        : null;
+    if (!paidRecord || !expectedPaidSha
+        || sha(fs.readFileSync(paidRecord.file)) !== expectedPaidSha)
         fail('last paid witness was not already archived before the failed configuration');
     active.claim = feedback.rejectedReaderClaims[0];
     const seed = require('../deep-analyzer').prepareApiReaderRevisionSeed(active.parent, sourceText, reviewFeedback);

@@ -153,7 +153,7 @@ async function readBoundedResponseText(response, maxBytes = MAX_PAGE_BYTES) {
 
 async function fetchPage(url, options = {}) {
     const fetchImpl = options.fetchImpl || globalThis.fetch;
-    const isDefaultFetch = !options.fetchImpl;
+    const isDefaultFetch = !options.fetchImpl || options.fetchImpl === globalThis.fetch;
     const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 20000;
     const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : MAX_PAGE_BYTES;
     const signal = options.signal
@@ -259,10 +259,13 @@ async function verify(date, options = {}) {
                 const slug = path.basename(page.url.replace(/\/$/, ''));
                 const isSummary = /^\d{4}-\d{2}-\d{2}$/.test(slug);
                 const dateInTitle = fetched.title ? fetched.title.includes(date) : false;
+                const topicSummaryTitle = /(?:专题|论文深度解读)/.test(String(fetched.title || ''));
                 const corruptedTitle = titleHasCorruptionArtifacts(fetched.title);
                 const titleOk = fetched.status === 200 && titleMatches(fetched.title, marker)
                     && !corruptedTitle
-                    && (isSummary ? dateInTitle : String(fetched.title || '').replace(marker, '').trim().length > 4);
+                    && (isSummary
+                        ? (dateInTitle || topicSummaryTitle)
+                        : String(fetched.title || '').replace(marker, '').trim().length > 4);
                 results[idx] = { ...page, ...fetched, titleOk, redirectOk, ok: titleOk && redirectOk };
             } catch (error) {
                 results[idx] = { ...page, status: null, title: null, titleOk: false, ok: false, error: error.message };
@@ -879,6 +882,9 @@ async function runVerifyWebCli(argv = [], deps = {}) {
 
     let deploy = null;
     try {
+        // 先校验生成清单存在，避免 --wait 长时间轮询后才因缺少清单失败。
+        const manifestFile = path.join(currentDir, `blog-generation-manifest-${options.date}.json`);
+        if (!fs.existsSync(manifestFile)) throw new Error(`找不到生成清单：${manifestFile}`);
         if (options.deploy) {
             if (options.wait) {
                 const waited = await waitForDeploy(options.deploy, {
@@ -995,6 +1001,17 @@ async function runVerifyWebCli(argv = [], deps = {}) {
             }
         }
         const partialFailed = summary.partial && !options.allowPartial;
+        if (!options.json && partialFailed) {
+            const reasons = [];
+            if (!receiptPath) reasons.push('缺少审查凭证');
+            if (!deployOk) reasons.push('缺少或未通过 Pages 部署核验');
+            if (!workflowOk) reasons.push('workflow 源核验未通过');
+            if (options.limit && summary.checked < summary.expected) {
+                reasons.push(`仅抽检 ${summary.checked}/${summary.expected} 页`);
+            }
+            const detail = reasons.length > 0 ? reasons.join('、') : '未满足完整验收条件';
+            print(`[verify-web] 仅完成部分验收（${detail}），返回退出码 1；如仅为抽查请传 --allow-partial`);
+        }
         return summary.failed > 0 || deployExitCode(deploy, options) !== 0 || partialFailed ? 1 : 0;
     } catch (error) {
         printError(`[verify-web] ${error.message}`);

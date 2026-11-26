@@ -272,10 +272,11 @@ function vmLogical(identity) {
         || ['readerRecoveryEpochSha256','readerJsonRequestPolicy','promptSha256','repairPromptSha256'].includes(key)));
 }
 function vmFeeFiles(records) {
+    const { isUsageLedgerFile, resolveUsageLedgerFile } = require('./llm-usage-ledger');
     const root = path.resolve(require('../config').FILES.llmUsageDir);
     return records.map(record => {
-        const file = relocatePathWithinRoot(record.file, root) || path.resolve(record.file);
-        vmNeed(path.dirname(file) === root && VM_FILE.test(path.basename(file)), 'fee path is not the normal ledger');
+        const file = resolveUsageLedgerFile(root, record?.file);
+        vmNeed(Boolean(file && isUsageLedgerFile(file, root)), 'fee path is not the normal ledger');
         const read = vmRead(file, record.sha256);
         return { file, sha256: read.sha256, event: read.value };
     });

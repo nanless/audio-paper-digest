@@ -319,6 +319,7 @@ class SafeHttp private constructor(
             "isca-archive.org", "www.isca-archive.org",
             "openreview.net", "proceedings.mlr.press",
             "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org",
+            "zenodo.org",
         )
 
         internal val PODCAST_RELEASE_HOSTS = setOf(

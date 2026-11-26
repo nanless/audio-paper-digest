@@ -286,3 +286,92 @@ describe('Wave 12 Track 12.3: Audio pedagogy reinforcement in prompts', () => {
         assert.ok(dynIdx / readerPrompt.length >= 0.90, `KV static prefix ratio dipped: ${(dynIdx / readerPrompt.length).toFixed(3)}`);
     });
 });
+
+describe('PC-P1-5 + PC-P2-1: Typography masking, SMOS/CMOS/DMOS, extended v5 units & scoped explicitScoreUnit', () => {
+    it('masks fenced code, inline backticks, LaTeX math, and URLs in findNumericTypographyDefects while preserving prose indices', () => {
+        const clean = [
+            '参考实现见 https://github.com/audio-lab/codec2026年，详情见代码：',
+            '```python',
+            '层数=3层',
+            'x = "共10个样本"',
+            '```',
+            '行内代码 `共12个` 与公式 \\(T=1\\)、$K=4$、$$L=8$$ 和 \\[N=16\\] 不应触发排版告警。'
+        ].join('\n');
+        assert.deepEqual(editorial.findNumericTypographyDefects(clean), []);
+
+        const withProseDefect = clean + '\n实际模型包含3层解码器。';
+        const findings = editorial.findNumericTypographyDefects(withProseDefect);
+        assert.ok(findings.length >= 1, `Expected real prose defect after masked regions, got: ${JSON.stringify(findings)}`);
+        const first = findings[0];
+        assert.equal(withProseDefect.slice(first.index, first.index + first.match.length), first.match);
+        assert.equal(first.line, withProseDefect.split('\n').length);
+    });
+
+    it('includes SMOS/CMOS/DMOS in AUDIO_METRIC_WHITELIST and v5 audio score masking, plus GiB/MiB/KiB/TB/Gbps/bps/FPS/RTFx/dB/Hz/kHz/MHz/s/秒', () => {
+        for (const metric of ['SMOS', 'CMOS', 'DMOS']) {
+            assert.ok(editorial.AUDIO_METRIC_WHITELIST.includes(metric), `Missing ${metric}`);
+        }
+        const validV5 = [
+            '虽然 WER 下降，但 SMOS 从 3.65 提升到 4.18，CMOS 提升到 +0.42，DMOS 为 4.05。',
+            '准确率提升的同时，显存占用为 16 GiB、缓存为 512 MiB 与 64 KiB、语料容量 2 TB，吞吐达 10 Gbps、码率 128 bps、帧率 30 FPS、速度 25 RTFx。',
+            '在 -5 dB 噪声、16 kHz 与 48000 Hz 及 2.4 MHz 条件下，推理耗时 1.8 s（即 1.8 秒），错误率显著下降。',
+            '该鼻音滤波器引入一对零点以降低 EER。'
+        ];
+        for (const s of validV5) {
+            assert.deepEqual(
+                editorial.findMissingComparisonUnits(s, { editorialProfile: format.STRUCTURED_V5 }),
+                [],
+                `Should pass on STRUCTURED_V5: ${s}`
+            );
+        }
+        // Negative: negated SMOS/CMOS attribution or bare WER alongside SMOS MUST still fail
+        assert.equal(
+            editorial.findMissingComparisonUnits('这里变化不是 SMOS 提升到 4.18，而是 WER 降至 4.2。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            1
+        );
+        assert.equal(
+            editorial.findMissingComparisonUnits('尽管 CMOS 提升到 +0.42，但 WER 从 12.4 降至 8.3。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            1
+        );
+    });
+
+    it('scopes explicitScoreUnit to the matched delta span (catches condition % + bare WER delta, keeps unit-bound deltas valid)', () => {
+        const mustCatchBoth = [
+            '在 100% 干净语音条件下，WER 从 12.4 降至 8.3。',
+            '在 100% 干净语音下 WER 从 12.4 降至 8.3。',
+            '在 100% 干净语音条件下，WER 降低至 8.3。',
+            '测试集 A 上准确率从 70% 提升到 80%，但测试集 B 上 WER 从 12.4 降至 8.3。'
+        ];
+        for (const s of mustCatchBoth) {
+            assert.equal(
+                editorial.findMissingComparisonUnits(s, { editorialProfile: format.STRUCTURED_V5 }).length,
+                1,
+                `Expected v5 to catch bare delta despite unrelated %: ${s}`
+            );
+            assert.equal(
+                editorial.findMissingComparisonUnits(s).length,
+                1,
+                `Expected default profile to catch bare delta despite unrelated %: ${s}`
+            );
+        }
+        assert.equal(
+            editorial.findMissingComparisonUnits('在 100% 干净语音条件下，WER 降至 8.3。', { editorialProfile: format.STRUCTURED_V5 }).length,
+            1
+        );
+
+        const mustPass = [
+            '在 100% 干净语音条件下，WER 从 12.4% 降至 8.3%。',
+            '在 100% 干净语音条件下，WER 降至 8.3%。',
+            '在 100% 干净语音条件下，WER 从 0.124 降至 0.083。',
+            '模型在 24 核 CPU 上将准确率提升了 3.2 个百分点。',
+            '在 100% 干净语音条件下，WER 显著下降。'
+        ];
+        for (const s of mustPass) {
+            assert.deepEqual(
+                editorial.findMissingComparisonUnits(s, { editorialProfile: format.STRUCTURED_V5 }),
+                [],
+                `Should pass with unit-bound or ratio-scale delta: ${s}`
+            );
+        }
+    });
+});

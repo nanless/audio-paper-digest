@@ -20,10 +20,15 @@ function convert(seed) {
             body: view.slice(headings[index].index + headings[index][0].length,
                 headings[index + 1]?.index ?? view.length).trim() };
     });
-    return { version: 3, readerTitle: plan.readerTitle, oneSentenceThesis: plan.oneSentenceThesis,
+    const draftHeader = plan && (Object.hasOwn(plan, 'contract') || Object.hasOwn(plan, 'version'))
+        ? require('./reader-record-format').draftHeaderForSavedPlan(plan)
+        : { version: 3 };
+    return { ...draftHeader, readerTitle: plan.readerTitle, oneSentenceThesis: plan.oneSentenceThesis,
         sections, conceptBridges: structuredClone(plan.conceptBridges),
         figurePlacements: plan.figurePlacements.map(placement => Object.fromEntries(
-            ['figureOrdinal', 'targetKind', 'marker', 'focusPoints']
+            ['figureOrdinal', 'targetKind', 'marker', 'focusPoints',
+                ...(placement && Object.hasOwn(placement, 'chineseCaption') && placement.chineseCaption !== undefined
+                    ? ['chineseCaption'] : [])]
                 .map(key => [key, structuredClone(placement[key])]))),
         tableBindings: plan.tableBindings.map(binding => ({ tableIndex: binding.tableIndex,
             sourceType: binding.sourceType, sourceTableOrdinal: binding.sourceTableOrdinal,
@@ -38,7 +43,9 @@ function convert(seed) {
                 ['renderedRow', 'renderedColumn', 'sourceRow', 'sourceColumn']
                     .map(key => [key, cell[key]]))) })),
         formulaBindings: (plan.formulaBindings || []).map(binding => ({
-            formulaOrdinal: binding.formulaOrdinal, targetKind: binding.targetKind, marker: binding.marker })) };
+            formulaOrdinal: binding.formulaOrdinal, targetKind: binding.targetKind, marker: binding.marker })),
+        ...(plan && Object.hasOwn(plan, 'implementationSpecs') && plan.implementationSpecs !== undefined
+            ? { implementationSpecs: structuredClone(plan.implementationSpecs) } : {}) };
 }
 const DISPLAY_CONTRACT = 'signed-reader-minimal-draft-display-v1';
 function minimalDisplay(seed) {

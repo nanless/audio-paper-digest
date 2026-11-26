@@ -515,3 +515,47 @@ test('SSRF/路径穿越拒绝与标题大括号/转义污染拦截', async () =>
         false
     );
 });
+
+test('缺清单时先于 --wait 快速失败；会议专题汇总标题放行；partialFailed 非 JSON 模式下输出诊断', async t => {
+    const dir = tempDir(t);
+    let spawnCalls = 0;
+    const errors = [];
+    const code = await verifyWeb.runVerifyWebCli(
+        ['--date', DATE, '--deploy', OID, '--wait', '--wait-seconds', '5'],
+        {
+            currentDir: dir,
+            env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
+            spawnSync: () => { spawnCalls += 1; return { status: 0, stdout: '[]' }; },
+            print: () => {},
+            printError: line => errors.push(line)
+        }
+    );
+    assert.strictEqual(code, 2);
+    assert.strictEqual(spawnCalls, 0, '缺生成清单不应先等待部署轮询');
+    assert.match(errors.join('\n'), /找不到生成清单/);
+
+    writeManifest(dir, DATE, [`${DATE}`]);
+    const topicRes = await verifyWeb.verify(DATE, {
+        currentDir: dir,
+        noWrite: true,
+        env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
+        fetchImpl: async () => ({
+            status: 200,
+            url: `https://example.com/posts/${DATE}/`,
+            text: async () => '<title>ICASSP 2026 语音专题论文深度解读 | 语音/音乐/音频论文速递</title>'
+        })
+    });
+    assert.strictEqual(topicRes.ok, 1);
+    assert.strictEqual(topicRes.results[0].titleOk, true);
+
+    const out = [];
+    const partialCode = await verifyWeb.runVerifyWebCli(['--date', DATE], {
+        currentDir: dir,
+        env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
+        fetchImpl: async () => ({ status: 200, url: `https://example.com/posts/${DATE}/`, text: async () => `<title>语音/音乐/音频论文速递 ${DATE}</title>` }),
+        print: line => out.push(line),
+        printError: () => {}
+    });
+    assert.strictEqual(partialCode, 1);
+    assert.match(out.join('\n'), /不完整|partial|--deploy/);
+});

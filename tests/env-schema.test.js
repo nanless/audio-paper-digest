@@ -252,3 +252,38 @@ test('大小写代理为空白或引号内空白时不能通过必需代理检�
         );
     }
 });
+
+test('播客分组、thinking mode、温度上限与历史审查并发与运行时 schema 对齐', () => {
+    const base = {
+        PAPER_ANALYZER_API_KEY: 'fixture',
+        PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor',
+        PAPER_ANALYZER_ENDPOINT: 'https://example.com/v1',
+        HTTPS_PROXY: 'http://127.0.0.1:7897'
+    };
+    const ok = schema.validateEntries({
+        ...base,
+        PD_PODCAST_RELEASE_TAG_GROUPING: 'monthly',
+        PD_API_READER_THINKING_MODE: 'disabled',
+        PD_SCORING_AUDIT_TEMPERATURE: '1',
+        PD_HISTORY_REVIEW_CONCURRENCY: '16',
+        PD_ARXIV_HEALTHY_COOLDOWN_MS: '0'
+    });
+    assert.strictEqual(ok.items.some(item => item.ok === 'fail'), false);
+
+    const bad = schema.validateEntries({
+        ...base,
+        PD_PODCAST_RELEASE_TAG_GROUPING: 'single',
+        PD_API_READER_THINKING_MODE: 'auto',
+        PD_SCORING_AUDIT_TEMPERATURE: '1.5',
+        PD_HISTORY_REVIEW_CONCURRENCY: '17'
+    });
+    const failedNames = bad.items.filter(item => item.ok === 'fail').map(item => item.name);
+    for (const name of [
+        'PD_PODCAST_RELEASE_TAG_GROUPING',
+        'PD_API_READER_THINKING_MODE',
+        'PD_SCORING_AUDIT_TEMPERATURE',
+        'PD_HISTORY_REVIEW_CONCURRENCY'
+    ]) {
+        assert.ok(failedNames.includes(name), `${name} should fail validation`);
+    }
+});

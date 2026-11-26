@@ -174,6 +174,23 @@ def parse_machine_summary(analysis):
                         '低': '低', 'low': '低', '较低': '低', 'l': '低',
                     }
                     val = confidence_map.get(val.lower(), val)
+            if mapped == 'sotaClaim':
+                sota_map = {
+                    '是': '是', 'yes': '是', 'y': '是', '有': '是',
+                    '否': '否', 'no': '否', 'n': '否', '无': '否',
+                    '未说明': '未说明', 'unknown': '未说明', 'unclear': '未说明',
+                }
+                val = sota_map.get(val.lower(), val)
+            if mapped in ('hasCode', 'hasModel', 'hasDataset'):
+                yes_no_map = {
+                    '是': '是', 'yes': '是', 'y': '是', '有': '是',
+                    '否': '否', 'no': '否', 'n': '否', '无': '否',
+                    '未说明': '未说明', 'unknown': '未说明',
+                }
+                val = yes_no_map.get(val.lower(), val)
+            if mapped in ('primaryTaskTag', 'primaryMethodTag'):
+                if val and not val.startswith('#'):
+                    val = '#' + val
             result[mapped] = val
 
     return result

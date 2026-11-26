@@ -169,7 +169,13 @@ def atomic_write_bytes(path, content, *, mode=None, dir_mode=None):
     else:
         # 只影响新建目录，已存在的目录不动。
         target.parent.mkdir(parents=True, exist_ok=True, mode=dir_mode)
-    existing_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
+    existing_mode = None
+    try:
+        existing_stat = target.lstat()
+        if stat.S_ISREG(existing_stat.st_mode):
+            existing_mode = stat.S_IMODE(existing_stat.st_mode)
+    except FileNotFoundError:
+        existing_mode = None
     final_mode = mode if mode is not None else existing_mode
     raw = bytes(content) if isinstance(content, (bytearray, memoryview)) else content
     temp_path = None
@@ -184,8 +190,10 @@ def atomic_write_bytes(path, content, *, mode=None, dir_mode=None):
             temp_path = Path(handle.name)
             handle.write(raw)
             handle.flush()
+            if final_mode is not None and hasattr(os, "fchmod"):
+                os.fchmod(handle.fileno(), final_mode)
             os.fsync(handle.fileno())
-        if final_mode is not None:
+        if final_mode is not None and not hasattr(os, "fchmod"):
             os.chmod(temp_path, final_mode)
         os.replace(temp_path, target)
         temp_path = None
@@ -197,7 +205,7 @@ def atomic_write_bytes(path, content, *, mode=None, dir_mode=None):
                 os.close(directory_fd)
         except OSError as exc:
             # 只兼容明确不支持目录同步的文件系统；真实 I/O 或权限错误须上报。
-            if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}:
+            if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM, errno.EACCES, errno.EBADF}:
                 raise
     finally:
         if temp_path is not None:

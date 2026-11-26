@@ -199,6 +199,8 @@ internal class CloudSyncCoordinator(
             require(!personal.settings().optBoolean("offlineMode")) { "离线模式已开启" }
             var workspaceFailed = false
             var personalFailed = false
+            var workspaceError: Exception? = null
+            var personalError: Exception? = null
             val full = if (command == "cloud.syncWorkspace") try {
                 cloud.syncFull(
                     workspaceEpoch,
@@ -228,8 +230,9 @@ internal class CloudSyncCoordinator(
                 )
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 workspaceFailed = true
+                workspaceError = error
                 null
             } else null
 
@@ -272,10 +275,23 @@ internal class CloudSyncCoordinator(
             } catch (error: Exception) {
                 if (command != "cloud.syncWorkspace") throw error
                 personalFailed = true
+                personalError = error
                 JSONObject()
                     .put("favorites", personal.snapshot().getJSONArray("favorites").length())
                     .put("conflicts", 0)
                     .put("noteConflicts", JSONArray(noteConflictsSnapshot().map { it.json() }))
+            }
+            if (workspaceFailed && personalFailed) {
+                val detail = listOfNotNull(
+                    workspaceError?.message?.takeIf { it.isNotBlank() }?.let { "研究资料：$it" },
+                    personalError?.message?.takeIf { it.isNotBlank() }?.let { "个人资料：$it" },
+                ).joinToString("；")
+                val failureMessage = if (detail.isNotEmpty()) {
+                    "WebDAV 同步未完成，原资料已保留（$detail）"
+                } else {
+                    "WebDAV 同步未完成，原资料已保留"
+                }
+                throw AppFailure("cloud", failureMessage)
             }
             result.put("workspaceSynced", full != null).put("personalSynced", !personalFailed)
 
@@ -285,11 +301,24 @@ internal class CloudSyncCoordinator(
                     .put("snapshots", full.getInt("snapshots"))
                     .put("artifactConflicts", artifactConflicts)
             }
+            val partial = workspaceFailed xor personalFailed
             val summary = when {
-                workspaceFailed && personalFailed -> "WebDAV 同步未完成，原资料已保留"
                 workspaceFailed -> "收藏和笔记已同步，研究资料待重试"
                 personalFailed -> "研究资料已同步，收藏和笔记待重试"
                 else -> "WebDAV 同步完成"
+            }
+            if (partial) {
+                result.put("partial", true).put("summary", summary)
+                val failedMessage = (workspaceError ?: personalError)?.message?.takeIf { it.isNotBlank() }
+                if (workspaceError != null) {
+                    result.put("workspaceError", workspaceError.message ?: "研究资料同步未完成")
+                }
+                if (personalError != null) {
+                    result.put("personalError", personalError.message ?: "个人资料同步未完成")
+                }
+                if (failedMessage != null) {
+                    result.put("error", failedMessage)
+                }
             }
             onNotice(
                 "$summary · 收藏 ${result.getInt("favorites")} 篇" +

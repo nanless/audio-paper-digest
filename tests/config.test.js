@@ -417,4 +417,16 @@ describe('config', () => {
             );
         });
     });
+
+    it('PD_ARXIV_* 退避与冷却变量接受 0（与 env-schema min: 0 对齐）', () => {
+        withProjectEnv([
+            'PD_ARXIV_FETCH_RETRY_BASE_DELAY_MS=0',
+            'PD_ARXIV_HEALTHY_COOLDOWN_MS=0',
+            'PD_ARXIV_COOLDOWN_JITTER_MS=0'
+        ].join('\n'), (Config) => {
+            assert.strictEqual(Config.ARXIV_CONFIG.fetchRetryBaseDelayMs, 0);
+            assert.strictEqual(Config.ARXIV_CONFIG.hostHealthyCooldownMs, 0);
+            assert.strictEqual(Config.ARXIV_CONFIG.hostCooldownJitterMs, 0);
+        });
+    });
 });

@@ -423,6 +423,38 @@ private actor PodcastFixtureTransport {
             try PodcastPlayerService.streamVerifyAudioFile(at: symMP3, expectedBytes: mp3A.count, expectedSHA256: PodcastPlayerService.sha256Hex(mp3A))
         }
 
+        // CL-P1-6: re-published episode with same ID and new SHA-256 must NOT be marked cached
+        let repubTransport = PodcastFixtureTransport()
+        let repubDir = root.appendingPathComponent("RepublishedSHA", isDirectory: true)
+        let repubService = try PodcastPlayerService(
+            cacheDirectory: repubDir,
+            siteBaseURL: base,
+            feedTransport: { url, limit in try await repubTransport.fetchFeed(url, limit) },
+            audioTransport: { url, limit in try await repubTransport.fetchAudio(url, limit) },
+            enableMediaCenter: false
+        )
+        let mp3V1 = makeMP3Data(seed: 55, size: 320)
+        let mp3V2 = makeMP3Data(seed: 88, size: 320)
+        let repubURL = "https://github.com/nanless/audio-paper-digest-blog/releases/download/v1.5/repub.mp3"
+        await repubTransport.setFeed(status: 200, data: try makeFeedJSON(episodes: [
+            episodeDict(id: "ep-repub", date: "2026-11-25", title: "Repub V1", audioUrl: repubURL, data: mp3V1)
+        ]))
+        await repubTransport.setAudio(repubURL, status: 200, data: mp3V1)
+        _ = try await repubService.fetchFeed(forceRefresh: true)
+        _ = try await repubService.downloadEpisode(id: "ep-repub")
+        let stateV1 = await repubService.stateSnapshot()
+        try check((stateV1["cachedEpisodeIds"] as? [String]) == ["ep-repub"], "V1 episode is marked cached after download")
+        try check(((stateV1["episodes"] as? [[String: Any]])?.first?["cached"] as? Bool) == true, "V1 serialized episode has cached=true")
+
+        // Feed re-publishes ep-repub with new audio bytes & SHA-256
+        await repubTransport.setFeed(status: 200, data: try makeFeedJSON(episodes: [
+            episodeDict(id: "ep-repub", date: "2026-11-25", title: "Repub V2", audioUrl: repubURL, data: mp3V2)
+        ]))
+        let stateV2 = try await repubService.fetchFeed(forceRefresh: true)
+        try check(((stateV2["cachedEpisodeIds"] as? [String]) ?? []).isEmpty, "re-published episode with new sha256 must NOT appear in cachedEpisodeIds")
+        try check(((stateV2["episodes"] as? [[String: Any]])?.first?["cached"] as? Bool) == false, "re-published episode with new sha256 must serialize cached=false")
+        await repubService.shutdown()
+
         print("PodcastPlayerServiceTests: ALL CHECKS PASSED")
     }
 }

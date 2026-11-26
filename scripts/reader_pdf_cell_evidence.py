@@ -1,12 +1,16 @@
 """依照封存 PDF 原字形与表格位置逐格核验数值双写，不修改原来源。"""
 from pathlib import Path
-import json,hashlib,re,sys,copy,os,stat
+import json,hashlib,re,sys,copy,os,stat,threading
 try:
     import fitz
 except ImportError as error:
     raise RuntimeError('PDF逐格确认缺少PyMuPDF，不能接受未重放的确认记录') from error
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from conference_extractor import load_pypdf_backend
+try:
+    from pdf_author_extract import PYMUPDF_LOCK
+except ImportError:
+    PYMUPDF_LOCK = threading.RLock()
 
 def sha(b): return hashlib.sha256(b).hexdigest()
 def norm(s): return re.sub(r'\s+',' ',s).strip()
@@ -756,8 +760,8 @@ def derive(request):
     tables=[t for t in actual.get('tables',[]) if supported(t)]
     if not tables:return []
     pdf_bytes=contents['source.pdf'];need(pdf_bytes.startswith(b'%PDF-'),'封存PDF头非法')
-    backend=load_pypdf_backend();audit=backend.extract_visual_audit(pdf_bytes);doc=fitz.open(stream=pdf_bytes,filetype='pdf')
-    try:
+    backend=load_pypdf_backend();audit=backend.extract_visual_audit(pdf_bytes)
+    with PYMUPDF_LOCK, fitz.open(stream=pdf_bytes,filetype='pdf') as doc:
         result=[]
         for table in tables:
             item=proof(pdf_bytes,table,audit,doc)
@@ -767,7 +771,6 @@ def derive(request):
                 'ruleSha256':sha(Path(__file__).read_bytes()),'extractorSha256':sha((Path(__file__).parent/'conference_extractor.py').read_bytes()),'originalTablePayloadSha256':stable(table),
                 'sourceTableOrdinal':table['ordinal'],'backendImplementationSha256':backend_sha})
             result.append(item)
-    finally:doc.close()
     for name,digest in files.items():read_stable(root/name,digest)
     need(backend_files()==backend_record,'PDF提取后端清单或字节在重放期间变化')
     return result

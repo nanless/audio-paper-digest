@@ -613,16 +613,16 @@ function readVerifiedSavedReaderImageLimit(handle,selectedCount) {
     return recovery.imageCount;
 }
 function usageHistoryRows(loaded,until) {
+    const { listUsageLedgerFiles } = require('./llm-usage-ledger');
     const root=require('../config').FILES.llmUsageDir,since=Date.parse(loaded.run.createdAt),events=[];
     check(Number.isFinite(since)&&Number.isFinite(Date.parse(until)),'saved usage history interval');
-    for(const name of fs.readdirSync(root)) {
-        if(!/^[a-f0-9-]{36}\.json$/u.test(name))continue;
-        let value;try{value=JSON.parse(fs.readFileSync(path.join(root,name),'utf8'));}catch{continue;}
+    for(const entry of listUsageLedgerFiles(root)) {
+        let value;try{value=JSON.parse(fs.readFileSync(entry.file,'utf8'));}catch{continue;}
         if(value.paperId!==loaded.run.paperId||value.stage!=='apiReaderArticle')continue;
         check(Number.isFinite(Date.parse(value.at)),'saved usage history has malformed timestamp');
         if(Date.parse(value.at)<since||Date.parse(value.at)>Date.parse(until))continue;
-        const row=read(path.join(root,name));check(same(row.value,value),'saved usage history changed during read');
-        events.push({name,...row});
+        const row=read(entry.file);check(same(row.value,value),'saved usage history changed during read');
+        events.push({name:entry.relativePath,...row});
     }
     return events.sort((a,b)=>a.name.localeCompare(b.name));
 }
@@ -645,16 +645,16 @@ function assertSavedSingleSourceImage(loaded,paper,native) {
     check(bytes.length===f.assetBytes&&sha(bytes)===f.assetSha256,'saved one-image actual sealed PNG changed');
 }
 function savedReaderUsageProof(loaded,native,stage,wholeHistory=false) {
+    const { listUsageLedgerFiles } = require('./llm-usage-ledger');
     const root=require('../config').FILES.llmUsageDir,events=[];
     const since=Date.parse(loaded.run.createdAt),until=Date.parse(stage.refreshedAt);
     check(Number.isFinite(since)&&Number.isFinite(until)&&until>=since,'saved Reader issue interval');
-    for(const name of fs.readdirSync(root)) {
-        if(!/^[a-f0-9-]{36}\.json$/u.test(name))continue;
-        let value;try{value=JSON.parse(fs.readFileSync(path.join(root,name),'utf8'));}catch{continue;}
+    for(const entry of listUsageLedgerFiles(root)) {
+        let value;try{value=JSON.parse(fs.readFileSync(entry.file,'utf8'));}catch{continue;}
         if(value.paperId!==loaded.run.paperId||value.stage!=='apiReaderArticle'
             ||Date.parse(value.at)<since||Date.parse(value.at)>until)continue;
-        const record=read(path.join(root,name));check(same(record.value,value),'usage changed during read');
-        events.push({name,...record});
+        const record=read(entry.file);check(same(record.value,value),'usage changed during read');
+        events.push({name:entry.relativePath,...record});
     }
     const requests=events.filter(({value:v})=>v.kind==='request'&&v.inputSha256===native.inputSha256);
     check(requests.length===1,'saved Reader needs unique actual request for native input');
@@ -750,7 +750,12 @@ function archiveSavedMaintenanceReaderCompletion(loaded,handle) {
     const saved=savedCompletionHandles.get(handle);check(saved&&saved.loaded.directory===loaded.directory
         &&saved.proof.originalPartialAnalysisFileSha256===loaded.analysisFileSha256,'opaque saved completion handle required');
     for(const file of saved.beforeFiles)check(read(path.join(loaded.directory,file.name)).sha256===file.sha256,'saved completion original CAS changed');
-    for(const row of saved.proof.usage.records)check(read(path.join(require('../config').FILES.llmUsageDir,row.name)).sha256===row.sha256,'saved completion usage changed');
+    const { resolveUsageLedgerFile } = require('./llm-usage-ledger');
+    const usageRoot = require('../config').FILES.llmUsageDir;
+    for(const row of saved.proof.usage.records){
+        const usageFile=resolveUsageLedgerFile(usageRoot,row.name);
+        check(usageFile&&read(usageFile).sha256===row.sha256,'saved completion usage changed');
+    }
     const directory=path.join(loaded.directory,'saved-reader-stage-recovery',loaded.analysisFileSha256);
     const immutable=(file,bytes)=>{if(fs.existsSync(file))check(same(read(file).bytes,bytes),'immutable saved completion archive differs');else adapter().writeBytesAtomic(file,bytes);};
     for(const record of saved.beforeFiles)immutable(path.join(directory,record.name),record.bytes);
@@ -798,7 +803,9 @@ function assertSavedMaintenanceReaderRecovery(loaded,paper) {
         if(resourceCount)assertSavedBoundSourceImages(loaded,paper,receipt.nativeRequest,resourceCount);
         else assertSavedSingleSourceImage(loaded,paper,receipt.nativeRequest);
     }
-    const feeRows=receipt.usage.records.map(row=>{const record=read(path.join(require('../config').FILES.llmUsageDir,row.name));check(record.sha256===row.sha256,'saved completion live usage SHA');return record.value;});
+    const { resolveUsageLedgerFile } = require('./llm-usage-ledger');
+    const usageRoot = require('../config').FILES.llmUsageDir;
+    const feeRows=receipt.usage.records.map(row=>{const usageFile=resolveUsageLedgerFile(usageRoot,row.name);check(usageFile,'saved completion live usage missing');const record=read(usageFile);check(record.sha256===row.sha256,'saved completion live usage SHA');return record.value;});
     check(feeRows.length===3&&feeRows[0].kind==='request_started'&&feeRows[1].kind==='request'&&feeRows[2].kind==='disposition'
         &&feeRows.every(v=>v.paperId===loaded.run.paperId&&v.stage==='apiReaderArticle'&&v.contentAttempt===1&&v.runId===null&&v.unitId===null)
         &&feeRows[0].eventId===feeRows[1].eventId&&feeRows[0].inputSha256===receipt.nativeRequest.inputSha256
@@ -1668,21 +1675,43 @@ function inspectUnissuedScoringPreRequestRecovery(loaded) {
     require('../deep-analyzer').replayVerifiedReaderResourceIdentity(preflight.value,loaded.source.sourceDetails.text);
     check(unissuedResourceMode(loaded.parent.analysis.papers[0],preflight.value)==='scoring-and-reader',
         'pre-request scoring recovery lost its normal fixed scoring mode');
+    const { SHARD_DIR_RE } = require('./llm-usage-ledger');
     const since=Date.parse(originalRun.value.createdAt),usageDirectory=require('../config').FILES.llmUsageDir;
-    const targetRows=[],names=fs.readdirSync(usageDirectory).sort();
-    const historicalTemporaryUsageRecords=names.filter(name=>name.endsWith('.tmp'))
-        .map(name=>readHistoricalPreRequestUsageTemporary(path.join(usageDirectory,name),since));
-    const assertHistoricalTemporaries=currentNames=>{
-        check(same(currentNames.filter(name=>name.endsWith('.tmp')).sort(),
-            historicalTemporaryUsageRecords.map(row=>path.basename(row.file)).sort()),
+    const collectUsageEntries=root=>{
+        const rootStat=fs.lstatSync(root);
+        check(rootStat.isDirectory()&&!rootStat.isSymbolicLink(),'pre-request scoring usage directory is unsafe');
+        const jsonEntries=[],tmpFiles=[];
+        for(const name of fs.readdirSync(root).sort()) {
+            const full=path.join(root,name);
+            if(SHARD_DIR_RE.test(name)) {
+                const shardStat=fs.lstatSync(full);
+                check(shardStat.isDirectory()&&!shardStat.isSymbolicLink(),'pre-request scoring usage shard directory is unsafe');
+                for(const subName of fs.readdirSync(full).sort()) {
+                    const subFull=path.join(full,subName);
+                    if(subName.endsWith('.tmp')) tmpFiles.push({rel:`${name}/${subName}`,file:subFull});
+                    else if(subName.endsWith('.json')) jsonEntries.push({rel:`${name}/${subName}`,name:subName,file:subFull});
+                }
+                continue;
+            }
+            if(name.endsWith('.tmp')) tmpFiles.push({rel:name,file:full});
+            else if(name.endsWith('.json')) jsonEntries.push({rel:name,name,file:full});
+        }
+        return {jsonEntries,tmpFiles};
+    };
+    const targetRows=[],initialEntries=collectUsageEntries(usageDirectory);
+    const historicalTemporaryUsageRows=initialEntries.tmpFiles
+        .map(item=>({rel:item.rel,record:readHistoricalPreRequestUsageTemporary(item.file,since)}));
+    const historicalTemporaryUsageRecords=historicalTemporaryUsageRows.map(row=>row.record);
+    const assertHistoricalTemporaries=currentTmpFiles=>{
+        check(same(currentTmpFiles.map(item=>item.rel).sort(),
+            historicalTemporaryUsageRows.map(row=>row.rel).sort()),
             'pre-request scoring usage temporary set changed during observation');
-        for(const row of historicalTemporaryUsageRecords)
-            check(same(readHistoricalPreRequestUsageTemporary(row.file,since),row),
+        for(const row of historicalTemporaryUsageRows)
+            check(same(readHistoricalPreRequestUsageTemporary(row.record.file,since),row.record),
                 'pre-request scoring historical temporary changed during observation');
     };
-    const inspectUsageName=name=>{
+    const inspectUsageEntry=({name,file})=>{
         if(!name.endsWith('.json')||!UUID.test(name.slice(0,-5))){check(!name.endsWith('.json'),'pre-request scoring usage has unknown record name');return;}
-        const file=path.join(usageDirectory,name);
         // Only metadata is archived here. Atomic usage writers keep incomplete
         // temporary files out of this fixed *.json namespace.
         const record=read(file),value=record.value;
@@ -1702,9 +1731,9 @@ function inspectUnissuedScoringPreRequestRecovery(loaded) {
             'pre-request scoring recovery cannot reopen any actual scoring request or disposition');
         targetRows.push({file,sha256:record.sha256});
     };
-    for(const name of names)inspectUsageName(name);
+    for(const entry of initialEntries.jsonEntries)inspectUsageEntry(entry);
     for(const row of targetRows)check(read(row.file).sha256===row.sha256,'pre-request scoring usage changed');
-    assertHistoricalTemporaries(fs.readdirSync(usageDirectory));
+    assertHistoricalTemporaries(collectUsageEntries(usageDirectory).tmpFiles);
     const after=adapter().loadConferenceReaderRevisionIdentity({analysisRoot:batch.analysisRoot,executionId:loaded.run.executionId});
     check(after.analysisFileSha256===current.analysisFileSha256&&after.runFileSha256===current.runFileSha256
         &&after.sourceFileSha256===current.sourceFileSha256&&same(after.revision,current.revision)
@@ -1717,12 +1746,13 @@ function inspectUnissuedScoringPreRequestRecovery(loaded) {
         'pre-request scoring recovery intent/preflight changed during observation');
     for(const pin of fixedCurrentFiles)check(read(pin.file).sha256===pin.sha256,
         'pre-request scoring source/revision/seed changed during observation');
-    const finalNames=fs.readdirSync(usageDirectory);
-    assertHistoricalTemporaries(finalNames);
-    const originalNames=new Set(names);for(const name of finalNames)if(!originalNames.has(name))inspectUsageName(name);
+    const finalEntries=collectUsageEntries(usageDirectory);
+    assertHistoricalTemporaries(finalEntries.tmpFiles);
+    const originalRels=new Set(initialEntries.jsonEntries.map(entry=>entry.rel));
+    for(const entry of finalEntries.jsonEntries)if(!originalRels.has(entry.rel))inspectUsageEntry(entry);
     for(const row of targetRows)check(read(row.file).sha256===row.sha256,'pre-request scoring usage changed at final fence');
     assertCurrentBatch(batch);
-    assertHistoricalTemporaries(fs.readdirSync(usageDirectory));
+    assertHistoricalTemporaries(collectUsageEntries(usageDirectory).tmpFiles);
     // Selection only. The adapter repeats this under its actual paper lock;
     // the normal scoring path consumes the next original outer attempt.
     return {...codec.recordHeader('conference-unissued-scoring-pre-request-readmission','conference-unissued-scoring-pre-request-readmission'),

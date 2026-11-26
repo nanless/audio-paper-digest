@@ -530,10 +530,35 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes, options = {}
         '毫秒': 'ms', '秒': 's', '小时': 'h', '赫兹': 'hz',
         '千赫兹': 'khz', '兆赫兹': 'mhz', '分贝': 'db', '百分比': '%'
     };
+    const headerUnitPattern = '%|db|ms|khz|mhz|ghz|hz|gib|mib|kib|gb|mb|kb|tb|kbps|mbps|pp|s|h';
+    const headerUnitRegex = new RegExp(
+        `^(.*?)(?:\\(\\s*(${headerUnitPattern})\\s*\\)|\\[\\s*(${headerUnitPattern})\\s*\\]|\\s+(${headerUnitPattern}))$`,
+        'i'
+    );
+    const findExplicitExtraUnitsForValue = (rawText, numericValueStr) => {
+        const cleaned = surface(rawText).replace(/[\u2212\uFF0D]/g, '-');
+        const units = new Set();
+        const matcher = /(?<![a-z0-9_.])([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(gib|mib|kib|mb|kb|tb|ghz|kbps|mbps|h)(?![a-z0-9_])/gi;
+        for (const m of cleaned.matchAll(matcher)) {
+            if (normalizeReaderNumericToken(m[1]) === numericValueStr) {
+                units.add(m[2].toLowerCase());
+            }
+        }
+        return units;
+    };
+    const quoteCoversExplicitExtraUnit = (quote, numericValueStr, targetUnit) => {
+        const target = String(targetUnit || '').toLowerCase();
+        return String(quote || '').normalize('NFKC')
+            .split(/(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)|[,，]/).some(clause => {
+                const text = surface(clause).replace(/[\u2212\uFF0D]/g, '-');
+                if (/\b(?:not|no|never|unavailable|unknown|missing)\b|未报告|未提供|不可得|未知|没有|并非|不是|未达到|不等于|不超过/.test(text)) return false;
+                return findExplicitExtraUnitsForValue(text, numericValueStr).has(target);
+            });
+    };
     const failures = [];
     for (let column = 0; column < (table?.header || []).length; column++) {
         const header = surface(table.header[column]);
-        let match = header.match(/^(.*?)(?:\(\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\)|\[\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\]|\s+(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp))$/i);
+        let match = header.match(headerUnitRegex);
         let mappedZhUnit = null;
         if (!match) {
             // 仅对含 ASCII 指标名的表头放行括号内中文 SI 单位（如 "Latency (毫秒)"），
@@ -559,11 +584,22 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes, options = {}
             ? new RegExp(`(?<![a-z0-9_])${escapeRe(surface(match[1]))}\\s*[(\\[]\\s*${escapeRe(unit)}\\s*[)\\]]`, 'i')
             : null;
         for (let row = 0; row < (table.rows || []).length; row++) {
-            const tokens = readerNumericTokens(table.rows[row]?.[column]);
+            const rawCell = table.rows[row]?.[column];
+            const tokens = readerNumericTokens(rawCell);
             for (const token of tokens) {
                 const number = token.match(/^([-+]?\d+(?:\.\d+)?)([a-z%]*)$/i);
                 if (!number) continue;
-                const unitConsistent = !number[2] || number[2].toLowerCase() === unit;
+                const explicitExtraCellUnits = !number[2]
+                    ? findExplicitExtraUnitsForValue(rawCell, number[1])
+                    : new Set();
+                const unitConsistent = number[2]
+                    ? number[2].toLowerCase() === unit
+                    : (explicitExtraCellUnits.size === 0 || explicitExtraCellUnits.has(unit));
+                // 单元格显式携带未纳入全局分词器的单位（如 MB/KB/h/GiB/MiB/KiB/TB/GHz/kbps/Mbps）时，
+                // 不改全局 readerNumericTokens 集合，只在引文存在同值同单位正例证据时按显式单位放行。
+                const coveredByExplicitCellUnit = !number[2]
+                    && explicitExtraCellUnits.has(unit)
+                    && quotes.some(quote => quoteCoversExplicitExtraUnit(quote, number[1], unit));
                 // 已显式写单位的单元格继续由既有数字引文规则核验；这里不改变其 PDF 拆单位兼容。
                 // 裸值只认可同句中指标单位声明后的第一个数值，不能跨句借另一方法或指标的单位；
                 // 若表头为 ASCII 指标 + 括号中文 SI 单位（如 AvLS (毫秒)），则同时认可同一逐字原表引文中
@@ -572,7 +608,7 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes, options = {}
                     const qSurf = surface(quote);
                     return zhAsciiHeaderUnitRe.test(qSurf) && readerNumericTokens(qSurf).includes(token);
                 }));
-                const covered = unitConsistent && (Boolean(number[2]) || coveredByZhTableHeader || quotes.some(quote => readerAdjacentMetricUnitEvidence(quote, surface(match[1]), number[1], unit)) || (metric && quotes.some(quote => (
+                const covered = unitConsistent && (Boolean(number[2]) || coveredByExplicitCellUnit || coveredByZhTableHeader || quotes.some(quote => readerAdjacentMetricUnitEvidence(quote, surface(match[1]), number[1], unit)) || (metric && quotes.some(quote => (
                     String(quote).normalize('NFKC').split(/(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)/).some(sentence => {
                         const text = surface(sentence);
                         return [...text.matchAll(declaredUnit)].some(declared => {

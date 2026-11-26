@@ -120,15 +120,23 @@ function buildVerificationPlan(options, files) {
             ] });
         }
         if (suite === 'all' || suite === 'python') {
-            plan.push({ group: 'Python 测试：tests/reader_pdf_steering_profile_test.py', command: 'bash', args: [
-                'scripts/python-runtime.sh', '-m', 'unittest', 'tests/reader_pdf_steering_profile_test.py'
+            plan.push({ group: 'Python 测试：tests/reader_pdf_*_test.py', command: 'bash', args: [
+                'scripts/python-runtime.sh', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'reader_pdf_*_test.py'
             ] });
         }
     }
-    if (staticChecks) plan.push({ group: '只读数据校验', command: process.execPath, args: [
-        'scripts/validate-data-files.js', ...(options.allowEmpty ? ['--allow-empty'] : [])
-    ], env: { VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' } });
+    if (staticChecks) {
+        plan.push({ group: '文档一致性检查', command: process.execPath, args: ['scripts/docs-consistency.js'] });
+        plan.push({ group: '只读数据校验', command: process.execPath, args: [
+            'scripts/validate-data-files.js', ...(options.allowEmpty ? ['--allow-empty'] : [])
+        ], env: { VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' } });
+    }
     return plan;
+}
+
+function requiresPinnedHugo(options = {}) {
+    const suite = options.suite || 'all';
+    return !options.quick && suite !== 'static';
 }
 
 function executeCommand(step, options = {}) {
@@ -242,13 +250,14 @@ async function main(args = process.argv.slice(2)) {
         ? '[verify] 快速检查（非完整验收）：仅检查 JavaScript、Python、Shell 语法与数据；不运行单元测试和 Hugo。'
         : partial ? `[verify] 分套件验证（非完整验收）：${options.suite}${options.shard ? ' ' + options.shard : ''}；须汇总同一提交和环境的所有分片。`
             : '[verify] 完整验证：固定版本 Hugo、全部语法、三流程及旧记录兼容的 JavaScript/Python 测试、只读数据校验。');
-    if (!options.quick) console.log(`[verify] ${assertPinnedHugo()}`);
+    const needHugo = requiresPinnedHugo(options);
+    if (needHugo) console.log(`[verify] ${assertPinnedHugo()}`);
     const files = collectSourceFiles();
     const plan = buildVerificationPlan(options, files);
     const cacheDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-verify-pycache-'));
     try {
         const env = { ...process.env, PYTHONPYCACHEPREFIX: cacheDirectory,
-            ...(!options.quick ? { REQUIRE_HUGO_INTEGRATION_TESTS: '1' } : {}) };
+            ...(needHugo ? { REQUIRE_HUGO_INTEGRATION_TESTS: '1' } : {}) };
         let index = 0;
         let previousGroup = null;
         while (index < plan.length) {
@@ -279,4 +288,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { HUGO_VERSION, parseOptions, collectSourceFiles, buildVerificationPlan, executeCommand, executeSyntaxStepsParallel, assertPinnedHugo, javascriptShardArguments };
+module.exports = { HUGO_VERSION, parseOptions, collectSourceFiles, buildVerificationPlan, requiresPinnedHugo, executeCommand, executeSyntaxStepsParallel, assertPinnedHugo, javascriptShardArguments };

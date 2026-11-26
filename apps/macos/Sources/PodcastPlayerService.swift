@@ -49,6 +49,46 @@ private final class PodcastTransferCancellation: @unchecked Sendable {
     }
 }
 
+@MainActor private final class PodcastRemoteCommandRegistry {
+    private var targets: [(MPRemoteCommand, Any)] = []
+
+    func install(service: PodcastPlayerService) {
+        guard targets.isEmpty else { return }
+        let center = MPRemoteCommandCenter.shared()
+        center.playCommand.isEnabled = true
+        let playToken = center.playCommand.addTarget { [weak service] _ in
+            guard let service else { return .commandFailed }
+            Task { _ = try? await service.play(episodeId: nil) }
+            return .success
+        }
+        center.pauseCommand.isEnabled = true
+        let pauseToken = center.pauseCommand.addTarget { [weak service] _ in
+            guard let service else { return .commandFailed }
+            Task { _ = await service.pause() }
+            return .success
+        }
+        center.changePlaybackPositionCommand.isEnabled = true
+        let posToken = center.changePlaybackPositionCommand.addTarget { [weak service] event in
+            guard let service, let posEvent = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            Task { _ = try? await service.seek(seconds: posEvent.positionTime) }
+            return .success
+        }
+        targets = [
+            (center.playCommand, playToken),
+            (center.pauseCommand, pauseToken),
+            (center.changePlaybackPositionCommand, posToken)
+        ]
+    }
+
+    func removeAllAndClearNowPlaying() {
+        for (cmd, token) in targets {
+            cmd.removeTarget(token)
+        }
+        targets.removeAll()
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    }
+}
+
 /// Native daily audio podcast downloader, verified LRU cache, and AVFoundation player.
 /// Audio fetching and playback run 100% natively (never via WebView); cached MP3 files live
 /// in a backup-excluded cache directory outside Application Support / WebDAV.
@@ -181,7 +221,7 @@ actor PodcastPlayerService {
     private var activeDownloadId: UUID?
     private var onStateChange: (@Sendable ([String: Any]) -> Void)?
     private var remoteCommandsInstalled = false
-    private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
+    private var remoteRegistry: PodcastRemoteCommandRegistry?
 
     init(
         cacheDirectory: URL,
@@ -726,13 +766,14 @@ actor PodcastPlayerService {
         saveCacheIndex()
     }
 
-    func clearCache() -> [String: Any] {
+    func clearCache() async -> [String: Any] {
         playbackGeneration &+= 1
         activeDownloadTask?.cancel()
         activeDownloadTask = nil
         activeDownloadId = nil
         downloadingEpisodeId = nil
         stopPlaybackInternal()
+        await clearNowPlaying()
         if let files = try? FileManager.default.contentsOfDirectory(at: episodesDirectory, includingPropertiesForKeys: nil) {
             for file in files {
                 try? FileManager.default.removeItem(at: file)
@@ -745,12 +786,28 @@ actor PodcastPlayerService {
         return stateSnapshot()
     }
 
-    func cachedEpisodeIDs() -> Set<String> {
-        var ids = Set<String>()
+    func cachedSHAs() -> Set<String> {
+        var shas = Set<String>()
         for entry in cacheIndex.entries where Self.isValidSHA256(entry.sha256) {
             if FileManager.default.fileExists(atPath: episodeFileURL(sha256: entry.sha256).path) {
-                ids.insert(entry.episodeId)
+                shas.insert(entry.sha256)
             }
+        }
+        return shas
+    }
+
+    func cachedEpisodeIDs() -> Set<String> {
+        let validSHAs = cachedSHAs()
+        if let episodes = feed?.episodes {
+            var ids = Set<String>()
+            for ep in episodes where validSHAs.contains(ep.sha256) {
+                ids.insert(ep.id)
+            }
+            return ids
+        }
+        var ids = Set<String>()
+        for entry in cacheIndex.entries where validSHAs.contains(entry.sha256) {
+            ids.insert(entry.episodeId)
         }
         return ids
     }
@@ -783,11 +840,17 @@ actor PodcastPlayerService {
                 currentTime = clamped
             }
             existing.rate = Float(rate)
-            existing.play()
+            guard existing.play() else {
+                stopPlaybackInternal()
+                await clearNowPlaying()
+                lastError = "系统音频播放器未能恢复播放。"
+                notifyState()
+                throw PodcastError.invalid("系统音频播放器未能恢复播放。")
+            }
             isPlaying = true
             lastError = nil
             startProgressLoop()
-            updateNowPlaying(episode: episode)
+            await updateNowPlaying(episode: episode)
             notifyState()
             return stateSnapshot()
         }
@@ -796,15 +859,24 @@ actor PodcastPlayerService {
             throw CancellationError()
         }
         stopPlaybackInternal()
-        let audioPlayer = try AVAudioPlayer(contentsOf: localFile)
-        audioPlayer.enableRate = true
-        audioPlayer.rate = Float(rate)
-        audioPlayer.prepareToPlay()
-        if let seekTo = startSeconds {
-            audioPlayer.currentTime = max(0, min(seekTo, audioPlayer.duration))
-        }
-        guard audioPlayer.play() else {
-            throw PodcastError.invalid("系统音频播放器未能启动。")
+        let audioPlayer: AVAudioPlayer
+        do {
+            audioPlayer = try AVAudioPlayer(contentsOf: localFile)
+            audioPlayer.enableRate = true
+            audioPlayer.rate = Float(rate)
+            audioPlayer.prepareToPlay()
+            if let seekTo = startSeconds {
+                audioPlayer.currentTime = max(0, min(seekTo, audioPlayer.duration))
+            }
+            guard audioPlayer.play() else {
+                throw PodcastError.invalid("系统音频播放器未能启动。")
+            }
+        } catch {
+            stopPlaybackInternal()
+            await clearNowPlaying()
+            lastError = error.localizedDescription
+            notifyState()
+            throw error
         }
         self.player = audioPlayer
         self.activeEpisodeId = episode.id
@@ -812,14 +884,14 @@ actor PodcastPlayerService {
         self.currentTime = audioPlayer.currentTime
         self.isPlaying = true
         self.lastError = nil
-        installRemoteCommandsIfNeeded()
+        await installRemoteCommandsIfNeeded()
         startProgressLoop()
-        updateNowPlaying(episode: episode)
+        await updateNowPlaying(episode: episode)
         notifyState()
         return stateSnapshot()
     }
 
-    func pause() -> [String: Any] {
+    func pause() async -> [String: Any] {
         playbackGeneration &+= 1
         player?.pause()
         isPlaying = false
@@ -827,27 +899,25 @@ actor PodcastPlayerService {
         progressTask?.cancel()
         progressTask = nil
         if let id = activeEpisodeId, let ep = feed?.episodes.first(where: { $0.id == id }) {
-            updateNowPlaying(episode: ep)
+            await updateNowPlaying(episode: ep)
         }
         notifyState()
         return stateSnapshot()
     }
 
-    func stop() -> [String: Any] {
+    func stop() async -> [String: Any] {
         playbackGeneration &+= 1
         activeDownloadTask?.cancel()
         activeDownloadTask = nil
         activeDownloadId = nil
         downloadingEpisodeId = nil
         stopPlaybackInternal()
-        if enableMediaCenter {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        }
+        await clearNowPlaying()
         notifyState()
         return stateSnapshot()
     }
 
-    func seek(seconds: Double) throws -> [String: Any] {
+    func seek(seconds: Double) async throws -> [String: Any] {
         guard seconds.isFinite, seconds >= 0 else {
             throw PodcastError.invalid("跳转时间无效。")
         }
@@ -859,13 +929,13 @@ actor PodcastPlayerService {
         p.currentTime = clamped
         currentTime = clamped
         if let id = activeEpisodeId, let ep = feed?.episodes.first(where: { $0.id == id }) {
-            updateNowPlaying(episode: ep)
+            await updateNowPlaying(episode: ep)
         }
         notifyState()
         return stateSnapshot()
     }
 
-    func setRate(_ nextRate: Double) throws -> [String: Any] {
+    func setRate(_ nextRate: Double) async throws -> [String: Any] {
         guard Self.allowedRates.contains(where: { abs($0 - nextRate) < 0.001 }) else {
             throw PodcastError.invalid("播放倍速仅支持 0.75 / 1.0 / 1.25 / 1.5 / 2.0。")
         }
@@ -876,13 +946,13 @@ actor PodcastPlayerService {
             p.rate = Float(canonical)
         }
         if let id = activeEpisodeId, let ep = feed?.episodes.first(where: { $0.id == id }) {
-            updateNowPlaying(episode: ep)
+            await updateNowPlaying(episode: ep)
         }
         notifyState()
         return stateSnapshot()
     }
 
-    func shutdown() {
+    func shutdown() async {
         playbackGeneration &+= 1
         activeDownloadTask?.cancel()
         activeDownloadTask = nil
@@ -890,12 +960,13 @@ actor PodcastPlayerService {
         downloadingEpisodeId = nil
         stopPlaybackInternal()
         if enableMediaCenter {
-            for (cmd, token) in remoteCommandTargets {
-                cmd.removeTarget(token)
-            }
-            remoteCommandTargets.removeAll()
+            let registry = remoteRegistry
+            remoteRegistry = nil
             remoteCommandsInstalled = false
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            await MainActor.run {
+                registry?.removeAllAndClearNowPlaying()
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            }
         }
     }
 
@@ -921,7 +992,7 @@ actor PodcastPlayerService {
         }
     }
 
-    private func pollProgressTick() {
+    private func pollProgressTick() async {
         guard let p = player else {
             isPlaying = false
             progressTask?.cancel()
@@ -938,50 +1009,49 @@ actor PodcastPlayerService {
             }
             progressTask?.cancel()
             progressTask = nil
+            if let id = activeEpisodeId, let ep = feed?.episodes.first(where: { $0.id == id }) {
+                await updateNowPlaying(episode: ep)
+            }
         }
         notifyState()
     }
 
-    private func installRemoteCommandsIfNeeded() {
+    private func installRemoteCommandsIfNeeded() async {
         guard enableMediaCenter, !remoteCommandsInstalled else { return }
         remoteCommandsInstalled = true
-        let center = MPRemoteCommandCenter.shared()
-        center.playCommand.isEnabled = true
-        let playToken = center.playCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            Task { _ = try? await self.play(episodeId: nil) }
-            return .success
+        let registry = await MainActor.run { () -> PodcastRemoteCommandRegistry in
+            let reg = PodcastRemoteCommandRegistry()
+            reg.install(service: self)
+            return reg
         }
-        center.pauseCommand.isEnabled = true
-        let pauseToken = center.pauseCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            Task { _ = await self.pause() }
-            return .success
-        }
-        center.changePlaybackPositionCommand.isEnabled = true
-        let posToken = center.changePlaybackPositionCommand.addTarget { [weak self] event in
-            guard let self, let posEvent = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            Task { _ = try? await self.seek(seconds: posEvent.positionTime) }
-            return .success
-        }
-        remoteCommandTargets = [
-            (center.playCommand, playToken),
-            (center.pauseCommand, pauseToken),
-            (center.changePlaybackPositionCommand, posToken)
-        ]
+        self.remoteRegistry = registry
     }
 
-    private func updateNowPlaying(episode: Episode) {
+    private func clearNowPlaying() async {
         guard enableMediaCenter else { return }
-        let info: [String: Any] = [
-            MPMediaItemPropertyTitle: episode.title,
-            MPMediaItemPropertyArtist: "音频研究工作台 · 每日播客",
-            MPMediaItemPropertyAlbumTitle: episode.date,
-            MPMediaItemPropertyPlaybackDuration: duration > 0 ? duration : episode.durationSeconds,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? rate : 0.0
-        ]
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        await MainActor.run {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        }
+    }
+
+    private func updateNowPlaying(episode: Episode) async {
+        guard enableMediaCenter else { return }
+        let title = episode.title
+        let date = episode.date
+        let playbackDuration = duration > 0 ? duration : episode.durationSeconds
+        let elapsed = currentTime
+        let playbackRate = isPlaying ? rate : 0.0
+        await MainActor.run {
+            let info: [String: Any] = [
+                MPMediaItemPropertyTitle: title,
+                MPMediaItemPropertyArtist: "音频研究工作台 · 每日播客",
+                MPMediaItemPropertyAlbumTitle: date,
+                MPMediaItemPropertyPlaybackDuration: playbackDuration,
+                MPNowPlayingInfoPropertyElapsedPlaybackTime: elapsed,
+                MPNowPlayingInfoPropertyPlaybackRate: playbackRate
+            ]
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        }
     }
 
     func stateSnapshot(extra: [String: Any] = [:]) -> [String: Any] {
@@ -1006,8 +1076,8 @@ actor PodcastPlayerService {
     }
 
     private func serializedEpisodes(_ episodes: [Episode]) -> [[String: Any]] {
-        let cached = cachedEpisodeIDs()
-        return episodes.map { $0.dictionary(cached: cached.contains($0.id)) }
+        let validSHAs = cachedSHAs()
+        return episodes.map { $0.dictionary(cached: validSHAs.contains($0.sha256)) }
     }
 
     private func notifyState() {

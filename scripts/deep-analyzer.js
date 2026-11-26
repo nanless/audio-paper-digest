@@ -2279,8 +2279,12 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         if (!API_READER_KINDS.includes(section.kind)) {
             throw new Error(`读者文章 sections[${index}].kind 非法`);
         }
-        let heading = makeReaderHeadingSpecific(
-            section.kind, String(section.heading || '').trim(), value.readerTitle, proseFormatOptions
+        let heading = normalizeReaderProseFormatting(
+            makeReaderHeadingSpecific(
+                section.kind, String(section.heading || '').trim(), value.readerTitle, proseFormatOptions
+            ).trim(),
+            [],
+            proseFormatOptions
         );
         section.heading = heading;
         const genericHeadingRe = isCohesiveV4 ? GENERIC_V4_READER_HEADING_RE : GENERIC_READER_HEADING_RE;
@@ -2294,7 +2298,11 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         if (seenHeadings.has(heading)) {
             if (isCohesiveV4) throw new Error('读者文章小节标题重复');
             const suffix = `（补充判断 ${index + 1}）`;
-            heading = `${heading.slice(0, Math.max(8, 80 - suffix.length))}${suffix}`;
+            heading = normalizeReaderProseFormatting(
+                `${heading.slice(0, Math.max(8, 80 - suffix.length))}${suffix}`,
+                [],
+                proseFormatOptions
+            );
             section.heading = heading;
         }
         if (seenHeadings.has(heading)) throw new Error('读者文章小节标题重复');
@@ -2357,6 +2365,9 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         );
         const termsDiagnostic = require('./lib/reader-repair').conceptBridgeTermsDiagnostic(bridge.terms, index);
         if (termsDiagnostic) throw new Error(`读者文章 ${termsDiagnostic}`);
+        const normalizedTerms = bridge.terms.map(term => normalizeReaderProseFormatting(term.trim(), [], proseFormatOptions));
+        const normalizedTermsDiagnostic = require('./lib/reader-repair').conceptBridgeTermsDiagnostic(normalizedTerms, index);
+        if (normalizedTermsDiagnostic) throw new Error(`读者文章 ${normalizedTermsDiagnostic}`);
         if (!API_READER_KINDS.includes(bridge.sectionKind)) {
             throw new Error(`读者文章 conceptBridges[${index}].sectionKind 非法`);
         }
@@ -2392,7 +2403,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             ? options.exactSignedBridgeSurfaces[index]
             : null;
         return {
-            terms: bridge.terms.map(term => normalizeReaderProseFormatting(term.trim(), [], proseFormatOptions)),
+            terms: normalizedTerms,
             sectionKind: bridge.sectionKind,
             marker,
             explanation: exactBridgeParagraph || collapseRepeatedReaderBridgeHeadings(
@@ -3660,9 +3671,19 @@ function hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback) {
     const engine = require('./analysis-engine');
     const hasFailure = Boolean(paper?.latestAnalysisAttemptError || paper?.error
         || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed');
-    const knownPreRequestRejection = paper?.latestAnalysisAttemptError === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR
+    const stages = paper?.analysisManifest?.stages || {};
+    const allStagesIntact = Object.values(stages).every(stage =>
+        !stage || !['transient_failure', 'failed', 'contract_rejected'].includes(stage.status));
+    const preflightFactReviewRejection = paper?.latestAnalysisAttemptErrorCode === 'DAILY_FACT_REVIEW_INTEGRITY'
+        && paper?.latestAnalysisAttemptRetryable === false
+        && (!paper.error || paper.error === paper.latestAnalysisAttemptError)
+        && allStagesIntact
+        && (!paper.analysisFactReviewObligation
+            || paper.analysisFactReviewObligation.feedbackSha256 === active?.readerBound?.proof?.feedbackSha256);
+    const knownPreRequestRejection = (paper?.latestAnalysisAttemptError === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR
         && paper?.latestAnalysisAttemptErrorCode === 'CONTRACT_REJECTED'
-        && (!paper.error || paper.error === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR);
+        && (!paper.error || paper.error === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR))
+        || preflightFactReviewRejection;
     if (hasFailure && !knownPreRequestRejection
         && !require('./lib/reader-fact-pre-request-recovery').isVerifiedReaderFactPreRequestSeed(paper, sourceText, reviewFeedback)
         && !hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback)) return false;
@@ -4466,6 +4487,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         completeFigureBindingNotice
     };
     const {
+        editorialProfile,
         minimumIntegratedTables,
         mechanicalContract
     } = buildApiReaderMechanicalContract(mechanicalContractOptions);
@@ -4706,7 +4728,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         : [{ type: 'text', text: `以下是论文 PDF 的临时渲染页 ${image.ordinal}。它只在本次请求中可见，`
             + '不能在文章中生成图片链接；可用它辅助理解，但正文涉及坐标、曲线或布局时仍须有可重放的文本/表格证据。' },
             buildImageContent(image.label, image.base64, image.mime)];
-    const parseCandidate = raw => {
+    const parseCandidate = (raw, parseExtraOptions = {}) => {
         const parsed = parseApiReaderArticleResult(raw, {
         arxivId: getPaperArxivId(paper),
         availableFigureOrdinals: pixelFigureOrdinals,
@@ -4725,7 +4747,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         enforceResourceAvailabilityClaims: requiresResourceIdentity
             || options.resourceLocalRevision === true,
         structuredArtifacts: options.structuredArtifacts,
-        sourceText: options.sourceText
+        sourceText: options.sourceText,
+        ...parseExtraOptions
         });
         try {
             require('./lib/daily-fact-review').validateRepairedClaims('apiReaderArticle', parsed.article, getPaperArxivId(paper));
@@ -5464,7 +5487,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             }
             normalizeCandidate();
             if (candidate) raw = JSON.stringify(candidate);
-            const parsed = parseCandidate(raw);
+            const parsed = parseCandidate(raw, {
+                requireImplementationSpecs: require('./lib/reader-record-format').isStructuredV5(editorialProfile)
+                    && !readerCapabilityPolicy
+            });
             // 本次被接受的若是一次非序号补丁（原子操作/元数据/局部修订），它改写了
             // 草稿基线：之前付费的序号链不再派生这份正文。保留成被接替历史，结果
             // 不再携带 ordinalPatchCompilations，finalize 也就不会去挂一个无法
@@ -10138,6 +10164,7 @@ async function fetchArxivTextDetailedUncached(arxivId) {
 }
 
 async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
+    const { sharedArxivOriginGate } = require('./lib/arxiv-origin-gate.js');
     const maxRetries = 6;
     const warnings = [];
     let htmlAvailability = 'transient_failure';
@@ -10149,18 +10176,19 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
         for (const htmlId of getArxivHtmlIds(arxivId)) {
             const url = `https://arxiv.org/html/${htmlId}`;
             try {
-                const response = await fetch(url, {
+                const response = await sharedArxivOriginGate.run(() => fetch(url, {
                     headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
                     signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
                     dispatcher: getArxivFetchDispatcher()
-                });
+                }));
 
                 if (response.status === 429) {
                     shouldRetryHtml = true;
                     attemptStatuses.push(`${htmlId}:429`);
                     const baseWait = Math.min(Math.pow(2, attempt) * 8000, 120000);
+                    const gateWait = sharedArxivOriginGate.recordRateLimitResponse(response.headers, baseWait);
                     const jitter = Math.floor(Math.random() * 5000);
-                    const waitTime = baseWait + jitter;
+                    const waitTime = Math.max(baseWait, gateWait) + jitter;
                     console.log(`    [deep] fetchArxivText ${arxivId} 被限流，等待 ${(waitTime/1000).toFixed(1)}s 后重试 (${attempt}/${maxRetries})`);
                     await new Promise(resolve => setTimeout(resolve, waitTime));
                     break;
@@ -10204,6 +10232,9 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
                         htmlAttempts,
                         warnings
                     };
+                }
+                if (response.status === 403) {
+                    sharedArxivOriginGate.recordRateLimitResponse(response.headers, Math.min(attempt * 8000, 60000));
                 }
                 console.log(`    [deep] fetchArxivText ${htmlId} HTTP ${response.status}`);
                 attemptStatuses.push(`${htmlId}:${response.status}`);
@@ -10249,12 +10280,15 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
     for (const pdfId of getArxivHtmlIds(arxivId)) {
         const pdfUrl = `https://arxiv.org/pdf/${pdfId}.pdf`;
         try {
-            const pdfResponse = await fetch(pdfUrl, {
+            const pdfResponse = await sharedArxivOriginGate.run(() => fetch(pdfUrl, {
                 headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
                 signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
                 dispatcher: getArxivFetchDispatcher()
-            });
+            }));
             if (!pdfResponse.ok) {
+                if (pdfResponse.status === 429 || pdfResponse.status === 403) {
+                    sharedArxivOriginGate.recordRateLimitResponse(pdfResponse.headers, 8000);
+                }
                 console.log(`    [deep] PDF ${pdfUrl} HTTP ${pdfResponse.status}`);
                 warnings.push(`PDF ${pdfId}: HTTP ${pdfResponse.status}`);
                 if (isRetryableImageStatus(pdfResponse.status)) {
@@ -10476,12 +10510,18 @@ async function fetchArxivFigureBytesUncached(rawUrl) {
         || !parsed.pathname.startsWith('/html/')) {
         throw new Error('Historical arXiv Figure fetch requires a direct official arXiv HTML HTTPS URL');
     }
-    const response = await fetch(parsed.toString(), {
+    const { sharedArxivOriginGate } = require('./lib/arxiv-origin-gate.js');
+    const response = await sharedArxivOriginGate.run(() => fetch(parsed.toString(), {
         headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
         signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS),
         dispatcher: getArxivFetchDispatcher()
-    });
-    if (!response.ok) throw new Error(`arXiv Figure download failed: HTTP ${response.status}`);
+    }));
+    if (!response.ok) {
+        if (response.status === 429 || response.status === 403) {
+            sharedArxivOriginGate.recordRateLimitResponse(response.headers, 8000);
+        }
+        throw new Error(`arXiv Figure download failed: HTTP ${response.status}`);
+    }
     const lengthHeader = String(response.headers.get('content-length') || '').trim();
     const contentLength = /^\d+$/.test(lengthHeader) ? parseContentLength(lengthHeader) : null;
     if (contentLength !== null && IMAGE_MAX_BYTES > 0 && contentLength > IMAGE_MAX_BYTES) {
@@ -11251,6 +11291,7 @@ async function requestReaderModelWithImageIsolation({ requestModel, buildMessage
                             { type: 'text', text: '仅验证附件图像是否可被当前模型端点解码；不需要分析内容。' },
                             buildImageContent(image.label, image.base64, image.mime)
                         ] }], 32, { ...requestOptions, maxRetries: 1,
+                            reasoningStage: 'apiReaderImageProbe',
                             usageContext: { ...(requestOptions?.usageContext || {}), stage: 'apiReaderImageProbe',
                                 imageInputId: image.inputId } });
                     } catch (probeError) {
@@ -14948,18 +14989,19 @@ async function repairCoreSummarySection(
         }
         issue = getCoreSummaryDetailIssue(updated, { sourceText, summaryHeader: effectiveSummaryHeader });
         try { require('./lib/daily-fact-review').validateRepairedClaims('coreSummaryRepair', match[1], getPaperArxivId(paper)); }
-        catch (error) { issue = error.message; }
+        catch (error) { issue = [issue, error.message].filter(Boolean).join('；'); }
+        const candidateSummarySha256 = crypto.createHash('sha256').update(candidateSummary).digest('hex');
         diagnosticApi.saveCoreSummaryDisposition(diagnostic, {
             status: issue ? 'rejected' : 'validated', error: issue || null,
             outputTextSha256: crypto.createHash('sha256').update(rawResponse).digest('hex'),
-            candidateSummarySha256: crypto.createHash('sha256').update(candidateSummary).digest('hex')
+            candidateSummarySha256
         });
         if (!issue) return updated;
         console.warn(`    [deep] ⚠️  本次核心摘要局部修复仍未通过校验（${attempt}/${CORE_SUMMARY_REPAIR_MAX_ATTEMPTS}）：${issue}`);
         feedback = [issue, externalFeedback].filter(Boolean).join('\n');
     }
     const exhausted = contractRejectedError(`核心摘要局部修复失败：${feedback}`);
-    // 本阶段已经完成三次内容修复，整篇自动重试不能再从相同原稿重新付费。
+    // 本阶段已经完成全部核心摘要内容修复机会，整篇自动重试不能再从相同原稿重新付费。
     // 实际请求、响应和最后候选仍保存在原诊断记录中，原正文保持不变。
     exhausted.retryable = false;
     throw exhausted;

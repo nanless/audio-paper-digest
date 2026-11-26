@@ -417,7 +417,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
             NSWorkspace.shared.open(URL(string:"zotero://select/library/items/\(key)")!);return [:]
         case "app.findQuery":return findQuery(payload["target"] as? String ?? "当前文档")
         case "app.external":
-            guard let raw=payload["url"] as? String,let url=URL(string:raw),url.scheme=="https",url.user==nil,url.password==nil else{throw DesktopError.message("链接无效")};NSWorkspace.shared.open(url);return [:]
+            guard let raw=payload["url"] as? String,let url=URL(string:raw),url.scheme=="https",let host=url.host,!host.isEmpty,url.user==nil,url.password==nil else{throw DesktopError.message("链接无效")};NSWorkspace.shared.open(url);return [:]
         case "app.openLocal":openLocal();return [:]
         case "app.export":return try await runJob(command,payload:payload){_ in try await self.exportCurrent(payload);return ["saved":true]}
         case "app.backup":try await flushEdits();try await backupData();return ["saved":true]
@@ -611,7 +611,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
     @objc func hideApp(){NSApp.hide(nil)}
     @objc func quit(){NSApp.terminate(nil)}
     @objc func closeWindow(){NSApp.keyWindow?.performClose(nil)}
-    @objc func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"音频研究工作台",.version:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "1.0.1",.credits:AboutLicenses.credits()])}
+    @objc func about(){NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"音频研究工作台",.version:Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "未知版本",.credits:AboutLicenses.credits()])}
     @objc func helpPage(){guard mainContextMenuAvailable() else{return};emit("menu.command",["action":"help"])}
     @objc func revealData(){NSWorkspace.shared.activateFileViewerSelecting([directory])}
     @objc func openLocal(){guard mainContextMenuAvailable() else{return};Task{do{try await flushEdits();try importLocalPDF()}catch{showError(error)}}}

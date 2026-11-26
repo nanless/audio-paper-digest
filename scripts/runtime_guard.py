@@ -24,7 +24,7 @@ _DEFAULT_ROLE_CONTRACT_SPEC = {
         'python': {
             'newConferenceDaily': ['conference-extract.py', 'conference-page-render.py'],
             'daily': [
-                'full-fetch.js', 'generate-blog.py', 'review-blog.py', 'push-blog.py',
+                'generate-blog.py', 'review-blog.py', 'push-blog.py',
                 'publish-to-blog.py', 'conference-filter-evidence-extract.py', 'indextts_synth.py',
                 'conference_publication_figure_crop.py', 'conference_publication_figure_view_replay.py',
             ],

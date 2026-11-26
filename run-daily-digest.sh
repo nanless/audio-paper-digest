@@ -5,7 +5,7 @@
 # 抓取/筛选/深度分析 → 博客生成 → 审查 → 推送 → 登记本次发布不生图。
 # 用户已持续取消日更长图与封面；论文原图的来源、展示和审查照常核验。
 
-set -eu
+set -euo pipefail
 
 usage() {
   cat <<'EOF'
@@ -210,7 +210,7 @@ if [ "$start_index" -eq 1 ]; then
   fi
 fi
 
-cd "$(dirname "$0")"
+CDPATH= cd -- "$(dirname -- "$0")"
 
 run_stage() {
   local stage_index="$1" stage_name="$2" stage_started status stage_elapsed

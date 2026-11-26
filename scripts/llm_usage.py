@@ -265,8 +265,8 @@ def write_llm_usage_event(event, directory=None):
     if not stat.S_ISREG(saved_stat.st_mode) or saved_stat.st_nlink != 1 \
             or stat.S_IMODE(saved_stat.st_mode) != 0o600:
         raise OSError('用量文件保存后的类型、链接或权限不符合要求')
-    # 同步追加一份按北京日期分片的只读索引缓存（best-effort，绝不影响主账本原子写入与历史回放）。
-    if bj_date and isinstance(event, dict) and event.get('kind'):
+    # 同步追加一份按北京日期分片的只读索引缓存（仅限 request 终态事件；best-effort，绝不影响主账本原子写入与历史回放）。
+    if bj_date and isinstance(event, dict) and event.get('kind') == 'request':
         try:
             index_dir = target_dir.parent / f'{target_dir.name}-daily'
             try:
@@ -284,7 +284,7 @@ def write_llm_usage_event(event, directory=None):
                 append_fd = os.open(daily_file, append_flags, 0o600)
                 try:
                     file_stat = os.fstat(append_fd)
-                    if stat.S_ISREG(file_stat.st_mode):
+                    if stat.S_ISREG(file_stat.st_mode) and (os.name == 'nt' or file_stat.st_nlink == 1):
                         try:
                             os.fchmod(append_fd, 0o600)
                         except OSError:

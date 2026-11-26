@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Paper Digest 公共工具模块
+ * Audio Research Workbench 公共工具模块
  * 统一封装：文件操作、时间处理、数据解析、环境配置
  */
 
@@ -44,6 +44,7 @@ function writeFileAtomic(filePath, content, options = {}) {
         fs.mkdirSync(dir, { recursive: true });
     }
     const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${require('crypto').randomUUID()}.tmp`);
+    let fd;
     try {
         let previousMode;
         try {
@@ -57,14 +58,16 @@ function writeFileAtomic(filePath, content, options = {}) {
         // 这个选项保留原来「一律 0600」的约定：目标通常不存在，但残留的
         // 中间文件不该把它的权限位带进来。
         const targetMode = mode ?? previousMode ?? 0o600;
-        // 写入后对临时文件 fsync 再改名：掉电或崩溃时宁可保留旧文件，
-        // 也不能留下截断的 JSON（分析结果与论文库都是已付费数据）。
-        // 临时名由随机 UUID 生成，写入用普通路径接口以保持既有测试与调用语义一致；
-        // fsync 时用 O_NOFOLLOW 打开，避免被同目录的符号链接顶替。
-        fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: targetMode });
-        const fd = fs.openSync(tmpPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-        try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        fs.chmodSync(tmpPath, targetMode);
+        // 以 O_EXCL|O_NOFOLLOW 创建临时文件，写入后 fchmod + fsync 再原子改名：
+        // 掉电或崩溃时宁可保留旧文件，也不能留下截断的 JSON（分析结果与论文库都是已付费数据）。
+        const openFlags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
+            | (fs.constants.O_NOFOLLOW || 0);
+        fd = fs.openSync(tmpPath, openFlags, targetMode);
+        fs.writeFileSync(fd, content, 'utf8');
+        if (process.platform !== 'win32') fs.fchmodSync(fd, targetMode);
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fd = undefined;
         fs.renameSync(tmpPath, filePath);
         // 目录项落盘是尽力而为：某些网络卷/FUSE 不支持目录 fsync，
         // 此时改名已经成功，不能把一次成功的写入报成失败。
@@ -76,9 +79,10 @@ function writeFileAtomic(filePath, content, options = {}) {
             if (!['EINVAL', 'ENOTSUP', 'EPERM', 'EACCES', 'EBADF'].includes(dirSyncError.code)) throw dirSyncError;
         }
     } catch (err) {
-        if (fs.existsSync(tmpPath)) {
-            fs.unlinkSync(tmpPath);
+        if (fd !== undefined) {
+            try { fs.closeSync(fd); } catch (_) { /* 清理失败不掩盖原错误 */ }
         }
+        try { fs.unlinkSync(tmpPath); } catch (_) { /* 清理失败不掩盖原错误 */ }
         throw err;
     }
 }
@@ -422,7 +426,7 @@ function parseMachineSummary(analysis) {
             
             // 对于 rankBucket，使用扩展映射表
             if (mappedKey === 'rankBucket') {
-                val = rankMap[val] || '';
+                val = rankMap[val] || rankMap[val.toLowerCase()] || '';
             }
             
             // 对于分数类字段，提取数字部分
@@ -458,7 +462,7 @@ function parseMachineSummary(analysis) {
                 const sotaMap = {
                     '是': '是', 'yes': '是', 'y': '是', '有': '是',
                     '否': '否', 'no': '否', 'n': '否', '无': '否',
-                    '未说明': '未说明', 'unknown': '未说明', ' unclear': '未说明'
+                    '未说明': '未说明', 'unknown': '未说明', 'unclear': '未说明'
                 };
                 val = sotaMap[val.toLowerCase()] || val;
             }
@@ -733,9 +737,11 @@ const STAGE_REASONING_EFFORT_TIERS = Object.freeze({
     openSourceScan: 'minimal',
     tagSelection: 'minimal',
     apiReaderConceptTerms: 'minimal',
+    apiReaderImageProbe: 'minimal',
     repair_review_payload: 'minimal',
-    // low tier: 日更筛选与发布文本审查
+    // low tier: 日更筛选、会议筛选与发布文本审查
     dailyFilter: 'low',
+    'conference-filter': 'low',
     'publish.text': 'low',
     'publish.review_text': 'low',
     'publish.index_text': 'low',
@@ -1064,6 +1070,13 @@ function parseSseResponse(raw) {
                 const fallbackStatus = type.split('.')[1];
                 terminalFailure = event.status ? event : { ...event, status: fallbackStatus };
             }
+        } else if (type === 'error') {
+            terminalFailure = {
+                status: 'failed',
+                error: event.error && typeof event.error === 'object'
+                    ? event.error
+                    : { message: String(event.message || event.error || 'SSE error event'), code: event.code }
+            };
         }
     }
     if (terminalFailure) return terminalFailure;
@@ -1168,7 +1181,8 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                     finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: json, raw });
                 } catch (err) {
                     // 401 的纯文本响应要原样保留，交给按路由判定账号的逻辑；
-                    // 不要从解析错误推断账号失效。
+                    // 其余非 JSON 响应（含 502 等可能回显凭证的网关错误页）交由下方安全脱敏的
+                    // LLM_RESPONSE_PARSE_ERROR 拒绝，并保留不可枚举的 llmResponse 原文。
                     if (res.statusCode === 401) {
                         finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: raw, raw });
                         return;

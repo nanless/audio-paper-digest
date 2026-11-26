@@ -113,10 +113,17 @@ function normalizeReaderConceptBridgeTerms(candidate) {
 function replayPaidReaderResponse(directory, old, identity, options) {
     const allowed = ['candidateIdentitySha256', 'candidateFileSha256', 'responseFile', 'responseFileSha256',
         'usageFileName', 'usageFileSha256', 'usageEventId', 'repairDiagnosticId', 'repairRequestSha256', 'repairResponseSha256'];
+    const usageNameParts = typeof options?.usageFileName === 'string' ? options.usageFileName.split('/') : [];
+    const validUsageFileName = (usageNameParts.length === 1
+        && usageNameParts[0].endsWith('.json')
+        && UUID.test(usageNameParts[0].slice(0, -5)))
+        || (usageNameParts.length === 2
+            && /^\d{4}-\d{2}-\d{2}$/.test(usageNameParts[0])
+            && usageNameParts[1].endsWith('.json')
+            && UUID.test(usageNameParts[1].slice(0, -5)));
     if (!options || Object.keys(options).sort().join(',') !== allowed.sort().join(',')
         || !UUID.test(options.usageEventId) || !UUID.test(options.repairDiagnosticId)
-        || !UUID.test(String(options.usageFileName).replace(/\.json$/, ''))
-        || path.basename(options.usageFileName) !== options.usageFileName) fail('原响应复验参数不完整');
+        || !validUsageFileName) fail('原响应复验参数不完整');
     const fresh = require('./fresh-analysis-context');
     if (!fresh.getFreshAnalysisContext() || !require('../analysis-engine').paperAnalysisLockHeld({ arxivId: identity.paperId })
         || !isDeepStrictEqual(fresh.freshAnalysisIdentity(identity.paperId), identity.freshAnalysis))
@@ -157,9 +164,12 @@ function replayPaidReaderResponse(directory, old, identity, options) {
         || oldIdentity.draftOrderImplementationSha256 !== HISTORICAL_NORMALIZER.draftOrderFileSha256
         || identity.draftOrderImplementationSha256 !== HISTORICAL_NORMALIZER.draftOrderFileSha256)
         fail('历史术语与表格变换实现不能更换');
+    const { isUsageLedgerFile, resolveUsageLedgerFile } = require('./llm-usage-ledger');
     const usageDir = require('../config').FILES.llmUsageDir;
     require('./fresh-rewrite-run').assertSafeDirectory(usageDir);
-    const usage = readPinnedJson(path.join(usageDir, options.usageFileName), options.usageFileSha256);
+    const usageFile = resolveUsageLedgerFile(usageDir, options.usageFileName);
+    if (!usageFile || !isUsageLedgerFile(usageFile, usageDir)) fail('原付费请求用量记录不在正常用量目录');
+    const usage = readPinnedJson(usageFile, options.usageFileSha256);
     const response = readPinnedJson(options.responseFile, options.responseFileSha256);
     const body = response.value;
     if (body.status !== 'completed' || body.model !== oldIdentity.model.model || !Array.isArray(body.output))

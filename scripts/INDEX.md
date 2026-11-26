@@ -3,7 +3,7 @@
 本文件由 `node scripts/generate-scripts-index.js` 根据 `scripts/` 目录自动生成，列出全部受版本控制的 `.js` 与 `.py` 运行时文件。
 架构分工与常用入口见 [脚本指南](README.md)（[English](README.en.md)）；旧记录兼容与独立人工审查位于 `manual/scripts/`。
 
-总计：**472** 个运行时文件（顶层 Node 89 · 顶层 Python 97 · `lib/` 内部库 286）。
+总计：**473** 个运行时文件（顶层 Node 89 · 顶层 Python 97 · `lib/` 内部库 287）。
 
 ## 顶层 Node 入口与共享模块（89）
 
@@ -91,7 +91,7 @@
 | `tag-record-update.js` | 词表更新后，检查已有标签阶段记录能否继续沿用，并计算或写入更新结果。 |
 | `tag-tools.js` | Node 流程入口或共享模块 |
 | `test-api-key.js` | Node 流程入口或共享模块 |
-| `utils.js` | Paper Digest 公共工具模块 |
+| `utils.js` | Audio Research Workbench 公共工具模块 |
 | `validate-data-files.js` | Node 流程入口或共享模块 |
 | `verify-project.js` | 这个运行器有意不引入分析或发布模块，也不做网络设置。 |
 | `verify-web.js` | 发布后网页核验： |
@@ -166,7 +166,7 @@
 | `public_network_policy.py` | 公网 IP / CIDR 与代理 Fake-IP 安全策略（与 Node `lib/public-network-policy.js` 单源同构）。 |
 | `publication_activation.py` | 将旧发布状态文件归档，让新的正式分析结果能重新生成和发布；中断后可恢复。 |
 | `publication_local_replay.py` | Private, invocation-local transport evidence for read-only publication workers. |
-| `publish_common.py` | Paper Digest 发布公共模块 (Python) |
+| `publish_common.py` | Audio Research Workbench 发布公共模块 (Python) |
 | `publish_node_replay_client.py` | Thread-safe persistent Node JSON-RPC client for read-only publication replay CLIs. |
 | `publish-conference.py` | 把一个已完成的会议流程作为独立的博客增量发布出去。 |
 | `publish-to-blog.py` | Python 流程脚本或共享模块 |
@@ -201,7 +201,7 @@
 | `tag_stage_record.py` | 识别标签阶段的保存格式，返回原记录及其哈希绑定字段。 |
 | `utils.py` | Paper Digest 公共工具模块 (Python) |
 
-## 内部支撑库（`scripts/lib/`）（286）
+## 内部支撑库（`scripts/lib/`）（287）
 
 | 文件 | 职责摘要 |
 |---|---|
@@ -342,6 +342,7 @@
 | `lib/llm-pending-request.js` | 发送前仅保存经过现有隐私白名单过滤的元数据，不证明请求已被服务商接收。 |
 | `lib/llm-response-recovery.js` | Only failures in the metadata ledger use this private response archive. It is |
 | `lib/llm-usage-format.js` | 只识别账目格式。已保存的事件不改写，调用方继续核验原文件 SHA 和事件身份。 |
+| `lib/llm-usage-ledger.js` | Node 内部共享支撑模块 |
 | `lib/llm-usage-summary.js` | 只读聚合 LLM 用量事件，供状态面板和费用账本使用。 |
 | `lib/llm-usage.js` | 只记元数据。服务商返回的用量与按字符估算的值按设计分开；缓存和推理的小计都不 |
 | `lib/merge-failed-reader-bundle.js` | Node 内部共享支撑模块 |
