@@ -135,12 +135,34 @@ def plan_dry_run(module, paths, receipt):
         touched = {entry['path']}
         if entry['originalPath']:
             touched.add(entry['originalPath'])
-        if not (touched & allowed):
-            unrelated.append(entry['path'])
+        code = entry['code']
+        is_rename_or_copy = 'R' in code or 'C' in code
+        outside = sorted(touched - allowed)
+        if outside:
+            for relative in outside:
+                if relative not in unrelated:
+                    unrelated.append(relative)
+            if is_rename_or_copy:
+                label = (
+                    f"{code.strip()}:{entry['originalPath']}->{entry['path']}"
+                    if entry['originalPath']
+                    else f"{code.strip()}:{entry['path']}"
+                )
+                if label not in unrelated:
+                    unrelated.append(label)
+            continue
+        if is_rename_or_copy:
+            label = (
+                f"{code.strip()}:{entry['originalPath']}->{entry['path']}"
+                if entry['originalPath']
+                else f"{code.strip()}:{entry['path']}"
+            )
+            if label not in unrelated:
+                unrelated.append(label)
             continue
         for relative in touched:
             if relative in allowed:
-                by_path.setdefault(relative, entry['code'])
+                by_path.setdefault(relative, code)
     receipt_object = _load_receipt(receipt)
     deleted = {
         record.get('path')

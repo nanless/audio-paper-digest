@@ -17,7 +17,7 @@ def _visible_lines(text):
     """返回代码围栏以外各行的位置及内容，位置指向原字符串。"""
     offset = 0
     fence = None
-    for line in str(text or '').splitlines(keepends=True):
+    for line in re.findall(r'[^\n]*\n|[^\n]+', str(text or '')):
         body = line.rstrip('\r\n')
         marker = re.match(r'^[ \t]{0,3}(`{3,}|~{3,})(.*)$', body)
         if fence is not None:
@@ -39,7 +39,8 @@ def _analysis_headings(text):
         if match:
             title = match.group(1).strip()
             title = re.sub(r'[：:]$', '', title).strip()
-            yield start, end, title
+            if title:
+                yield start, end, title
 
 
 def find_evaluation_headings(text, *, rendered=False):
@@ -79,7 +80,7 @@ def extract_evaluation_section(text, *, rendered=False):
         if offset < start:
             continue
         boundary = re.match(r'^#{1,6}[ \t]+', line) if rendered \
-            else re.match(r'^##(?!#)[ \t]*', line)
+            else re.match(r'^##(?!#)\s*\S', line)
         if rendered and (re.match(r'^(?:📌|🔗|🏗️|📊|🔬|⚖️|🚨|📎)[ \t]*\*\*', line)
                          or re.fullmatch(r'---[ \t]*', line)):
             boundary = True

@@ -105,6 +105,7 @@ function parseCliArgs(argv = process.argv.slice(2)) {
         input: null,
         output: null,
         rounds: DEFAULT_SWISS_ROUNDS,
+        roundsExplicit: false,
         maxDelta: DEFAULT_MAX_DELTA,
         priorWeight: DEFAULT_PRIOR_WEIGHT,
         mappingMethod: 'moment_anchored',
@@ -182,9 +183,11 @@ function parseCliArgs(argv = process.argv.slice(2)) {
             options.replaySpecified = true;
         } else if (arg === '--rounds') {
             options.rounds = requireValue(arg, i);
+            options.roundsExplicit = true;
             i += 1;
         } else if (arg.startsWith('--rounds=')) {
             options.rounds = requireEqualsValue(arg, '--rounds=');
+            options.roundsExplicit = true;
         } else if (arg === '--max-delta') {
             options.maxDelta = requireValue(arg, i);
             i += 1;
@@ -788,8 +791,11 @@ async function runCalibrationCli(argv = process.argv.slice(2), deps = {}) {
         const effectiveBidirectional = options.bidirectionalExplicit
             ? options.bidirectional
             : (replayMetadata?.bidirectional ?? options.bidirectional);
+        const effectiveRounds = options.roundsExplicit
+            ? options.rounds
+            : (replayMetadata?.rounds ?? options.rounds);
         const calibrated = calibrateBatchScores(rawBatch, comparisons, {
-            rounds: replayMetadata?.rounds ?? options.rounds,
+            rounds: effectiveRounds,
             seed: options.seed || replayMetadata?.seed || seed,
             bidirectional: effectiveBidirectional,
             priorWeight: options.priorWeight,

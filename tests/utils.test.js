@@ -143,6 +143,13 @@ describe('stripMd', () => {
 
     it('去除斜体标记', () => {
         assert.strictEqual(stripMd('*hello*'), 'hello');
+        assert.strictEqual(stripMd('_hello_'), 'hello');
+        assert.strictEqual(stripMd('a _italic_ b'), 'a italic b');
+    });
+
+    it('去除行内代码反引号并保留 snake_case 标识符中的下划线', () => {
+        assert.strictEqual(stripMd('`STFT` 解耦 `top_10_percent`'), 'STFT 解耦 top_10_percent');
+        assert.strictEqual(stripMd('snake_case_identifier'), 'snake_case_identifier');
     });
 
     it('去除空值', () => {
@@ -159,8 +166,18 @@ describe('fetch 代理调度器', () => {
         );
     });
 
-    it('接受 HTTP CONNECT dispatcher', () => {
-        assert.ok(createProxyDispatcher('http://127.0.0.1:7897'));
+    it('接受 HTTP CONNECT dispatcher 并传递 60s proxyTls/requestTls 超时且不覆写 SNI', () => {
+        const dispatcher = createProxyDispatcher('http://127.0.0.1:7897');
+        assert.ok(dispatcher);
+        const symbols = Object.getOwnPropertySymbols(dispatcher);
+        const proxyTlsSym = symbols.find(s => s.description === 'proxy tls settings');
+        const requestTlsSym = symbols.find(s => s.description === 'request tls settings');
+        assert.ok(proxyTlsSym, 'ProxyAgent 应包含 proxyTls 设置');
+        assert.ok(requestTlsSym, 'ProxyAgent 应包含 requestTls 设置');
+        assert.deepStrictEqual(dispatcher[proxyTlsSym], { timeout: 60000 });
+        assert.deepStrictEqual(dispatcher[requestTlsSym], { timeout: 60000 });
+        assert.strictEqual(Object.hasOwn(dispatcher[proxyTlsSym], 'servername'), false);
+        assert.strictEqual(Object.hasOwn(dispatcher[requestTlsSym], 'servername'), false);
     });
 
     it('arXiv 前置检测忽略仅 SOCKS 的 ALL_PROXY', () => {
@@ -248,6 +265,30 @@ has_dataset: 否
         assert.strictEqual(parseMachineSummary('## 机器摘要\nconfidence: 3').confidence, '中');
         assert.strictEqual(parseMachineSummary('## 机器摘要\nconfidence: 4').confidence, '高');
         assert.strictEqual(parseMachineSummary('## 机器摘要\nconfidence: 0.7').confidence, '中');
+    });
+
+    it('大小写键名与 11 个 Python rankMap 别名保持双端一致', () => {
+        const mixed = parseMachineSummary(`## 机器摘要
+DOCUMENT_TYPE: \`方法研究\`
+Rank_Bucket: _Top-Tier_
+HAS_CODE: yes
+Primary_Task_Tag: \`语音识别\``);
+        assert.strictEqual(mixed.documentType, '方法研究');
+        assert.strictEqual(mixed.rankBucket, '前10%');
+        assert.strictEqual(mixed.hasCode, '是');
+        assert.strictEqual(mixed.primaryTaskTag, '#语音识别');
+
+        const rankPairs = [
+            ['top-tier', '前10%'], ['top', '前10%'], ['前10', '前10%'],
+            ['high', '前25%'], ['前25', '前25%'],
+            ['mid', '前50%'], ['medium', '前50%'], ['前50', '前50%'],
+            ['low', '后50%'], ['bottom', '后50%'], ['后50', '后50%'],
+            ['Top-Tier', '前10%'], ['HIGH', '前25%'], ['Medium', '前50%'], ['LOW', '后50%']
+        ];
+        for (const [rawRank, expected] of rankPairs) {
+            const parsed = parseMachineSummary(`## 机器摘要\n- **RANK_BUCKET**: ${rawRank}\n`);
+            assert.strictEqual(parsed.rankBucket, expected, `rank_bucket=${rawRank}`);
+        }
     });
 });
 
@@ -1794,5 +1835,41 @@ describe('W3 LLM infra & summary parsing regressions', () => {
         assert.strictEqual(parsed.rankBucket, '前10%');
         assert.strictEqual(parsed.hasCode, 'unclear');
         assert.strictEqual(parsed.hasModel, 'unclear');
+    });
+
+    it('parseMachineSummary 在 ### 评分依据 / ## 其他章节 / 【 处终止且历史标签分类分级推理已注册', () => {
+        const utils = require('../scripts/utils.js');
+        assert.strictEqual(utils.STAGE_REASONING_EFFORT_TIERS['historical-source-tag-classification'], 'minimal');
+        assert.strictEqual(utils.STAGE_REASONING_EFFORT_TIERS['historical-source-tag-classification-review'], 'low');
+
+        const withSubheading = [
+            '### 机器摘要',
+            'document_type: 方法研究',
+            'has_code: 否',
+            '### 评分依据',
+            'innovation: 9.9',
+            'has_code: 是'
+        ].join('\n');
+        const parsedSub = utils.parseMachineSummary(withSubheading);
+        assert.strictEqual(parsedSub.documentType, '方法研究');
+        assert.strictEqual(parsedSub.hasCode, '否');
+        assert.strictEqual(parsedSub.innovation, '');
+
+        const withBracket = [
+            '## 机器摘要',
+            'has_model: 否',
+            '【附录说明】',
+            'has_model: 是'
+        ].join('\n');
+        assert.strictEqual(utils.parseMachineSummary(withBracket).hasModel, '否');
+
+        // P3-3: test-api-key.js 不在顶层触发 setupScriptLogging，且探测请求使用 minimal 推理档位
+        const testApiKeySrc = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'test-api-key.js'), 'utf8');
+        const mainBlockStart = testApiKeySrc.indexOf('if (require.main === module)');
+        assert.ok(mainBlockStart > 0);
+        assert.ok(!testApiKeySrc.slice(0, mainBlockStart).includes('setupScriptLogging(__filename)'));
+        assert.ok(testApiKeySrc.slice(mainBlockStart).includes('requireExternalRuntime'));
+        assert.ok(testApiKeySrc.slice(mainBlockStart).includes('setupScriptLogging(__filename)'));
+        assert.match(testApiKeySrc, /reasoningStage:\s*'apiReaderConceptTerms'/);
     });
 });

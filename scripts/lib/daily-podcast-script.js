@@ -256,10 +256,15 @@ function normalizeForChineseTts(input) {
         .replace(/`<([A-Za-z0-9_/-]+)>`/g, '$1')
         .replace(STRICT_HTML_TAG_RE, ' ');
 
-    // 2. Decode basic HTML entities
+    // 2. Decode basic HTML entities (handle <=, >= and encoded arrows BEFORE standalone &lt;/&gt;)
     text = text
         .replace(/&nbsp;/gi, ' ')
         .replace(/&amp;/gi, '&')
+        .replace(/&lt;=/gi, '小于等于')
+        .replace(/&gt;=/gi, '大于等于')
+        .replace(/&lt;-&gt;/gi, '双向')
+        .replace(/-&gt;|=&gt;/gi, '到')
+        .replace(/&lt;-(?!\d)/gi, '来自')
         .replace(/&lt;/gi, '小于')
         .replace(/&gt;/gi, '大于')
         .replace(/&quot;/gi, '"')
@@ -315,8 +320,11 @@ function normalizeForChineseTts(input) {
         .replace(/(^|[\s\u4e00-\u9fff])\*([^*\n]+)\*/g, '$1$2')
         .replace(/\|/g, '，');
 
-    // 7. Convert mathematical inequalities & operators (including standalone ASCII <=, >=, <, >)
+    // 7. Convert mathematical inequalities & operators (ASCII arrows & <=/>= BEFORE standalone <, >)
     text = text
+        .replace(/<->|↔/g, '双向')
+        .replace(/->|=>/g, '到')
+        .replace(/<-(?!\d)/g, '来自')
         .replace(/<=/g, '小于等于')
         .replace(/>=/g, '大于等于')
         .replace(/</g, '小于')

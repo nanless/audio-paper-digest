@@ -334,6 +334,31 @@ class DisplayFormulaExtractionTests(unittest.TestCase):
         page, _ = publish.generate_paper_page(paper, '2026-08-31')
         self.assertIn(formula, page)
 
+    def test_display_formula_closing_requires_odd_backslash_run_and_table_projection_guards_pipes(self):
+        import blog_formula_tex_display as display
+
+        # Even backslashes before `]` (e.g. `\\]`) must NOT terminate a `\[ ... \]` display formula
+        self.assertEqual(
+            display.api_reader_display_formula_blocks(r'\[ a \\] b \]'),
+            [r'\[ a \\] b \]'],
+        )
+        # Odd backslashes before `]` (e.g. `\\\]`) DO terminate `\[ ... \]`
+        self.assertEqual(
+            display.api_reader_display_formula_blocks(r'\[ a \\\] trailing'),
+            [r'\[ a \\\]'],
+        )
+        # Missing closing pipe in table row must raise PublishDataValidationError, not IndexError
+        malformed_table = '| A | B |\n| --- | --- |\n| x \\| y\n'
+        plan = {
+            'tableBindings': [{
+                'sourceType': 'artifact_table',
+                'tableIndex': 1,
+                'cellBindings': [{'renderedRow': 1, 'renderedColumn': 1, 'sourceText': 'y'}],
+            }],
+        }
+        with self.assertRaises(display.PublishDataValidationError):
+            display.project_artifact_table_cell_tex_display(malformed_table, plan)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -177,15 +177,16 @@ function normalizeFetchedSourceWithHeader(details, arxivId, fetchedAt, header) {
         fail('官方抓取缺少表格或公式来源清单，或清单格式无效');
     }
     const { payloadSha256, ...artifactBody } = structuredArtifacts;
+    // 先按固定顺序排列 JSON 的键，再保存来源对象；同时兼容按排序键（stableFingerprint）与原始键顺序计算的 SHA。
+    const durableArtifactBody = sortJsonKeys(artifactBody);
+    const durableSha = sha256(JSON.stringify(durableArtifactBody));
     if (!/^[a-f0-9]{64}$/.test(String(payloadSha256 || ''))
-        || payloadSha256 !== sha256(JSON.stringify(artifactBody))
+        || (payloadSha256 !== durableSha && payloadSha256 !== sha256(JSON.stringify(artifactBody)))
         || structuredArtifacts.flattenedTextSha256 !== sha256(details.text)) {
         fail('官方抓取的结构化来源 SHA-256 格式无效、与内容不符，或其全文 SHA-256 与正文不一致');
     }
-    // 先按固定顺序排列 JSON 的键，再保存来源对象；后续须按相同字节重新计算 SHA。
-    const durableArtifactBody = sortJsonKeys(artifactBody);
     const durableStructuredArtifacts = { ...durableArtifactBody,
-        payloadSha256: sha256(JSON.stringify(durableArtifactBody)) };
+        payloadSha256: durableSha };
     const sourceUrl = details.source === 'html'
         ? `https://arxiv.org/html/${sourceId}` : `https://arxiv.org/pdf/${sourceId}.pdf`;
     const observationBody = { ...header, paperId: `arxiv:${arxivId}`,

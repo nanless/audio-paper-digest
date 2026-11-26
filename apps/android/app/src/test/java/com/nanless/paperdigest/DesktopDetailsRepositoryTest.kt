@@ -1888,4 +1888,92 @@ class DesktopDetailsRepositoryTest {
             assertTrue(bib.bytes.isNotEmpty())
         }
     }
+
+    @Test
+    fun `desktop details sync preserves canonical portal page aggregates from search index across cold reload`() = runBlocking {
+        withWorkspace { dir, personal ->
+            val mock = MockSite()
+            val paper = buildPaperFixture(
+                appearanceId = "posts/2026-11-26-page-preserve-2611-90001/",
+                paperId = "arxiv:2611.90001",
+                sourceVersionId = "arxiv:2611.90001v1",
+                sourceUrl = "https://arxiv.org/abs/2611.90001v1",
+                pdfUrl = "https://arxiv.org/pdf/2611.90001v1.pdf",
+            )
+            val dailyAgg = buildAggregateRow(
+                appearanceId = "posts/2026-11-26-daily/",
+                pageType = "daily",
+                title = "2026-11-26 音频研究日报",
+                blogPublishedAt = "2026-11-26",
+            )
+            publishSnapshotToMock(mock, listOf(paper), aggregateRows = listOf(dailyAgg))
+
+            // Serve client/index.json containing /about/ and /links/ (and verify /conferences/ is canonically supplemented)
+            val pageShardRows = JSONArray()
+                .put(
+                    JSONObject()
+                        .put("pageType", "page")
+                        .put("permalink", "/audio-research-portal/about/")
+                        .put("title", "About Portal")
+                        .put("titleZh", "关于本站")
+                        .put("summary", "音频研究门户与工作台说明")
+                        .put("date", "0001-01-01")
+                )
+                .put(
+                    JSONObject()
+                        .put("pageType", "page")
+                        .put("permalink", "/audio-research-portal/links/")
+                        .put("title", "Links")
+                        .put("titleZh", "友情链接")
+                        .put("summary", "音频与语音研究站点导航")
+                        .put("date", "0001-01-01")
+                )
+            val pageShardBytes = pageShardRows.toString().toByteArray(Charsets.UTF_8)
+            val pageShardSha = sha256(pageShardBytes)
+            val pageShardRel = "search-index/part-0001-${pageShardSha.take(12)}.json"
+            mock.putBytes("client/$pageShardRel", pageShardBytes)
+            val indexManifest = ClientProtocols.record("paper-search-index-manifest")
+                .put("recordCount", pageShardRows.length())
+                .put("totalBytes", pageShardBytes.size)
+                .put(
+                    "shards",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("url", pageShardRel)
+                            .put("bytes", pageShardBytes.size)
+                            .put("sha256", pageShardSha)
+                            .put("recordCount", pageShardRows.length())
+                    )
+                )
+            mock.putBytes("client/index.json", indexManifest.toString().toByteArray(Charsets.UTF_8))
+
+            val repo = CatalogRepository(null, personal) { url, limit -> mock.fetch(url, limit) }
+            repo.sync()
+
+            val catalog = requireNotNull(repo.aggregateCatalog())
+            assertEquals(1, catalog.records.count { it.kind == "daily" })
+            val pages = catalog.records.filter { it.kind == "page" }
+            assertEquals(
+                setOf(
+                    "https://nanless.github.io/audio-research-portal/about/",
+                    "https://nanless.github.io/audio-research-portal/links/",
+                    "https://nanless.github.io/audio-research-portal/conferences/",
+                ),
+                pages.map { it.sourceURL }.toSet(),
+            )
+            // Verify real metadata from client/index.json was kept for /about/ and canonical fallback added /conferences/
+            assertEquals("音频研究门户与工作台说明", pages.first { it.sourceURL.endsWith("/about/") }.summary)
+
+            // Cold reload without network preserves all 3 page aggregates and verifies originalRow witness
+            val cold = CatalogRepository(null, personal) { _, _ -> error("No network on cold reload") }
+            val coldCatalog = requireNotNull(cold.aggregateCatalog())
+            val coldPages = coldCatalog.records.filter { it.kind == "page" }
+            assertEquals(3, coldPages.size)
+            val aggStore = PublishedAggregateStore(File(dir, "PublishedLibrary"))
+            for (page in coldPages) {
+                val rawRow = aggStore.originalRow(page)
+                assertEquals(page.source.normalizedRowSHA256, PublishedAggregateReader.sha(rawRow))
+            }
+        }
+    }
 }

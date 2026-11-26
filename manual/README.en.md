@@ -16,7 +16,7 @@ What stays read-only is the historical bytes that legacy-record verification rea
 
 Retired contract prompts are no longer in the working tree. Verification retrieves their original bytes through the controlled Git index and checks the originally declared SHA; it does not re-sign old results.
 
-The working tree holds 62 files here; 40 are tracked by Git: 2 READMEs, 14 scripts, 11 JavaScript tests, 7 Python tests, 4 fixtures, and 2 test helpers. The other 22 are local ignored artifacts (21 `.pyc` files under `__pycache__` and one `.DS_Store`) and are not repository content. Count files in this directory as 40.
+This directory tracks 40 files in Git: 2 READMEs, 14 scripts, 11 JavaScript tests, 7 Python tests, 4 fixtures, and 2 test helpers. Local ignored artifacts (such as `.pyc` files under `__pycache__` or `.DS_Store`) are not repository content and are excluded when counting files here.
 
 ## How to read the retained records
 

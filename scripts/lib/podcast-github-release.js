@@ -362,7 +362,7 @@ function buildGhReleaseCommands({ repo, tag, assetPath, title, notes }) {
     if (safeAsset.includes('#') || safeAsset.includes('\0')) {
         throw new Error(`Unsafe asset path for gh release (contains # or NUL): "${safeAsset}"`);
     }
-    const safeTitle = String(title || `Audio Paper Digest Podcast ${validTag}`).replace(/[\r\n\0]+/g, ' ').trim();
+    const safeTitle = String(title || `Audio Research Workbench Podcast ${validTag}`).replace(/[\r\n\0]+/g, ' ').trim();
     const safeNotes = String(notes || `Daily Chinese audio podcast episodes for ${validTag}.`).replace(/\0/g, '').trim();
 
     return {
@@ -423,7 +423,7 @@ function publishPodcastToGitHubRelease(options = {}) {
             allowedExtensions
         });
         const releaseNotes = options.releaseNotes || (
-            `Audio Paper Digest daily Chinese podcast audio assets (${tag}).\n`
+            `Audio Research Workbench daily Chinese podcast audio assets (${tag}).\n`
             + `Latest episode: ${date} — SHA-256: ${verified.audioSha256}`
         );
         const commands = buildGhReleaseCommands({
@@ -472,7 +472,7 @@ function publishPodcastToGitHubRelease(options = {}) {
         });
 
         const releaseNotes = options.releaseNotes || (
-            `Audio Paper Digest daily Chinese podcast audio assets (${tag}).\n`
+            `Audio Research Workbench daily Chinese podcast audio assets (${tag}).\n`
             + `Latest episode: ${date} — SHA-256: ${verified.audioSha256}`
         );
         const commands = buildGhReleaseCommands({
@@ -915,9 +915,15 @@ function buildPodcastRssXml(episodes, channelConfig = {}) {
         ? validateSafeHttpsUrl(channelConfig.imageUrl, 'channelConfig.imageUrl')
         : null;
 
-    // Validate all episodes upfront before sorting or computing latestPubDate
+    // Validate all episodes upfront, deduplicate by date (preserving first occurrence), then sort newest first
     const validatedEpisodes = episodes.map(rawEp => buildPodcastEpisodeMetadata(rawEp));
-    const sortedEpisodes = [...validatedEpisodes].sort((a, b) => {
+    const byDate = new Map();
+    for (const ep of validatedEpisodes) {
+        if (!byDate.has(ep.date)) {
+            byDate.set(ep.date, ep);
+        }
+    }
+    const sortedEpisodes = [...byDate.values()].sort((a, b) => {
         const dateCmp = b.date.localeCompare(a.date, 'en');
         if (dateCmp !== 0) return dateCmp;
         return a.title.localeCompare(b.title, 'zh-Hans-CN');

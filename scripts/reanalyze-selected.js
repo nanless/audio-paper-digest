@@ -40,25 +40,44 @@ const readerRepair = require('./lib/reader-repair.js');
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
 
+const KNOWN_SELECTED_REANALYZE_OPTION_KEYS = new Set([
+    'naturalResourceProse',
+    'refreshReaderDiagnostics',
+    'coreSummaryDiagnosticIds',
+    'fullStageReanalysis',
+    'coreFeedbackFiles',
+    'coreInputRecovery',
+    'paidCoreLiteralCorrectionFiles',
+    'resolvedReaderCandidates',
+    'readerFeedbackFiles',
+    'readerInputSnapshotRecovery',
+    'feedbackFiles',
+    'originalFeedbackFiles',
+    'paidFinalAnalysisRecovery',
+    'analyzeBatch'
+]);
+
 async function reanalyzeSelected(ids, options = {}) {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) {
+        throw new Error('reanalyzeSelected 的 options 必须是对象');
+    }
+    const unknownOptionKeys = Object.keys(options).filter(key => !KNOWN_SELECTED_REANALYZE_OPTION_KEYS.has(key));
+    if (unknownOptionKeys.length > 0) {
+        throw new Error(`reanalyzeSelected 收到未知或已废弃的参数键：${unknownOptionKeys.join(', ')}`);
+    }
     console.log(`=== 重新分析 ${ids.length} 篇论文 ===\n`);
 
     if (!fs.existsSync(RESULT_FILE) && fs.existsSync(Config.FILES.deepAnalysisResultLegacy)) {
         const legacyData = readJsonFileStrict(Config.FILES.deepAnalysisResultLegacy);
-        const assertPending = () => {
-            for (const paper of (Array.isArray(legacyData) ? legacyData : legacyData?.papers || []))
+        const legacyPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(legacyData, {
+            papers: papersFromAnalysisData(legacyData), label: 'selected legacy reanalyze recovery'
+        });
+        dailyFreshSources.withDailyFreshAnalysisContext(legacyPlan, () => {
+            for (const paper of papersFromAnalysisData(legacyData))
                 if (ids.some(id => normalizedId(id) === normalizedId(paper)))
                     require('./lib/daily-scoring-refresh-checkpoint').assertNoPending(paper);
-        };
-        if (legacyData?.dailyFreshSourceRun) {
-            const legacyPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(legacyData, {
-                label: 'selected legacy reanalyze recovery'
-            });
-            dailyFreshSources.withDailyFreshAnalysisContext(legacyPlan, assertPending);
-        } else assertPending();
-        initializeJsonFileLocked(RESULT_FILE, Array.isArray(legacyData)
-            ? { timestamp: getBeijingISOString(), source: Config.FILES.deepAnalysisResultLegacy, papers: legacyData }
-            : legacyData);
+        });
+        initializeJsonFileLocked(RESULT_FILE, legacyData);
         console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${RESULT_FILE}`);
     }
 
@@ -208,6 +227,8 @@ async function reanalyzeSelected(ids, options = {}) {
     }
     if (coreFeedbacks.size && readerFeedbacks.size) throw new Error('独立核心和Reader纠错不能混用：核心 '
         + [...coreFeedbacks.keys()].join(', ') + '；Reader ' + [...readerFeedbacks.keys()].join(', '));
+    if (options.feedbackFiles !== undefined && !Array.isArray(options.feedbackFiles))
+        throw new Error('feedbackFiles 必须为反馈路径数组');
     for (const file of options.feedbackFiles || []) {
         const feedback = factReview.readFeedback(file);
         if (feedbacks.has(feedback.paperId))
@@ -336,6 +357,9 @@ async function reanalyzeSelected(ids, options = {}) {
             const current = readJsonFileStrict(RESULT_FILE);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             let latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            const lockedPlan = dailyFreshSources.requireLockedDailyFreshSourceRecoveryPlan(current, {
+                entryPlan: dailySourcePlan, paper: latest || paper, label: '锁内选定重分析恢复'
+            });
             if (!latest) return { paper, skip: false };
             const firstPreparation = !preparedIds.has(normalizedId(paper));
             preparedIds.add(normalizedId(paper));
@@ -386,13 +410,13 @@ async function reanalyzeSelected(ids, options = {}) {
                         return { paper: latest, skip: true };
                     }
                     return { paper: dailyFreshSources.prepareDailyPaper(
-                        fullStages.preparePaperLocked(latest), dailySourcePlan), skip: false };
+                        fullStages.preparePaperLocked(latest), lockedPlan), skip: false };
                 };
                 return bound ? factReview.withFactReview(bound, prepare) : prepare();
             }
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
-                    !firstPreparation || options.resolvedReaderCandidates?.[normalizedId(paper)] || options.paidFinalAnalysisRecovery?.[normalizedId(paper)] || options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) || combinedReaderFacts(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
+                    !firstPreparation || options.resolvedReaderCandidates?.[normalizedId(paper)] || options.paidFinalAnalysisRecovery?.[normalizedId(paper)] || options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) || combinedReaderFacts(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), lockedPlan
                 ),
                 skip: false
             };
@@ -497,6 +521,9 @@ async function reanalyzeSelected(ids, options = {}) {
     );
 
     const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
+        dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, {
+            entryPlan: dailySourcePlan, label: '选定重分析结束来源核验'
+        });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
         const savedAnalysisById = new Map(currentPapers.map(paper => [normalizedId(paper), paper]));
         const remainingFailed = missingIds.length
@@ -546,7 +573,9 @@ async function reanalyzeSelected(ids, options = {}) {
 function parseSelectedReanalyzeCliArgs(argv) {
     const ids = [];
     const options = {};
-    const factFeedbackFiles = [];
+    const feedbackFiles = [];
+    const readerFeedbackFiles = [];
+    const coreFeedbackFiles = [];
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if (arg === '--natural-resource-prose') {
@@ -554,22 +583,24 @@ function parseSelectedReanalyzeCliArgs(argv) {
         } else if (arg === '--fact-feedback-file') {
             const next = argv[++i];
             if (!next || next.startsWith('--')) throw new Error('--fact-feedback-file 缺少文件路径');
-            factFeedbackFiles.push(next);
+            feedbackFiles.push(next);
         } else if (arg === '--reader-fact-feedback-file') {
             const next = argv[++i];
             if (!next || next.startsWith('--')) throw new Error('--reader-fact-feedback-file 缺少文件路径');
-            options.readerFactFeedbackFiles = [...(options.readerFactFeedbackFiles || []), next];
+            readerFeedbackFiles.push(next);
         } else if (arg === '--core-summary-fact-feedback-file') {
             const next = argv[++i];
             if (!next || next.startsWith('--')) throw new Error('--core-summary-fact-feedback-file 缺少文件路径');
-            options.coreSummaryFactFeedbackFiles = [...(options.coreSummaryFactFeedbackFiles || []), next];
+            coreFeedbackFiles.push(next);
         } else if (arg.startsWith('--')) {
             throw new Error(`无法识别参数: ${arg}`);
         } else {
             ids.push(arg);
         }
     }
-    if (factFeedbackFiles.length) options.factReviewFeedbackFiles = factFeedbackFiles;
+    if (feedbackFiles.length) options.feedbackFiles = feedbackFiles;
+    if (readerFeedbackFiles.length) options.readerFeedbackFiles = readerFeedbackFiles;
+    if (coreFeedbackFiles.length) options.coreFeedbackFiles = coreFeedbackFiles;
     return { ids, options };
 }
 

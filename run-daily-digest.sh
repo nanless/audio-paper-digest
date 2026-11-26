@@ -71,6 +71,8 @@ fi
 shift
 
 start_stage="fetch"
+from_option_seen=0
+api_option_seen=0
 no_visuals_option_seen=0
 allow_empty_daily=0
 previous_day_batch=0
@@ -84,14 +86,24 @@ fi
 while [ "$#" -gt 0 ]; do
   case "${1:-}" in
     --from)
+      if [ "$from_option_seen" -eq 1 ]; then
+        echo "--from 不能重复使用" >&2
+        exit 2
+      fi
       if [ "$#" -lt 2 ]; then
         usage >&2
         exit 2
       fi
+      from_option_seen=1
       start_stage="${2:-}"
       shift 2
       ;;
     --api)
+      if [ "$api_option_seen" -eq 1 ]; then
+        echo "--api 不能重复使用" >&2
+        exit 2
+      fi
+      api_option_seen=1
       shift
       ;;
     --no-visuals)

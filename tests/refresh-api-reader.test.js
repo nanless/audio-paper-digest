@@ -1072,4 +1072,107 @@ describe('日更人工作业记录与保留序号补丁候选的刷新前置守�
         assert.equal(upstreamBrokenCalls, 1);
         assert.deepEqual(f.readCanonicalBytes(), beforeBytes);
     });
+
+    it('--fact-feedback-file 前置校验重复/不匹配/不兼容模式，并在准入检查前进入 withFactReview 作用域', async t => {
+        const f = await setupDailyGuardFixture(t);
+        const facts = require('../scripts/lib/daily-fact-review.js');
+        const deep = require('../scripts/deep-analyzer.js');
+
+        const sourceDir = path.join(f.plan.sourcesDir, f.ordinaryId, 'generation-000001');
+        const sourceFiles = Object.fromEntries(
+            ['source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json']
+                .map(name => [name, sha(fs.readFileSync(path.join(sourceDir, name)))])
+        );
+        const source = daily.readDailyFreshSource(f.plan, f.ordinaryPaper);
+        const feedback = {
+            contract: facts.CONTRACT,
+            paperId: f.ordinaryId,
+            runId: f.plan.runId,
+            batchDate: f.batchDate,
+            sourceFiles,
+            coreAnalysisSha256: sha(f.ordinaryPaper.analysis),
+            coreSummarySha256: sha(deep.extractSectionByTitle(f.ordinaryPaper.analysis, '核心摘要')),
+            primaryFeedback: '',
+            coreFeedback: '',
+            readerFeedback: '核对受控事实局部修订。',
+            rejectedPrimaryClaims: [],
+            rejectedCoreClaims: [],
+            rejectedReaderClaims: ['当前测试正文中不存在的合成旧错句。'],
+            sourceQuotes: [source.text.slice(0, 70).trim()]
+        };
+        const fbFile1 = path.join(f.root, 'fb-ordinary-1.json');
+        const fbFile2 = path.join(f.root, 'fb-ordinary-2.json');
+        const fbOther = path.join(f.root, 'fb-other.json');
+        fs.writeFileSync(fbFile1, JSON.stringify(feedback), { mode: 0o600 });
+        fs.writeFileSync(fbFile2, JSON.stringify({ ...feedback, readerFeedback: '第二份重复反馈。' }), { mode: 0o600 });
+        fs.writeFileSync(fbOther, JSON.stringify({ ...feedback, paperId: f.operatorId }), { mode: 0o600 });
+
+        // 1. CLI 参数解析前置拒绝不兼容模式、重复 paperId 与未命中目标 ID
+        for (const modeFlag of ['--authors-only', '--figures-only', '--surface-bindings-only', '--scoring-and-reader']) {
+            assert.throws(
+                () => parseRefreshCliArgs([modeFlag, '--fact-feedback-file', fbFile1, f.ordinaryId]),
+                /--fact-feedback-file 只能用于刷新完整读者文章/
+            );
+        }
+        assert.throws(
+            () => parseRefreshCliArgs(['--fact-feedback-file', fbFile1, '--fact-feedback-file', fbFile2, f.ordinaryId]),
+            /同一论文不能提供多份事实反馈文件/
+        );
+        assert.throws(
+            () => parseRefreshCliArgs(['--fact-feedback-file', fbOther, f.ordinaryId]),
+            /不在本次刷新目标中/
+        );
+
+        // 2. 给 ordinaryPaper 绑定与 fbFile1 匹配的 stage.factReview（无外层 withFactReview）：
+        // 若不在 readRefreshEntryPlan / assertMayRefreshDailyReaderRecord 之前进入 withFactReview，
+        // 会在前置守卫被 DAILY_OPERATOR_READER_REFRESH_FORBIDDEN 拒绝！
+        const bound = facts.validateFeedback(feedback, f.plan, f.ordinaryPaper);
+        const payload = f.readCanonicalJson();
+        const target = payload.papers.find(item => item.arxivId === f.ordinaryId);
+        target.analysisManifest.stages.apiReaderArticle.factReview = structuredClone(bound.proof);
+        fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload, null, 2), { mode: 0o600 });
+
+        // 编程调用同样前置拒绝重复、不匹配和不兼容模式（0 次模型调用）
+        let spyCalls = 0;
+        const failOp = { article: async () => { spyCalls += 1; throw new Error('不应触发'); } };
+        await assert.rejects(
+            refreshApiReader(f.ordinaryId, { factFeedbackFiles: [fbFile1, fbFile2], operations: failOp }),
+            /同一论文不能提供多份事实反馈文件/
+        );
+        await assert.rejects(
+            refreshApiReader(f.ordinaryId, { factFeedbackFiles: [fbOther], operations: failOp }),
+            /不在本次刷新目标中/
+        );
+        await assert.rejects(
+            refreshApiReader(f.ordinaryId, { factFeedbackFiles: [fbFile1], scoringAndReader: true, operations: failOp }),
+            /--fact-feedback-file 只能用于刷新完整读者文章/
+        );
+        assert.equal(spyCalls, 0);
+
+        // 通过 refreshApiReaders（批量入口）与 refreshApiReader（单篇入口）传入 --fact-feedback-file，
+        // 均能在准入检查前进入 withFactReview 并成功执行！
+        let observedActiveProof = null;
+        const results = await refreshApiReaders([f.ordinaryId], {
+            factFeedbackFiles: [fbFile1],
+            readerFactLocalRevision: true,
+            reviewFeedback: '核对受控事实局部修订。',
+            operations: {
+                article: async paper => {
+                    observedActiveProof = facts.current(f.ordinaryId)?.proof || null;
+                    const next = structuredClone(paper);
+                    const updatedText = `${next.apiReaderArticle}\n\n受控事实局部修订已完成核对。`;
+                    next.apiReaderArticle = updatedText;
+                    next.apiReaderArticleSha256 = sha(updatedText);
+                    next.analysisManifest.stages.apiReaderArticle.articleSha256 = next.apiReaderArticleSha256;
+                    next.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = sha('核对受控事实局部修订。');
+                    next.analysisManifest.stages.apiReaderArticle.factReview = structuredClone(bound.proof);
+                    next.analysisManifest.stages.apiReaderArticle.refreshedAt = '2026-11-19T13:00:00.000+08:00';
+                    return next;
+                }
+            }
+        });
+        assert.equal(results.length, 1);
+        assert.deepEqual(observedActiveProof, bound.proof);
+        assert.match(results[0].apiReaderArticle, /受控事实局部修订已完成核对/);
+    });
 });

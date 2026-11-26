@@ -105,6 +105,33 @@ class PersonalAndCatalogTest {
         }
         assertTrue(CatalogRepository.approvedResource(java.net.URI("https://zenodo.org/records/1234567/files/paper.pdf")))
         assertTrue("zenodo.org" in SafeHttp.APPROVED_SYNTHETIC_HOSTS)
+        val conferenceOfficialPDFs = listOf(
+            "https://ojs.aaai.org/index.php/AAAI/article/view/35001/37200" to "ojs.aaai.org",
+            "https://openaccess.thecvf.com/content/CVPR2026/papers/Author_Paper_CVPR_2026_paper.pdf" to "openaccess.thecvf.com",
+            "https://eurasip.org/Proceedings/Eusipco/Eusipco2026/pdfs/1571000001.pdf" to "eurasip.org",
+            "https://www.eurasip.org/Proceedings/Eusipco/Eusipco2026/pdfs/1571000001.pdf" to "www.eurasip.org",
+            "https://nime.org/proceedings/2026/nime2026_12.pdf" to "nime.org",
+            "https://www.nime.org/proceedings/2026/nime2026_12.pdf" to "www.nime.org",
+            "https://dafx26.mit.edu/assets/papers/DAFx26_paper_42.pdf" to "dafx26.mit.edu",
+            "https://icmc2026.ligeti-zentrum.de/wp-content/uploads/2026/07/ICMC2026_proceedings_V2showcase.pdf" to "icmc2026.ligeti-zentrum.de",
+        )
+        for ((pdfUrl, host) in conferenceOfficialPDFs) {
+            assertTrue("expected official conference PDF allowed: $pdfUrl", CatalogRepository.approvedResource(java.net.URI(pdfUrl)))
+            assertTrue("expected official conference host in synthetic allowlist: $host", host in SafeHttp.APPROVED_SYNTHETIC_HOSTS)
+        }
+        val untrustedConferenceUrls = listOf(
+            "http://ojs.aaai.org/index.php/AAAI/article/view/35001/37200",
+            "https://ojs.aaai.org.evil.invalid/paper.pdf",
+            "https://openaccess.thecvf.com:8443/content/CVPR2026/papers/paper.pdf",
+            "https://user@dafx26.mit.edu/assets/papers/DAFx26_paper_1.pdf",
+            "https://evil-eurasip.org/Proceedings/Eusipco/Eusipco2026/pdfs/1.pdf",
+            "https://evil.nime.org/proceedings/2026/nime2026_1.pdf",
+            "https://icmc2026.ligeti-zentrum.de.evil.invalid/paper.pdf",
+            "https://untrusted.example.org/proceedings/paper.pdf",
+        )
+        for (badUrl in untrustedConferenceUrls) {
+            assertFalse("expected untrusted URL rejected: $badUrl", CatalogRepository.approvedResource(java.net.URI(badUrl)))
+        }
         assertTrue(CatalogRepository.approvedResource(java.net.URI("https://nanless.github.io/audio-paper-digest-images/icassp-2026/2026-04-29/11462137-0.png")))
         assertFalse(CatalogRepository.approvedResource(java.net.URI("https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/unknown-2026/11ff0ce7b961/figure-1.png")))
         assertNull(CatalogRepository.externalResourceProxy(java.net.URI("https://raw.githubusercontent.com/nanless/audio-paper-digest-blog/main/../../other/repo/file"), "http://127.0.0.1:7890"))
@@ -121,5 +148,43 @@ class PersonalAndCatalogTest {
         assertFalse(article.html.contains("class=\"anchor\""))
         assertTrue(article.html.contains("ta-right"))
         assertTrue(article.html.contains("ta-center"))
+    }
+    @Test fun officialIclrAndMlresearchProceedingsPdfsAnd64ImageCap() {
+        assertTrue(CatalogRepository.approvedResource(java.net.URI("https://proceedings.iclr.cc/paper_files/paper/2026/file/abc123.pdf")))
+        assertTrue("proceedings.iclr.cc" in SafeHttp.APPROVED_SYNTHETIC_HOSTS)
+
+        val validMlresearch = "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith25a/smith25a.pdf"
+        assertTrue(CatalogRepository.isApprovedOfficialProceedingsPdf(java.net.URI(validMlresearch)))
+        assertTrue(CatalogRepository.approvedResource(java.net.URI(validMlresearch)))
+        assertEquals("http://127.0.0.1:7890", CatalogRepository.externalResourceProxy(java.net.URI(validMlresearch), "http://127.0.0.1:7890"))
+
+        val invalidMlresearch = listOf(
+            "http://raw.githubusercontent.com/mlresearch/v267/main/assets/smith25a/smith25a.pdf",
+            "https://user@raw.githubusercontent.com/mlresearch/v267/main/assets/smith25a/smith25a.pdf",
+            "https://raw.githubusercontent.com:8443/mlresearch/v267/main/assets/smith25a/smith25a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith25a/smith25a.pdf?raw=1",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith25a/smith25a.pdf#page=1",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith25a/..%2fsecret.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/../other/paper.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/./paper.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main//assets/smith25a/smith25a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith25a/smith25a.png",
+            "https://raw.githubusercontent.com/otherorg/v267/main/assets/smith25a/smith25a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith25a/sub/smith25a.pdf",
+        )
+        for (bad in invalidMlresearch) {
+            val uri = java.net.URI(bad)
+            assertFalse("must reject mlresearch url: $bad", CatalogRepository.isApprovedOfficialProceedingsPdf(uri))
+            assertFalse("must reject approvedResource: $bad", CatalogRepository.approvedResource(uri))
+            assertNull("must not proxy rejected mlresearch url: $bad", CatalogRepository.externalResourceProxy(uri, "http://127.0.0.1:7890"))
+        }
+
+        val paper = CatalogRepository.parsePaper(row())!!
+        fun htmlWithImages(count: Int) = "<div id='article-body' class='post-content'>" +
+            (1..count).joinToString("") { i -> "<img src='https://arxiv.org/html/2610.27491v1/x$i.png' alt='fig $i'/>" } +
+            "</div>"
+        assertEquals(36, org.jsoup.Jsoup.parseBodyFragment(CatalogRepository.extractArticle(htmlWithImages(36), paper).html).select("img").size)
+        assertEquals(64, org.jsoup.Jsoup.parseBodyFragment(CatalogRepository.extractArticle(htmlWithImages(64), paper).html).select("img").size)
+        assertThrows(IllegalArgumentException::class.java) { CatalogRepository.extractArticle(htmlWithImages(65), paper) }
     }
 }

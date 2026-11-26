@@ -414,11 +414,14 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     }
     const analysisData = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
 
+    const blogBaseUrl = options.blogBaseUrl || env.PAPER_DIGEST_BLOG_URL || DEFAULT_BLOG_BASE_URL;
+    const siteRoot = `${String(blogBaseUrl).replace(/\/posts\/?$/, '').replace(/\/+$/, '')}/`;
+
     const script = buildDailyPodcastScript(analysisData, {
         date: options.date || undefined,
         maxHighlights: options.maxHighlights ?? DEFAULT_MAX_HIGHLIGHTS,
         includeCohost: options.includeCohost !== false,
-        blogBaseUrl: options.blogBaseUrl || DEFAULT_BLOG_BASE_URL,
+        blogBaseUrl,
         roundup: options.roundup
     });
 
@@ -527,8 +530,8 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     const priorEpisodes = loadExistingEpisodes(options.episodesDir, dateStr);
     const allEpisodes = [episodeMetadata, ...priorEpisodes];
     const rssXml = buildPodcastRssXml(allEpisodes, {
-        feedUrl: options.feedUrl || 'https://nanless.github.io/audio-research-portal/podcast.xml',
-        link: String(options.blogBaseUrl || DEFAULT_BLOG_BASE_URL).replace(/\/posts\/?$/, '/')
+        feedUrl: options.feedUrl || `${siteRoot}podcast.xml`,
+        link: siteRoot
     });
     writeFileAtomic(rssPath, rssXml);
 

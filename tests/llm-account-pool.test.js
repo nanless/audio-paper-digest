@@ -1985,4 +1985,410 @@ describe('OpenCode Go 月到期优先、同天剩余最多与三窗口额度调�
         const pickedAfter = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: afterReset });
         assert.strictEqual(pickedAfter.apiKey, 'live-k1');
     });
+
+    it('P0-1/P1-6: requestLlmJson 生产状态自动触发实时同步、限制超时预算并脱敏警告，且落账异常回退保留 accountId', async () => {
+        const { file } = tempState();
+        const keys = ['sk-live-sync-alpha-1111', 'sk-live-sync-beta-2222'];
+        const seenSyncTimeouts = [];
+        const warnings = [];
+        const origWarn = console.warn;
+        console.warn = (...args) => warnings.push(args.join(' '));
+        try {
+            const resp = await requestLlmJson(
+                `${ENDPOINT}/chat/completions`, ENDPOINT, 'test-model', {}, {},
+                {
+                    apiKeys: keys,
+                    accountPoolStateFile: file,
+                    timeoutMs: 4000,
+                    recordUsage: false,
+                    usageFetcher: async ({ timeoutMs, apiKey }) => {
+                        seenSyncTimeouts.push(timeoutMs);
+                        if (apiKey === keys[0]) {
+                            throw new Error(`proxy https://user:topsecret@proxy.test:8080 rejected Bearer ${apiKey} ${'a'.repeat(64)}`);
+                        }
+                        return {
+                            statusCode: 200,
+                            body: {
+                                usage: {
+                                    rolling: { status: 'ok', percent: 5, resetsAt: '2026-11-26T09:00:00.000Z' },
+                                    weekly: { status: 'ok', percent: 10, resetsAt: '2026-11-30T00:00:00.000Z' },
+                                    monthly: { status: 'ok', percent: 20, resetsAt: '2026-12-02T00:00:00.000Z' }
+                                }
+                            }
+                        };
+                    },
+                    transportRequestFn: async () => ({ statusCode: 200, body: { output_text: 'ok' }, raw: '{}' })
+                }
+            );
+            assert.strictEqual(resp.statusCode, 200);
+            assert.ok(seenSyncTimeouts.length >= 1);
+            assert.ok(seenSyncTimeouts.every(ms => ms === 2000), `expected capped timeout 2000, got ${seenSyncTimeouts}`);
+
+            // Verify redactUsageSyncError strips apiKey, Bearer/Basic, sk-*, 64-hex, URL userinfo
+            const redacted = pool.redactUsageSyncError(
+                new Error(`https://u:p@host:8080 Bearer tok123 Basic b64== sk-secret9999 ${'f'.repeat(64)} customKey42`),
+                'customKey42'
+            );
+            for (const leaked of ['u:p', 'tok123', 'b64==', 'sk-secret9999', 'f'.repeat(64), 'customKey42']) {
+                assert.ok(!redacted.includes(leaked), `should redact ${leaked}: ${redacted}`);
+            }
+
+            // Verify persistence-error fallback buildLlmUsageEvent includes accountId
+            let capturedErr = null;
+            try {
+                await requestLlmJson(
+                    `${ENDPOINT}/chat/completions`, ENDPOINT, 'test-model', {}, {},
+                    {
+                        apiKeys: keys,
+                        accountPoolStateFile: file,
+                        timeoutMs: 4000,
+                        usageSink: () => { throw new Error('disk full'); },
+                        transportRequestFn: async () => ({ statusCode: 200, body: { output_text: 'ok' }, raw: '{}' })
+                    }
+                );
+            } catch (err) {
+                capturedErr = err;
+            }
+            assert.ok(capturedErr, 'expected persistence error');
+            assert.ok(
+                capturedErr.usageEvent?.accountId || capturedErr.event?.accountId,
+                'fallback usage event must include accountId'
+            );
+
+            // P0-1: child process without NODE_TEST_CONTEXT passing Config.FILES.llmAccountPoolState triggers live sync
+            const probeScript = `
+                const path = require('node:path');
+                const Config = require('./scripts/config.js');
+                const pool = require('./scripts/llm-account-pool.js');
+                let syncCalled = 0;
+                let syncArgs = null;
+                pool.syncOpenCodeGoPoolUsage = async (_keys, _ep, sf, opts) => {
+                    syncCalled += 1;
+                    syncArgs = { sf, opts };
+                    return { synced: 0, failed: 0, skipped: 2, authErrors: [], fromCache: true, results: [] };
+                };
+                pool.selectApiKey = () => { throw new Error('STOP_AFTER_SYNC'); };
+                process.env.https_proxy = 'http://127.0.0.1:7897';
+                const { requestLlmJson } = require('./scripts/utils.js');
+                requestLlmJson(
+                    'https://opencode.ai/zen/go/v1/chat/completions',
+                    'https://opencode.ai/zen/go/v1',
+                    'test-model',
+                    {},
+                    {},
+                    { apiKeys: ['k-prod-1', 'k-prod-2'], accountPoolStateFile: Config.FILES.llmAccountPoolState, timeoutMs: 5000 }
+                ).catch(err => {
+                    console.log(JSON.stringify({
+                        syncCalled,
+                        proxyUrl: syncArgs?.opts?.proxyUrl,
+                        timeoutMs: syncArgs?.opts?.timeoutMs,
+                        errMsg: err.message
+                    }));
+                });
+            `;
+            const childEnv = { ...process.env };
+            delete childEnv.NODE_TEST_CONTEXT;
+            const probeRes = spawnSync(process.execPath, ['-e', probeScript], {
+                cwd: path.join(__dirname, '..'),
+                env: childEnv,
+                encoding: 'utf8'
+            });
+            assert.strictEqual(probeRes.status, 0, probeRes.stderr);
+            const probeOut = JSON.parse(probeRes.stdout.trim().split('\n').pop());
+            assert.strictEqual(probeOut.syncCalled, 1);
+            assert.strictEqual(probeOut.proxyUrl, 'http://127.0.0.1:7897');
+            assert.strictEqual(probeOut.timeoutMs, 2500);
+            assert.strictEqual(probeOut.errMsg, 'STOP_AFTER_SYNC');
+        } finally {
+            console.warn = origWarn;
+        }
+    });
+
+    it('P0-2/P1-6: parseMonthlyExpiryInput 拒绝越界时区和非正时间戳，且 setAccountQuota 备注错误不回显密钥', () => {
+        const { file } = tempState();
+        for (const bad of ['2026-12-01T00:00:00+20:00', '2026-12-01T00:00:00-15:00', '1969-12-31', '1970-01-01T00:00:00Z']) {
+            assert.throws(
+                () => pool.parseMonthlyExpiryInput(bad),
+                err => err.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR',
+                `should reject ${bad}`
+            );
+            assert.throws(
+                () => pool.setAccountQuota('acct-tz-test', ENDPOINT, { monthlyExpiry: bad }, file, { nowMs: BASE_NOW }),
+                err => err.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR'
+            );
+        }
+        // State file must remain readable (not bricked)
+        assert.doesNotThrow(() => pool.readStateStrict(file));
+
+        const secretLabel = 'sk-secret-do-not-echo-12345';
+        assert.throws(
+            () => pool.setAccountQuota('acct-tz-test', ENDPOINT, { label: secretLabel }, file, { nowMs: BASE_NOW }),
+            err => err.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR' && !err.message.includes(secretLabel)
+        );
+    });
+
+    it('P1-2/P2-3: null monthlyCycleStartMs 不吞掉同步后消费，5h 旧分桶老化和非周一重置周周期扣减准确', () => {
+        const { file } = tempState();
+        const keys = ['acct-spend-a', 'acct-spend-b'];
+        const selA = selectionFor(keys, keys[0]);
+        // 取 04:05:00Z（桶内第 5 分钟），保证 snapNow - 60s 与 snapNow + 60s 同属 04:00 桶
+        const snapNow = BASE_NOW + 5 * 60_000;
+
+        // 1. 先在没有 monthlyCycle 时记入旧 5h 桶 $5.00（monthlyCycleStartMs === null）
+        pool.recordAccountUsage(selA, { estimatedCostUsd: 5.0, totalTokens: 1000 }, file, { nowMs: snapNow - 4 * 3600_000 - 45 * 60_000 });
+        // 再在快照所在的 04:00 桶内、快照前记入 $0.50
+        pool.recordAccountUsage(selA, { estimatedCostUsd: 0.5, totalTokens: 500 }, file, { nowMs: snapNow - 60_000 });
+
+        // 2. Live sync 写入周重置为周三（2026-12-02T10:00:00Z，非周一）、月预算 $10
+        pool.setAccountQuota(keys[0], ENDPOINT, { monthlyBudgetUsd: 10 }, file, { nowMs: snapNow });
+        pool.applyLiveUsageSnapshots(keys, ENDPOINT, {
+            [selA.accountId]: {
+                monthly: { status: 'ok', usedPercent: 20, remainingPct: 80, limited: false, resetsAtMs: Date.parse('2026-12-10T00:00:00Z') },
+                weekly: { status: 'ok', usedPercent: 10, remainingPct: 90, limited: false, resetsAtMs: Date.parse('2026-12-02T10:00:00Z') },
+                rolling: { status: 'ok', usedPercent: 25, remainingPct: 75, limited: false, resetsAtMs: snapNow + 3 * 3600_000 }
+            }
+        }, file, { nowMs: snapNow });
+
+        const identity = pool.getPoolIdentity(keys, ENDPOINT);
+        const recAfterSync = pool.readStateStrict(file).services[identity.serviceId].accounts[selA.accountId];
+        // P1-2: monthlySpentAtSnapshotUsd 必须为 0（而非 5.5）
+        assert.strictEqual(recAfterSync.quota.monthlySpentAtSnapshotUsd, 0);
+        // P2-3: rolling5hSpentAtSnapshotUsd 仅记快照当前桶 $0.50（而非整 5h $5.50）
+        assert.strictEqual(recAfterSync.quota.rolling5hSpentAtSnapshotUsd, 0.5);
+
+        // 3. 快照同桶再消费 $0.25，以及 30 分钟后（旧 $5.00 分桶已老化出 5h 窗口）新桶再消费 $0.75，共 $1.00
+        pool.recordAccountUsage(selA, { estimatedCostUsd: 0.25, totalTokens: 250 }, file, { nowMs: snapNow + 60_000 });
+        const laterMs = snapNow + 30 * 60_000;
+        pool.recordAccountUsage(selA, { estimatedCostUsd: 0.75, totalTokens: 750 }, file, { nowMs: laterMs });
+        const recLater = pool.readStateStrict(file).services[identity.serviceId].accounts[selA.accountId];
+        const evLater = pool.evaluateAccountQuota(recLater, laterMs);
+        // 月预算 $10 -> $1.00 扣 10% -> 70%
+        assert.strictEqual(evLater.effectiveMonthlyRemainingPct, 70);
+        // 周预算 $5 -> $1.00 扣 20% -> 70%
+        assert.strictEqual(evLater.effectiveWeeklyRemainingPct, 70);
+        // 5h 预算 $2 -> $1.00 扣 50% -> 25%（旧 $5.00 分桶老化绝不能吞掉新消费！）
+        assert.strictEqual(evLater.effectiveRolling5hRemainingPct, 25);
+
+        // 4. 跨过周一 UTC 00:00（2026-11-30T01:00:00Z），仍早于周三重置（2026-12-02T10:00:00Z）
+        const mondayAfter = Date.parse('2026-11-30T01:00:00Z');
+        pool.recordAccountUsage(selA, { estimatedCostUsd: 0.5, totalTokens: 500 }, file, { nowMs: mondayAfter });
+        const recMon = pool.readStateStrict(file).services[identity.serviceId].accounts[selA.accountId];
+        const evMon = pool.evaluateAccountQuota(recMon, mondayAfter);
+        // 累计周消费 $1.50 / $5 = 30% -> 90% - 30% = 60%（不因周一误清零！）
+        assert.strictEqual(evMon.effectiveWeeklyRemainingPct, 60);
+    });
+
+    it('P1-3/P1-4/P2-1/P2-2/P2-4/P3-3: 严格校验 percent、快路径安全守卫、单账号退避与 live_api 保护、代理优先级与游标排序', async () => {
+        // P1-3: percent 拒绝 null / "" / false / 字符串
+        for (const badPct of [null, '', false, [], '20', -1, 101]) {
+            assert.throws(() => pool.parseOpenCodeGoUsagePayload({
+                usage: {
+                    rolling: { status: 'ok', percent: badPct, resetsAt: '2026-11-26T09:00:00.000Z' },
+                    weekly: { status: 'ok', percent: 0, resetsAt: '2026-11-30T00:00:00.000Z' },
+                    monthly: { status: 'ok', percent: 0, resetsAt: '2026-12-10T00:00:00.000Z' }
+                }
+            }), /percent 非法/);
+        }
+
+        // P1-4: 只读快路径必须拦截父目录 symlink 与 service.endpoint 篡改
+        {
+            const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-fastpath-guard-'));
+            const realDir = path.join(tmpRoot, 'real');
+            const linkedDir = path.join(tmpRoot, 'linked');
+            fs.mkdirSync(realDir);
+            fs.symlinkSync(realDir, linkedDir, 'dir');
+            const realFile = path.join(realDir, 'pool.json');
+            const keys = ['fp-a', 'fp-b'];
+            pool.selectApiKey(keys, ENDPOINT, realFile, { nowMs: BASE_NOW, affinityKey: '2611.00001' });
+            assert.throws(
+                () => pool.selectApiKey(keys, ENDPOINT, path.join(linkedDir, 'pool.json'), { nowMs: BASE_NOW + 1000, affinityKey: '2611.00001' }),
+                err => err.code === 'LLM_ACCOUNT_POOL_STATE_ERROR'
+            );
+            // Tamper service.endpoint while group is hot -> fast path must throw LlmAccountPoolStateError
+            const state = JSON.parse(fs.readFileSync(realFile, 'utf8'));
+            const id = pool.getPoolIdentity(keys, ENDPOINT);
+            state.services[id.serviceId].endpoint = 'https://evil.invalid/zen/go';
+            fs.writeFileSync(realFile, JSON.stringify(state), { mode: 0o600 });
+            assert.throws(
+                () => pool.selectApiKey(keys, ENDPOINT, realFile, { nowMs: BASE_NOW + 1000, affinityKey: '2611.00001' }),
+                err => err.code === 'LLM_ACCOUNT_POOL_STATE_ERROR'
+            );
+            fs.rmSync(tmpRoot, { recursive: true, force: true });
+        }
+
+        // P2-1: stale resetsAt <= lastSync 不无限循环，单账号失败退避（部分成功也生效），时钟回拨不命中缓存
+        {
+            const { file } = tempState();
+            const keys = ['sync-p21-ok', 'sync-p21-fail'];
+            let callsByKey = { 'sync-p21-ok': 0, 'sync-p21-fail': 0 };
+            const fetcher = async ({ apiKey }) => {
+                callsByKey[apiKey] += 1;
+                if (apiKey === 'sync-p21-fail') {
+                    return { statusCode: 500, body: { error: 'boom' } };
+                }
+                return {
+                    statusCode: 200,
+                    body: {
+                        usage: {
+                            // resetsAt 已经早于 BASE_NOW（模拟服务端返回过期时间戳）
+                            rolling: { status: 'ok', percent: 0, resetsAt: new Date(BASE_NOW - 10_000).toISOString() },
+                            weekly: { status: 'ok', percent: 5, resetsAt: new Date(BASE_NOW + 3 * 86400_000).toISOString() },
+                            monthly: { status: 'ok', percent: 10, resetsAt: new Date(BASE_NOW + 10 * 86400_000).toISOString() }
+                        }
+                    }
+                };
+            };
+            const r1 = await pool.syncOpenCodeGoPoolUsage(keys, ENDPOINT, file, { nowMs: BASE_NOW, fetcher });
+            assert.strictEqual(r1.synced, 1);
+            assert.strictEqual(r1.failed, 1);
+            // 10s 后再次同步：ok 账号命中 TTL（stale resetsAt <= lastSync 不触发重拉），fail 账号命中单账号退避
+            const r2 = await pool.syncOpenCodeGoPoolUsage(keys, ENDPOINT, file, { nowMs: BASE_NOW + 10_000, fetcher });
+            assert.strictEqual(r2.fromCache, true);
+            assert.strictEqual(r2.backoff, true);
+            assert.deepStrictEqual(callsByKey, { 'sync-p21-ok': 1, 'sync-p21-fail': 1 });
+            // 70s 后 fail 账号退避结束，仅重拉 fail 账号；ok 账号仍在 5min TTL 内
+            const r3 = await pool.syncOpenCodeGoPoolUsage(keys, ENDPOINT, file, { nowMs: BASE_NOW + 70_000, fetcher });
+            assert.strictEqual(r3.fromCache, false);
+            assert.deepStrictEqual(callsByKey, { 'sync-p21-ok': 1, 'sync-p21-fail': 2 });
+            // 时钟回拨（nowMs < lastSync）：不命中缓存，重新同步
+            await pool.syncOpenCodeGoPoolUsage(keys, ENDPOINT, file, { nowMs: BASE_NOW - 5000, fetcher });
+            assert.strictEqual(callsByKey['sync-p21-ok'], 2);
+        }
+
+        // P2-2: markQuotaExhausted 与 initQuotasFromHistory 均保留 live_api 锚点
+        {
+            const { file } = tempState();
+            const keys = ['live-keep-1', 'live-keep-2'];
+            const liveResetMs = Date.parse('2026-12-08T00:00:00Z');
+            pool.applyLiveUsageSnapshots(keys, ENDPOINT, {
+                [pool.getAccountId(keys[0])]: {
+                    monthly: { status: 'ok', usedPercent: 50, remainingPct: 50, limited: false, resetsAtMs: liveResetMs },
+                    weekly: { status: 'ok', usedPercent: 10, remainingPct: 90, limited: false, resetsAtMs: BASE_NOW + 2 * 86400_000 },
+                    rolling: { status: 'ok', usedPercent: 0, remainingPct: 100, limited: false, resetsAtMs: BASE_NOW + 3600_000 }
+                }
+            }, file, { nowMs: BASE_NOW });
+            pool.markQuotaExhausted(selectionFor(keys, keys[0]), {
+                limitClass: 'monthly',
+                blockedUntilMs: Date.parse('2026-12-15T00:00:00Z')
+            }, file, { nowMs: BASE_NOW + 1000 });
+            const identity = pool.getPoolIdentity(keys, ENDPOINT);
+            const rec = pool.readStateStrict(file).services[identity.serviceId].accounts[pool.getAccountId(keys[0])];
+            assert.strictEqual(rec.quota.monthlyResetSource, 'live_api');
+            assert.strictEqual(rec.quota.monthlyResetAtMs, liveResetMs);
+            const initRes = pool.initQuotasFromHistory(keys, ENDPOINT, file, { nowMs: BASE_NOW + 2000 });
+            assert.ok(initRes.skipped.some(s => s.slot === 1 && s.reason === 'already_live_api'));
+        }
+
+        // P2-4: 代理规范顺序 https_proxy > HTTPS_PROXY > http_proxy > HTTP_PROXY，非法不穿透
+        assert.strictEqual(pool.resolveUsageProxyUrl(undefined, {
+            https_proxy: 'socks5://127.0.0.1:7897',
+            HTTP_PROXY: 'http://127.0.0.1:7897'
+        }), null);
+        assert.strictEqual(pool.resolveUsageProxyUrl(undefined, {
+            https_proxy: 'http://127.0.0.1:8080',
+            HTTPS_PROXY: 'http://127.0.0.1:9090'
+        }), 'http://127.0.0.1:8080');
+
+        // P3-2/P3-3: legacy limitName='balance' 与 describePoolPriorities 游标对齐
+        const balEval = pool.evaluateAccountQuota({ limitName: 'balance', blockedUntilMs: BASE_NOW + 60_000 }, BASE_NOW);
+        assert.strictEqual(balEval.eligible, false);
+        assert.strictEqual(balEval.hasBalanceQuota, false);
+        assert.strictEqual(balEval.balanceBlockedUntil, BASE_NOW + 60_000);
+
+        {
+            const { file } = tempState();
+            const keys = ['rot-1', 'rot-2', 'rot-3'];
+            pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW, strategy: 'equal_rotation' });
+            pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 1, strategy: 'equal_rotation' });
+            const state = pool.readStateStrict(file);
+            const desc = pool.describePoolPriorities(keys, ENDPOINT, state, { nowMs: BASE_NOW + 2, strategy: 'equal_rotation' });
+            const rank1Row = desc.rows.find(r => r.priorityRank === 1);
+            assert.strictEqual(rank1Row.slot, desc.nextSlot, 'equal_rotation #1 必须与 nextSlot 一致');
+            const descTier2 = pool.describePoolPriorities(keys, ENDPOINT, state, { nowMs: BASE_NOW + 2, strategy: 'expiry_priority' });
+            const tier2Rank1 = descTier2.rows.find(r => r.priorityRank === 1);
+            assert.strictEqual(tier2Rank1.slot, descTier2.nextSlot, 'Tier-2 #1 必须与 nextSlot 一致');
+        }
+
+        // P3-2: fetchOpenCodeGoAccountUsage forwards nowMs to classifyOpenCodeGoQuotaResponse
+        const balResp = await pool.fetchOpenCodeGoAccountUsage('sk-bal-key', ENDPOINT, {
+            nowMs: BASE_NOW,
+            fetcher: async () => ({ statusCode: 401, body: { error: { message: 'Insufficient balance' } } })
+        });
+        assert.strictEqual(balResp.insufficientBalance, true);
+        assert.strictEqual(balResp.quota.blockedUntilMs, BASE_NOW + 30 * 60 * 1000);
+    });
+
+    it('fetchOpenCodeGoAccountUsage 与 syncOpenCodeGoPoolUsage 向 undici ProxyAgent 传递 proxyTls/requestTls 超时且不覆写 SNI', async () => {
+        const undiciPath = require.resolve('undici');
+        const originalUndiciEntry = require.cache[undiciPath];
+        const capturedOptions = [];
+        const okPayload = JSON.stringify({
+            usage: {
+                rolling: { status: 'ok', percent: 10, resetsAt: '2026-12-01T05:00:00.000Z' },
+                weekly: { status: 'ok', percent: 20, resetsAt: '2026-12-07T00:00:00.000Z' },
+                monthly: { status: 'ok', percent: 30, resetsAt: '2026-12-20T00:00:00.000Z' }
+            }
+        });
+        class FakeProxyAgent {
+            constructor(opts) {
+                capturedOptions.push(opts);
+                this.opts = opts;
+                this.closed = false;
+            }
+            async close() {
+                this.closed = true;
+            }
+        }
+        const fakeFetch = async (_url, init) => ({
+            status: 200,
+            headers: new Map(),
+            body: (async function* () {
+                assert.ok(init.dispatcher instanceof FakeProxyAgent);
+                yield Buffer.from(okPayload, 'utf8');
+            })()
+        });
+        require.cache[undiciPath] = {
+            id: undiciPath,
+            filename: undiciPath,
+            loaded: true,
+            exports: { ProxyAgent: FakeProxyAgent, fetch: fakeFetch }
+        };
+        try {
+            const single = await pool.fetchOpenCodeGoAccountUsage('sk-tls-1', ENDPOINT, {
+                proxyUrl: 'http://127.0.0.1:7897',
+                timeoutMs: 25000
+            });
+            assert.strictEqual(single.ok, true);
+            assert.strictEqual(capturedOptions.length, 1);
+            assert.deepStrictEqual(capturedOptions[0], {
+                uri: 'http://127.0.0.1:7897',
+                connectTimeout: 25000,
+                proxyTls: { timeout: 25000 },
+                requestTls: { timeout: 25000 }
+            });
+            assert.strictEqual(Object.hasOwn(capturedOptions[0].proxyTls, 'servername'), false);
+            assert.strictEqual(Object.hasOwn(capturedOptions[0].requestTls, 'servername'), false);
+
+            const { file } = tempState();
+            const synced = await pool.syncOpenCodeGoPoolUsage(['sk-tls-1', 'sk-tls-2'], ENDPOINT, file, {
+                proxyUrl: 'http://127.0.0.1:7897',
+                timeoutMs: 18000,
+                nowMs: BASE_NOW,
+                force: true
+            });
+            assert.strictEqual(synced.synced, 2);
+            assert.strictEqual(capturedOptions.length, 2);
+            assert.deepStrictEqual(capturedOptions[1], {
+                uri: 'http://127.0.0.1:7897',
+                connectTimeout: 18000,
+                proxyTls: { timeout: 18000 },
+                requestTls: { timeout: 18000 }
+            });
+            assert.strictEqual(Object.hasOwn(capturedOptions[1].proxyTls, 'servername'), false);
+            assert.strictEqual(Object.hasOwn(capturedOptions[1].requestTls, 'servername'), false);
+        } finally {
+            if (originalUndiciEntry) require.cache[undiciPath] = originalUndiciEntry;
+            else delete require.cache[undiciPath];
+        }
+    });
 });

@@ -63,7 +63,7 @@ object PublishedAggregateReader {
                 if(m.desktopDetails){
                     val pageType=row.getString("pageType");val url=pageURL(row.getString("pageUrl"));require(pages.add(url)){"目录页面地址重复"}
                     if(pageType=="paper")continue
-                    require(pageType in setOf("daily","conference")&&row.getString("identityStatus")=="aggregate-page"&&row.isNull("paperId")){"非论文汇总记录身份无效"}
+                    require(pageType in setOf("daily","conference","page")&&row.getString("identityStatus")=="aggregate-page"&&row.isNull("paperId")){"非论文汇总记录身份无效"}
                     val title=row.getString("title");require(title.isNotBlank());val titleZh=row.nullableString("titleZh")?:title;val summary=row.nullableString("summary")?:""
                     val date=row.nullableString("blogPublishedAt")?:""
                     val scope=if(pageType=="conference"&&row.getString("pageUrl").endsWith("-summary/"))"overview" else null
@@ -79,5 +79,24 @@ object PublishedAggregateReader {
             }
         }
         require(sourceRows==m.recordCount);return PublishedAggregateCatalog(snapshot,sourceRows,result.sortedBy{it.id})
+    }
+    internal fun readSupplementalPages(snapshotSHA256:String,shardURL:String,shardSHA256:String,shardBytes:Int,rawShard:ByteArray,existingIds:Set<String>):List<PublishedAggregate> {
+        require(validSHA(snapshotSHA256)&&validSHA(shardSHA256)&&shardURL=="client/details/pages/$shardSHA256.json"&&shardBytes in 1..1024*1024)
+        require(rawShard.size==shardBytes&&sha(rawShard)==shardSHA256){"补充页面分片与原清单不符"}
+        val rows=JSONArray(PublishedUtf8.decode(rawShard))
+        val encoding=ClientProtocols.contract("foundation-sorted-keys-json")
+        val pages=mutableSetOf<String>();val result=mutableListOf<PublishedAggregate>()
+        for(i in 0 until rows.length()){
+            val row=rows.getJSONObject(i)
+            require(row.getString("pageType")=="page"){"补充目录仅允许网站页面类型"}
+            val url=pageURL(row.getString("permalink"));require(pages.add(url)){"补充目录页面地址重复"}
+            val id="page:"+URI(url).rawPath
+            if(id in existingIds)continue
+            val title=row.getString("title");require(title.isNotBlank())
+            val titleZh=row.optString("titleZh",title).ifBlank{title};val summary=row.optString("summary");val date=row.optString("date")
+            val source=AggregateSource(snapshotSHA256,shardSHA256,shardBytes,shardURL,i,sha(normalizedRow(row)),encoding)
+            result+=PublishedAggregate(id,"page",null,title,titleZh,summary,date,date.takeUnless{it.isEmpty()||it.startsWith("0001-01-01")},strings(row,"categories"),strings(row,"tags"),url,source)
+        }
+        return result
     }
 }

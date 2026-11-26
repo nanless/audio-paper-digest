@@ -22,18 +22,33 @@ const correction = require('./lib/daily-reader-operator-correction.js');
 const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 function nodeAt(draft, pointer) {
-    if (['/readerTitle', '/oneSentenceThesis', '/implementationSpecs'].includes(pointer)) return draft[pointer.slice(1)];
-    if (['/sections', '/tableBindings', '/conceptBridges', '/formulaBindings', '/figurePlacements'].includes(pointer)) return draft[pointer.slice(1)];
+    if (!draft || typeof draft !== 'object') throw new Error(`节点不存在：${pointer}`);
+    if (['/readerTitle', '/oneSentenceThesis', '/implementationSpecs',
+        '/sections', '/tableBindings', '/conceptBridges', '/formulaBindings', '/figurePlacements'].includes(pointer)) {
+        const key = pointer.slice(1);
+        if (!Object.hasOwn(draft, key) || draft[key] === undefined) {
+            throw new Error(`节点不存在：${pointer}`);
+        }
+        return draft[key];
+    }
     const match = /^\/(?:(sections)\/(0|[1-9]\d*)(\/body)?|(conceptBridges)\/(0|[1-9]\d*)(\/explanation)?|(figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*))$/.exec(pointer);
     if (!match) throw new Error(`不支持的节点路径：${pointer}`);
     const key = match[1] || match[4] || match[7];
     const index = Number(match[2] ?? match[5] ?? match[8]);
     const leaf = match[3] || match[6] || '';
+    if (!Object.hasOwn(draft, key)) throw new Error(`节点不存在：${pointer}`);
     const collection = draft[key];
-    if (!Array.isArray(collection)) throw new Error(`节点不存在：${pointer}`);
+    if (!Array.isArray(collection) || !Object.hasOwn(collection, index)) throw new Error(`节点不存在：${pointer}`);
     const node = collection[index];
     if (!node || typeof node !== 'object') throw new Error(`节点不存在：${pointer}`);
-    return leaf ? node[leaf.slice(1)] : node;
+    if (leaf) {
+        const leafKey = leaf.slice(1);
+        if (!Object.hasOwn(node, leafKey) || node[leafKey] === undefined) {
+            throw new Error(`节点不存在：${pointer}`);
+        }
+        return node[leafKey];
+    }
+    return node;
 }
 
 function validateSpec(spec) {

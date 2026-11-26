@@ -4844,6 +4844,128 @@ ZETA 与 MusicMagus 的 ΔBPM 数值与两个全局适配系统分成两组，�
         self.assertEqual(sse_err.get('status'), 'failed')
         self.assertNotIn('secretpass', _sanitize_publish_llm_error('proxy http://user:secretpass@127.0.0.1:7897 failed'))
 
+    def test_f3_escape_html_preserves_inline_code_comparisons_and_live_sync_proxy_sanitization(self):
+        from publish_common import _open_publish_json_with_account_pool
+
+        # 1) escape_html_like_tags must not corrupt `< ... >` inside inline code spans
+        code_cmp = '在 `if (a < b && c > d)` 中，以及 ``if (x < y && y > z)`` 和正文 <1 2> 里。'
+        escaped = escape_html_like_tags(code_cmp)
+        self.assertIn('`if (a < b && c > d)`', escaped)
+        self.assertIn('``if (x < y && y > z)``', escaped)
+        self.assertIn('&lt;1 2&gt;', escaped)
+        self.assertEqual(escape_html_like_tags(escaped), escaped)
+        # Explicit malformed-backtick repair still works and stays idempotent
+        repaired = escape_html_like_tags('目标命令是 `turn off `<EOT>``。')
+        self.assertEqual(repaired, '目标命令是 `turn off &lt;EOT&gt;`。')
+        self.assertEqual(escape_html_like_tags(repaired), repaired)
+
+        # 2) Live usage sync resolves lowercase https_proxy, caps timeout_ms, and sanitizes errors
+        class _FakeResp:
+            status = 200
+            headers = {}
+
+            def read(self, _limit=-1):
+                return b'{"output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        opener = urllib.request.OpenerDirector()
+        opener._pd_live_usage_sync_allowed = True
+        opener._pd_live_usage_proxy = None
+        captured_sync = {}
+        buf = io.StringIO()
+        keys = ['sk-live-secret-alpha-1111', 'sk-live-secret-beta-2222']
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {'https_proxy': 'http://alice:proxy-secret-pw@127.0.0.1:7897'}, clear=False), \
+                mock.patch.object(opener, 'open', return_value=_FakeResp()), \
+                mock.patch('publish_common.sync_opencode_go_pool_usage',
+                           side_effect=lambda *a, **kw: (
+                               captured_sync.update(kw),
+                               (_ for _ in ()).throw(RuntimeError(
+                                   f'sync failed via http://alice:proxy-secret-pw@127.0.0.1:7897 key={keys[0]}'
+                               )),
+                           )) as sync_mock, \
+                mock.patch('publish_common.begin_pending_llm_request', return_value={'eventId': 'evt-live-1'}), \
+                mock.patch('publish_common.record_llm_usage'), \
+                contextlib.redirect_stdout(buf):
+            status, _data = _open_publish_json_with_account_pool(
+                api_url='https://opencode.ai/zen/go/v1/responses',
+                endpoint='https://opencode.ai/zen/go/v1',
+                model='muse-spark-1.3-contributor',
+                api_type='openai_responses',
+                api_keys=keys,
+                payload={'model': 'muse-spark-1.3-contributor', 'input': 'hi'},
+                opener=opener,
+                timeout=8,
+                state_file=Path(tmp) / 'pool-state.json',
+                usage_directory=Path(tmp) / 'usage',
+            )
+        self.assertEqual(status, 200)
+        sync_mock.assert_called_once()
+        self.assertEqual(captured_sync['proxy_url'], 'http://alice:proxy-secret-pw@127.0.0.1:7897')
+        self.assertEqual(captured_sync['timeout_ms'], 4000)  # min(default_sync_timeout, max(1000, int(8 * 500)))
+        printed = buf.getvalue()
+        self.assertNotIn('proxy-secret-pw', printed)
+        self.assertNotIn(keys[0], printed)
+        self.assertIn('[REDACTED]', printed)
+
+        # PD_LLM_ACCOUNT_POOL_SYNC_TIMEOUT_MS > 10000 is honored instead of hard-capped at 10s,
+        # while still bounded by max(1000, int(timeout * 500)) for shorter request timeouts
+        for req_timeout, expected_sync_ms in ((60, 25000), (12, 6000)):
+            captured_cfg_sync = {}
+            with tempfile.TemporaryDirectory() as tmp, \
+                    mock.patch.dict(os.environ, {
+                        'https_proxy': 'http://127.0.0.1:7897',
+                        'PD_LLM_ACCOUNT_POOL_SYNC_TIMEOUT_MS': '25000',
+                    }, clear=False), \
+                    mock.patch.object(opener, 'open', return_value=_FakeResp()), \
+                    mock.patch('publish_common.sync_opencode_go_pool_usage',
+                               side_effect=lambda *a, **kw: captured_cfg_sync.update(kw)) as cfg_sync_mock, \
+                    mock.patch('publish_common.begin_pending_llm_request', return_value={'eventId': f'evt-cfg-{req_timeout}'}), \
+                    mock.patch('publish_common.record_llm_usage'):
+                _open_publish_json_with_account_pool(
+                    api_url='https://opencode.ai/zen/go/v1/responses',
+                    endpoint='https://opencode.ai/zen/go/v1',
+                    model='muse-spark-1.3-contributor',
+                    api_type='openai_responses',
+                    api_keys=keys,
+                    payload={'model': 'muse-spark-1.3-contributor', 'input': 'hi'},
+                    opener=opener,
+                    timeout=req_timeout,
+                    state_file=Path(tmp) / 'pool-state.json',
+                    usage_directory=Path(tmp) / 'usage',
+                )
+            cfg_sync_mock.assert_called_once()
+            self.assertEqual(captured_cfg_sync['timeout_ms'], expected_sync_ms)
+
+        # Invalid higher-priority proxy (socks5://) must NOT fall through to HTTP_PROXY
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {
+                    'https_proxy': 'socks5://127.0.0.1:1080',
+                    'HTTP_PROXY': 'http://127.0.0.1:7897',
+                }, clear=False), \
+                mock.patch.object(opener, 'open', return_value=_FakeResp()), \
+                mock.patch('publish_common.sync_opencode_go_pool_usage') as skipped_sync, \
+                mock.patch('publish_common.begin_pending_llm_request', return_value={'eventId': 'evt-live-2'}), \
+                mock.patch('publish_common.record_llm_usage'):
+            _open_publish_json_with_account_pool(
+                api_url='https://opencode.ai/zen/go/v1/responses',
+                endpoint='https://opencode.ai/zen/go/v1',
+                model='muse-spark-1.3-contributor',
+                api_type='openai_responses',
+                api_keys=keys,
+                payload={'model': 'muse-spark-1.3-contributor', 'input': 'hi'},
+                opener=opener,
+                timeout=30,
+                state_file=Path(tmp) / 'pool-state.json',
+                usage_directory=Path(tmp) / 'usage',
+            )
+        skipped_sync.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

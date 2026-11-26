@@ -171,7 +171,37 @@ private actor SyncDAVFixture {
             guard error.localizedDescription.contains("缺少本机已核验") else { throw TestFailure.fixture }
         }
         guard await dav.committed().count == stable.count - 1 else { throw TestFailure.fixture }
-        print("Mac 全资料同步验证通过（共享离线包、冲突原稿、丢回执续传、恢复后重放、幂等）")
+
+        // Verify stuck fullSync pending snapshot blocks retargeting until archived via archivePending/archiveAllPending.
+        let stuckRoot = sandbox.appendingPathComponent("stuck-fullsync-pending")
+        try FileManager.default.createDirectory(at: stuckRoot, withIntermediateDirectories: false)
+        _ = try DesktopStore(directory: stuckRoot)
+        let stuckLocal = try CloudLocalStore(dataDirectory: stuckRoot)
+        try stuckLocal.save(account: "stuck@example.invalid", folder: "PaperDigest", automatic: false, intervalHours: 24)
+        let stuckPayload = try BackupCodec.collect(sourceDirectory: stuckRoot)
+        _ = try stuckLocal.prepare(stuckPayload, fullSync: true)
+        guard try stuckLocal.hasPendingMaterials(fullSync: true), try stuckLocal.hasAnyPendingMaterials() else { throw TestFailure.fixture }
+        do {
+            try stuckLocal.save(account: "new@example.invalid", folder: "OtherFolder", automatic: false, intervalHours: 24)
+            throw TestFailure.fixture
+        } catch is DesktopError { }
+        let archivedFullSync = try stuckLocal.archivePending()
+        guard FileManager.default.fileExists(atPath: archivedFullSync.appendingPathComponent("pending.json").path),
+              FileManager.default.fileExists(atPath: archivedFullSync.appendingPathComponent("snapshot.paperdigest").path),
+              FileManager.default.fileExists(atPath: archivedFullSync.appendingPathComponent("connection.json").path),
+              try !stuckLocal.hasAnyPendingMaterials() else { throw TestFailure.fixture }
+        try stuckLocal.save(account: "new@example.invalid", folder: "OtherFolder", automatic: false, intervalHours: 24)
+        guard stuckLocal.profile.account == "new@example.invalid", stuckLocal.profile.folder == "OtherFolder" else { throw TestFailure.fixture }
+
+        // Verify archiving when BOTH manual and fullSync pending snapshots exist simultaneously.
+        _ = try stuckLocal.prepare(stuckPayload, fullSync: false)
+        _ = try stuckLocal.prepare(stuckPayload, fullSync: true)
+        let archivedBoth = try stuckLocal.archiveAllPending()
+        guard archivedBoth.count == 2, try !stuckLocal.hasAnyPendingMaterials() else { throw TestFailure.fixture }
+        try stuckLocal.save(account: "after-both@example.invalid", folder: "PaperDigest2", automatic: false, intervalHours: 24)
+        guard stuckLocal.profile.account == "after-both@example.invalid" else { throw TestFailure.fixture }
+
+        print("Mac 全资料同步验证通过（共享离线包、冲突原稿、丢回执续传、恢复后重放、幂等、全资料待续传归档解阻）")
     }
 
     @MainActor private static func live(_ args: [String], fixture: Fixture) async throws {

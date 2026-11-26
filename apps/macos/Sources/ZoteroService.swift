@@ -909,10 +909,12 @@ actor ZoteroService {
             guard available.contains(where: { $0.key == key }) else { throw ServiceError.invalid("目标分类不存在") }
             return key
         }
-        let matches = available.filter { $0.name == input.collectionName }
+        guard let rawName = input.collectionName else { throw ServiceError.invalid("目标分类名称无效") }
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw ServiceError.invalid("目标分类名称无效") }
+        let matches = available.filter { $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == name }
         guard matches.count <= 1 else { throw ServiceError.invalid("目标分类重名，请选择具体分类") }
         if let match = matches.first { return match.key }
-        let name = input.collectionName!.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = try await createObject(["name": name, "parentCollection": false], endpoint: "collections", scope: scope)
         let check = try await readObject("/api/users/0/collections/\(key)", scope: scope)
         guard (check["data"] as? [String: Any])?["name"] as? String == name else { throw ServiceError.verification("目标分类") }

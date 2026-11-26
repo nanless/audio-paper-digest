@@ -1,81 +1,98 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="442" viewBox="0 0 960 442" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="464" viewBox="0 0 960 464" role="img" aria-labelledby="title desc">
   <title id="title">Mac and Android Workbench Reading, Podcast, and Sync Boundaries</title>
-  <desc id="desc">Public website snapshots and daily podcast releases flow read-only into the Mac and Android Workbench apps; on the right, three isolated user channels handle personal study models, Zotero archiving (local on Mac, Web API on Android), and versioned WebDAV backups (dashed arrow shows confirmed restore).</desc>
+  <desc id="desc">Studio Monograph client boundary diagram: public portal snapshots and v1.5.0 daily podcasts flow read-only into Mac and Android Workbench apps; four isolated user channels handle opt-in personal LLM study, per-device Zotero archiving, one-click bidirectional WebDAV sync with lossless note conflict merge, and versioned full-space backup snapshots with confirmed restore.</desc>
   <defs>
     <style>
-      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #0f172a; }
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #182120; }
       .t-main { font-size: 20px; font-weight: 700; }
-      .t-sub { font-size: 13px; fill: #475569; }
-      .t-card { font-size: 14.8px; font-weight: 700; }
-      .t-badge { font-size: 11px; font-weight: 700; }
-      .t-body { font-size: 12.5px; fill: #334155; }
-      .t-small { font-size: 11.4px; fill: #475569; }
-      .l-solid { fill: none; stroke: #2563eb; stroke-width: 2; marker-end: url(#a-blue); }
-      .l-teal { fill: none; stroke: #0d9488; stroke-width: 2; marker-end: url(#a-teal); }
-      .l-dash { fill: none; stroke: #0d9488; stroke-width: 2; stroke-dasharray: 6 4; marker-end: url(#a-teal); }
+      .t-sub { font-size: 12.6px; fill: #4a5755; }
+      .t-card { font-size: 14.5px; font-weight: 700; }
+      .t-head { font-size: 15px; font-weight: 700; fill: #f7f5f0; }
+      .t-badge { font-size: 12px; font-weight: 700; }
+      .t-body { font-size: 12.4px; fill: #2d3a38; }
+      .t-small { font-size: 12px; fill: #556360; }
+      .l-teal { fill: none; stroke: #0f5c58; stroke-width: 2; marker-end: url(#a-teal); }
+      .l-bi { fill: none; stroke: #1f8a82; stroke-width: 2.2; marker-start: url(#a-teal-rev); marker-end: url(#a-teal); }
+      .l-copper { fill: none; stroke: #b85a34; stroke-width: 2; marker-end: url(#a-copper); }
+      .l-dash { fill: none; stroke: #b85a34; stroke-width: 2; stroke-dasharray: 6 4; marker-end: url(#a-copper); }
     </style>
-    <marker id="a-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-      <path d="M0,1 L7.5,4 L0,7 Z" fill="#2563eb"/>
-    </marker>
     <marker id="a-teal" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-      <path d="M0,1 L7.5,4 L0,7 Z" fill="#0d9488"/>
+      <path d="M0,1 L7.5,4 L0,7 Z" fill="#0f5c58"/>
+    </marker>
+    <marker id="a-teal-rev" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto">
+      <path d="M7.5,1 L0,4 L7.5,7 Z" fill="#1f8a82"/>
+    </marker>
+    <marker id="a-copper" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,1 L7.5,4 L0,7 Z" fill="#b85a34"/>
     </marker>
   </defs>
 
-  <rect width="960" height="442" rx="16" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  <rect width="960" height="464" rx="16" fill="#f7f5f0" stroke="#d6cfc3" stroke-width="1.5"/>
 
-  <text x="32" y="42" class="t-main">Mac &amp; Android Workbench · Public Feed vs. Personal Data Boundaries</text>
-  <text x="32" y="64" class="t-sub">Solid arrows: read-only fetch or explicit save  ·  Dashed arrow: user-confirmed restore (never silent merge)</text>
+  <text x="32" y="42" class="t-main">Mac &amp; Android Workbench (v1.5.0) · Public Feed vs. Personal Sync</text>
+  <text x="32" y="64" class="t-sub">One-way solid: read-only / explicit save  ·  Two-way solid: one-click WebDAV sync  ·  Dashed: confirmed snapshot restore</text>
 
-  <rect x="32" y="96" width="224" height="122" rx="12" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
-  <text x="48" y="124" class="t-card" fill="#1d4ed8">Audio Research Portal</text>
-  <text x="48" y="149" class="t-body">Static detail snapshots &amp; tags</text>
-  <text x="48" y="169" class="t-body">Guides, digests, BibTeX / RIS</text>
-  <text x="48" y="196" class="t-small">Read-only; never triggers analysis</text>
+  <!-- Left -->
+  <rect x="32" y="92" width="218" height="134" rx="12" fill="#eef6f4" stroke="#9ec9c3" stroke-width="1.5"/>
+  <text x="48" y="120" class="t-card" fill="#0f5c58">Audio Research Portal</text>
+  <text x="48" y="146" class="t-body">Static snapshots &amp; taxonomy</text>
+  <text x="48" y="168" class="t-body">Guides, digests, BibTeX/RIS</text>
+  <text x="48" y="202" class="t-small">Read-only · never re-analyzes</text>
 
-  <rect x="32" y="236" width="224" height="114" rx="12" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.6"/>
-  <text x="48" y="264" class="t-card" fill="#0f766e">Daily Audio Podcast</text>
-  <text x="48" y="289" class="t-body">Verified GitHub Release audio</text>
-  <text x="48" y="309" class="t-body">Streaming SHA-256 + MP3 check</text>
-  <text x="48" y="334" class="t-small">150 MiB / 5-episode LRU cache</text>
+  <rect x="32" y="242" width="218" height="140" rx="12" fill="#fdf6f1" stroke="#e4bfa8" stroke-width="1.5"/>
+  <text x="48" y="270" class="t-card" fill="#a64d2a">Daily Podcast (v1.5.0)</text>
+  <text x="48" y="296" class="t-body">Allowlisted Release HTTPS</text>
+  <text x="48" y="318" class="t-body">SHA-256 + MP3 verification</text>
+  <text x="48" y="356" class="t-small">150 MiB / 5-ep LRU · no backup</text>
 
-  <path d="M260 157 H306" class="l-solid"/>
-  <path d="M260 293 H306" class="l-teal"/>
+  <path d="M254 159 H296" class="l-teal"/>
+  <path d="M254 312 H296" class="l-copper"/>
 
-  <rect x="310" y="96" width="276" height="254" rx="14" fill="#ffffff" stroke="#a78bfa" stroke-width="1.8"/>
-  <rect x="310" y="96" width="276" height="44" rx="14" fill="#f5f3ff"/>
-  <rect x="310" y="126" width="276" height="14" fill="#f5f3ff"/>
-  <text x="328" y="124" class="t-card" fill="#5b21b6">Workbench Apps (v1.5.0)</text>
+  <!-- Center -->
+  <rect x="300" y="92" width="276" height="290" rx="14" fill="#ffffff" stroke="#b9cfc9" stroke-width="1.8"/>
+  <rect x="300" y="92" width="276" height="44" rx="14" fill="#182120"/>
+  <rect x="300" y="122" width="276" height="14" fill="#182120"/>
+  <text x="318" y="120" class="t-head">Workbench Apps (v1.5.0)</text>
 
-  <text x="328" y="164" class="t-badge" fill="#4338ca">Mac (Apple Silicon) · Android (4 ABIs)</text>
-  <text x="328" y="190" class="t-body">• 400-concept browse &amp; offline search</text>
-  <text x="328" y="214" class="t-body">• Reader guide + side-by-side PDF</text>
-  <text x="328" y="238" class="t-body">• Favorites by date, highlights, notes</text>
-  <text x="328" y="262" class="t-body">• Native podcast (0.75x–2.0x, chapters)</text>
-  <text x="328" y="286" class="t-body">• Sanitized HTML5, MathML, and SVG</text>
-  <text x="328" y="328" class="t-small">API keys &amp; integrity keys stay local</text>
+  <text x="318" y="160" class="t-badge" fill="#0f5c58">Mac (Apple Silicon) · Android (4 ABIs)</text>
+  <text x="318" y="188" class="t-body">• 400-concept &amp; multi-word search</text>
+  <text x="318" y="213" class="t-body">• Reader guide + side-by-side PDF</text>
+  <text x="318" y="238" class="t-body">• Favorites by date, highlights, notes</text>
+  <text x="318" y="263" class="t-body">• Native podcast (0.75x–2.0x, chapters)</text>
+  <text x="318" y="288" class="t-body">• Studio Monograph sanitized HTML</text>
+  <line x1="318" y1="314" x2="558" y2="314" stroke="#e5dfd4" stroke-width="1"/>
+  <text x="318" y="340" class="t-small">API &amp; integrity keys stay on device</text>
+  <text x="318" y="362" class="t-small">Keychain (Mac) / Keystore (Android)</text>
 
-  <path d="M590 140 H640" class="l-solid"/>
-  <path d="M590 223 H640" class="l-solid"/>
-  <path d="M590 298 H640" class="l-teal"/>
-  <path d="M644 328 H594" class="l-dash"/>
+  <!-- Arrows -->
+  <path d="M580 125 H626" class="l-teal"/>
+  <path d="M580 198 H626" class="l-teal"/>
+  <path d="M584 272 H624" class="l-bi"/>
+  <path d="M580 338 H626" class="l-copper"/>
+  <path d="M628 362 H584" class="l-dash"/>
 
-  <rect x="644" y="96" width="284" height="78" rx="11" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
-  <text x="660" y="121" class="t-card">Personal LLM Service (Opt-in)</text>
-  <text x="660" y="143" class="t-body">Sends only confirmed extracted text</text>
-  <text x="660" y="162" class="t-small">No raw PDF/images; separate billing</text>
+  <!-- Right 1 -->
+  <rect x="630" y="92" width="298" height="66" rx="11" fill="#ffffff" stroke="#d6cfc3" stroke-width="1.4"/>
+  <text x="646" y="116" class="t-card">Personal LLM Service (Opt-in)</text>
+  <text x="646" y="140" class="t-small">Approved extracted text only · own billing</text>
 
-  <rect x="644" y="186" width="284" height="78" rx="11" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
-  <text x="660" y="211" class="t-card">Zotero Library Archiving</text>
-  <text x="660" y="233" class="t-body">Mac: local API · Android: Web API</text>
-  <text x="660" y="252" class="t-small">Authorized independently per device</text>
+  <!-- Right 2 -->
+  <rect x="630" y="166" width="298" height="66" rx="11" fill="#ffffff" stroke="#d6cfc3" stroke-width="1.4"/>
+  <text x="646" y="190" class="t-card">Zotero Library Archiving</text>
+  <text x="646" y="214" class="t-small">Mac local API · Android Web API v3</text>
 
-  <rect x="644" y="276" width="284" height="74" rx="11" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
-  <text x="660" y="301" class="t-card" fill="#15803d">WebDAV Versioned Backups</text>
-  <text x="660" y="323" class="t-body">Separate folder snapshots; manual restore</text>
-  <text x="660" y="341" class="t-small">Secrets and local keys never leave device</text>
+  <!-- Right 3 -->
+  <rect x="630" y="240" width="298" height="68" rx="11" fill="#eef6f4" stroke="#1f8a82" stroke-width="1.5"/>
+  <text x="646" y="264" class="t-card" fill="#0f5c58">One-Click Bidirectional WebDAV</text>
+  <text x="646" y="288" class="t-small">Syncs notes/files · lossless conflict merge</text>
 
-  <rect x="32" y="376" width="896" height="44" rx="8" fill="#f1f5f9"/>
-  <text x="48" y="396" class="t-small">Privacy &amp; upgrades: Restoring a backup preserves prior notes and history without sending model requests; WebDAV backup and Zotero storage stay separate.</text>
-  <text x="48" y="413" class="t-small">v1.5.0 keeps legacy portal-path compatibility for 1.4.x backups. macOS requires macOS 15+ (Apple silicon); Android 1.4.4+ upgrades in place.</text>
+  <!-- Right 4 -->
+  <rect x="630" y="316" width="298" height="66" rx="11" fill="#fdf6f1" stroke="#e4bfa8" stroke-width="1.5"/>
+  <text x="646" y="340" class="t-card" fill="#a64d2a">Full-Space Snapshot Backups</text>
+  <text x="646" y="364" class="t-small">Versioned folder · manual point-in-time restore</text>
+
+  <!-- Footer -->
+  <rect x="32" y="402" width="896" height="44" rx="8" fill="#ece8de"/>
+  <text x="48" y="421" class="t-small">Isolation: WebDAV sync/backup folders stay separate from Zotero attachments; restoring keeps history without re-sending LLM calls.</text>
+  <text x="48" y="438" class="t-small">Upgrades: v1.5.0 reads 1.4.x backups and legacy portal paths; macOS requires 15+ (Apple silicon), Android 1.4.4+ upgrades in place.</text>
 </svg>

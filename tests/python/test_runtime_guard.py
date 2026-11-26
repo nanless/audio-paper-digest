@@ -188,6 +188,19 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
                 with self.assertRaisesRegex(ExternalRuntimeRequired, 'workspaceRealpath 路径与当前工作区不符'):
                     require_workspace_role('history', copy)
 
+    def test_registered_python_roles_and_marker_size_cap(self):
+        import tempfile
+        from runtime_guard import required_workspace_role_for_command
+        self.assertEqual(required_workspace_role_for_command('publish-conference.py'), 'daily')
+        self.assertEqual(required_workspace_role_for_command('publication_activation.py'), 'history')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            marker = root / '.paper-digest-workspace-role.json'
+            marker.write_text(' ' * 4097, encoding='utf-8')
+            marker.chmod(0o600)
+            with self.assertRaisesRegex(ExternalRuntimeRequired, '超过 4096 字节'):
+                require_workspace_role('daily', root)
+
 
 if __name__ == '__main__':
     unittest.main()

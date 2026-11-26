@@ -171,15 +171,51 @@ class PublishedAggregateStore(private val directory:File) {
             value.keys().asSequence().toSet()==ClientProtocols.recordKeys(value.get("contract"),activationFamily,body.keys,value.opt("schemaFingerprint") as? String)&&
             body.all{(key,expected)->value.opt(key)==expected}){"汇总激活代与原清单不一致"}
     }
-    private fun shardFile(shardURL:String,shardSHA256:String):File =
-        if(shardURL.startsWith("client/details/catalog/"))child("desktop-details","catalog","$shardSHA256.json")
-        else child("index","$shardSHA256.json")
+    private fun shardFile(shardURL:String,shardSHA256:String):File = when {
+        shardURL.startsWith("client/details/catalog/") -> child("desktop-details","catalog","$shardSHA256.json")
+        shardURL.startsWith("client/details/pages/") -> child("aggregate-pages","$shardSHA256.json")
+        else -> child("index","$shardSHA256.json")
+    }
 
-    fun stage(rawManifest:ByteArray,validationEpoch:String,check:()->Unit={}):PublishedAggregateCatalog {
+    private fun mergeSupplementalPages(base:PublishedAggregateCatalog,refFile:File,readFile:(File,Int)->ByteArray):PublishedAggregateCatalog {
+        val ref=JSONObject(PublishedUtf8.decode(readFile(refFile,64*1024)))
+        require(ref.getString("snapshotSHA256")==base.snapshotSHA256){"补充页面索引与目录快照不符"}
+        val shardURL=ref.getString("shardURL");val shardSHA=ref.getString("shardSHA256");val shardBytes=ref.getInt("shardBytes")
+        val rawShard=readFile(shardFile(shardURL,shardSHA),shardBytes)
+        val extra=PublishedAggregateReader.readSupplementalPages(base.snapshotSHA256,shardURL,shardSHA,shardBytes,rawShard,base.records.mapTo(HashSet()){it.id})
+        return if(extra.isEmpty())base else PublishedAggregateCatalog(base.snapshotSHA256,base.sourceRecordCount,(base.records+extra).sortedBy{it.id})
+    }
+
+    fun stage(rawManifest:ByteArray,validationEpoch:String,supplementalPages:List<JSONObject> = emptyList(),check:()->Unit={}):PublishedAggregateCatalog {
         val identity=epoch(validationEpoch)
-        val catalog=PublishedAggregateReader.read(rawManifest,check){read(shardFile(it.url,it.sha256),it.bytes)}
-        check();immutable(child("aggregate-manifests","${catalog.snapshotSHA256}.json"),rawManifest)
-        check();val sidecar=child("aggregate-index","${catalog.snapshotSHA256}.json")
+        val base=PublishedAggregateReader.read(rawManifest,check){read(shardFile(it.url,it.sha256),it.bytes)}
+        check();immutable(child("aggregate-manifests","${base.snapshotSHA256}.json"),rawManifest)
+        val sidecar=child("aggregate-index","${base.snapshotSHA256}.json")
+        val refFile=child("aggregate-pages-refs","${base.snapshotSHA256}.json")
+        if(supplementalPages.isNotEmpty()&&(!sidecar.exists()||refFile.exists())){
+            val existingIds=base.records.mapTo(HashSet()){it.id}
+            val seenIds=HashSet<String>()
+            val filtered=supplementalPages.filter{row->
+                if(row.optString("pageType")!="page")false
+                else {
+                    val url=PublishedAggregateReader.pageURL(row.getString("permalink"))
+                    val id="page:"+java.net.URI(url).rawPath
+                    id !in existingIds && seenIds.add(id)
+                }
+            }
+            if(filtered.isNotEmpty()){
+                val pageBytes=OfflineFoundationJSON.encode(JSONArray(filtered))
+                val pageSHA=PublishedAggregateReader.sha(pageBytes)
+                val pageURL="client/details/pages/$pageSHA.json"
+                check();immutable(child("aggregate-pages","$pageSHA.json"),pageBytes)
+                if(!refFile.exists()){
+                    val ref=JSONObject().put("snapshotSHA256",base.snapshotSHA256).put("shardURL",pageURL).put("shardSHA256",pageSHA).put("shardBytes",pageBytes.size).put("recordCount",filtered.size)
+                    check();immutable(refFile,OfflineFoundationJSON.encode(ref))
+                }
+            }
+        }
+        val catalog=if(refFile.exists())mergeSupplementalPages(base,refFile,::read) else base
+        check()
         if(!sidecar.exists())immutable(sidecar,catalogRecord(catalog))
         val actual=catalogRecord(catalog,read(sidecar,8*1024*1024))
         val marker=child("aggregate-activations",catalog.snapshotSHA256,"$identity.json")
@@ -206,7 +242,9 @@ class PublishedAggregateStore(private val directory:File) {
         require(PublishedAggregateReader.validSHA(snapshot));check()
         ownedSourceReadScope()?.catalogs?.get(snapshot)?.let{saved->return saved.catalog}
         val raw=sourceBytes(child("aggregate-manifests","$snapshot.json"),2*1024*1024);require(PublishedAggregateReader.sha(raw)==snapshot)
-        val catalog=PublishedAggregateReader.read(raw,check){sourceBytes(shardFile(it.url,it.sha256),it.bytes)}
+        val base=PublishedAggregateReader.read(raw,check){sourceBytes(shardFile(it.url,it.sha256),it.bytes)}
+        val refFile=child("aggregate-pages-refs","$snapshot.json")
+        val catalog=if(refFile.exists())mergeSupplementalPages(base,refFile,::sourceBytes) else base
         ownedSourceReadScope()?.catalogs?.put(snapshot,ParsedSource(catalog,PublishedAggregateReader.sha(OfflineFoundationJSON.encode(catalog.json()))))
         return catalog
     }
@@ -284,7 +322,7 @@ class PublishedAggregateStore(private val directory:File) {
     /** Image bytes are immutable SHA blobs shared across platform derivation namespaces. */
     fun cacheImageBlob(bytes:ByteArray):AggregateImageBlob {
         require(bytes.size in 1..AggregateImages.MAX_IMAGE_BYTES)
-        val mime=AggregateImages.rasterMIME(bytes.copyOfRange(0,minOf(16,bytes.size)));val sha=PublishedAggregateReader.sha(bytes)
+        val mime=AggregateImages.imageMIME(bytes);val sha=PublishedAggregateReader.sha(bytes)
         immutable(child(AggregateImages.blobDirectory(false),sha),bytes)
         return AggregateImageBlob(sha,mime,bytes.size)
     }
@@ -322,7 +360,13 @@ class PublishedAggregateStore(private val directory:File) {
         try {
             val digest=java.security.MessageDigest.getInstance("SHA-256");val buffer=ByteBuffer.allocate(65536);val header=ByteArray(minOf(16,size));var headerCount=0;var count=0
             while(count<size){buffer.clear();buffer.limit(minOf(buffer.capacity(),size-count));val n=channel.read(buffer);require(n>0);digest.update(buffer.array(),0,n);if(headerCount<header.size){val take=minOf(n,header.size-headerCount);buffer.array().copyInto(header,headerCount,0,take);headerCount+=take};count+=n}
-            require(channel.read(ByteBuffer.allocate(1))==-1&&digest.digest().joinToString(""){"%02x".format(it.toInt()and 255)}==sha&&AggregateImages.rasterMIME(header)==record.mime){"图片真实字节或类型身份不一致"}
+            require(channel.read(ByteBuffer.allocate(1))==-1&&digest.digest().joinToString(""){"%02x".format(it.toInt()and 255)}==sha){"图片真实字节或类型身份不一致"}
+            val verifiedMime=if(record.mime=="image/svg+xml"){
+                channel.position(0);val svgBytes=ByteArray(size);val target=ByteBuffer.wrap(svgBytes)
+                while(target.hasRemaining())require(channel.read(target)>0)
+                AggregateImages.imageMIME(svgBytes)
+            }else AggregateImages.rasterMIME(header)
+            require(verifiedMime==record.mime){"图片真实字节或类型身份不一致"}
             noLinks(file);val after=attrs(file);require(before.fileKey()==after.fileKey()&&before.size()==after.size()&&before.lastModifiedTime()==after.lastModifiedTime())
             ownedSourceReadScope()?.let{scope->
                 val proof=SourceFile(file,AggregateImages.MAX_IMAGE_BYTES,sha);val prior=scope.files.putIfAbsent(file.absolutePath,proof)

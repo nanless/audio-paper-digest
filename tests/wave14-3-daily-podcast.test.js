@@ -671,3 +671,79 @@ test('daily-podcast-script: handles diverse single-paper themes and never slices
     assert.match(script.segments[1].text, /0\.210、0\.069、0\.092/);
     assert.match(script.segments[1].text, /30秒录音/);
 });
+
+test('podcast pipeline F3 fixes: RSS dedupe, Workbench branding, env blogBaseUrl->feedUrl, and TTS arrows/&lt;=', () => {
+    // 1) normalizeForChineseTts handles &lt;=, &gt;=, and ASCII arrows BEFORE standalone < / >
+    const arrowText = scriptLib.normalizeForChineseTts(
+        '流程为 text -> speech、A => B、voice <-> text、target <- source，指标 WER &lt;= 2.5%，MOS &gt;= 4.1，且 SNR<-5 dB。'
+    );
+    assert.match(arrowText, /text 到 speech/);
+    assert.match(arrowText, /A 到 B/);
+    assert.match(arrowText, /voice 双向 text/);
+    assert.match(arrowText, /target 来自 source/);
+    assert.match(arrowText, /词错率 W E R 小于等于百分之2\.5/);
+    assert.match(arrowText, /主观音质分 M O S 大于等于 4\.1/);
+    assert.match(arrowText, /小于-5分贝/);
+    assert.doesNotMatch(arrowText, /-大于|=大于|小于-(?!\d)|小于=|大于=/);
+
+    // 2) buildGhReleaseCommands & publishPodcastToGitHubRelease use "Audio Research Workbench" (not legacy "Audio Paper Digest")
+    const cmds = releaseLib.buildGhReleaseCommands({
+        repo: 'nanless/audio-research-portal',
+        tag: 'podcast-2026-11',
+        assetPath: '/tmp/podcast-2026-11-24.mp3'
+    });
+    assert.ok(cmds.createArgs.some(arg => arg.includes('Audio Research Workbench')));
+    assert.ok(!cmds.createArgs.some(arg => arg.includes('Audio Paper Digest')));
+
+    // 3) buildPodcastRssXml deduplicates episodes by date (matching buildClientPodcastFeedJson) & preserves stable GUID
+    const epA = releaseLib.buildPodcastEpisodeMetadata({
+        date: '2026-11-24',
+        title: '第一版 2026-11-24',
+        description: '新版说明',
+        audioUrl: 'https://github.com/nanless/audio-research-portal/releases/download/podcast-2026-11/podcast-2026-11-24.mp3',
+        audioBytes: 1024,
+        audioSha256: 'a'.repeat(64),
+        durationSeconds: 120
+    });
+    const epADup = { ...epA, title: '重复旧版 2026-11-24' };
+    const rss = releaseLib.buildPodcastRssXml([epA, epADup]);
+    assert.equal((rss.match(/<item>/g) || []).length, 1);
+    assert.match(rss, /第一版 2026-11-24/);
+    assert.doesNotMatch(rss, /重复旧版 2026-11-24/);
+    assert.match(rss, /<guid isPermaLink="false">audio-paper-digest:podcast:2026-11-24<\/guid>/);
+
+    // 4) runDailyPodcastPipeline derives siteRoot and default feedUrl from env.PAPER_DIGEST_BLOG_URL
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wave14-3-feedurl-'));
+    try {
+        const inputPath = path.join(tmpDir, 'deep-analysis-result.json');
+        fs.writeFileSync(inputPath, JSON.stringify(makeSampleAnalysisData('2026-11-24'), null, 2));
+        const res = publisher.runDailyPodcastPipeline(
+            {
+                date: '2026-11-24',
+                input: inputPath,
+                outDir: path.join(tmpDir, 'out'),
+                backend: 'silent-mock',
+                mockSecondsPerChunk: 0.2,
+                dryRun: true
+            },
+            {
+                env: {
+                    PATH: process.env.PATH,
+                    HOME: process.env.HOME,
+                    PAPER_DIGEST_BLOG_URL: 'https://custom.example.org/portal/posts'
+                }
+            }
+        );
+        const xml = fs.readFileSync(res.rssPath, 'utf8');
+        assert.match(xml, /<link>https:\/\/custom\.example\.org\/portal\/<\/link>/);
+        assert.match(xml, /href="https:\/\/custom\.example\.org\/portal\/podcast\.xml"/);
+        assert.ok(
+            res.releaseResult.plannedCommands.createArgs.some(arg => arg.includes('Audio Research Workbench'))
+        );
+        assert.ok(
+            !res.releaseResult.plannedCommands.createArgs.some(arg => arg.includes('Audio Paper Digest'))
+        );
+    } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+});

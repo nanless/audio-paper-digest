@@ -39,10 +39,12 @@ import org.json.JSONObject
     Text("自动识别根据模型和完整端点选择协议；切换选项不会发起请求。",style=MaterialTheme.typography.bodySmall)
     if(muse) {
         Text("Muse 需要 HTTP CONNECT 代理",style=MaterialTheme.typography.titleSmall)
-        OutlinedTextField(settings.optString("httpProxy"),{change("httpProxy",it)},Modifier.fillMaxWidth(),label={Text("HTTP CONNECT 代理（Muse 必填）")},supportingText={Text("填写不含账号密码的 http://主机:端口。")},singleLine=true)
+        OutlinedTextField(settings.optString("httpProxy"),{change("httpProxy",it)},Modifier.fillMaxWidth(),label={Text("HTTP CONNECT 代理（Muse 必填）")},supportingText={Text("填写不含账号密码的 http://主机:端口；arXiv 原文 PDF 与插图同样使用此代理。")},singleLine=true)
+    } else {
+        Text("网络代理（Muse 与 arXiv 原文/插图）",style=MaterialTheme.typography.titleSmall)
+        OutlinedTextField(settings.optString("httpProxy"),{change("httpProxy",it)},Modifier.fillMaxWidth(),label={Text("HTTP CONNECT 代理（Muse 与 arXiv 原文/插图必填）")},supportingText={Text("填写不含账号密码的 http://主机:端口。下载 arXiv 原文 PDF/插图及使用 Muse 模型时必填；其他模型未配置时保持直连。")},singleLine=true)
     }
     TextButton({advanced=!advanced}){Text(if(advanced)"收起高级参数"else"展开高级参数（预算、超时与推理）")}
-    if(!advanced&&settings.optString("httpProxy").isNotBlank()&&!muse)Text("已有代理配置，可在高级参数中查看；未修改的原值会保留。",style=MaterialTheme.typography.bodySmall)
     if(advanced) {
         Text("用量与等待时间",style=MaterialTheme.typography.titleMedium)
         Text("这些设置不会自动发起请求；实际发送前仍会核对用量与费用。",style=MaterialTheme.typography.bodySmall)
@@ -53,10 +55,6 @@ import org.json.JSONObject
         ModelSettingChoice("推理强度",settings.optString("reasoningEffort","default"),listOf("default" to "服务默认","none" to "不额外推理","minimal" to "最少","low" to "低","medium" to "中","high" to "高","xhigh" to "更高")){change("reasoningEffort",it)}
         Text("仅支持该参数的 Responses 服务会采用推理设置。",style=MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth()) {Text("Responses 流式响应",Modifier.weight(1f));Switch(settings.optBoolean("responsesStream"),{change("responsesStream",it)})}
-        if(!muse) {
-            Text("代理配置",style=MaterialTheme.typography.titleMedium)
-            OutlinedTextField(settings.optString("httpProxy"),{change("httpProxy",it)},Modifier.fillMaxWidth(),label={Text("HTTP CONNECT 代理（Muse 必填）")},supportingText={Text("Muse 使用此配置；其他模型沿用现有直连规则。")},singleLine=true)
-        }
     }
     error?.let {Text(it,color=MaterialTheme.colorScheme.error)}
     FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {

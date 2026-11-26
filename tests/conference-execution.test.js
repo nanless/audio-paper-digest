@@ -386,3 +386,44 @@ test('真实计划的仅状态恢复先核请求 UUID，不能为另一执行记
     assert.deepEqual(fs.readFileSync(path.join(directory, 'state.json')), original);
     assert.deepEqual(fs.readdirSync(directory).sort(), ['patches', 'state.json']);
 });
+
+test('operation.lock 仅允许回收本机已退出进程的陈旧锁，拒绝本机存活与异机锁', t => {
+    const f = fixture(t);
+    let state = execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: f.handle, executionId, now: stamp });
+    const directory = path.join(f.root, executionId);
+    const lock = path.join(directory, 'operation.lock');
+
+    // 本机存活进程持有的锁拒绝回收
+    fs.writeFileSync(lock, `${JSON.stringify({
+        pid: process.pid, hostname: os.hostname(), startedAt: stamp, owner: 'live-worker'
+    })}\n`, { mode: 0o600 });
+    assert.throws(() => execution.transitionExecution({
+        executionRoot: f.root, executionId, planHandle: f.handle, owner: 'worker', now: stamp,
+        patch: { operationId, expectedStateSha256: state.stateSha256, paperId,
+            nextState: { status: 'source_ready', usage: { requests: 1 } } }
+    }), /locked/);
+    fs.unlinkSync(lock);
+
+    // 异机锁即使 PID 不存在也拒绝回收
+    fs.writeFileSync(lock, `${JSON.stringify({
+        pid: 2147483647, hostname: `${os.hostname()}-remote`, startedAt: stamp, owner: 'remote-worker'
+    })}\n`, { mode: 0o600 });
+    assert.throws(() => execution.transitionExecution({
+        executionRoot: f.root, executionId, planHandle: f.handle, owner: 'worker', now: stamp,
+        patch: { operationId, expectedStateSha256: state.stateSha256, paperId,
+            nextState: { status: 'source_ready', usage: { requests: 1 } } }
+    }), /locked/);
+    fs.unlinkSync(lock);
+
+    // 本机已退出进程的合法 0600 锁可被自动回收并完成转换
+    fs.writeFileSync(lock, `${JSON.stringify({
+        pid: 2147483647, hostname: os.hostname(), startedAt: stamp, owner: 'crashed-worker'
+    })}\n`, { mode: 0o600 });
+    state = execution.transitionExecution({
+        executionRoot: f.root, executionId, planHandle: f.handle, owner: 'worker', now: stamp,
+        patch: { operationId, expectedStateSha256: state.stateSha256, paperId,
+            nextState: { status: 'source_ready', usage: { requests: 1 } } }
+    });
+    assert.equal(state.paperStates[paperId].status, 'source_ready');
+    assert.equal(fs.existsSync(lock), false);
+});

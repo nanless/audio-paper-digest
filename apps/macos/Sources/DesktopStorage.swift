@@ -60,7 +60,7 @@ actor DesktopStorage {
             guard Self.sha(data)==hash,pdf["bytes"] as? Int==data.count,data.starts(with:Data("%PDF-".utf8)),let document=PDFDocument(data:data),document.pageCount>0 else {throw StorageError.invalid("离线原文真实字节、大小或 PDF 格式校验失败")}
             pdfHash=hash;payloads.append(("original.pdf",data,"pdf",address))
         }
-        guard resources.count<=32 else{throw StorageError.invalid("离线科学图数量超过上限")}
+        guard resources.count<=64 else{throw StorageError.invalid("离线科学图数量超过上限")}
         var seen=Set<String>(),imageBytes=0
         for resource in resources {
             guard resource["kind"] as? String=="image",let path=resource["localPath"] as? String,let hash=resource["sha256"] as? String,PrivateStoragePaths.validSHA(hash),let address=resource["sourceURL"] as? String,Self.https(address) else {throw StorageError.invalid("离线科学图缺少实际来源或校验材料")}
@@ -285,7 +285,7 @@ actor DesktopStorage {
     private static func verifyDirectory(_ folder:URL,expectedID:String)throws->Manifest {
         _=try PrivateStoragePaths.checkedDirectory(folder)
         let manifestFile=try PrivateStoragePaths.checkedFile(relative:"manifest.json",directory:folder),bytes=try PrivateStoragePaths.boundedData(manifestFile,limit:2*1024*1024),manifest=try JSONDecoder().decode(Manifest.self,from:bytes)
-        guard ClientProtocols.hasValidHeader(manifest.contract,fingerprint:manifest.schemaFingerprint,"paperdigest-offline-package"),manifest.id==expectedID,!manifest.paperID.isEmpty,Self.https(manifest.blogURL),Self.https(manifest.sourceURL),PrivateStoragePaths.validSHA(manifest.articleRevisionSHA256),manifest.files.count>=2,manifest.files.count<=35 else{throw StorageError.invalid("离线包清单合同无效")}
+        guard ClientProtocols.hasValidHeader(manifest.contract,fingerprint:manifest.schemaFingerprint,"paperdigest-offline-package"),manifest.id==expectedID,!manifest.paperID.isEmpty,Self.https(manifest.blogURL),Self.https(manifest.sourceURL),PrivateStoragePaths.validSHA(manifest.articleRevisionSHA256),manifest.files.count>=2,manifest.files.count<=67 else{throw StorageError.invalid("离线包清单合同无效")}
         var names=Set<String>()
         for entry in manifest.files {
             guard names.insert(entry.path).inserted,PrivateStoragePaths.validSHA(entry.sha256),entry.bytes>=0 else{throw StorageError.invalid("离线包清单有重复或无效文件")}

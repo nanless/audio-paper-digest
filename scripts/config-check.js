@@ -68,23 +68,40 @@ function main(argv = process.argv.slice(2)) {
         console.error(`⚠️ .env 权限过宽（当前 ${((envStat.mode & 0o777).toString(8)).padStart(4, '0')}），建议收紧为 0600`);
     }
     let text;
-    const fd = fs.openSync(options.envFile, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    let fd;
+    const MAX_ENV_BYTES = 2 * 1024 * 1024;
     try {
+        fd = fs.openSync(options.envFile, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
         const opened = fs.fstatSync(fd);
-        if (!opened.isFile() || opened.dev !== envStat.dev || opened.ino !== envStat.ino || opened.size > 2 * 1024 * 1024) {
+        if (!opened.isFile() || (process.platform !== 'win32' && opened.nlink !== 1)
+            || opened.dev !== envStat.dev || opened.ino !== envStat.ino || opened.size > MAX_ENV_BYTES) {
             console.error(`❌ .env 打开后身份异常或过大：${options.envFile}`);
             return 1;
         }
-        const buf = Buffer.alloc(opened.size);
-        let offset = 0;
-        while (offset < opened.size) {
-            const n = fs.readSync(fd, buf, offset, opened.size - offset, null);
+        const chunks = [];
+        let total = 0;
+        const buf = Buffer.alloc(65536);
+        while (total <= MAX_ENV_BYTES) {
+            const toRead = Math.min(buf.length, MAX_ENV_BYTES + 1 - total);
+            const n = fs.readSync(fd, buf, 0, toRead, null);
             if (n <= 0) break;
-            offset += n;
+            chunks.push(Buffer.from(buf.subarray(0, n)));
+            total += n;
         }
-        text = buf.subarray(0, offset).toString('utf8');
+        if (total > MAX_ENV_BYTES) {
+            console.error(`❌ .env 打开后身份异常或过大：${options.envFile}`);
+            return 1;
+        }
+        text = Buffer.concat(chunks, total).toString('utf8');
+    } catch (error) {
+        if (error?.code === 'ELOOP') {
+            console.error(`❌ .env 必须是无硬链接的普通文件，禁止符号链接：${options.envFile}`);
+            return 1;
+        }
+        console.error(`❌ 无法读取 .env：${error.message}`);
+        return 1;
     } finally {
-        fs.closeSync(fd);
+        if (fd !== undefined) fs.closeSync(fd);
     }
     const entries = parseLikeRuntime(text);
     const { items, unknown, spelling } = validateEntries(entries);

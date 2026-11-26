@@ -23,4 +23,27 @@ class ExportDocumentTest {
         val result = ExportService.htmlDocument("实际标题", body)
         assertEquals("实际标题", Jsoup.parse(result).select("h1").text()); assertTrue(result.contains(body))
     }
+    @Test fun exportedHtmlIncludesWave12AndTrack133CssCardsWithBalancedBracesAndStrictCsp() {
+        val head = ExportService.htmlDocumentHead("导读标题")
+        val requiredSelectors = listOf(
+            ".audio-spec-quick-card",
+            ".audio-spec-grid",
+            "a.audio-demo-cta-btn",
+            ".implementation-specs-card",
+            ".digest-brief-card",
+            ".digest-reading-tiers",
+            ".digest-spotlight-card",
+            "details.compact-authors-details",
+            "details.index-abstract-more",
+            ".scoring-audit-card",
+            ".scoring-evidence-grid",
+            ".scoring-strengths-box",
+            ".scoring-defects-box",
+        )
+        requiredSelectors.forEach { selector ->
+            assertTrue("Missing Wave 12 / Track 13.3 selector in export HTML: $selector", head.contains(selector))
+        }
+        assertTrue(head.contains("default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"))
+        assertEquals("Export CSS braces must stay balanced", head.count { it == '{' }, head.count { it == '}' })
+    }
 }

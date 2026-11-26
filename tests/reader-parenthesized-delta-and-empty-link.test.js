@@ -317,11 +317,15 @@ test('HTML 全幅 colspan 表同时含 [][] 行首前缀与 (±X)(±X) 双写时
     assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
 
     const projectRoot = path.resolve(__dirname, '..');
-    const checkPage = (targetPaper, renderedOverride) => JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', `import sys, json
+    let checkPageSeq = 0;
+    const checkPage = (targetPaper, renderedOverride) => {
+        const reqFile = path.join(root, `check-page-${++checkPageSeq}.json`);
+        fs.writeFileSync(reqFile, JSON.stringify({ paper: targetPaper, runs: path.dirname(plan.runDir), override: renderedOverride || null }), 'utf8');
+        return JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', `import sys, json
 from pathlib import Path
 sys.path.insert(0, 'tests/python')
 from test_publish_to_blog import publish_to_blog as publish
-req = json.load(sys.stdin)
+req = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
 publish.DAILY_FRESH_SOURCE_RUNS_DIR = Path(req['runs'])
 p = req['paper']
 projected = publish._collapse_mathjax_double_write(
@@ -335,12 +339,12 @@ try:
     publish._validate_api_reader_source_bindings(p, rendered)
     print(json.dumps({'issue': None, 'rendered': projected}))
 except Exception as e:
-    print(json.dumps({'issue': str(e), 'rendered': projected}))`], {
-        cwd: projectRoot,
-        input: JSON.stringify({ paper: targetPaper, runs: path.dirname(plan.runDir), override: renderedOverride || null }),
-        encoding: 'utf8',
-        env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
-    }).trim());
+    print(json.dumps({'issue': str(e), 'rendered': projected}))`, reqFile], {
+            cwd: projectRoot,
+            encoding: 'utf8',
+            env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
+        }).trim());
+    };
 
     const beforePaper = JSON.stringify(paper);
     const ok = checkPage(paper, null);
@@ -492,11 +496,15 @@ test('配对 DOM 特征格表同含 [][] 与 (±X)(±X) 时新旧落盘稿均通
     assert.equal(engine.hasValidIntegratedApiReaderRecords(paper), true);
 
     const projectRoot = path.resolve(__dirname, '..');
-    const checkPaired = targetPaper => JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', `import sys, json
+    let checkPairedSeq = 0;
+    const checkPaired = targetPaper => {
+        const reqFile = path.join(root, `check-paired-${++checkPairedSeq}.json`);
+        fs.writeFileSync(reqFile, JSON.stringify({ paper: targetPaper, runs: path.dirname(plan.runDir) }), 'utf8');
+        return JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', `import sys, json
 from pathlib import Path
 sys.path.insert(0, 'tests/python')
 from test_publish_to_blog import publish_to_blog as publish
-req = json.load(sys.stdin)
+req = json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
 publish.DAILY_FRESH_SOURCE_RUNS_DIR = Path(req['runs'])
 p = req['paper']
 try:
@@ -510,12 +518,12 @@ try:
     publish._validate_api_reader_source_bindings(p, projected)
     print(json.dumps({'issue': None, 'rendered': projected}))
 except Exception as e:
-    print(json.dumps({'issue': str(e)}))`], {
-        cwd: projectRoot,
-        input: JSON.stringify({ paper: targetPaper, runs: path.dirname(plan.runDir) }),
-        encoding: 'utf8',
-        env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
-    }).trim());
+    print(json.dumps({'issue': str(e)}))`, reqFile], {
+            cwd: projectRoot,
+            encoding: 'utf8',
+            env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
+        }).trim());
+    };
 
     const ok = checkPaired(paper);
     assert.equal(ok.issue, null, ok.issue || '');

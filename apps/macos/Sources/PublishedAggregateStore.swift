@@ -271,7 +271,7 @@ struct PublishedAggregateStore {
             let activation=try ClientProtocols.record(Self.activationFamily,fields:["snapshotSHA256":catalog.snapshotSHA256,"validationEpoch":identity,"catalogSHA256":actualSHA])
             try immutable(JSONSerialization.data(withJSONObject:activation,options:[.sortedKeys]),to:marker)
         }
-        return catalog
+        return try PublishedAggregateReader.supplementCanonicalDesktopPages(catalog, manifestRaw: manifest, siteBase: siteBase)
     }
     /// Neither a matching manifest nor an orphan activation from a cancelled same-SHA sync can grant currentness.
     func load(activeSnapshotSHA256:String,validationEpoch:String?)throws->PublishedAggregateCatalog? {
@@ -286,9 +286,10 @@ struct PublishedAggregateStore {
         #if PAPER_DIGEST_TESTS
         metrics?.sourceParses += 1
         #endif
-        let catalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try shardFile(url:shard.url, sha256:shard.sha256),limit:shard.bytes)}
-        let actual=try catalogRecord(catalog,original:read(sidecar,limit:8*1024*1024))
+        let baseCatalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try shardFile(url:shard.url, sha256:shard.sha256),limit:shard.bytes)}
+        let actual=try catalogRecord(baseCatalog,original:read(sidecar,limit:8*1024*1024))
         try checkActivation(read(marker,limit:4096),snapshot:activeSnapshotSHA256,epoch:identity,catalogSHA:PublishedAggregateReader.sha(actual))
+        let catalog=try PublishedAggregateReader.supplementCanonicalDesktopPages(baseCatalog, manifestRaw: raw, siteBase: siteBase)
         readScope?.catalogs[activeSnapshotSHA256]=catalog;readScope?.activations[activationKey]=catalog
         return catalog
     }
@@ -301,11 +302,19 @@ struct PublishedAggregateStore {
         #if PAPER_DIGEST_TESTS
         metrics?.sourceParses += 1
         #endif
-        let catalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try shardFile(url:shard.url, sha256:shard.sha256),limit:shard.bytes)}
+        let baseCatalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try shardFile(url:shard.url, sha256:shard.sha256),limit:shard.bytes)}
+        let catalog=try PublishedAggregateReader.supplementCanonicalDesktopPages(baseCatalog, manifestRaw: raw, siteBase: siteBase)
         readScope?.catalogs[snapshot]=catalog;return catalog
     }
     func originalRow(for descriptor:PublishedAggregate)throws->Data {
         guard try sourceCatalog(snapshot:descriptor.source.manifestSHA256).records.contains(descriptor) else{throw AggregateFailure.invalid("汇总原目录身份未核验")}
+        if descriptor.kind == .page && descriptor.source.shardURL == PublishedAggregateReader.canonicalDesktopPagesShardURL {
+            try PublishedAggregateReader.require(descriptor.source.shardSHA256 == descriptor.source.manifestSHA256 && descriptor.source.shardBytes == 0, "桌面规范页面来源声明无效")
+            let row = try PublishedAggregateReader.canonicalDesktopPageRow(at: descriptor.source.rowIndex, siteBase: siteBase)
+            let normalized = try PublishedAggregateReader.normalizedRow(row)
+            try PublishedAggregateReader.require(PublishedAggregateReader.sha(normalized) == descriptor.source.normalizedRowSHA256, "汇总原行身份不符")
+            return normalized
+        }
         let bytes=try read(try shardFile(url:descriptor.source.shardURL, sha256:descriptor.source.shardSHA256),limit:descriptor.source.shardBytes)
         guard let rows=try JSONSerialization.jsonObject(with:bytes) as? [[String:Any]],rows.indices.contains(descriptor.source.rowIndex) else{throw AggregateFailure.invalid("汇总原行位置无效")}
         let normalized=try PublishedAggregateReader.normalizedRow(rows[descriptor.source.rowIndex])

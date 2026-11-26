@@ -230,3 +230,70 @@ test('llm-accounts-quota sync 通过官方 /zen/go/v1/usage 实时同步并按�
         assert.ok(!rendered.includes(secret));
     }
 });
+
+test('P1-5/P2-5: import 拒绝 null/false/空串隐式强转与非法时区且保持原子性，--live 拒绝非 status/sync 子命令', async t => {
+    const { root, stateFile, env } = makeFixture(t);
+
+    // --live 只允许 status 或 sync，其余子命令退出码 2
+    for (const badArgs of [
+        ['set', '--account', '1', '--monthly-remaining', '50', '--live'],
+        ['clear', '--account', '1', '--live'],
+        ['import', '--file', '/tmp/x.json', '--live'],
+        ['init-from-history', '--live']
+    ]) {
+        assert.throws(
+            () => cli.parseArgs(badArgs),
+            err => err instanceof cli.QuotaCliUsageError && err.exitCode === 2,
+            `should reject --live with ${badArgs[0]}`
+        );
+    }
+    assert.strictEqual(cli.parseArgs(['status', '--live']).live, true);
+    assert.strictEqual(cli.parseArgs(['sync', '--live']).live, true);
+
+    // 先写入账号 1 的合法状态
+    cli.runCommand(cli.parseArgs([
+        'set', '--account', '1', '--monthly-expiry', '2026-12-10', '--monthly-remaining', '80', '--state', stateFile
+    ]), env, { nowMs: BASE_NOW });
+    const snapshotBefore = fs.readFileSync(stateFile, 'utf8');
+
+    // import 第二项含 null/false/""/越界时区/非整数 account -> 必须整体 fail-closed 不修改账号 1
+    const badEntries = [
+        { account: 2, monthlyRemainingPct: null },
+        { account: 2, monthlyRemainingPct: false },
+        { account: 2, monthlyRemainingPct: '' },
+        { account: 2, weeklyRemainingPct: null },
+        { account: 2, rolling5hRemainingPct: '' },
+        { account: true, monthlyRemainingPct: 50 },
+        { account: 2, monthlyResetDay: false },
+        { account: 2, monthlyExpiry: '2026-12-01T00:00:00+20:00' },
+        { account: 2, monthlyExpiry: '1969-12-31' },
+        { account: 2, monthlyExpiry: null }
+    ];
+    for (let i = 0; i < badEntries.length; i += 1) {
+        const importFile = path.join(root, `bad-coercion-${i}.json`);
+        fs.writeFileSync(importFile, JSON.stringify([
+            { account: 1, monthlyRemainingPct: 10 },
+            badEntries[i]
+        ]));
+        assert.throws(
+            () => cli.runCommand(cli.parseArgs(['import', '--file', importFile, '--state', stateFile]), env, { nowMs: BASE_NOW }),
+            err => err.exitCode === 2,
+            `should reject ${JSON.stringify(badEntries[i])}`
+        );
+        assert.strictEqual(fs.readFileSync(stateFile, 'utf8'), snapshotBefore, '失败的 import 不得部分落盘');
+    }
+
+    // readStateReadOnly 使用 pool.readStateStrict 拒绝 symlink 状态文件
+    const symState = path.join(root, 'sym-state.json');
+    fs.symlinkSync(stateFile, symState);
+    assert.throws(() => cli.readStateReadOnly(symState), err => err.code === 'LLM_ACCOUNT_POOL_STATE_ERROR');
+
+    // runSyncCommand 遵守规范代理顺序：非法 https_proxy 不穿透到 HTTP_PROXY
+    const syncBadProxy = await cli.runSyncCommand(
+        cli.parseArgs(['sync', '--json', '--state', stateFile]),
+        { ...env, https_proxy: 'socks5://127.0.0.1:7897', HTTP_PROXY: 'http://127.0.0.1:7897' },
+        { nowMs: BASE_NOW }
+    );
+    assert.strictEqual(syncBadProxy.sync.synced, 0);
+    assert.strictEqual(syncBadProxy.sync.failed, 3);
+});

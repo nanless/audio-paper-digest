@@ -157,6 +157,40 @@ test('命令行校验显式的身份和来源参数，根目录仍可覆写', t 
     assert.throws(() => cli.parseArgs(['--apply', '--snapshot', 'relative.json', '--forum-id', f.forumId]), /Use/);
 });
 
+test('OpenReview 下载器在重定向、非 200、非法类型和超长声明时释放响应体', async t => {
+    const f = fixture(t);
+    const url = api.pdfUrlForForum(f.forumId);
+    const makeBody = counter => ({ cancel: async () => { counter.canceled += 1; } });
+
+    const c1 = { canceled: 0 };
+    await assert.rejects(api.defaultFetchPdf({ url, forumId: f.forumId, maxRedirects: 0 }, {
+        detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}),
+        fetchImpl: async () => ({ status: 302, headers: { get: () => `/attachment?id=${f.forumId}&name=pdf` }, body: makeBody(c1) })
+    }), /重定向/);
+    assert.equal(c1.canceled, 1);
+
+    const c2 = { canceled: 0 };
+    await assert.rejects(api.defaultFetchPdf({ url, forumId: f.forumId }, {
+        detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}),
+        fetchImpl: async () => ({ status: 503, headers: { get: () => null }, body: makeBody(c2) })
+    }), /HTTP 503/);
+    assert.equal(c2.canceled, 1);
+
+    const c3 = { canceled: 0 };
+    await assert.rejects(api.defaultFetchPdf({ url, forumId: f.forumId }, {
+        detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}),
+        fetchImpl: async () => ({ status: 200, headers: { get: k => k === 'content-type' ? 'text/plain' : null }, body: makeBody(c3) })
+    }), /Content-Type/);
+    assert.equal(c3.canceled, 1);
+
+    const c4 = { canceled: 0 };
+    await assert.rejects(api.defaultFetchPdf({ url, forumId: f.forumId, maxBytes: 10 }, {
+        detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}),
+        fetchImpl: async () => ({ status: 200, headers: { get: k => k === 'content-type' ? 'application/pdf' : (k === 'content-length' ? '999' : null) }, body: makeBody(c4) })
+    }), /字节上限/);
+    assert.equal(c4.canceled, 1);
+});
+
 
 test('下载和凭证核验拒绝重复身份或附件名称参数', async t => {
     const f = fixture(t); const canonical = api.pdfUrlForForum(f.forumId);

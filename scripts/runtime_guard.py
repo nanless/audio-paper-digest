@@ -25,10 +25,11 @@ _DEFAULT_ROLE_CONTRACT_SPEC = {
             'newConferenceDaily': ['conference-extract.py', 'conference-page-render.py'],
             'daily': [
                 'generate-blog.py', 'review-blog.py', 'push-blog.py',
-                'publish-to-blog.py', 'conference-filter-evidence-extract.py', 'indextts_synth.py',
+                'publish-to-blog.py', 'publish-conference.py',
+                'conference-filter-evidence-extract.py', 'indextts_synth.py',
                 'conference_publication_figure_crop.py', 'conference_publication_figure_view_replay.py',
             ],
-            'historyExact': ['conference-extract.py', 'history-inventory.py'],
+            'historyExact': ['conference-extract.py', 'history-inventory.py', 'publication_activation.py'],
             'historyPrefixes': ['conference-', 'historical-', 'history-'],
         },
     },
@@ -57,26 +58,31 @@ def _env_file_value(env_file, key):
     """读工作区 .env 里的一个键。开关由本模块自己解析，因为 python 入口
     在 npm 包装层检查时还没有任何脚本读过 .env。"""
     try:
+        max_bytes = 2 * 1024 * 1024
         before = env_file.lstat()
         if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode) \
-                or (os.name != 'nt' and before.st_nlink != 1) or before.st_size > 2 * 1024 * 1024:
+                or (os.name != 'nt' and before.st_nlink != 1) or before.st_size > max_bytes:
             return ''
         fd = os.open(env_file, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
         try:
             opened = os.fstat(fd)
             if not stat.S_ISREG(opened.st_mode) \
+                    or (os.name != 'nt' and opened.st_nlink != 1) \
                     or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino) \
-                    or opened.st_size > 2 * 1024 * 1024:
+                    or opened.st_size > max_bytes:
                 return ''
             chunks = []
-            remaining = opened.st_size + 1
+            remaining = max_bytes + 1
             while remaining > 0:
                 chunk = os.read(fd, min(65536, remaining))
                 if not chunk:
                     break
                 chunks.append(chunk)
                 remaining -= len(chunk)
-            raw = b''.join(chunks).decode('utf-8')
+            raw_bytes = b''.join(chunks)
+            if len(raw_bytes) > max_bytes:
+                return ''
+            raw = raw_bytes.decode('utf-8')
         finally:
             os.close(fd)
     except (OSError, UnicodeDecodeError):
@@ -149,7 +155,17 @@ def require_workspace_role(required_role, project_root=PROJECT_ROOT):
                     '工作区角色标记不是只有一个硬链接的普通文件，或打开的文件与先前检查的文件不同。')
             if os.name != 'nt' and opened.st_mode & 0o077:
                 raise ExternalRuntimeRequired('工作区角色标记权限必须为 0600')
-            raw = os.read(fd, max(opened.st_size + 1, 4096))
+            if opened.st_size > 4096:
+                raise ExternalRuntimeRequired('工作区角色标记超过 4096 字节，或读取长度与打开时记录的长度不同。')
+            chunks = []
+            remaining = 4097
+            while remaining > 0:
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b''.join(chunks)
             if len(raw) > 4096 or len(raw) != opened.st_size:
                 raise ExternalRuntimeRequired('工作区角色标记超过 4096 字节，或读取长度与打开时记录的长度不同。')
         finally:

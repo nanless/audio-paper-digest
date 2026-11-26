@@ -13,11 +13,28 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
 }
 @MainActor final class NativeTaskActionButton: NSButton { var lease: NativeTaskLease? }
 @MainActor private final class TaskFlippedView: NSView { override var isFlipped: Bool { true } }
+@MainActor private final class TaskRootView: NSView {
+    override init(frame: NSRect) { super.init(frame: frame); wantsLayer = true; updatePalette() }
+    required init?(coder: NSCoder) { fatalError("Not archived") }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updatePalette() }
+    private func updatePalette() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            layer?.backgroundColor = (dark ? NSColor(srgbRed: 0.051, green: 0.067, blue: 0.071, alpha: 1) : NSColor(srgbRed: 0.969, green: 0.961, blue: 0.941, alpha: 1)).cgColor
+        }
+    }
+}
 @MainActor private final class TaskCardView: NSView {
     override init(frame: NSRect) { super.init(frame: frame); wantsLayer = true; layer?.cornerRadius = 10; layer?.borderWidth = 1; updatePalette() }
     required init?(coder: NSCoder) { fatalError("Not archived") }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updatePalette() }
-    private func updatePalette() { effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor; layer?.borderColor = NSColor.separatorColor.cgColor } }
+    private func updatePalette() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            layer?.backgroundColor = (dark ? NSColor(srgbRed: 0.078, green: 0.102, blue: 0.110, alpha: 1) : NSColor(srgbRed: 0.984, green: 0.980, blue: 0.969, alpha: 1)).cgColor
+            layer?.borderColor = (dark ? NSColor(srgbRed: 0.153, green: 0.204, blue: 0.220, alpha: 1) : NSColor(srgbRed: 0.867, green: 0.847, blue: 0.800, alpha: 1)).cgColor
+        }
+    }
 }
 
 @MainActor final class NativeTasksController: NSViewController {
@@ -51,7 +68,7 @@ enum NativeTaskFeedback { case requested, opened, previewOnly }
     deinit { NotificationCenter.default.removeObserver(self);if let inputEventMonitor{NSEvent.removeMonitor(inputEventMonitor)} }
     required init?(coder: NSCoder) { fatalError("Not archived") }
     override func loadView() {
-        view = NSView(frame: NSRect(x: 0, y: 0, width: 850, height: 650))
+        view = TaskRootView(frame: NSRect(x: 0, y: 0, width: 850, height: 650))
         header.font = .systemFont(ofSize: 24, weight: .semibold)
         let help = label("同步、原文、个人研究与存档的原记录。Control-Tab 进入操作区，Tab 或 Shift-Tab 切换。", size: 13, secondary: true)
         view.setAccessibilityHelp("Control-Tab 进入操作区，Control-Shift-Tab 从末项进入；Tab 或 Shift-Tab 到边界时返回页面。")

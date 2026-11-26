@@ -160,6 +160,26 @@ class UsageTests(unittest.TestCase):
                     llm_usage.write_llm_usage_event(llm_usage.usage_event_header(), directory)
             self.assertEqual(list(directory.glob('*.tmp')), [])
 
+    def test_batch_date_validation_and_macos_root_symlink_alias(self):
+        with llm_usage.with_llm_usage_context({'batchDate': '2026-11-25', 'stage': 'publish.text'}):
+            ev = llm_usage.build_llm_usage_event(protocol='openai', model='test', request={}, status_code=200)
+        self.assertEqual(ev.get('batchDate'), '2026-11-25')
+        for bad in ('2026-02-30', '2026-13-01', 'invalid', '', 20261125, None):
+            ev_bad = llm_usage.build_llm_usage_event(
+                protocol='openai', model='test', request={}, status_code=200, context={'batchDate': bad}
+            )
+            self.assertNotIn('batchDate', ev_bad)
+
+        # Unresolved tempfile path (on macOS under /var/folders) must succeed while real user symlinks still fail
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger_dir = Path(tmp) / 'ledger'
+            target = llm_usage.write_llm_usage_event(llm_usage.usage_event_header(), ledger_dir)
+            self.assertTrue(target.is_file())
+            user_link = Path(tmp) / 'user-link'
+            user_link.symlink_to(ledger_dir, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                llm_usage.write_llm_usage_event(llm_usage.usage_event_header(), user_link)
+
 
 if __name__ == '__main__':
     unittest.main()

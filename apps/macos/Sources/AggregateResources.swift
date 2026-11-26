@@ -99,7 +99,7 @@ enum AggregateResources {
     }
     /// `body` comes from the normal native HTML extraction and sanitizer; no bridge-supplied tree or URL.
     static func plan(source: AggregateDocument, sanitizedBody: XMLElement) throws -> AggregateImagePlan {
-        let images=try sanitizedBody.nodes(forXPath:".//img");try PublishedAggregateReader.require(images.count<=128,"汇总图片超过上限")
+        let images=try sanitizedBody.nodes(forXPath:".//img");try PublishedAggregateReader.require(images.count<=512,"汇总图片超过上限")
         let slots=images.enumerated().map { index,node -> AggregateImageSlot in
             let image=node as! XMLElement
             var parent=image.parent;var caption=""
@@ -116,7 +116,7 @@ enum AggregateResources {
         return .init(contract:planContract,descriptor:source.descriptor,rawHTMLSHA256:source.rawHTMLSHA256,originalBodySHA256:source.sanitizedBodySHA256,slots:slots,templateBodyHTML:template,templateBodySHA256:PublishedAggregateReader.sha(Data(template.utf8)))
     }
     static func validateReferenceBudget(_ images:[AggregateImageRecord]) throws {
-        try PublishedAggregateReader.require(images.count<=128,"汇总图片超过上限")
+        try PublishedAggregateReader.require(images.count<=512,"汇总图片超过上限")
         // Reject the whole cold observation before allocating any base64 or rendered image nodes.
         var referencedBytes=0
         for record in images where record.sha256 != nil {

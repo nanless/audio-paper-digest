@@ -44,4 +44,51 @@ class ReaderDocumentStyleV15Test {
         )
         assertEquals(darkHead.count { it == '{' }, darkHead.count { it == '}' })
     }
+
+    @Test
+    fun studioMonographDarkMatAndMissingLivePortalClassesAndCtaInkContrast() {
+        val lightHead = readerDocumentHead(0xfffaf8f4.toInt(), 0xff1c1a17.toInt(), 0xff0f5c58.toInt())
+        val darkHead = readerDocumentHead(0xff121617.toInt(), 0xffede8df.toInt(), 0xff5ecac0.toInt())
+
+        // Studio Monograph CTA ink contrast: light teal -> #ffffff; dark bright teal (#5ecac0, lum > 0.45) -> #141b28
+        assertTrue(lightHead.contains("background:#0f5c58;color:#ffffff;"))
+        assertTrue(darkHead.contains("background:#5ecac0;color:#141b28;"))
+
+        // Warm archival paper mat for SVGs & transparent PNGs ONLY in dark mode
+        assertTrue(darkHead.contains("figure img,p>img{background:#faf8f4;padding:8px;border-radius:10px;"))
+        assertFalse(lightHead.contains("figure img,p>img{background:#faf8f4;"))
+
+        // All 9 previously unstyled live portal classes present in both modes
+        val portalClasses = listOf(
+            ".classification-tree",
+            ".classification-cards",
+            ".classification-card",
+            ".classification-node",
+            ".paper-tags",
+            ".paper-tags--aggregate",
+            ".reader-roadmap-title",
+            ".reader-roadmap-list",
+            ".audio-spec-quick-header",
+            ".audio-spec-quick-title",
+            ".audio-demo-cta-wrap",
+            ".resource-primary-note",
+            ".reader-content-notice",
+            ".image-unavailable-notice",
+            ".image-original-description",
+            ".scoring-weights-strip",
+            ".scoring-audit-meta",
+            ".math-fallback",
+            ".highlight",
+            ".chroma",
+        )
+        for (selector in portalClasses) {
+            assertTrue("Missing portal selector in light mode: $selector", lightHead.contains(selector))
+            assertTrue("Missing portal selector in dark mode: $selector", darkHead.contains(selector))
+        }
+        assertEquals(lightHead.count { it == '{' }, lightHead.count { it == '}' })
+        assertEquals(darkHead.count { it == '{' }, darkHead.count { it == '}' })
+        assertFalse(darkHead.contains("<script"))
+        assertFalse(darkHead.contains("script-src"))
+        assertFalse(darkHead.contains("media-src"))
+    }
 }

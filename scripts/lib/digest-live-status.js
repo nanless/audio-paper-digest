@@ -569,7 +569,7 @@ function inferStage(evidence = {}) {
         else stage = 'complete';
     }
     const hint = logStageHint(latestLog, { logFreshSeconds });
-    return { stage: applyLogStageHint(stage, hint), logStageHint: hint };
+    return { stage: applyLogStageHint(stage, hint, latestLog), logStageHint: hint };
 }
 
 function reviewCounts(generation, review) {
@@ -676,16 +676,21 @@ function buildLiveStatus(options = {}) {
     const recordContext = { manifestSha: actualSha(generationPath), receiptSha: actualSha(reviewPath),
         visualSha: actualSha(visualPath), coverSha: actualSha(coverPath) };
 
-    const counts = inferAnalysisCounts(deep);
+    const matchedRaw = documentMatchesDate(raw, date, ['batchDate']) ? raw : null;
+    const matchedDecisions = documentMatchesDate(decisions, date, ['batchDate']) ? decisions : null;
+    const matchedFiltered = documentMatchesDate(filtered, date, ['batchDate']) ? filtered : null;
+    const matchedDeep = documentMatchesDate(deep, date, ['batchDate']) ? deep : null;
+
+    const counts = inferAnalysisCounts(matchedDeep);
     const latestLog = options.latestLog !== undefined
         ? options.latestLog : readLatestLog(paths.logsDir, { nowMs, date });
     const { stage, logStageHint: hint } = inferStage({
         date,
-        raw,
+        raw: matchedRaw,
         fetchCheckpoint,
-        decisions,
-        filtered,
-        deep,
+        decisions: matchedDecisions,
+        filtered: matchedFiltered,
+        deep: matchedDeep,
         generation,
         review,
         visualManifest,
@@ -698,11 +703,11 @@ function buildLiveStatus(options = {}) {
     });
 
     const reviewInfo = reviewCounts(generation, review);
-    const rawCount = raw ? papersOf(raw).length : null;
-    const selectedCount = filtered ? papersOf(filtered).length
-        : (Number.isInteger(decisions?.stats?.related) ? decisions.stats.related : null);
-    const currentPaper = inferCurrentPaper(deep, stage);
-    const failedPapers = collectFailedPapers(deep);
+    const rawCount = matchedRaw ? papersOf(matchedRaw).length : null;
+    const selectedCount = matchedFiltered ? papersOf(matchedFiltered).length
+        : (Number.isInteger(matchedDecisions?.stats?.related) ? matchedDecisions.stats.related : null);
+    const currentPaper = inferCurrentPaper(matchedDeep, stage);
+    const failedPapers = collectFailedPapers(matchedDeep);
     const accountPool = readAccountPoolStatus(paths.accountPoolState, { nowMs });
     const { usage, usageError } = usageForDate(paths, date, options, nowMs);
     // 只有属于目标日期的产物才参与“无进度”计算；新日期尚未开跑时不报 stalled。

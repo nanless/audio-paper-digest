@@ -97,9 +97,9 @@ python3 apps/android/release_tools.py --repo "$PWD" verify \
   --prepared "$ANDROID_SIGNED" --certificate "$ANDROID_CERTIFICATE_SHA256"
 ```
 
-签名入口要求本机终端交互，运行时提示输入签名库密码和密钥密码。1.4.4 重新生成的签名库（1.4.5 与 1.4.6 沿用）的口令取自本机登录钥匙串的 `com.nanless.PaperDigest.android-release-signing.v1` 条目；该条目只保存口令，不保存签名库、私钥或证书。1.4.4 重新生成的签名库在仓库外以 `0600` 权限单独保存，父目录为 `0700`。不要把口令、签名库或私钥写入仓库、Release 或终端历史。
+签名入口要求本机终端交互，运行时提示输入签名库密码和密钥密码。1.4.4 重新生成的签名库（1.4.5 至 1.5.0 沿用）的口令取自本机登录钥匙串的 `com.nanless.PaperDigest.android-release-signing.v1` 条目；该条目只保存口令，不保存签名库、私钥或证书。1.4.4 重新生成的签名库在仓库外以 `0600` 权限单独保存，父目录为 `0700`。不要把口令、签名库或私钥写入仓库、Release 或终端历史。
 
-1.4.4 的证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，公开的 `android-build-info.json` 记录了这一值。1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，两版不同，已安装 1.4.3 的用户不能覆盖升级到 1.4.4 及后续版本：先导出完整备份、卸载旧版，再安装新版、恢复资料并重新配置设备凭据。1.4.4 至 1.4.6 的公开 `android-build-info.json` 记录 `signingOrigin: apksigner-sign`、`buildTools 36.0.0`，签名工具指纹与实际发行包一致；本页只登记这些可复核的来源，签名方案与证书主题以发行机器上 `apksigner verify --print-certs` 的输出为准。Android 来源、版本、四种 ABI、16 KiB 对齐、许可与包体核验必须与 Mac 使用同一发行提交。1.4.5 与 1.4.6 沿用 1.4.4 的发布签名库与证书，因此已安装 1.4.4 或 1.4.5 的用户可以直接覆盖升级；1.4.3 用户仍需先导出备份、卸载旧版再安装。
+1.4.4 的证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，公开的 `android-build-info.json` 记录了这一值。1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，两版不同，已安装 1.4.3 的用户不能覆盖升级到 1.4.4 及后续版本：先导出完整备份、卸载旧版，再安装新版、恢复资料并重新配置设备凭据。1.4.4 至 1.4.6 的公开 `android-build-info.json` 记录 `signingOrigin: apksigner-sign`、`buildTools 36.0.0`；1.4.7 与 1.5.0 沿用同一发布签名库，经 `apksigner` 36.0.0 签名（1.4.7 为 APK Signature Scheme v2 + v3，1.5.0 为 v3）并由 `finalize-signed` 封存核验，公开 `android-build-info.json` 记录 `signingOrigin: provided-signed-apk`，签名工具指纹与实际发行包一致；本页只登记这些可复核的来源，签名方案与证书主题以发行机器上 `apksigner verify --print-certs` 的输出为准。Android 来源、版本、四种 ABI、16 KiB 对齐、许可与包体核验必须与 Mac 使用同一发行提交。1.4.5 至 1.5.0 均沿用 1.4.4 的发布签名库与证书，因此已安装 1.4.4–1.4.7 的用户可以直接覆盖升级；1.4.3 用户仍需先导出备份、卸载旧版再安装。
 
 ## 5. 私有草稿、下载核验与公开
 
@@ -133,7 +133,7 @@ python3 apps/android/release_tools.py --repo "$PWD" joint-public-plan \
 
 公开计划重新核对包和来源，查询指定草稿 ID，按固定资产 ID 下载全部文件并比较真实字节，之后再次核对标签与草稿未变化。检查通过只生成针对同一 ID 的公开参数，不创建、上传或自动公开。维护者最终复核后执行，并核对公开状态、标签和附件。
 
-1.4.6 使用附注标签，标签对象（`29f9e269…`）指向提交 `fcf7e05b`；1.4.5 使用附注标签，标签对象指向提交 `f9241190`；1.4.4 使用附注标签，标签对象指向提交 `aecf5c25`；三版各十二件附件的名称、字节与 SHA-256 均见[客户端发行核验](client-release-verification.md)。1.4.3 于 2026-11-05 公开后，Release 页面与十二件附件在未登录状态下均返回 HTTP 200；Mac 按 `SHA256SUMS`、Android 按 `ANDROID-SHA256SUMS` 复核，远端大小与本地产物一致。1.4.3 的实际附件如下：
+1.5.0 使用附注标签，标签对象（`24a48710…`）指向提交 `5b5a8e79`；1.4.7 使用附注标签，标签对象（`3ca347ac…`）指向提交 `520e93c3`；1.4.6 使用附注标签，标签对象（`29f9e269…`）指向提交 `fcf7e05b`；1.4.5 使用附注标签，标签对象指向提交 `f9241190`；1.4.4 使用附注标签，标签对象指向提交 `aecf5c25`；五版各十二件附件的名称、字节与 SHA-256 均见[客户端发行核验](client-release-verification.md)。1.4.3 于 2026-11-05 公开后，Release 页面与十二件附件在未登录状态下均返回 HTTP 200；Mac 按 `SHA256SUMS`、Android 按 `ANDROID-SHA256SUMS` 复核，远端大小与本地产物一致。1.4.3 的实际附件如下：
 
 | 平台 | 附件 | 字节 | SHA-256 |
 |---|---|---:|---|

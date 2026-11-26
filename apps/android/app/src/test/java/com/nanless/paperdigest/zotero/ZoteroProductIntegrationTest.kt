@@ -28,7 +28,7 @@ class ZoteroProductIntegrationTest {
     private class Server:ZoteroTransport,DavWireTransport {
         val calls=mutableListOf<Request>();val blobs=mutableMapOf<String,ByteArray>();val items=mutableMapOf<String,JSONObject>()
         var davApiBackoff=false;var normalAttachmentBackoffOnce=false;var davApiCalls=0
-        var apiFilesPermission=false;var writes=0;var puts=0;var patches=0;var lostZip=false
+        var apiFilesPermission=false;var writes=0;var puts=0;var patches=0;var lostZip=false;var davPropfindCode=207;var davPropfindCalls=0
         var beforeDav:suspend()->Unit={};var drainGate:CompletableDeferred<Unit>?=null;var drainEntered=CompletableDeferred<Unit>()
         private fun bytes(code:Int,j:JSONObject?=null)=HttpBytes(code,emptyMap(),j?.toString()?.toByteArray()?:byteArrayOf())
         override suspend fun request(request:Request,limit:Int):HttpBytes {
@@ -57,6 +57,10 @@ class ZoteroProductIntegrationTest {
             calls+=request;assertNull(request.header("Zotero-API-Key"));assertTrue(request.header("Authorization")!!.startsWith("Basic "));assertEquals("dav.example.org",request.url.host)
             try{beforeDav()}finally{drainGate?.let{gate->withContext(NonCancellable){drainEntered.complete(Unit);gate.await()}}}
             check();val path=request.url.encodedPath
+            if(request.method=="PROPFIND"){
+                davPropfindCalls++;assertEquals("0",request.header("Depth"));assertEquals("/dav/zotero/",path)
+                return DavWireReply(davPropfindCode,emptyMap())
+            }
             if(request.method=="PUT"){
                 puts++;assertEquals("*",request.header("If-None-Match"));if(blobs.containsKey(path))return DavWireReply(412,emptyMap());val b=Buffer();request.body!!.writeTo(b);blobs[path]=b.readByteArray();if(lostZip&&path.endsWith(".zip")){lostZip=false;throw java.io.IOException("synthetic lost response after write")};return DavWireReply(201,emptyMap())
             }
@@ -112,5 +116,25 @@ class ZoteroProductIntegrationTest {
 
     @Test fun persistedDavApiBackoffStopsOrdinaryServiceApiBeforeCredentialsOrRequest()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();f.server.davApiBackoff=true;refusal{f.service.execute("archive",JSONObject().put("preparedID",id))};val calls=f.server.calls.size;val reads=f.keys.reads.size;val cold=f.service();refusal{cold.execute("resume",JSONObject().put("journalID",id))};assertEquals("DAV API pacing must also guard ordinary Service API",calls,f.server.calls.size);assertEquals(reads,f.keys.reads.size);assertEquals(0,f.server.puts)}finally{f.close()}}
     @Test fun normalServiceMetadataBackoffStopsBeforeEnteringDavBackend()=runBlocking{val f=Fixture();try{f.configure();val id=f.prepare();f.server.normalAttachmentBackoffOnce=true;refusal{f.service.execute("archive",JSONObject().put("preparedID",id))};assertEquals("ordinary API cooldown must guard the backend transition",0,f.server.davApiCalls);assertEquals(0,f.server.puts)}finally{f.close()}}
+    @Test fun checkDavPerformsAuthenticatedPropfindAndRejectsInvalidPassword()=runBlocking{
+        val f=Fixture()
+        try{
+            f.configure()
+            val davScope=f.service.webdavSecretScope()
+            f.keys.reads.clear()
+            f.service.execute("zotero.checkDav")
+            assertEquals(1,f.server.davPropfindCalls)
+            assertEquals(listOf(davScope),f.keys.reads)
+            assertTrue("checkDav must never touch Zotero API key or Cloud secrets",f.keys.reads.none{it=="zotero.primary"||it.startsWith("cloud")})
+
+            f.server.davPropfindCode=401
+            val authErr=refusal{f.service.execute("zotero.checkDav")}
+            assertTrue(authErr is ZoteroDavFailure && authErr.code=="authentication")
+
+            f.server.davPropfindCode=404
+            val missingErr=refusal{f.service.execute("zotero.checkDav")}
+            assertTrue(missingErr is ZoteroDavFailure && missingErr.code=="target")
+        }finally{f.close()}
+    }
 
 }

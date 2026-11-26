@@ -72,9 +72,16 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'conference-queues', root: path.join(runtime, 'conference-queues') },
         { key: 'conference-publications', root: path.join(runtime, 'conference-publications') },
         { key: 'conference-source-recovery', root: path.join(runtime, 'conference-source-recovery') },
+        { key: 'conference-recovery-grants', root: path.join(runtime, 'conference-recovery-grants') },
         { key: 'blog-republication-archives', root: path.join(runtime, 'blog-republication-archives') },
         { key: 'canonical-maintenance', root: path.join(runtime, 'canonical-maintenance') },
         { key: 'daily-fetch-refresh-backups', root: path.join(runtime, 'daily-fetch-refresh-backups') },
+        { key: 'daily-scoring-refresh-recovery', root: path.join(runtime, 'daily-scoring-refresh-recovery') },
+        { key: 'daily-render-observations', root: path.join(runtime, 'daily-render-observations') },
+        { key: 'daily-deployment-observations', root: path.join(runtime, 'daily-deployment-observations') },
+        { key: 'daily-republications', root: path.join(runtime, 'daily-republications') },
+        { key: 'analysis-repair-attempts', root: path.join(runtime, 'analysis-repair-attempts') },
+        { key: 'analysis-batch-reports', root: path.join(runtime, 'analysis-batch-reports') },
         { key: 'fresh-rewrites', root: path.join(runtime, 'fresh-rewrites') },
         { key: 'fresh-source-diagnostics', root: path.join(runtime, 'fresh-source-diagnostics') },
         { key: 'llm-usage', root: path.join(runtime, 'llm-usage') },
@@ -101,6 +108,9 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'historical-direct-aggregates', root: path.join(runtime, 'historical-direct-aggregates') },
         { key: 'historical-direct-tag-supplements', root: path.join(runtime, 'historical-direct-tag-supplements') },
         { key: 'historical-direct-taxonomy-supplements', root: path.join(runtime, 'historical-direct-taxonomy-supplements') },
+        { key: 'historical-source-identity-supplements', root: path.join(runtime, 'historical-source-identity-supplements') },
+        { key: 'historical-direct-publications', root: path.join(runtime, 'historical-direct-publications') },
+        { key: 'historical-direct-visual-dispositions', root: path.join(runtime, 'historical-direct-visual-dispositions') },
         { key: 'historical-source-tag-classifications', root: path.join(runtime, 'historical-source-tag-classifications') },
         { key: 'historical-source-taxonomy-classifications', root: path.join(runtime, 'historical-source-taxonomy-classifications') },
         { key: 'historical-icml-pdf-sources', root: path.join(runtime, 'historical-icml-pdf-sources') },
@@ -152,11 +162,47 @@ function resolveRetentionSetting(value = process.env.PD_STORAGE_RETENTION_DAYS, 
 // 读取保留天数。返回 error 是给调用方区分「确实没有这一项」和「读不出来」。
 function readProjectEnvValue(key, envFile = path.join(PROJECT_ROOT, '.env')) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key))) return { value: undefined, error: null };
+    const MAX_ENV_BYTES = 2 * 1024 * 1024;
     let source;
-    try { source = fs.readFileSync(envFile, 'utf8'); }
-    catch (error) {
+    let fd;
+    try {
+        const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+        fd = fs.openSync(envFile, flags);
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || (process.platform !== 'win32' && opened.nlink !== 1)) {
+            return {
+                value: undefined,
+                error: { path: String(envFile), code: 'UNSAFE_FILE', message: '.env 必须是无硬链接的普通文件，禁止符号链接' }
+            };
+        }
+        if (opened.size > MAX_ENV_BYTES) {
+            return {
+                value: undefined,
+                error: { path: String(envFile), code: 'FILE_TOO_LARGE', message: `.env 超过大小限制 (${MAX_ENV_BYTES} bytes)` }
+            };
+        }
+        const chunks = [];
+        let total = 0;
+        const buf = Buffer.alloc(65536);
+        while (total <= MAX_ENV_BYTES) {
+            const toRead = Math.min(buf.length, MAX_ENV_BYTES + 1 - total);
+            const n = fs.readSync(fd, buf, 0, toRead, null);
+            if (n <= 0) break;
+            chunks.push(Buffer.from(buf.subarray(0, n)));
+            total += n;
+        }
+        if (total > MAX_ENV_BYTES) {
+            return {
+                value: undefined,
+                error: { path: String(envFile), code: 'FILE_TOO_LARGE', message: `.env 超过大小限制 (${MAX_ENV_BYTES} bytes)` }
+            };
+        }
+        source = Buffer.concat(chunks, total).toString('utf8');
+    } catch (error) {
         if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { value: undefined, error: null };
         return { value: undefined, error: { path: String(envFile), code: error?.code || null, message: error?.message || String(error) } };
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
     }
     let result;
     for (const line of source.split('\n')) {
@@ -164,8 +210,8 @@ function readProjectEnvValue(key, envFile = path.join(PROJECT_ROOT, '.env')) {
         const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
         if (!match || match[1] !== key) continue;
         result = match[2].trim();
-        if ((result.startsWith('"') && result.endsWith('"'))
-            || (result.startsWith("'") && result.endsWith("'"))) result = result.slice(1, -1);
+        if (result.length >= 2 && ((result.startsWith('"') && result.endsWith('"'))
+            || (result.startsWith("'") && result.endsWith("'")))) result = result.slice(1, -1);
     }
     return { value: result, error: null };
 }
@@ -998,7 +1044,14 @@ function getPdfDuplicateReport(options = {}) {
             } catch (error) {
                 blockers.push({ type: 'io', path: record.path, message: `PDF SHA 计算失败: ${error.message}` });
             }
-        } else if (record.bytes !== null && declaredHashes.length > 0) {
+        } else if (record.bytes !== null && declaredHashes.length > 1) {
+            declaredHashMismatch = true;
+            blockers.push({
+                type: 'declared_hash_conflict',
+                path: record.path,
+                message: `同一 PDF 存在 ${declaredHashes.length} 个互不一致的 receipt 声明哈希，未纳入重复组`
+            });
+        } else if (record.bytes !== null && declaredHashes.length === 1) {
             actualHash = declaredHashes[0];
             hashSource = 'receipt-declared';
         }
@@ -2092,7 +2145,11 @@ function buildPrunePlan(options = {}) {
     const retentionDays = retention.days;
     const cutoffMs = nowMs - retentionDays * DAY_MS;
     const references = scanAuthoritativeReferences(layout);
-    const blockers = [...references.blockers, ...activeRuntimeLockBlockers(layout)];
+    const blockers = [
+        ...references.blockers,
+        ...activeRuntimeLockBlockers(layout),
+        ...sharedBlogLockBlockers(layout, { envFile: options.envFile, spawnSync: options.spawnSync })
+    ];
     const candidates = [];
     const retained = { recent: 0, referenced: 0, nonLog: 0 };
 

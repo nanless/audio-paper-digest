@@ -4461,6 +4461,7 @@ def render_packet(packet):
     if any(cid not in concepts for cid in ordered):
         raise ValueError('会议论文的标签记录中，部分主标签或已选概念没有对应的概念记录。')
     labels = [concepts[cid]['preferredLabel']['zh'] for cid in assignment.get('conceptIds', [])]
+    publisher = load_publish_to_blog()
     tag_presentation = render_tag_hierarchy_markdown({
         'registryVersion': assignment['registryVersion'],
         'registrySha256': assignment['registrySha256'],
@@ -4490,7 +4491,6 @@ def render_packet(packet):
     formula_lines, formula_assets = render_formula_image_section(
         packet.get('formulaEvidence'), paper_id, conference['id'], pdf_url)
     assets.extend(formula_assets)
-    publisher = load_publish_to_blog()
     presentation = build_reader_presentation(paper, plan=plan, resources=resources,
                                              publisher=publisher,
                                              authors=authors, exclude_resource_url=is_arxiv_url,
@@ -4552,7 +4552,7 @@ def render_packet(packet):
                  for cid in assignment['conceptIds']], ensure_ascii=False, separators=(',', ':'), sort_keys=True),
              f'paper_digest_primary_method: {json.dumps(concepts[assignment["primaryMethodId"]]["preferredLabel"]["zh"], ensure_ascii=False)}',
              f'paper_digest_conference_structure: {"pdf-visual-quote-evidence-v1" if capabilities == PDF_VISUAL else "replayable-pdf-layout-v1" if capabilities == FULL else "weak-text-only-v1"}', '---', '',
-             f'# 📄 {reader_title}', '', f'> 英文题目：*{title}*', '',
+             f'# 📄 {publisher.markdown_title_for_publish(reader_title)}', '', f'> 英文题目：*{publisher.markdown_title_for_publish(plain_title)}*', '',
              f'> 会议身份：`{paper_id}`', '',
              ('> ⚠️ 来源为会议 PDF 提取的正文；表格、公式和论文图片均不可用，本文不会据此重建这些结构。' if capabilities == WEAK else ''),
              ('> ℹ️ 这是会议论文集中的短篇 PDF；正文较短，但分析使用封存的完整 PDF 文本，未降级为摘要。' if short_proceedings else ''),

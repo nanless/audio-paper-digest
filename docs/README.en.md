@@ -25,21 +25,24 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 | Compare platform features and window adaptation | [Android feature mapping](android-feature-parity.md), [interface design](macos-interface-design-research.md) |
 | Understand personal study and product decisions | [Workbench design](desktop-research-workbench-plan.md), which separates current capabilities from future goals |
 
-The current published release for both Mac and Android is **1.5.0 (build 24)**, published on 26 November 2026 (Beijing time, commit `5b5a8e79`), adding the native daily podcast player, Wave 12 / Track 13.3 card typography, aligned offline search/filtering, full rebranding to Audio Research Workbench / Audio Research Portal, and legacy `/audio-paper-digest-blog/` path compatibility; see the [1.5.0 record](workbench-1.5.0-review.md). The previous release 1.4.7 / build 23 (23 November 2026, commit `520e93c3`) fixed newer paper blog pages that failed to open while hardening HTML5/SVG/MathML sanitization, networking, WebDAV sync, and Zotero transport; see the [1.4.7 record](workbench-1.4.7-review.md). Earlier release 1.4.6 / build 22 (20 November 2026, commit `fcf7e05b`) is recorded in the [1.4.6 record](workbench-1.4.6-review.md).
+The current published release for both Mac and Android is **1.5.0 (build 24)** (published 26 November 2026, commit `5b5a8e79`), adding the native daily audio podcast player, Wave 12 / Track 13.3 audio spec & score-audit card styling, aligned offline multi-word search and filters, full rebranding to Audio Research Workbench / Audio Research Portal, and legacy `/audio-paper-digest-blog/` compatibility; see the [1.5.0 release record](workbench-1.5.0-review.md).
 
-Version 1.4.5 (12 November 2026, commit `f9241190`) fixes repeated full-catalog synchronization when the Android app returns to the foreground, a macOS crash when the saved catalog JSON is corrupt, and `apps/macos/test.sh` exiting early without running the remaining suites; see the [1.4.5 record](workbench-1.4.5-review.md).
+<details>
+<summary>Previous releases 1.4.7–1.3.0 (each version retains its own date, environment, and tested scope)</summary>
 
-Version 1.4.4 restores recovery after a failed catalog load: `library.retryLoad` and `library.sync` still run when startup decoding failed, and a successful sync clears the failed state. It also adds to the repository the public-paper PDF and three figure crops that the macOS tests read, and closes gaps in the macOS suite (at the time of 1.4.4 macOS tests ran locally only; current CI runs standalone `client-macos` and `client-android` jobs outside the `test` aggregator). See the [1.4.4 record](workbench-1.4.4-review.md) for the actual changes and tested scope.
+| Release (Build) | Date | Summary | Record |
+|---|---|---|---|
+| 1.4.7 (23) | 2026-11-23 | Fixed newer paper blog pages that failed to open; hardened HTML5/SVG/MathML sanitization, networking, WebDAV, and Zotero | [1.4.7 record](workbench-1.4.7-review.md) |
+| 1.4.6 (22) | 2026-11-20 | Switched default reads to `client/details/*` snapshots; added lossless note conflict merge and portable backup desktop-detail replay | [1.4.6 record](workbench-1.4.6-review.md) |
+| 1.4.5 (21) | 2026-11-12 | Fixed repeated Android foreground full sync, macOS corrupt-catalog startup crash, and early exit in `apps/macos/test.sh` | [1.4.5 record](workbench-1.4.5-review.md) |
+| 1.4.4 (20) | 2026-11-05 | Restored `library.retryLoad`/`library.sync` after startup decode failure; committed public MiCLA test assets | [1.4.4 record](workbench-1.4.4-review.md) |
+| 1.4.3 (19) | 2026-11-05 | Compact catalog projection, background startup decode, reused guide/overview parsing, lightweight offline index, merged bridge calls | [1.4.3 record](workbench-1.4.3-review.md) |
+| 1.4.2 | 2026-11-04 | Fixed Nov 3–4 context declaration camelCase rebuilding with single lowercase alias compatibility on both apps | [1.4.2 record](workbench-1.4.2-review.md) |
+| 1.4.1 | 2026-11-03 | Fixed Nutstore favorites/notes sync, website paper detection, and re-verified on a Xiaomi physical device | [1.4.1 record](workbench-1.4.1-review.md) |
+| 1.4.0 | 2026-11-02 | Cross-platform one-click WebDAV full-data sync, Nutstore validation, and official installer acceptance | [1.4.0 record](workbench-1.4.0-review.md) |
+| 1.3.0 | 2026-11-02 | Site-wide 9-facet hierarchical classification, refreshed desktop/mobile UI, formal upgrades, and public downloads | [1.3.0 record](workbench-1.3.0-review.md) |
 
-Version 1.4.3 performance work (compact catalog projection, background startup decoding, reused explanation and aggregate parsing, offline index, merged bridge calls) is recorded in the [1.4.3 record](workbench-1.4.3-review.md).
-
-1.4.2 fixed the context declaration on the explanations published on 3 and 4 November 2026: the blog template rebuilds the declaration from a whitelist and keeps camelCase, while the Mac and Android apps accept the single lowercase alias in already-published pages. See the [1.4.2 record](workbench-1.4.2-review.md).
-
-1.4.1 covers Nutstore favorites and note fixes, website paper classification, and re-verification on a Xiaomi physical device; see the [1.4.1 record](workbench-1.4.1-review.md).
-
-1.4.0 covers WebDAV full-data sync on both platforms, Nutstore testing, and acceptance of the official installers; see the [1.4.0 record](workbench-1.4.0-review.md).
-
-The [1.3.0 record](workbench-1.3.0-review.md) covers classification browsing, both interfaces, final packages, upgrades, and public downloads. Other versions retain their own dates, environments, and tested scope. They do not establish that every real-service operation was repeated on the current package.
+</details>
 
 Use the [workbench review and release playbook](workbench-review-playbook.md) for cross-platform reviews, sync checks, and releases. See the [promotional production notes](workbench-promo-production.md) for recording demos, making covers, and preparing social copy.
 

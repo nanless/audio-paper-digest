@@ -317,9 +317,13 @@ class SafeHttp private constructor(
             "nanless.github.io", "raw.githubusercontent.com",
             "arxiv.org", "export.arxiv.org",
             "isca-archive.org", "www.isca-archive.org",
-            "openreview.net", "proceedings.mlr.press",
+            "openreview.net", "proceedings.mlr.press", "proceedings.iclr.cc",
             "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org",
             "zenodo.org",
+            "ojs.aaai.org", "openaccess.thecvf.com",
+            "eurasip.org", "www.eurasip.org",
+            "nime.org", "www.nime.org",
+            "dafx26.mit.edu", "icmc2026.ligeti-zentrum.de",
         )
 
         internal val PODCAST_RELEASE_HOSTS = setOf(

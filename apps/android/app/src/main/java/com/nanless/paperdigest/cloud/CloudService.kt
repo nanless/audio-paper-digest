@@ -59,7 +59,41 @@ class CloudService(
     val targetID: String get() = destinationID
     val credentialScope get() = "cloud.$destinationID"
     private fun targetFolder(id: String = destinationID): File = File(controlRoot, id).also { if (it.exists()) BackupCodec.checkedDirectory(it) }
+    private fun existingFullSyncFolder(id: String = destinationID): File? =
+        File(controlRoot, "full-sync-$id").takeIf { it.exists() || Files.isSymbolicLink(it.toPath()) }
+            ?.also { BackupCodec.checkedDirectory(it) }
     private fun hasPending(id: String = destinationID): Boolean { val folder = targetFolder(id); return listOf("pending.json", "snapshot.paperdigest").any { File(folder, it).exists() || Files.isSymbolicLink(File(folder, it).toPath()) } }
+    private fun hasFullSyncPending(id: String = destinationID): Boolean {
+        val folder = existingFullSyncFolder(id) ?: return false
+        return listOf("pending.paperdigest", "checkpoint.json", "capture.json").any {
+            val file = File(folder, it)
+            file.exists() || Files.isSymbolicLink(file.toPath())
+        }
+    }
+    private fun hasAnyPending(id: String = destinationID): Boolean = hasPending(id) || hasFullSyncPending(id)
+    private fun fullSyncPendingState(id: String): JSONObject? {
+        if (!hasFullSyncPending(id)) return null
+        val folder = existingFullSyncFolder(id) ?: return null
+        return runCatching {
+            val outbox = File(folder, "pending.paperdigest")
+            val checkpointFile = File(folder, "checkpoint.json")
+            require(outbox.isFile && !Files.isSymbolicLink(outbox.toPath()) && outbox.length() in 1..BackupCodec.MAX_ENCODED)
+            val checkpoint = if (checkpointFile.exists() || Files.isSymbolicLink(checkpointFile.toPath())) {
+                CloudCheckpoint.parse(readJSON(checkpointFile, 4 * 1024 * 1024))
+            } else null
+            JSONObject()
+                .put("fullSync", true)
+                .put("encodedBytes", outbox.length())
+                .put("sha256", checkpoint?.manifest?.sha256 ?: JSONObject.NULL)
+                .put("createdAt", checkpoint?.let { Instant.ofEpochMilli(it.manifest.createdAt).toString() } ?: JSONObject.NULL)
+                .put("retryAfter", checkpoint?.retryAfter ?: JSONObject.NULL)
+        }.getOrElse {
+            JSONObject()
+                .put("fullSync", true)
+                .put("damaged", true)
+                .put("notice", "未完成的全资料同步材料损坏或缺失，可原样保留退出；不保证恢复")
+        }
+    }
     private fun persistProfile(next: JSONObject) { validateProfile(next); BackupCodec.atomicJSON(File(controlRoot, "profile.json"), next); profile = next }
     private fun copyProfile() = JSONObject(profile.toString())
     private fun pause(paused: Boolean) { memoryPaused = paused; val next = copyProfile().put("automaticPaused", paused); persistProfile(next); scheduleChanged(state()) }
@@ -71,6 +105,10 @@ class CloudService(
             val pending = runCatching { pending(id) }.getOrNull()
             state.put("pending", if (pending == null) JSONObject().put("damaged", true).put("notice", "未完成材料损坏或缺失，可原样保留退出；不保证恢复") else JSONObject().put("createdAt", pending.getString("createdAt")).put("fileCount", pending.getInt("fileCount")).put("encodedBytes", pending.getLong("encodedBytes")).put("sha256", pending.getString("sha256")).put("retryAfter", pending.optJSONObject("checkpoint")?.opt("retryAfter") ?: JSONObject.NULL))
         } else state.put("pending", JSONObject.NULL)
+        val fullSync = runCatching { fullSyncPendingState(id) }.getOrElse {
+            JSONObject().put("fullSync", true).put("damaged", true).put("notice", "未完成的全资料同步材料损坏或缺失，可原样保留退出；不保证恢复")
+        }
+        state.put("fullSyncPending", fullSync ?: JSONObject.NULL)
         return state
     }
     private suspend fun <T> operation(body: suspend () -> T): T = withContext(Dispatchers.IO) {
@@ -88,7 +126,7 @@ class CloudService(
             return operation {
                 if (token != null) requireNotNull(borrowing).requireMutation(token)
         val trimmed = account.trim(); val changed = trimmed != profile.getString("account") || folder != profile.getString("folder")
-        require(!changed || !hasPending()) { "请先续传或原样保留未完成材料，再更换账号或目录" }
+        require(!changed || !hasAnyPending()) { "请先续传或原样保留未完成材料，再更换账号或目录" }
         val next = copyProfile().put("account", trimmed).put("folder", folder).put("automatic", automatic).put("intervalHours", intervalHours)
         if (changed) { next.put("destinationID", UUID.randomUUID().toString()).remove("lastBackup"); next.remove("lastAttemptAt"); next.put("automaticPaused", false) }
         validateProfile(next); require(!automatic || trimmed.isNotEmpty()) { "先保存账号再开启自动备份" }
@@ -287,16 +325,27 @@ class CloudService(
                     if (prior.optString("workspaceEpoch") == workspaceEpoch) continue
                 }
                 val retained = File(controlRoot, "archived-$id")
-                if (!retained.exists()) require(retained.mkdir())
-                BackupCodec.checkedDirectory(retained); BackupCodec.privateDirectory(retained)
                 val original = File(retained, "snapshot.paperdigest")
                 if (!original.exists()) {
                     val partial = File(directory, ".download-${UUID.randomUUID()}")
+                    var createdRetained = false
                     try {
                         service.download(identity.reference, partial, identity)
                         require(partial.length() == identity.encodedBytes && BackupCodec.hash(partial, check) == identity.sha256)
+                        if (!retained.exists()) {
+                            require(retained.mkdir())
+                            createdRetained = true
+                        }
+                        BackupCodec.checkedDirectory(retained); BackupCodec.privateDirectory(retained)
                         Files.move(partial.toPath(), original.toPath(), ATOMIC_MOVE)
+                    } catch (e: Throwable) {
+                        if (createdRetained && retained.exists() && retained.listFiles().orEmpty().isEmpty()) {
+                            retained.delete()
+                        }
+                        throw e
                     } finally { partial.delete() }
+                } else {
+                    BackupCodec.checkedDirectory(retained); BackupCodec.privateDirectory(retained)
                 }
                 val staged = BackupCodec.stage(BackupCodec.checkedFile(retained, original.name).inputStream(), directory, check)
                 try {
@@ -325,11 +374,61 @@ class CloudService(
     }
 
     suspend fun archivePending(): JSONObject = operation {
-        require(hasPending()) { "没有未完成材料" }; val folder = targetFolder(); BackupCodec.checkedDirectory(folder)
-        val connection = File(folder, if (File(folder, "connection.json").exists()) "connection-${UUID.randomUUID()}.json" else "connection.json")
-        BackupCodec.atomicJSON(connection, profile); pause(true)
-        val retained = File(controlRoot, "archived-${UUID.randomUUID()}"); Files.move(folder.toPath(), retained.toPath(), ATOMIC_MOVE)
-        JSONObject().put("transferID", retained.name).put("notice", "已原样保留材料并结束本次续传；损坏或缺失快照不保证恢复")
+        val manual = hasPending()
+        val fullSync = hasFullSyncPending()
+        require(manual || fullSync) { "没有未完成材料" }
+        val originalProfile = copyProfile()
+        var firstRetained: File? = null
+        val archivedIDs = JSONArray()
+        if (manual) {
+            val folder = targetFolder(); BackupCodec.checkedDirectory(folder)
+            val connection = File(folder, if (File(folder, "connection.json").exists()) "connection-${UUID.randomUUID()}.json" else "connection.json")
+            BackupCodec.atomicJSON(connection, originalProfile)
+            pause(true)
+            val retained = File(controlRoot, "archived-${UUID.randomUUID()}"); Files.move(folder.toPath(), retained.toPath(), ATOMIC_MOVE)
+            firstRetained = retained
+            archivedIDs.put(retained.name)
+        }
+        if (fullSync) {
+            val folder = existingFullSyncFolder()!!
+            val stage = File(controlRoot, ".archive-full-sync-${UUID.randomUUID()}")
+            require(stage.mkdir()); BackupCodec.privateDirectory(stage)
+            try {
+                BackupCodec.atomicJSON(File(stage, "connection.json"), originalProfile)
+                if (!manual) pause(true)
+                val pendingFiles = listOf(
+                    "pending.paperdigest" to "snapshot.paperdigest",
+                    "checkpoint.json" to "checkpoint.json",
+                    "capture.json" to "capture.json",
+                )
+                for ((srcName, dstName) in pendingFiles) {
+                    val src = File(folder, srcName)
+                    if (src.exists() || Files.isSymbolicLink(src.toPath())) {
+                        Files.move(src.toPath(), File(stage, dstName).toPath(), ATOMIC_MOVE)
+                    }
+                }
+                val retained = File(controlRoot, "archived-${UUID.randomUUID()}")
+                Files.move(stage.toPath(), retained.toPath(), ATOMIC_MOVE)
+                if (firstRetained == null) firstRetained = retained
+                archivedIDs.put(retained.name)
+            } catch (e: Throwable) {
+                if (stage.exists()) {
+                    val contents = stage.listFiles().orEmpty()
+                    if (contents.any { it.name != "connection.json" }) {
+                        val rescue = File(controlRoot, "archived-${UUID.randomUUID()}")
+                        runCatching { Files.move(stage.toPath(), rescue.toPath(), ATOMIC_MOVE) }
+                    } else {
+                        stage.deleteRecursively()
+                    }
+                }
+                throw e
+            }
+        }
+        val result = JSONObject()
+            .put("transferID", requireNotNull(firstRetained).name)
+            .put("notice", "已原样保留材料并结束本次续传；损坏或缺失快照不保证恢复")
+        if (archivedIDs.length() > 1) result.put("archivedTransferIDs", archivedIDs)
+        result
     }
     private fun pending(id: String = destinationID): JSONObject? {
         val file = File(targetFolder(id), "pending.json"); if (!file.exists()) return null

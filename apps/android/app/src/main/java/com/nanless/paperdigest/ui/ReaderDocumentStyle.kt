@@ -11,6 +11,21 @@ internal fun readerDocumentHead(background:Int,foreground:Int,link:Int,imageSour
     val linkB=(link and 0xff)/255.0
     val linkLuminance=0.2126*linkR+0.7152*linkG+0.0722*linkB
     val demoBtnInk=if(linkLuminance>0.45)"#141b28" else "#ffffff"
+    val bgR=((background ushr 16) and 0xff)/255.0
+    val bgG=((background ushr 8) and 0xff)/255.0
+    val bgB=(background and 0xff)/255.0
+    val isDark=(0.2126*bgR+0.7152*bgG+0.0722*bgB)<0.2
+    val borderCol=if(isDark)"rgba(237,232,223,.14)" else "rgba(28,26,23,.13)"
+    val strongBorder=if(isDark)"rgba(237,232,223,.22)" else "rgba(28,26,23,.20)"
+    val cardBg=if(isDark)"rgba(255,255,255,.04)" else "rgba(15,92,88,.035)"
+    val cardAltBg=if(isDark)"rgba(255,255,255,.065)" else "rgba(28,26,23,.035)"
+    val thBg=if(isDark)"rgba(94,202,192,.14)" else "rgba(15,92,88,.09)"
+    val codeBg=if(isDark)"rgba(255,255,255,.08)" else "rgba(28,26,23,.06)"
+    val mutedInk=if(isDark)"#b0aaa0" else "#555048"
+    val copperAccent=if(isDark)"#e39b6d" else "#964624"
+    val copperBg=if(isDark)"rgba(227,155,109,.12)" else "rgba(150,70,36,.07)"
+    val copperBorder=if(isDark)"rgba(227,155,109,.32)" else "rgba(150,70,36,.26)"
+    val figureImgCss=if(isDark)"figure img,p>img{background:#faf8f4;padding:8px;border-radius:10px;border:1px solid rgba(237,232,223,.16);box-sizing:border-box}" else "figure img,p>img{border-radius:8px;border:1px solid rgba(28,26,23,.10);box-sizing:border-box}"
     return """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src $imageSource; font-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><style>
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{max-width:76ch;margin:10px auto;padding:0 10px;font:14px/1.5 system-ui,sans-serif;background:${css(background)};color:${css(foreground)}}
@@ -31,5 +46,40 @@ details.index-abstract-more{margin:.45em 0 .65em;padding:.4em .7em;font-size:.94
 .scoring-evidence-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:.6em 0}
 .scoring-strengths-box{margin:.55em 0;padding:.6em .8em;border:1px solid rgba(22,128,74,.35);border-left:3px solid #16804a;border-radius:8px;background:rgba(22,128,74,.07)}
 .scoring-defects-box{margin:.55em 0;padding:.6em .8em;border:1px solid rgba(185,56,44,.35);border-left:3px solid #b9382c;border-radius:8px;background:rgba(185,56,44,.07)}
+body{line-height:1.68;padding:4px 14px 28px}
+h2{padding-bottom:.28em;border-bottom:1px solid $borderCol;margin:1.35em 0 .55em}
+h3{margin:1.1em 0 .42em}
+p{margin:.68em 0}
+blockquote{margin:.85em 0;padding:.55em .9em;border-left:3px solid ${css(link)};border-radius:0 8px 8px 0;background:$cardBg}
+code{padding:.12em .36em;border-radius:5px;background:$codeBg;font-size:.9em}
+pre{padding:.75em .9em;border:1px solid $borderCol;border-radius:10px;background:$cardAltBg;line-height:1.5}
+pre code{padding:0;background:transparent;font-size:.88em}
+figure{margin:1em 0;text-align:center}
+figcaption{margin-top:.45em;font-size:.88em;line-height:1.5;color:$mutedInk;text-align:left}
+$figureImgCss
+table{margin:.85em 0;border-radius:8px}
+td,th{padding:6px 9px;border:1px solid $borderCol}
+thead th{background:$thBg;font-weight:600}
+tbody tr:nth-child(even) td{background:$cardAltBg}
+.paper-tags,.paper-tags--aggregate{margin:.75em 0;padding:.7em .85em;border:1px solid $borderCol;border-radius:10px;background:$cardBg}
+.classification-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-top:.5em}
+.classification-card{padding:.55em .7em;border:1px solid $borderCol;border-radius:8px;background:$cardAltBg}
+.classification-tree{list-style:none;padding-left:0;margin:.3em 0}
+.classification-tree ul{list-style:none;padding-left:.85em;margin:.2em 0;border-left:1px solid $borderCol}
+.classification-node{display:inline-block;padding:2px 8px;margin:2px 4px 2px 0;border-radius:999px;font-size:.84em;border:1px solid $strongBorder;background:$cardBg;text-decoration:none}
+.reader-roadmap-title{font-weight:600;font-size:.95em;margin:0 0 .4em;color:${css(link)}}
+.reader-roadmap-list{margin:.3em 0 0;padding-left:1.3em}
+.reader-roadmap-list li{margin:.25em 0}
+.audio-spec-quick-header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px;margin-bottom:.45em}
+.audio-spec-quick-title{font-weight:700;font-size:.96em;color:${css(link)}}
+.audio-demo-cta-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:.55em}
+.resource-primary-note,.reader-content-notice{margin:.65em 0;padding:.55em .8em;border:1px solid $borderCol;border-left:3px solid ${css(link)};border-radius:8px;background:$cardBg;font-size:.9em}
+.image-unavailable-notice{margin:.65em 0;padding:.6em .85em;border:1px solid $copperBorder;border-left:3px solid $copperAccent;border-radius:8px;background:$copperBg;font-size:.89em}
+.image-original-description{margin:.35em 0 .6em;padding:.45em .75em;border-radius:6px;background:$cardAltBg;font-size:.87em;color:$mutedInk}
+.scoring-weights-strip{display:flex;flex-wrap:wrap;gap:6px;margin:.5em 0;padding:.45em .65em;border:1px solid $borderCol;border-radius:8px;background:$cardAltBg;font-size:.84em}
+.scoring-audit-meta{font-size:.85em;color:$mutedInk;margin:.3em 0 .55em}
+.math-fallback{display:inline-block;padding:.12em .4em;border:1px dashed $strongBorder;border-radius:5px;background:$cardAltBg;font-family:ui-monospace,monospace;font-size:.9em}
+.highlight,.chroma{margin:.75em 0;padding:.7em .85em;border:1px solid $borderCol;border-radius:10px;background:$cardAltBg;overflow-x:auto}
+.highlight pre,.chroma pre{margin:0;padding:0;border:none;background:transparent}
 </style></head><body>"""
 }

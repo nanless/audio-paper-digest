@@ -254,6 +254,68 @@ class SharedBlogRepositoryLockTest(unittest.TestCase):
             with patch.object(mod, '_boot_time_seconds', return_value=2000):
                 self.assertTrue(_reclaimable(stale_reused, configured_lease=7200))
 
+    def test_remove_exact_cleans_leftover_owner_tmp_and_guards_missing_owner_record(self):
+        import blog_repository_lock as mod
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(tmp)
+            root = shared_lock_root(repo)
+            lock_path = root / LOCK_NAME
+
+            # 1) Stale lock directory with leftover heartbeat .owner.*.tmp is reclaimed cleanly (no ENOTEMPTY brick)
+            lock_path.mkdir(mode=0o700)
+            tmp_leftover = lock_path / '.owner.99999.deadbeef.tmp'
+            tmp_leftover.write_text('{"partial":true}\n', encoding='utf-8')
+            tmp_leftover.chmod(0o600)
+            old = time.time() - 3600
+            os.utime(tmp_leftover, (old, old))
+            os.utime(lock_path, (old, old))
+            with shared_blog_repository_lock(repo, owner='recovered', timeout_seconds=1, stale_seconds=0.05) as acquired:
+                self.assertEqual(acquired, lock_path)
+                self.assertFalse(tmp_leftover.exists())
+            self.assertFalse(lock_path.exists())
+
+            # 2) Same when both stale owner.json and leftover .owner.*.tmp exist
+            lock_path.mkdir(mode=0o700)
+            owner_path = lock_path / 'owner.json'
+            owner_path.write_bytes(b'{')
+            owner_path.chmod(0o600)
+            tmp_leftover2 = lock_path / '.owner.88888.cafebabe.tmp'
+            tmp_leftover2.write_bytes(b'partial')
+            tmp_leftover2.chmod(0o600)
+            os.utime(owner_path, (old, old))
+            os.utime(tmp_leftover2, (old, old))
+            os.utime(lock_path, (old, old))
+            with shared_blog_repository_lock(repo, owner='recovered-2', timeout_seconds=1, stale_seconds=0.05):
+                self.assertFalse(tmp_leftover2.exists())
+            self.assertFalse(lock_path.exists())
+
+            # 3) Missing owner.json on release must not raise TypeError when checking token
+            with self.assertRaises(BlogRepositoryLockError):
+                with shared_blog_repository_lock(repo, owner='missing-owner', stale_seconds=60) as active_path:
+                    (active_path / 'owner.json').unlink()
+            # Lock directory remains (not blindly deleted once ownership is gone) and cleanup succeeded without TypeError
+            if lock_path.exists():
+                lock_path.rmdir()
+
+            # 4) Missing owner record returned by _snapshot during _renew raises BlogRepositoryLockError, not TypeError
+            with shared_blog_repository_lock(repo, owner='renew-missing', stale_seconds=60) as active_path:
+                snap = mod._snapshot(active_path)
+                empty_replay = {**snap, 'entries': [], 'owner': None}
+                real_snapshot = mod._snapshot
+                calls = {'n': 0}
+
+                def snapshot_missing_after_replace(path, *, allow_invalid_owner=False):
+                    calls['n'] += 1
+                    if calls['n'] == 2:
+                        return empty_replay
+                    return real_snapshot(path, allow_invalid_owner=allow_invalid_owner)
+
+                with patch.object(mod, '_snapshot', side_effect=snapshot_missing_after_replace):
+                    with self.assertRaises(BlogRepositoryLockError):
+                        mod._renew(snap)
+                # Keep holder snapshot synced after the on-disk atomic replace succeeded before the mocked second snapshot
+                mod._holder_stack()[-1]['state']['snapshot'] = real_snapshot(active_path)
+
 
 if __name__ == '__main__':
     unittest.main()

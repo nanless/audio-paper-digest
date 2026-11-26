@@ -76,8 +76,15 @@ import org.json.JSONObject
   val split=canSplit&&focus=="both"
   val showPDF=pdfAvailable&&(split||if(canSplit)focus=="pdf" else phonePDF)
   val showText=!pdfAvailable||split||!showPDF
-  Column(Modifier.fillMaxSize()){
-   Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)){
+   val assessment=state.article?.researchContext?.optJSONObject("assessment")
+   val rankBucket=assessment?.optString("rankBucket")?.takeIf{it.isNotBlank()&&it!="null"}
+   val documentType=assessment?.optString("documentType")?.takeIf{it.isNotBlank()&&it!="null"}
+   val readerVenue=parseConferenceVenue(paper.id)
+   val readerDemoIds=if(state.article?.paperID==paper.id&&state.article.html.contains("audio-demo-cta-btn"))state.cachedDemoIds+paper.id else state.cachedDemoIds
+   val readerResources=resolvePaperResources(paper,state.resourceBadges,readerDemoIds)
+   val hasReaderBadges=readerVenue!=null||rankBucket!=null||documentType!=null||readerResources.hasAny
+   Column(Modifier.fillMaxSize()){
+   Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerLowest)){
    Column(if(hingePair!=null)Modifier.width(hingePair.left.width.dp)else Modifier.fillMaxWidth()){
    Row(Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=4.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
     if(geometry.compactChrome){
@@ -135,25 +142,33 @@ import org.json.JSONObject
      }
     }
    }
-   if(!geometry.compactChrome){
-    val assessment=state.article?.researchContext?.optJSONObject("assessment")
-    val rankBucket=assessment?.optString("rankBucket")?.takeIf{it.isNotBlank()&&it!="null"}
-    val documentType=assessment?.optString("documentType")?.takeIf{it.isNotBlank()&&it!="null"}
-    val readerVenue=parseConferenceVenue(paper.id)
-    val readerDemoIds=if(state.article?.paperID==paper.id&&state.article.html.contains("audio-demo-cta-btn"))state.cachedDemoIds+paper.id else state.cachedDemoIds
-    val readerResources=resolvePaperResources(paper,state.resourceBadges,readerDemoIds)
-    if(readerVenue!=null||rankBucket!=null||documentType!=null||readerResources.hasAny){
+   if(geometry.compactChrome){
+    if(paper.score!=null||hasReaderBadges){
+     Row(
+      Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start=14.dp,end=14.dp,bottom=6.dp),
+      horizontalArrangement=Arrangement.spacedBy(6.dp),
+      verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
+     ){
+      paper.score?.let{ScoreTierBadge(it)}
+      if(hasReaderBadges){
+       PaperMetadataBadgesRow(venue=readerVenue,resources=readerResources,rankBucket=rankBucket,documentType=documentType,singleRow=true)
+      }
+     }
+    }
+   }else{
+    if(hasReaderBadges){
      Box(Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=2.dp)){
       PaperMetadataBadgesRow(venue=readerVenue,resources=readerResources,rankBucket=rankBucket,documentType=documentType)
      }
     }
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
-    listOf("导读","研究","笔记").forEach{value->FilterChip(tab==value&&(!showPDF||split),{chooseMode(value)},label={Text(value)})}
-    if(pdfAvailable)FilterChip(showPDF,{chooseMode("PDF")},label={Text("PDF")})
-    if(sourceNotices.isNotEmpty())TextButton({showPaperInfo=true}){Text("$sourceLabel · ${sourceNotices.size}",color=sourceColor)}
-    if(canSplit)TextButton({showLayout=true}){Text("阅读布局")}
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=12.dp,vertical=2.dp),horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+     listOf("导读","研究","笔记").forEach{value->FilterChip(tab==value&&(!showPDF||split),{chooseMode(value)},label={Text(value)})}
+     if(pdfAvailable)FilterChip(showPDF,{chooseMode("PDF")},label={Text("PDF")})
+     if(sourceNotices.isNotEmpty())TextButton({showPaperInfo=true}){Text("$sourceLabel · ${sourceNotices.size}",color=sourceColor)}
+     if(canSplit)TextButton({showLayout=true}){Text("阅读布局")}
+    }
    }
-   }
+   HorizontalDivider(color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.65f))
    }
    if(hingePair!=null&&document!=null)Column(Modifier.offset(x=(hingePair.left.width+hingePair.gap).dp).width(hingePair.right.width.dp).padding(horizontal=12.dp,vertical=8.dp)){
     Text("PDF 原件",style=MaterialTheme.typography.titleSmall)
@@ -303,8 +318,7 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
  }
  if(noteConflict!=null){
   val remoteCandidates=noteConflict.allRemoteCandidates()
-  OutlinedCard(Modifier.fillMaxWidth()){
-   Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+  EditorialCard{
     Text("云端并发笔记冲突",style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.tertiary)
     Text(
      if(remoteCandidates.size>1)"检测到 ${remoteCandidates.size} 台云端设备存在互异并发笔记，本机版本已安全保留。建议使用「双版合并」无损保留全部 ${remoteCandidates.size+1} 份版本；「采用云端」仅采用最高版本远端头（设备 ${noteConflict.remoteDeviceId.take(8)} · 版本 ${noteConflict.remoteRevision}）。"
@@ -337,15 +351,14 @@ internal fun readerSourceNotices(state:UiState,paperID:String,pdfError:String?):
      OutlinedButton({resolveConflict("ADOPT_REMOTE")},enabled=!dirty&&!saving&&!state.busy){Text(if(remoteCandidates.size>1)"采用云端（最高版本头）" else "采用云端")}
      Button({resolveConflict("MERGE_BOTH")},enabled=!dirty&&!saving&&!state.busy){Text("双版合并")}
     }
-   }
   }
  }
  OutlinedTextField(draft,{draft=it;dirty=true},Modifier.fillMaxWidth().heightIn(min=200.dp),shape=MaterialTheme.shapes.medium,label={Text("你的想法、疑问与结论")})
  error?.let{Text(it,color=MaterialTheme.colorScheme.error);TextButton({reloadNote=true}){Text("查看并重新读取已保存版本…")}}
  Button({val submitted=draft;val base=revision;saving=true;saveScope.launch{try{val result=controller.execute("personal.note",obj("paperID" to id,"text" to submitted,"baseRevision" to base));revision=result.optInt("revision",base+1);if(draft==submitted)dirty=false;error=null}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;error=e.message}finally{saving=false}}},enabled=dirty&&!saving&&!state.busy){Text(if(saving)"正在保存…" else "保存笔记")}
- state.pdfSelection?.takeIf{it.text.isNotBlank()}?.let{selection->Text("原文选区 · 物理页 ${selection.pages.joinToString()}",style=MaterialTheme.typography.titleSmall);Text(selection.text);Button({action("pdf.highlight",obj("comment" to "","color" to "yellow"))}){Text("保存高亮标注")}}
+ state.pdfSelection?.takeIf{it.text.isNotBlank()}?.let{selection->EditorialCard{Text("原文选区 · 物理页 ${selection.pages.joinToString()}",style=MaterialTheme.typography.titleSmall);Text(selection.text,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant);Button({action("pdf.highlight",obj("comment" to "","color" to "yellow"))}){Text("保存高亮标注")}}}
  Text("PDF 标注",style=MaterialTheme.typography.titleLarge)
- annotationGroups(state.personal.optJSONObject("annotations")?.rows(id)?:emptyList()).forEach{group->val a=group.first();OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text(group.map{it.optString("text")}.filter{it.isNotBlank()}.distinct().joinToString("\n"));Text(group.map{it.optString("comment",it.optString("note"))}.filter{it.isNotBlank()}.distinct().joinToString("\n"));Text("${group.size} 个原页位置",style=MaterialTheme.typography.labelSmall);FlowRow(horizontalArrangement=Arrangement.spacedBy(4.dp)){TextButton({action("pdf.annotation.open",obj("id" to a.optString("id")))}){Text("回到原文")};TextButton({edit=a;editText=group.map{it.optString("comment",it.optString("note"))}.filter{it.isNotBlank()}.distinct().joinToString("\n")}){Text("编辑批注…")};TextButton({removeCount=group.size;remove=a}){Text("删除标注…")}}}}}
+ annotationGroups(state.personal.optJSONObject("annotations")?.rows(id)?:emptyList()).forEach{group->val a=group.first();EditorialCard{Text(group.map{it.optString("text")}.filter{it.isNotBlank()}.distinct().joinToString("\n"));Text(group.map{it.optString("comment",it.optString("note"))}.filter{it.isNotBlank()}.distinct().joinToString("\n"),color=MaterialTheme.colorScheme.onSurfaceVariant);Text("${group.size} 个原页位置",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant);FlowRow(horizontalArrangement=Arrangement.spacedBy(4.dp)){TextButton({action("pdf.annotation.open",obj("id" to a.optString("id")))}){Text("回到原文")};TextButton({edit=a;editText=group.map{it.optString("comment",it.optString("note"))}.filter{it.isNotBlank()}.distinct().joinToString("\n")}){Text("编辑批注…")};TextButton({removeCount=group.size;remove=a}){Text("删除标注…")}}}}
  }
  if(reloadNote)AlertDialog(onDismissRequest={reloadNote=false},title={Text("读取已保存笔记？")},text={Column{Text("当前草稿将被以下已保存版本替换。取消会保留草稿。");Text(note.optString("text"))}},confirmButton={TextButton({draft=note.optString("text");revision=note.optInt("revision");dirty=false;error=null;reloadNote=false}){Text("替换当前草稿")}},dismissButton={TextButton({reloadNote=false}){Text("保留草稿")}})
  edit?.let{a->AlertDialog(onDismissRequest={if(!saving){edit=null;annotationError=null}},title={Text("编辑标注批注")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(editText,{editText=it},label={Text("批注")},enabled=!saving);annotationError?.let{Text(it,color=MaterialTheme.colorScheme.error)}}},confirmButton={TextButton({val submitted=editText;saving=true;annotationError=null;saveScope.launch{try{controller.execute("personal.annotationNote",obj("paperID" to id,"id" to a.optString("id"),"comment" to submitted));edit=null;annotationError=null}catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;annotationError=e.message}finally{saving=false}}},enabled=!saving){Text(if(saving)"正在保存…"else"保存")}},dismissButton={TextButton({edit=null;annotationError=null},enabled=!saving){Text("取消")}})}

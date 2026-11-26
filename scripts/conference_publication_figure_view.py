@@ -13,6 +13,7 @@ if __name__ == '__main__':
 import copy
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -22,6 +23,174 @@ import protocol_codec as protocols
 CONTRACT = 'conference-publication-figure-view'
 CROP_CONTRACT = 'conference-publication-figure-crops'
 SHA = re.compile(r'^[a-f0-9]{64}$')
+OLD_REPO_DIRNAME = 'audio-paper-digest'
+NEW_REPO_DIRNAME = 'audio-research-workbench'
+
+
+def _normalize_abs_repo_path(value):
+    if not isinstance(value, str) or not value or '\x00' in value or not os.path.isabs(value):
+        return None
+    if any(part == '..' for part in value.split(os.sep)):
+        return None
+    normalized = os.path.normpath(value)
+    return normalized if os.path.isabs(normalized) else None
+
+
+def _abs_path_segments(value):
+    normalized = _normalize_abs_repo_path(value)
+    if normalized is None:
+        return None
+    parts = [part for part in normalized.split(os.sep) if part]
+    if any(part in {'.', '..'} for part in parts):
+        return None
+    return parts
+
+
+def matches_relocated_repo_path(recorded_path, expected_current_path):
+    recorded = _normalize_abs_repo_path(str(recorded_path) if isinstance(recorded_path, Path) else recorded_path)
+    expected = _normalize_abs_repo_path(str(expected_current_path) if isinstance(expected_current_path, Path) else expected_current_path)
+    if recorded is None or expected is None:
+        return False
+    if recorded == expected:
+        return True
+    rec_parts = _abs_path_segments(recorded)
+    exp_parts = _abs_path_segments(expected)
+    if rec_parts is None or exp_parts is None or len(rec_parts) != len(exp_parts):
+        return False
+    diff_index = -1
+    for index, (rec_part, exp_part) in enumerate(zip(rec_parts, exp_parts)):
+        if rec_part == exp_part:
+            continue
+        if diff_index != -1:
+            return False
+        diff_index = index
+    return (diff_index != -1
+            and rec_parts[diff_index] == OLD_REPO_DIRNAME
+            and exp_parts[diff_index] == NEW_REPO_DIRNAME)
+
+
+def relocate_path_within_root(recorded_path, current_root):
+    recorded = _normalize_abs_repo_path(str(recorded_path) if isinstance(recorded_path, Path) else recorded_path)
+    root = _normalize_abs_repo_path(str(current_root) if isinstance(current_root, Path) else current_root)
+    if recorded is None or root is None:
+        return None
+    root_parts = _abs_path_segments(root)
+    rec_parts = _abs_path_segments(recorded)
+    if root_parts is None or rec_parts is None or len(rec_parts) < len(root_parts):
+        return None
+    prefix = rec_parts[:len(root_parts)]
+    if prefix == root_parts:
+        candidate = Path(recorded)
+    else:
+        diff_index = -1
+        for index, (rec_part, root_part) in enumerate(zip(prefix, root_parts)):
+            if rec_part == root_part:
+                continue
+            if diff_index != -1:
+                return None
+            diff_index = index
+        if (diff_index == -1
+                or prefix[diff_index] != OLD_REPO_DIRNAME
+                or root_parts[diff_index] != NEW_REPO_DIRNAME):
+            return None
+        suffix = rec_parts[len(root_parts):]
+        candidate = Path(root).joinpath(*suffix) if suffix else Path(root)
+    resolved_root = Path(root)
+    if candidate != resolved_root and not str(candidate).startswith(str(resolved_root) + os.sep):
+        return None
+    return candidate
+
+
+def _records_match_relocated(expected_records, live_records):
+    if expected_records == live_records:
+        return True
+    if not isinstance(expected_records, list) or not isinstance(live_records, list) \
+            or len(expected_records) != len(live_records):
+        return False
+    for exp, live in zip(expected_records, live_records):
+        if not isinstance(exp, dict) or not isinstance(live, dict) or set(exp) != set(live):
+            return False
+        for key in exp:
+            if key == 'sourcePath':
+                if not matches_relocated_repo_path(exp[key], live[key]):
+                    return False
+            elif exp[key] != live[key]:
+                return False
+    return True
+
+
+def _node_derivation_matches_relocated(expected_node, live_node):
+    if expected_node == live_node:
+        return True
+    if not isinstance(expected_node, dict) or not isinstance(live_node, dict) \
+            or set(expected_node) != set(live_node):
+        return False
+    exp_body = {k: v for k, v in expected_node.items() if k != 'derivationSha256'}
+    if expected_node.get('derivationSha256') != stable(exp_body):
+        return False
+    for key in expected_node:
+        if key == 'derivationSha256':
+            continue
+        if key == 'derivations':
+            if not isinstance(expected_node[key], list) or not isinstance(live_node[key], list) \
+                    or len(expected_node[key]) != len(live_node[key]):
+                return False
+            for exp_item, live_item in zip(expected_node[key], live_node[key]):
+                if not isinstance(exp_item, dict) or not isinstance(live_item, dict) \
+                        or set(exp_item) != set(live_item):
+                    return False
+                for field in exp_item:
+                    if field in {'derivedSourcePath', 'proofPath'}:
+                        if not matches_relocated_repo_path(exp_item[field], live_item[field]):
+                            return False
+                    elif exp_item[field] != live_item[field]:
+                        return False
+        elif key == 'blocked':
+            if not isinstance(expected_node[key], list) or not isinstance(live_node[key], list) \
+                    or len(expected_node[key]) != len(live_node[key]):
+                return False
+            for exp_item, live_item in zip(expected_node[key], live_node[key]):
+                if not isinstance(exp_item, dict) or not isinstance(live_item, dict) \
+                        or set(exp_item) != set(live_item):
+                    return False
+                for field in exp_item:
+                    if field == 'blockedReceiptPath':
+                        if not matches_relocated_repo_path(exp_item[field], live_item[field]):
+                            return False
+                    elif exp_item[field] != live_item[field]:
+                        return False
+        elif expected_node[key] != live_node[key]:
+            return False
+    return True
+
+
+def _declaration_matches_relocated(live, expected, bundle):
+    if live == expected:
+        return True
+    if not isinstance(live, dict) or not isinstance(expected, dict) or set(live) != set(expected):
+        return False
+    exp_body = {k: v for k, v in expected.items() if k != 'viewSha256'}
+    if expected.get('viewSha256') != stable(exp_body):
+        return False
+    for key in live:
+        if key in {'viewSha256', 'manifestPath', 'rawFiles', 'rawImageFiles', 'rawBundleSha256', 'nodeDerivation'}:
+            continue
+        if expected[key] != live[key]:
+            return False
+    if not matches_relocated_repo_path(expected.get('manifestPath'), live.get('manifestPath')):
+        return False
+    if not _records_match_relocated(expected.get('rawFiles'), live.get('rawFiles')):
+        return False
+    if not _records_match_relocated(expected.get('rawImageFiles'), live.get('rawImageFiles')):
+        return False
+    expected_raw_bundle_sha = stable({
+        'completionReceiptSha256': bundle['completion']['receiptSha256'],
+        'files': expected['rawFiles'],
+        'imageFiles': expected['rawImageFiles'],
+    })
+    if expected.get('rawBundleSha256') != expected_raw_bundle_sha:
+        return False
+    return _node_derivation_matches_relocated(expected.get('nodeDerivation'), live.get('nodeDerivation'))
 
 
 class FigureViewRejected(ValueError):
@@ -197,7 +366,8 @@ def materialize_view(bundle, node_result, *, root, conference_id, process_id,
         new_paths.add(item['newImagePath'])
         require(SHA.fullmatch(str(item.get('sha256', ''))) and type(item.get('size')) is int
                 and item['size'] > 0, 'derivative byte identity missing')
-        data = read_bytes(Path(item['derivedSourcePath']))
+        derived_path = relocate_path_within_root(item['derivedSourcePath'], root) or Path(item['derivedSourcePath'])
+        data = read_bytes(derived_path)
         require(sha(data) == item['sha256'] and len(data) == item['size'], 'derived PNG bytes changed')
         actions_by_paper.setdefault(item['paperId'], []).append(item)
         images.append({'kind': 'asset', 'paperId': item['paperId'], 'path': item['newImagePath'],
@@ -208,7 +378,8 @@ def materialize_view(bundle, node_result, *, root, conference_id, process_id,
     for i, record in enumerate(files):
         if record['kind'] not in {'paper', 'aggregate'}:
             continue
-        raw = read_bytes(Path(record['sourcePath']))
+        raw_path = relocate_path_within_root(record['sourcePath'], root) or Path(record['sourcePath'])
+        raw = read_bytes(raw_path)
         require(sha(raw) == record['sourceSha256'] and len(raw) == record['size'], 'raw page changed')
         text = raw.decode('utf-8')
         if record['kind'] == 'paper':
@@ -240,7 +411,9 @@ def materialize_view(bundle, node_result, *, root, conference_id, process_id,
                    'changedPages': changed}
     declaration['viewSha256'] = stable(declaration)
     if replay:
-        require(declaration == expected_declaration, 'publication view declaration differs from live replay')
+        require(_declaration_matches_relocated(declaration, expected_declaration, bundle),
+                'publication view declaration differs from live replay')
+        declaration = copy.deepcopy(expected_declaration)
     result = {**bundle, 'files': records(files), 'imageFiles': records(images), 'figurePublicationView': declaration}
     return result
 

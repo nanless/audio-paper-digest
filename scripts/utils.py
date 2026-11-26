@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Paper Digest 公共工具模块 (Python)
+Audio Research Workbench 公共工具模块 (Python)
 统一封装：Markdown 处理与分析文本解析
 """
 
@@ -67,7 +67,7 @@ def strip_md(t):
     t = re.sub(r'\*\*(.+?)\*\*', r'\1', t)
     t = re.sub(r'__(.+?)__', r'\1', t)
     t = re.sub(r'\*(.+?)\*', r'\1', t)
-    t = re.sub(r'_(.+?)_', r'\1', t)
+    t = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'\1', t)
     t = re.sub(r'`(.+?)`', r'\1', t)
     # 清理残留的不成对 ** 和 __
     t = t.replace('**', '')
@@ -131,32 +131,43 @@ def parse_machine_summary(analysis):
         line = line.strip()
         if not line:
             continue
-        km = re.match(r'^(?:[-*]\s+)?([a-z_]+)\s*[：:]\s*(.+)$', line, flags=re.I)
+        km = re.match(r'^(?:[-*]\s*)?(?:\*\*)?([a-z_]+)(?:\*\*)?\s*[：:]\s*(.+)$', line, flags=re.I)
         if not km:
             continue
-        mapped = key_map.get(km.group(1))
+        mapped = key_map.get(km.group(1).lower())
         if mapped:
             val = strip_md(km.group(2))
             if mapped == 'rubricVersion':
                 val = val if val in SUPPORTED_SCORING_RUBRIC_VERSIONS else ''
             if mapped == 'documentType':
                 val = normalize_document_type(val)
-            # 对于数值型字段，只保留数字部分（去除中文括号说明等）
+            # 对于数值型字段，只保留开头数字部分（去除中文括号说明等）
             if mapped in ('innovation', 'technicalRigor', 'experimentalSufficiency', 'clarity', 'impact', 'openSource', 'reproducibility', 'engineeringScore'):
-                num_match = re.search(r'(\d+\.?\d*)', val)
+                num_match = re.match(r'^(\d+\.?\d*)', val)
                 if num_match:
                     val = num_match.group(1)
-            # 对于 rankBucket，只允许四个标准分档，同时映射常见英文输出
+            # 对于 rankBucket，只允许四个标准分档，同时统一兼容常见中英文与字母/数字分档
             if mapped == 'rankBucket':
                 rank_map = {
+                    '1': '前10%', '2': '前25%', '3': '前50%', '4': '后50%',
+                    '前10%': '前10%', '前25%': '前25%', '前50%': '前50%', '后50%': '后50%',
+                    'a': '前10%', 'b': '前25%', 'c': '前50%', 'd': '后50%',
+                    'top_10_percent': '前10%', 'top_25_percent': '前25%',
+                    'top_50_percent': '前50%', 'bottom_50_percent': '后50%',
+                    'top 10%': '前10%', 'top 25%': '前25%',
+                    'top 50%': '前50%', 'bottom 50%': '后50%',
                     'top-tier': '前10%', 'top': '前10%', '前10': '前10%',
                     'high': '前25%', '前25': '前25%',
                     'mid': '前50%', 'medium': '前50%', '前50': '前50%',
                     'low': '后50%', 'bottom': '后50%', '后50': '后50%',
+                    '高': '前10%', '很高': '前10%', '上': '前10%', '上上': '前10%',
+                    '中高': '前25%', '中上': '前25%', '较高': '前25%', '优秀': '前25%',
+                    '中': '前50%', '中等': '前50%', '中等偏下': '前50%', '中下': '前50%',
+                    '中低': '前50%', '一般': '前50%',
+                    '低': '后50%', '很低': '后50%', '下': '后50%', '差': '后50%',
+                    '较弱': '后50%', '偏低': '后50%',
                 }
-                val = rank_map.get(val.lower(), val)
-                if val not in ('前10%', '前25%', '前50%', '后50%'):
-                    val = ''
+                val = rank_map.get(val) or rank_map.get(val.lower(), '')
             if mapped == 'confidence':
                 number_match = re.match(r'^(\d+(?:\.\d+)?)', val)
                 if number_match:
@@ -358,7 +369,7 @@ def parse_scoring_dimensions(scoring_text, rubric_version=SCORING_RUBRIC_VERSION
 
     for raw_line in str(scoring_text or '').splitlines():
         line = re.sub(r'^(?:[-*+]\s+|\d+[.)]\s+)', '', raw_line.strip())
-        line = line.replace('**', '').strip()
+        line = strip_md(line)
         if not line:
             continue
 
@@ -511,7 +522,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
         },
     }
 
-    m = re.search(r'##\s*评分\s*\n\s*\*?(\d+\.?\d*)\*?', analysis)
+    m = re.search(r'##\s*评分\s*\n\s*\*{0,2}(\d+\.?\d*)\*{0,2}', analysis)
     r['score'] = m.group(1) if m else ''
 
     # 主任务和主方法必须由对应字段明确给出，不能按标签列表中的位置推断。
@@ -627,7 +638,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
             r[key] = val
 
     # 局限与问题（新章节，可能在评分理由之后）
-    m = re.search(r'##\s*局限与问题\s*\n([\s\S]*?)(?=\n##\s*(?:开源|$))', analysis)
+    m = re.search(r'##\s*局限与问题\s*\n([\s\S]*?)(?=\n##\s*开源|\n##\s|$)', analysis)
     if m:
         r['limitations'] = m.group(1).strip()
 

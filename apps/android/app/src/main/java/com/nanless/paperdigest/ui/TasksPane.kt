@@ -62,14 +62,13 @@ import androidx.compose.ui.unit.dp
    }
    if(pendingExpanded){
    items(pendingExportsNewest(state.pendingExports),key={"export-"+it.getString("operationID")}) { pending ->
-    OutlinedCard(Modifier.fillMaxWidth().testTag("pending-export-${pending.getString("operationID")}")) {
-     Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+    EditorialCard(modifier=Modifier.testTag("pending-export-${pending.getString("operationID")}")) {
       Text(pending.optString("suggestedName").ifBlank{pending.optJSONObject("sourceIdentity")?.optString("label").orEmpty().ifBlank{"本次导出原件"}},style=MaterialTheme.typography.titleMedium)
-      Text(pendingExportStatus(pending))
-      Text("准备记录：${pending.optString("createdAt")}\n来源：${pending.optJSONObject("sourceIdentity")?.optString("paperID").orEmpty().ifBlank{"研究空间"}}",style=MaterialTheme.typography.bodySmall)
-      pending.optJSONObject("sourceIdentity")?.opt("sourceVersion")?.let{it as? String}?.let{Text("原阅读版本：$it",style=MaterialTheme.typography.bodySmall)}
-      (pending.opt("bytes") as? Number)?.let{Text("原件逻辑文件长度：${it.toLong()} B",style=MaterialTheme.typography.bodySmall)}
-      pending.optString("sha256").takeIf{it.isNotBlank()}?.let{Text("原编码 SHA：$it",style=MaterialTheme.typography.labelSmall)}
+      Text(pendingExportStatus(pending),style=MaterialTheme.typography.bodyMedium)
+      Text("准备记录：${pending.optString("createdAt")}\n来源：${pending.optJSONObject("sourceIdentity")?.optString("paperID").orEmpty().ifBlank{"研究空间"}}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+      pending.optJSONObject("sourceIdentity")?.opt("sourceVersion")?.let{it as? String}?.let{Text("原阅读版本：$it",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+      (pending.opt("bytes") as? Number)?.let{Text("原件逻辑文件长度：${it.toLong()} B",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+      pending.optString("sha256").takeIf{it.isNotBlank()}?.let{Text("原编码 SHA：$it",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
       pendingExportMessage(pending)?.let{Text(it)}
       if(pending.optBoolean("ready")&&pending.optString("preparation")=="ready") {
        TextButton({action("export.delivery.prepare",obj("operationID" to pending.getString("operationID")))},enabled=pending.optString("delivery") !in setOf("choosing","writing")) {Text(if(pending.optString("delivery")=="verified")"再次保存同一原件" else "继续保存原件")}
@@ -91,7 +90,6 @@ import androidx.compose.ui.unit.dp
        TextButton({action("export.reconcile",obj("operationID" to pending.getString("operationID")))}){Text("核验本次封存材料")}
        if(pending.optJSONObject("sourceIdentity")?.optString("format")=="backup")TextButton({action("export.retained.stop",obj("operationID" to pending.getString("operationID")))}){Text("结束本次准备并原样保留材料…")}
       }
-     }
     }
    }
    }
@@ -104,20 +102,21 @@ import androidx.compose.ui.unit.dp
    }
    items(jobs.drop(page*20).take(20),key={it.optString("id")}) { job ->
     var details by rememberSaveable(job.optString("id")){mutableStateOf(false)}
-    OutlinedCard(Modifier.fillMaxWidth(),colors=CardDefaults.outlinedCardColors(containerColor=MaterialTheme.colorScheme.surfaceContainerLow),border=androidx.compose.foundation.BorderStroke(1.dp,MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.6f))) {
-     Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
-      Text(job.optString("title").takeIf{it.isNotBlank()}?:jobTitle(job.optString("kind",job.optString("command"))),style=MaterialTheme.typography.titleMedium)
-      StatusLabel(job.optString("status"))
-      if(job.optBoolean("localRetainedExport"))Text("本机保留快照任务；此后续任务不属于原捕获快照，不修改原任务和费用。",style=MaterialTheme.typography.bodySmall)
-      if(job.optBoolean("localRescueExport"))Text("本机救援导出任务；此任务记录不包含在原研究快照，也不改写原费用与历史。",style=MaterialTheme.typography.bodySmall)
-      Text(job.optString("identity",job.optString("paperID","研究空间")),style=MaterialTheme.typography.bodySmall)
-      job.optString("message",job.optString("error")).takeIf{it.isNotBlank()}?.let { Text(it) }
+    EditorialCard {
+      Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+       Text(job.optString("title").takeIf{it.isNotBlank()}?:jobTitle(job.optString("kind",job.optString("command"))),style=MaterialTheme.typography.titleMedium,modifier=Modifier.weight(1f))
+       StatusLabel(job.optString("status"))
+      }
+      if(job.optBoolean("localRetainedExport"))Text("本机保留快照任务；此后续任务不属于原捕获快照，不修改原任务和费用。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+      if(job.optBoolean("localRescueExport"))Text("本机救援导出任务；此任务记录不包含在原研究快照，也不改写原费用与历史。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+      Text(job.optString("identity",job.optString("paperID","研究空间")),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+      job.optString("message",job.optString("error")).takeIf{it.isNotBlank()}?.let { Text(it,style=MaterialTheme.typography.bodyMedium) }
       if(details){
       job.optJSONObject("material")?.takeIf{!isModelTask(job)}?.let { m ->
-       Text("材料：${m.optString("kind")} · ${m.optString("createdAt")}\n${if(m.has("fileCount"))m.optInt("fileCount").toString()+" 文件" else "文件数未记录"}\n${m.optString("sha256")}",style=MaterialTheme.typography.labelSmall)
+       Text("材料：${m.optString("kind")} · ${m.optString("createdAt")}\n${if(m.has("fileCount"))m.optInt("fileCount").toString()+" 文件" else "文件数未记录"}\n${m.optString("sha256")}",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
       }
-      Text("开始：${readableMoment(job.optString("startedAt"))}",style=MaterialTheme.typography.bodySmall)
-      if(job.optString("endedAt").isNotBlank())Text("结束：${readableMoment(job.optString("endedAt"))}",style=MaterialTheme.typography.bodySmall)
+      Text("开始：${readableMoment(job.optString("startedAt"))}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+      if(job.optString("endedAt").isNotBlank())Text("结束：${readableMoment(job.optString("endedAt"))}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
       }
       TextButton({details=!details}){Text(if(details)"收起时间与材料信息" else "时间与材料信息")}
 
@@ -125,9 +124,9 @@ import androidx.compose.ui.unit.dp
        TextButton({action("jobs.cancel",obj("id" to job.optString("id")))}) { Text("取消") }
       }
       studyTaskPresentation(job,state.sessions)?.let { recorded ->
-       Text(recorded.evidence,style=MaterialTheme.typography.bodySmall)
-       Text(recorded.usage,style=MaterialTheme.typography.bodySmall)
-       Text(recorded.charge,style=MaterialTheme.typography.bodySmall)
+       Text(recorded.evidence,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+       Text(recorded.usage,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+       Text(recorded.charge,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
       }
       jobSession(job,state.sessions)?.let { session ->
        TextButton({action("ui.session.open",obj("id" to session.getString("id")))}){Text("打开原研究记录")}
@@ -135,7 +134,6 @@ import androidx.compose.ui.unit.dp
       job.optString("paperID").takeIf{it.isNotEmpty()}?.let { id ->
        TextButton({action("paper.open",obj("paperID" to id))}) { Text("打开对应论文") }
       }
-     }
     }
    }
   }
@@ -159,7 +157,7 @@ internal fun pendingExportStatus(p:org.json.JSONObject):String = when(p.optStrin
 }
 
 internal fun jobStatus(value:String):String = when(value){"queued","pending"->"等待执行";"running"->"进行中";"complete","completed"->"已完成";"partial"->"部分完成";"failed"->"未完成";"cancelled"->"已取消";"interrupted"->"已中断，可检查原记录";else->value.ifBlank{"状态未记录"}}
-internal fun jobTitle(value:String):String=when(value){"library.sync"->"同步已发布论文";"library.sync.automatic"->"后台自动检查目录更新";"model.run"->"基于原文继续研究";"model.check"->"检查模型连接";"cloud.syncPersonal"->"同步个人资料到 WebDAV";"cloud.syncWorkspace"->"双向同步 WebDAV 研究资料";"cloud.upload"->"保存完整研究空间";"cloud.check"->"检查坚果云连接";"cloud.restore"->"恢复研究快照";"cloud.restore.prepare"->"下载并校验恢复快照";"cloud.automatic"->"自动保存完整研究空间";"cloud.list"->"读取云端备份版本";"storage.prepare"->"保存离线研究快照";"storage.openPackage"->"打开离线研究快照";"app.restore.prepare"->"校验本机备份材料";"zotero.prepare"->"准备 Zotero 存档材料";"zotero.check"->"检查 Zotero 连接";"zotero.archive"->"完整存档到 Zotero";"zotero.resume"->"继续 Zotero 存档并回读";"zotero.migration.preview"->"预览 Zotero 附件迁移";"zotero.migration.confirm"->"确认 Zotero 附件迁移";"pdf.open"->"准备 PDF 原件";"pdf.import"->"导入 PDF 原件";"pdf.import.batch"->"批量导入 PDF 原件";"pdf.annotation.open"->"定位原文批注";"pdf.studySource.open"->"打开研究来源 PDF";"export.retained.prepare"->"核验保留的原完整快照";"export.retained.save"->"另存并回读保留的原快照";"export.prepare"->"准备导出原件";"retained.export.prepare"->"准备保留快照原件";"export.save"->"写出并回读原件";else->value.ifBlank{"研究任务"}}
+internal fun jobTitle(value:String):String=when(value){"library.sync"->"同步已发布论文";"library.sync.automatic"->"后台自动检查目录更新";"model.run"->"基于原文继续研究";"model.check"->"检查模型连接";"cloud.syncPersonal"->"同步个人资料到 WebDAV";"cloud.syncWorkspace"->"双向同步 WebDAV 研究资料";"cloud.upload"->"保存完整研究空间";"cloud.check"->"检查坚果云连接";"cloud.restore"->"恢复研究快照";"cloud.restore.prepare"->"下载并校验恢复快照";"cloud.automatic"->"自动保存完整研究空间";"cloud.list"->"读取云端备份版本";"storage.prepare"->"保存离线研究快照";"storage.openPackage"->"打开离线研究快照";"app.restore.prepare"->"校验本机备份材料";"zotero.prepare"->"准备 Zotero 存档材料";"zotero.check"->"检查 Zotero 连接";"zotero.checkDav"->"检查 Zotero WebDAV 连接";"zotero.archive"->"完整存档到 Zotero";"zotero.resume"->"继续 Zotero 存档并回读";"zotero.migration.preview"->"预览 Zotero 附件迁移";"zotero.migration.confirm"->"确认 Zotero 附件迁移";"pdf.open"->"准备 PDF 原件";"pdf.import"->"导入 PDF 原件";"pdf.import.batch"->"批量导入 PDF 原件";"pdf.annotation.open"->"定位原文批注";"pdf.studySource.open"->"打开研究来源 PDF";"export.retained.prepare"->"核验保留的原完整快照";"export.retained.save"->"另存并回读保留的原快照";"export.prepare"->"准备导出原件";"retained.export.prepare"->"准备保留快照原件";"export.save"->"写出并回读原件";else->value.ifBlank{"研究任务"}}
 
 /** Display ordering never rewrites the original cross-platform arrays or invents missing times. */
 internal fun recordsNewest(records:List<org.json.JSONObject>):List<org.json.JSONObject> = records.withIndex().sortedWith(compareByDescending<IndexedValue<org.json.JSONObject>>{ indexed ->

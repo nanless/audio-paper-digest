@@ -10,7 +10,7 @@
 
 分片就是将大目录拆成的若干小文件。应用核对每份文件的字节、大小、条数和 SHA 内容指纹，全部成功后才替换本机目录快照。快照表示某个时点的一份完整目录。取消或失败时，上一份完整目录继续可用，不把已经下载的一部分当作全站结果。新同步保存的本机目录也带结构指纹；已有目录按它实际保存的格式读取。未知或混用格式不能当成空目录重新保存。
 
-分类资料成对核验：`client/details/*` 快照直接在 `tagCatalogs` 中声明成对描述符与词表版本；走 `client/index.json` 过渡路径时，优先读取 `client/data/tag-catalog-snapshot.json` 和 `client/data/tag-catalog-versions.json`，只有两份新地址都返回 404 时才读取原来的 `data/` 地址。新旧地址各自只接受该地址登记的格式；在错误地址收到另一种已知格式，也不会把它当成可用结果。所有客户端协议声明集中登记在 [`config/protocols/clients.json`](../config/protocols/clients.json)。当前格式使用稳定名称和 `schemaFingerprint`，后者是完整结构声明的内容指纹；旧格式按照原声明读取，不能因名称相同就替换成当前结构。
+分类资料成对核验：`client/details/*` 快照直接在 `tagCatalogs` 中声明成对描述符与词表版本；走 `client/index.json` 过渡路径时，优先读取 `client/data/tag-catalog-snapshot.json` 和 `client/data/tag-catalog-versions.json`，只有两份新地址都返回 404 时才读取原来的 `data/` 地址。新旧地址各自只接受该地址登记的格式；在错误地址收到另一种已知格式，也不会把它当成可用结果。所有客户端协议声明集中登记在 [`config/protocols/clients.json`](../config/protocols/clients.json) 及同目录按领域拆分的 `clients-*.json` 清单中。当前格式使用稳定名称和 `schemaFingerprint`，后者是完整结构声明的内容指纹；旧格式按照原声明读取，不能因名称相同就替换成当前结构。
 
 当目录快照激活 `desktop-details` 时，打开导读、导出引用或下载会议原文 PDF 会按描述符按需读取并缓存 `client/details/papers/<sha256>.json`（`paper-desktop-detail`，上限 2 MiB）与 `client/details/articles/<sha256>.html`（上限 16 MiB）。应用在解析前先核对原始字节长度与 SHA-256，再校验内嵌 `paper-citation-source` 协议头与四份 `client/papers/` 附属文件（`citation.json`、`citation.bib`、`citation.ris`、`rethink-context.json`）的字节数及 SHA。正文片段采用严格的标签、属性与协议正向白名单，禁止 HTML 注释、脚本、嵌入框架、表单、事件属性、未加引号危险字符与非白名单 URL 协议。元数据严格区分 `originalTitle` 与 `readerTitle`，保留 `sourceVersionWarning`、`provenanceDisclosure` 与撤稿证据提示；若必要外部或缺失图片尚未缓存，`completeOffline` 如实记为 `false`。跨快照更新时，SHA 未变的详情与正文直接复用本地文件，不重复下载；读取期间若目录快照切换，应用拒绝混用跨代内容。走过渡路径时，论文页同样声明四份 `client/papers/` 附属文件及 SHA，网页可见下载链接仍保留原 `data/papers/` 兼容地址供已发行客户端使用。兼容文件不是新的科学来源证明；生成、审查和发布资格仍由原正常流程核验。
 

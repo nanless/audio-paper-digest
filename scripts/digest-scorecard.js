@@ -31,8 +31,22 @@ function isValidDate(date) {
 }
 
 function resolveTargetDates(options) {
+    if (options.batchDate && options.days === undefined) {
+        if (!isValidDate(options.batchDate)) {
+            throw new Error(`--batch-date 必须是有效的北京日期 YYYY-MM-DD：${String(options.batchDate)}`);
+        }
+        const batchMs = Date.parse(`${options.batchDate}T00:00:00+08:00`);
+        const set = new Set([options.batchDate, beijingDateFromMs(batchMs + DAY_MS)]);
+        if (options.date) {
+            if (!isValidDate(options.date)) {
+                throw new Error(`--date 必须是有效的北京日期 YYYY-MM-DD：${String(options.date)}`);
+            }
+            set.add(options.date);
+        }
+        return [...set].sort();
+    }
     const today = beijingDateFromMs(Date.now());
-    const anchor = options.date || today;
+    const anchor = options.date || options.batchDate || today;
     if (!isValidDate(anchor)) {
         throw new Error(`--date 必须是有效的北京日期 YYYY-MM-DD：${String(anchor)}`);
     }
@@ -78,8 +92,9 @@ function loadEventsForDates(usageDir, targetDates, options = {}) {
             let stat;
             try { stat = fs.lstatSync(indexFile); } catch (_) { continue; }
             if (!stat.isFile() || stat.isSymbolicLink()) continue;
-            let loadedCount = 0;
-            const lines = fs.readFileSync(indexFile, 'utf8').split('\n');
+            let rawIndexText;
+            try { rawIndexText = fs.readFileSync(indexFile, 'utf8'); } catch (_) { continue; }
+            const lines = rawIndexText.split('\n');
             for (const line of lines) {
                 if (!line.trim()) continue;
                 let event;
@@ -91,18 +106,17 @@ function loadEventsForDates(usageDir, targetDates, options = {}) {
                     seenEventIds.add(event.eventId);
                 }
                 events.push(event);
-                loadedCount += 1;
             }
-            if (loadedCount > 0) {
-                loadedDatesFromIndex.add(date);
-            }
+            // 可读的 0 行日索引文件也代表该日已有索引覆盖，避免触发 20 万级平铺目录回退扫描。
+            loadedDatesFromIndex.add(date);
         }
     }
 
-    // 默认模式优先读每日 JSONL 索引与日期分片子目录（避开 20 万级历史扁平根目录全扫，200x+ 加速）；
-    // 仅当某目标日既无日索引也无日期分片子目录，或显式传 --canonical 时才扫描平铺根目录。
+    // 默认模式与 --fast 模式优先读每日 JSONL 索引与日期分片子目录（避开 20 万级历史扁平根目录全扫，200x+ 加速）；
+    // --fast 模式只读日索引与可选日期分片子目录，绝不回退扫描平铺根目录；
+    // 仅非 --fast 模式下某目标日既无日索引也无日期分片子目录，或显式传 --canonical 时才扫描平铺根目录。
     const scannedSubdirDates = new Set();
-    if (!canonical && !fast && fs.existsSync(usageDir)) {
+    if (!canonical && fs.existsSync(usageDir)) {
         const rootStatCheck = fs.lstatSync(usageDir);
         if (!rootStatCheck.isDirectory() || rootStatCheck.isSymbolicLink()) {
             throw new Error('用量目录必须是真实目录，不能是符号链接');
@@ -130,6 +144,15 @@ function loadEventsForDates(usageDir, targetDates, options = {}) {
                 events.push(event);
             }
         }
+    }
+
+    if (fast) {
+        return {
+            events: filterEventsByRunAndBatch(events, options),
+            source: loadedDatesFromIndex.size > 0
+                ? (scannedSubdirDates.size > 0 ? 'daily-index+date-shard-fast' : 'daily-index-fast')
+                : (scannedSubdirDates.size > 0 ? 'date-shard-fast' : 'empty-fast')
+        };
     }
 
     // 默认模式优先读每日 JSONL 索引与日期分片子目录；若平铺根目录体积在轻量阈值内（<= 5000 项）
@@ -259,6 +282,7 @@ function emptyMetricBucket() {
         econnresetErrors: 0,
         httpErrors: 0,
         providerErrors: 0,
+        blockedBeforeTransport: 0,
         inputTokens: 0,
         cachedInputTokens: 0,
         outputTokens: 0,
@@ -268,8 +292,13 @@ function emptyMetricBucket() {
 }
 
 function accumulate(bucket, event) {
+    const blocked = event.transportStarted === false || event.outcome === 'blocked_before_transport'
+        || (event.transportStarted === undefined && event.outcome === 'transport_error'
+            && event.errorCode === 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED'
+            && event.statusCode == null && !event.outputTextSha256 && event.usage?.status !== 'reported');
     bucket.requests += 1;
-    if (event.outcome === 'completed') bucket.completed += 1;
+    if (blocked) bucket.blockedBeforeTransport += 1;
+    else if (event.outcome === 'completed') bucket.completed += 1;
     else if (event.outcome === 'incomplete') bucket.incomplete += 1;
     else if (event.outcome === 'transport_error') {
         bucket.transportErrors += 1;
@@ -298,6 +327,7 @@ function finalizeBucket(bucket) {
         econnresetErrors: bucket.econnresetErrors,
         httpErrors: bucket.httpErrors,
         providerErrors: bucket.providerErrors,
+        blockedBeforeTransport: bucket.blockedBeforeTransport,
         inputTokens: bucket.inputTokens,
         cachedInputTokens: bucket.cachedInputTokens,
         cacheHitRatePct: pct(bucket.cachedInputTokens, bucket.inputTokens),
@@ -362,7 +392,7 @@ function formatTextScorecard(card) {
     const fmtMs = v => (v === null ? 'N/A' : `${(v / 1000).toFixed(1)}s`);
     const lines = [
         `📊 LLM 运行记分卡（${card.dates[0]}${card.dates.length > 1 ? ` ~ ${card.dates[card.dates.length - 1]}` : ''} | source=${card.source}）`,
-        `总请求: ${t.requests} | 成功: ${t.completed} (${fmtPct(t.successRatePct)}) | 截断: ${t.incomplete} | 传输错: ${t.transportErrors} (ECONNRESET=${t.econnresetErrors}) | HTTP错: ${t.httpErrors}`,
+        `总请求: ${t.requests} | 成功: ${t.completed} (${fmtPct(t.successRatePct)}) | 截断: ${t.incomplete} | 传输错: ${t.transportErrors} (ECONNRESET=${t.econnresetErrors}) | HTTP错: ${t.httpErrors} | 服务商错: ${t.providerErrors} | 本地拦截: ${t.blockedBeforeTransport}`,
         `输入 Token: ${t.inputTokens.toLocaleString('en-US')} | 缓存命中: ${t.cachedInputTokens.toLocaleString('en-US')} (${fmtPct(t.cacheHitRatePct)})`,
         `输出 Token: ${t.outputTokens.toLocaleString('en-US')} | 思考占比: ${t.reasoningTokens.toLocaleString('en-US')} (${fmtPct(t.reasoningSharePct)}) | P50=${fmtMs(t.p50DurationMs)} P95=${fmtMs(t.p95DurationMs)}`
     ];

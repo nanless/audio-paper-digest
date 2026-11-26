@@ -1453,8 +1453,11 @@ function validateApiReaderTableExtrema(article, sections = null) {
     if (extremaIssues.length === 0) return;
     const readerIssues = extremaIssues.map(item => ({
         code: item.code,
-        path: Number.isInteger(item.sectionIndex) ? `/sections/${item.sectionIndex}/body` : null,
+        path: Number.isInteger(item.sectionIndex)
+            ? (item.inSectionHeading ? `/sections/${item.sectionIndex}` : `/sections/${item.sectionIndex}/body`)
+            : null,
         sectionIndex: item.sectionIndex,
+        ...(item.inSectionHeading ? { inSectionHeading: true } : {}),
         tableIndex: item.tableIndex,
         columnHeader: item.columnHeader,
         message: item.message

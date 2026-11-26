@@ -670,6 +670,13 @@ class Wave143IndexTTSSynthTest(unittest.TestCase):
             self.assertEqual(ok_logs[-1]['headers']['Authorization'], 'Bearer bearer-secret')
             self.assertEqual(ok_logs[-1]['body']['model'], 'IndexTeam/IndexTTS-2.5')
             self.assertEqual(ok_logs[-1]['body']['voice'], 'cohost_voice')
+            # openai-speech wire payload must merge custom IndexTTS fields at top level (no client-SDK extra_body)
+            self.assertNotIn('extra_body', ok_logs[-1]['body'])
+            self.assertEqual(ok_logs[-1]['body']['spk_audio_prompt'], 'cohost_voice')
+            self.assertEqual(ok_logs[-1]['body']['emo_vector'], synth.EMOTION_HINT_VECTORS['analytical'])
+            self.assertEqual(ok_logs[-1]['body']['emo_alpha'], 0.75)
+            self.assertEqual(ok_logs[-1]['body']['emotion_hint'], 'analytical')
+            self.assertEqual(ok_logs[-1]['body']['role'], 'cohost')
 
             # 6. Custom JSON base64 with leading whitespace succeeds
             b64_payload = b'  ' + json.dumps({'audio_base64': base64.b64encode(tone_bytes).decode('ascii')}).encode('utf-8')
@@ -807,6 +814,20 @@ class Wave143IndexTTSSynthTest(unittest.TestCase):
                 synth.convert_audio_bytes_to_wav(b'\x00\x00\x00\x18ftypM4A ' + b'\x00' * 12, tmp / 'mov_in.wav', sample_rate=44100)
                 self.assertIn('-enable_drefs', mov_cmd['cmd'])
                 self.assertEqual(mov_cmd['cmd'][mov_cmd['cmd'].index('-enable_drefs') + 1], '0')
+
+    def test_cli_arg_parser_env_booleans_and_empty_model_dir(self):
+        for truthy in ('1', 'true', 'TRUE', ' yes ', 'On'):
+            with mock.patch.dict(os.environ, {'PD_INDEXTTS_ALLOW_LOCAL_ENDPOINT': truthy}, clear=False):
+                args = synth.build_arg_parser().parse_args([])
+                self.assertTrue(args.allow_local_endpoint, f'expected True for {truthy!r}')
+        for falsy in ('', '0', 'false', 'no', 'off', '   '):
+            with mock.patch.dict(os.environ, {'PD_INDEXTTS_ALLOW_LOCAL_ENDPOINT': falsy}, clear=False):
+                args = synth.build_arg_parser().parse_args([])
+                self.assertFalse(args.allow_local_endpoint, f'expected False for {falsy!r}')
+        for empty_dir in ('', '   '):
+            with mock.patch.dict(os.environ, {'PD_INDEXTTS_MODEL_DIR': empty_dir}, clear=False):
+                args = synth.build_arg_parser().parse_args([])
+                self.assertEqual(args.model_dir, 'checkpoints')
 
     def test_cli_sandbox_guard(self):
         env = dict(os.environ, CODEX_SANDBOX='seatbelt')

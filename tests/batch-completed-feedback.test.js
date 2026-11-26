@@ -150,3 +150,21 @@ test('事实单句local只接受显式Reader包，拒混核心/无反馈/自定�
         await rejected({ factFeedbackFiles: [f.feedbackFile], ...options }, /显式严格Reader反馈/);
     await rejected({ factFeedbackFiles: [f.feedbackFile] }, /没有显式Reader反馈的其它失败论文/);
 });
+
+test('无效 --reader-operator-corrections 清单在改写 deep-analysis-result.json 为 running 前拒绝', async t => {
+    const f = await createBoundFeedbackPaperSample(t);
+    const batchPath = require.resolve('../scripts/batch-analyze'), previous = require.cache[batchPath];
+    delete require.cache[batchPath];
+    const freshBatch = require('../scripts/batch-analyze');
+    t.after(() => { require.cache[batchPath] = previous; });
+    const original = fs.readFileSync(Config.FILES.deepAnalysisResult);
+    const badManifest = path.join(f.root, 'missing-operator-manifest.json');
+    await assert.rejects(
+        freshBatch.main({
+            readerOperatorCorrectionsPath: badManifest,
+            analyzeBatch: () => assert.fail('无效人工修正清单不得进入分析')
+        }),
+        /Operator|outside controlled runtime|ENOENT/
+    );
+    assert.deepEqual(fs.readFileSync(Config.FILES.deepAnalysisResult), original, '无效人工修正清单失败前不得改写正式结果状态');
+});

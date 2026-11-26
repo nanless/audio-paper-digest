@@ -152,6 +152,9 @@ function createAnalysisWaiver({ date, paperIds, reason, files = Config.FILES, no
     if (ids.length !== paperIds.length) throw new Error('paperIds 必须是规范化且不重复的论文 ID');
     if (String(reason || '').trim().length < 10) throw new Error('reason 至少要 10 个字符，否则说明不了豁免理由');
     const deep = JSON.parse(fs.readFileSync(files.deepAnalysisResult, 'utf8'));
+    if (deep?.batchDate !== date) {
+        throw new Error(`分析结果的 batchDate（${deep?.batchDate || '缺失'}）与目标日期（${date}）不一致`);
+    }
     const papers = JSON.parse(fs.readFileSync(files.papers, 'utf8'));
     const deepById = new Map(paperList(deep).map(paper => [normalizedId(paper), paper]).filter(([id]) => id));
     const db = papers.papers || {};

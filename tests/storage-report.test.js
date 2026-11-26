@@ -18,3 +18,24 @@ test('--advice-only 不触发完整 status 扫描（只返回 0）', () => {
     try { assert.strictEqual(report.main(['--advice-only']), 0); } finally { console.log = original; }
     assert.match(logs.join('\n'), /清理必须先预览/);
 });
+
+test('status 失败判定依据返回值而非环境残留 process.exitCode', () => {
+    const storage = require('../scripts/runtime-storage.js');
+    const originalMain = storage.main;
+    const originalLog = console.log;
+    const savedExitCode = process.exitCode;
+    console.log = () => {};
+    try {
+        process.exitCode = 1;
+        storage.main = () => ({ targets: [{ key: 'logs', errors: [] }] });
+        assert.strictEqual(report.main([]), 0);
+
+        process.exitCode = 0;
+        storage.main = () => ({ targets: [{ key: 'logs', errors: [{ message: 'EACCES' }] }] });
+        assert.strictEqual(report.main([]), 1);
+    } finally {
+        storage.main = originalMain;
+        console.log = originalLog;
+        process.exitCode = savedExitCode;
+    }
+});

@@ -244,6 +244,9 @@ test('命令参数支持更新记录、标记旧文件、比较词表和归档�
     assert.throws(() => cli.parseArgs(['--from', 'not-a-uuid']), /用法：/);
     assert.throws(() => cli.parseArgs(['--from', uuid, '--mode', 'llm']), /用法：/);
     assert.throws(() => cli.parseArgs(['--mark-stale', '--apply']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--mark-stale', '--old', 'a.json']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--mark-stale', '--new', 'b.json']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--mark-stale', '--old', 'a.json', '--new', 'b.json']), /用法：/);
     assert.throws(() => cli.parseArgs(['--classify', '--old', 'a.json']), /用法：/);
     assert.throws(() => cli.parseArgs(['--archive-snapshot', '--apply']), /用法：/);
     assert.throws(() => cli.parseArgs(['--archive-snapshot', '--report', 'a.json']), /用法：/);

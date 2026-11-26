@@ -93,12 +93,29 @@ struct CloudRestoreSelection {
         if let cloudLastError { state["lastError"] = cloudLastError }
         else if let until = profile.retryAfter, until > Date() { state["lastError"] = CloudArchiveService.CloudError.throttled(until).localizedDescription }
         else if !cloudAutomaticPermitted(profile: profile) { state["lastError"] = "自动备份已暂停，请主动检查连接后继续" }
-        do {
-            if let pending = try local.pending() { state["pending"] = ["createdAt": pending.createdAt, "encodedBytes": pending.encodedBytes, "fileCount": pending.fileCount] }
-            else if try local.hasPendingMaterials() { state["pending"] = ["damaged": true]; state["lastError"] = "未完成材料缺少有效检查点；可原样保留并停止续传，不能认定这份材料已完整" }
-        } catch {
-            state["pending"] = ["damaged": true]; state["lastError"] = "未完成材料无法正常读取；可在本机原样保留并停止续传，损坏文件需要手动核对"
+        func describePending(fullSync: Bool) -> (payload: [String: Any]?, error: String?) {
+            do {
+                if let pending = try local.pending(fullSync: fullSync) {
+                    var item: [String: Any] = ["createdAt": pending.createdAt, "encodedBytes": pending.encodedBytes, "fileCount": pending.fileCount]
+                    if fullSync { item["fullSync"] = true }
+                    return (item, nil)
+                } else if try local.hasPendingMaterials(fullSync: fullSync) {
+                    var item: [String: Any] = ["damaged": true]
+                    if fullSync { item["fullSync"] = true }
+                    return (item, "未完成材料缺少有效检查点；可原样保留并停止续传，不能认定这份材料已完整")
+                }
+                return (nil, nil)
+            } catch {
+                var item: [String: Any] = ["damaged": true]
+                if fullSync { item["fullSync"] = true }
+                return (item, "未完成材料无法正常读取；可在本机原样保留并停止续传，损坏文件需要手动核对")
+            }
         }
+        let manualPending = describePending(fullSync: false)
+        let fullSyncPending = describePending(fullSync: true)
+        if let payload = manualPending.payload { state["pending"] = payload }
+        if let payload = fullSyncPending.payload { state["fullSyncPending"] = payload }
+        if let error = manualPending.error ?? fullSyncPending.error { state["lastError"] = error }
         if let backup = profile.lastBackup { state["lastBackup"] = ["month": backup.month, "id": backup.id.uuidString, "createdAt": backup.createdAt, "encodedBytes": backup.encodedBytes] }
         return state
     }
@@ -251,7 +268,7 @@ struct CloudRestoreSelection {
             try local.pauseAutomatic(true); return try cloudState()
         }
         if command == "cloud.archivePending" {
-            guard try local.hasPendingMaterials() else { throw DesktopError.message("当前没有未完成的云备份") }
+            guard try local.hasAnyPendingMaterials() else { throw DesktopError.message("当前没有未完成的云备份") }
             let destination = local.profile.destinationID
             cloudBusy = true; emit("cloud.changed"); defer { cloudBusy = false; emit("cloud.changed") }
             let alert = NSAlert(); alert.messageText = "保留原快照并停止本次续传？"
@@ -259,10 +276,10 @@ struct CloudRestoreSelection {
             alert.addButton(withTitle: "保留快照并停止续传"); alert.addButton(withTitle: "继续保留当前续传")
             guard alert.runModal() == .alertFirstButtonReturn else { throw DesktopOperationCancelled("已取消，原快照仍可继续上传") }
             try requireMainContextAvailable()
-            guard local.profile.destinationID == destination, try local.hasPendingMaterials() else { throw DesktopError.message("原续传目标已变化，未移动其他材料") }
+            guard local.profile.destinationID == destination, try local.hasAnyPendingMaterials() else { throw DesktopError.message("原续传目标已变化，未移动其他材料") }
             cloudAutomaticPausedInMemory = true
             try local.pauseAutomatic(true)
-            _ = try local.archivePending(); cloudLastError = nil; return ["retained": true]
+            _ = try local.archiveAllPending(); cloudLastError = nil; return ["retained": true]
         }
         guard ["cloud.check", "cloud.upload", "cloud.list", "cloud.restore", "cloud.syncPersonal", "cloud.syncWorkspace"].contains(command) else { throw DesktopError.message("不支持此云端操作") }
         let acquiredBusy = !holdingBusy

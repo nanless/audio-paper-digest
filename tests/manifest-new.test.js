@@ -102,11 +102,35 @@ test('validateSpec 拒绝非法论文/路径/空值', () => {
     assert.throws(() => manifest.validateSpec({ paperId: '2610.12345', replacements: [{ path: '/bad', value: 'x' }] }), /path/);
 });
 
-test('nodeAt 支持节点路径并拒绝未知路径', () => {
-    const draft = { sections: [{ body: 'a' }], tableBindings: [{ tableIndex: 1 }] };
+test('nodeAt 支持节点路径并拒绝未知路径与缺失可选键', () => {
+    const draft = {
+        readerTitle: 't',
+        sections: [{ body: 'a' }, {}],
+        conceptBridges: [{}],
+        tableBindings: [{ tableIndex: 1 }]
+    };
+    assert.strictEqual(manifest.nodeAt(draft, '/readerTitle'), 't');
     assert.strictEqual(manifest.nodeAt(draft, '/sections/0/body'), 'a');
     assert.strictEqual(manifest.nodeAt(draft, '/tableBindings/0'), draft.tableBindings[0]);
     assert.throws(() => manifest.nodeAt(draft, '/figurePlacements/0/explanation'), /节点/);
+    for (const missingPath of ['/implementationSpecs', '/oneSentenceThesis', '/figurePlacements',
+        '/sections/1/body', '/conceptBridges/0/explanation']) {
+        assert.throws(
+            () => manifest.nodeAt(draft, missingPath),
+            err => !(err instanceof TypeError) && err.message === `节点不存在：${missingPath}`,
+            missingPath
+        );
+    }
+    assert.throws(
+        () => manifest.buildSpecPreview({
+            paper: { arxivId: '2610.12345' },
+            draft: { sections: [{ body: 'old' }] },
+            spec: { paperId: '2610.12345', replacements: [{ path: '/implementationSpecs', value: { items: [] } }] },
+            found: { absolutePath: '/unused.json', envelopeSha256: 'a'.repeat(64) },
+            sourceDescriptor: {}
+        }),
+        err => !(err instanceof TypeError) && /节点不存在：\/implementationSpecs/.test(err.message)
+    );
 });
 
 test('真实封存来源与安全候选：dry/write在任何输出和写入前共核完整尾集及重复', async t => {

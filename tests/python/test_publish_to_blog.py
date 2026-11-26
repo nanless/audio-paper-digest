@@ -6504,9 +6504,13 @@ primary_method_tag: #Transformer
         content = '![结果图](https://arxiv.org/result.png)'
         with mock.patch.dict(os.environ, {}, clear=True), \
                 mock.patch.object(publish_to_blog, 'call_llm_api') as call:
-            passed, issues = publish_to_blog.multimodal_review_images(content, '标题', required=True)
-        self.assertTrue(passed)
-        self.assertEqual(issues, [])
+            passed, issues = publish_to_blog.multimodal_review_images(content, '标题', required=False)
+            self.assertTrue(passed)
+            self.assertEqual(issues, [])
+            with self.assertRaisesRegex(
+                publish_to_blog.PublishLLMUnavailable, '缺少 PAPER_ANALYZER_MODEL'
+            ):
+                publish_to_blog.multimodal_review_images(content, '标题', required=True)
         call.assert_not_called()
 
     def test_image_download_pins_connect_target_and_preserves_host_and_sni(self):
@@ -10161,6 +10165,134 @@ body
                 )
                 self.assertEqual(blocking_full, 0)
                 self.assertTrue(full_results[str(png_path.resolve())]['passed'])
+
+    def test_f3_review_and_fix_preflight_alignment_image_loader_and_index_handling(self):
+        import blog_review_image_loader as img_loader
+        from PIL import Image
+
+        # 1) review_and_fix_post 5 preflight/sanitizer alignment cases
+        with tempfile.TemporaryDirectory() as tmp:
+            clean_page = Path(tmp) / 'clean.md'
+            clean_md = (
+                '---\n'
+                'title: "A \\"quoted\\" title,, ok"\n'
+                'tags: [语音识别, 音频生成]\n'
+                'categories: [论文速递]\n'
+                '---\n\n'
+                '行内代码 `<task>`、`<s>hello</s>`、`<b>bold</b>` 与 `$x + y$` 均不触发误报。\n'
+                '```html\n<task>fenced</task>\n<b>fenced</b>\n$a + b$\n```\n'
+                '预算约 $100 至 $200 美元，不含未转换公式。\n\n'
+                '---\n\n'
+                '正文含 "单独引号不应被误认为 frontmatter 未闭合。\n'
+            )
+            clean_page.write_text(clean_md, encoding='utf-8')
+            fixed, issues = publish_to_blog.review_and_fix_post(str(clean_page), dry_run=True, source_content=clean_md)
+            self.assertFalse(fixed)
+            self.assertEqual(issues, [], f'Unexpected preflight issues: {issues}')
+
+            # Real bare <b>, real $x+y$, real YAML tags double comma, and real unclosed YAML quote are still caught
+            dirty_md = (
+                '---\n'
+                'title: "Valid"\n'
+                'tags: ["unclosed,, A]\n'
+                '---\n\n'
+                '正文 <b>粗体</b> 与公式 $x + y$ 与 <task>裸标签。\n'
+            )
+            dirty_page = Path(tmp) / 'dirty.md'
+            dirty_page.write_text(dirty_md, encoding='utf-8')
+            dirty_fixed, dirty_issues = publish_to_blog.review_and_fix_post(
+                str(dirty_page), dry_run=True, source_content=dirty_md
+            )
+            self.assertTrue(dirty_fixed)
+            joined = '\n'.join(dirty_issues)
+            self.assertIn('HTML-like', joined)
+            self.assertIn('未转换的 LaTeX', joined)
+            self.assertIn('裸 HTML', joined)
+            self.assertIn('YAML frontmatter 双逗号', joined)
+            self.assertIn('未闭合引号', joined)
+
+        # 2) SVG review allows text containing "onset = 0.2s" / "online = True" while blocking XML on* attributes
+        valid_svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><text>onset = 0.2s, online = True</text></svg>'
+        bad_attr_svg = b'<svg xmlns="http://www.w3.org/2000/svg" onclick="alert(1)"><rect width="10" height="10"/></svg>'
+        bad_ns_svg = b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:x="http://example.org/x" x:onLoad="alert(1)"><rect width="10" height="10"/></svg>'
+        with self.assertRaises(img_loader.PublishDataValidationError):
+            img_loader.rasterize_svg_for_review(bad_attr_svg)
+        with self.assertRaises(img_loader.PublishDataValidationError):
+            img_loader.rasterize_svg_for_review(bad_ns_svg)
+        # Valid SVG passes static/XML inspection (stop right at playwright launch to stay offline & fast)
+        with mock.patch.dict(sys.modules, {'playwright': None, 'playwright.sync_api': None}):
+            with self.assertRaises(img_loader.PublishDataValidationError) as ctx:
+                img_loader.rasterize_svg_for_review(valid_svg)
+            self.assertNotIn('脚本、实体、嵌入对象或外部资源', str(ctx.exception))
+
+        # 3) prepare_raster_for_review respects EXIF orientation tag 274 before fast path and before downsample target
+        def make_oriented_jpeg(w, h, orientation):
+            im = Image.new('RGB', (w, h), 'red')
+            exif = im.getexif()
+            exif[274] = orientation
+            buf = io.BytesIO()
+            im.save(buf, format='JPEG', exif=exif.tobytes())
+            return buf.getvalue()
+
+        small_rot = make_oriented_jpeg(400, 200, 6)  # 90 deg CW -> display 200x400
+        out_mt, out_bytes = img_loader.prepare_raster_for_review('image/jpeg', small_rot)
+        self.assertNotEqual(out_bytes, small_rot)
+        with Image.open(io.BytesIO(out_bytes)) as transposed:
+            self.assertEqual(transposed.size, (200, 400))
+
+        large_rot = make_oriented_jpeg(3200, 800, 6)  # display 800x3200 -> with max_edge=1600 must become 400x1600
+        _mt2, out_large = img_loader.prepare_raster_for_review(
+            'image/jpeg', large_rot, hooks={'REVIEW_IMAGE_MAX_EDGE': 1600, 'REVIEW_IMAGE_MAX_PIXELS': 4_000_000}
+        )
+        with Image.open(io.BytesIO(out_large)) as downsampled:
+            self.assertEqual(downsampled.size, (400, 1600))
+
+        # 4) _render_empty_digest_index safely quotes YAML category via _yaml_flow_scalar
+        empty_md = publish_to_blog._render_empty_digest_index('2026-11-26', '语音: 识别')
+        self.assertIn('categories: ["语音: 识别"]', empty_md)
+
+        # 5) _api_reader_concept_term_present / display use ASCII [0-9], not Unicode fullwidth digits
+        self.assertEqual(publish_to_blog._api_reader_concept_term_display('中文 １２'), '中文 １２')
+        self.assertEqual(publish_to_blog._api_reader_concept_term_display('中文 12'), '中文12')
+
+        # 6) review_all_posts records summary-page PublishLLMUnavailable in file_results & callback cleanly
+        with tempfile.TemporaryDirectory() as td:
+            idx_file = Path(td) / '2026-11-26.md'
+            idx_text = '---\ntitle: "汇总"\n---\n正文\n'
+            idx_file.write_text(idx_text, encoding='utf-8')
+            idx_key = os.path.realpath(str(idx_file))
+
+            # Text review unavailable
+            cb_text = []
+            with mock.patch.object(publish_to_blog, 'review_and_fix_post', return_value=(False, [])), \
+                    mock.patch.object(publish_to_blog, 'llm_review_post',
+                                      side_effect=publish_to_blog.PublishLLMUnavailable('timeout')):
+                _fixed, blocking, results = publish_to_blog.review_all_posts(
+                    '2026-11-26', {}, [], require_llm=True, content_dir=td,
+                    review_paths=[idx_file], return_details=True,
+                    result_callback=lambda k, r: cb_text.append((k, r)),
+                )
+            self.assertEqual(blocking, 1)
+            self.assertEqual(results[idx_key]['failureKind'], 'transient')
+            self.assertFalse(results[idx_key]['passed'])
+            self.assertEqual(len(cb_text), 1)
+            self.assertEqual(cb_text[0][0], idx_key)
+
+            # Image review unavailable
+            cb_img = []
+            with mock.patch.object(publish_to_blog, 'review_and_fix_post', return_value=(False, [])), \
+                    mock.patch.object(publish_to_blog, 'llm_review_post', return_value=(True, [], idx_text)), \
+                    mock.patch.object(publish_to_blog, 'multimodal_review_images',
+                                      side_effect=publish_to_blog.PublishLLMUnavailable('vision 502')) as img_mock:
+                _fixed2, blocking2, results2 = publish_to_blog.review_all_posts(
+                    '2026-11-26', {}, [], require_llm=True, content_dir=td,
+                    review_paths=[idx_file], return_details=True,
+                    result_callback=lambda k, r: cb_img.append((k, r)),
+                )
+            self.assertEqual(blocking2, 1)
+            self.assertEqual(results2[idx_key]['failureKind'], 'transient')
+            self.assertEqual(img_mock.call_args.args[1], '汇总页')
+            self.assertEqual(len(cb_img), 1)
 
 
 if __name__ == '__main__':

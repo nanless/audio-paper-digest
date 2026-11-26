@@ -585,7 +585,7 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
     if (loaded.analysis.status === 'complete') {
         if (!require('./model-text-sanitization.js').canReuseModelTextInputs(
             loaded.analysis.papers[0], loaded.source.sourceDetails)) {
-            fail('旧会议模型输入清洗可能损坏 Unicode 字符，必须按已核验来源重新分析后再复用');
+            throw new Error('旧会议模型输入清洗可能损坏 Unicode 字符，必须按已核验来源重新分析后再复用');
         }
         const reuseAuthorOptions = {};
         if (readerPdfSourceHandle) {
@@ -608,7 +608,7 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
             reuseAuthorOptions.expectedMetadataSha256 = expectedMetaSha;
         }
         if (!require('./reader-author-source.js').canReuseReaderAuthorInputs(loaded.analysis.papers[0], loaded.source.sourceDetails, reuseAuthorOptions)) {
-            fail('旧会议作者来源未通过封存全文重放，请先刷新作者或 Reader 后再复用');
+            throw new Error('旧会议作者来源未通过封存全文重放，请先刷新作者或 Reader 后再复用');
         }
         const run = loaded.run.status === 'complete' && loaded.analysis.stats?.analysisStatus === 'complete'
             ? loaded.run : await sealCompletedRunLocked({

@@ -38,14 +38,17 @@ const CONFERENCE_PROTECTED_KEYS = [
     'conference-processes',
     'conference-queues',
     'conference-publications',
-    'conference-source-recovery'
+    'conference-source-recovery',
+    'conference-recovery-grants'
 ];
 const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks',
     'historical-arxiv-batches', 'historical-analysis-schedulers', 'historical-postprocess-schedulers', 'historical-taxonomy-assignments', 'historical-tag-assignments',
     'historical-page-staging', 'historical-daily-aggregates', 'historical-publications', 'paper-source-authorities',
     'daily-fresh-source-runs', 'fetched-arxiv-sources', 'historical-arxiv-fresh-failure-handoffs',
     'historical-arxiv-publication-metadata', 'blog-republication-archives', 'canonical-maintenance',
-    'daily-fetch-refresh-backups', 'fresh-rewrites', 'fresh-source-diagnostics', 'llm-usage', 'llm-response-recovery',
+    'daily-fetch-refresh-backups', 'daily-scoring-refresh-recovery', 'daily-render-observations',
+    'daily-deployment-observations', 'daily-republications', 'analysis-repair-attempts', 'analysis-batch-reports',
+    'fresh-rewrites', 'fresh-source-diagnostics', 'llm-usage', 'llm-response-recovery',
     'publication-amendments', 'reader-attempts', 'reader-efficiency-evaluations', 'stale-locks',
     'tag-taxonomy-audit', 'taxonomy-preview', 'tag-preview', 'taxonomy-reseal-reports', 'tag-record-update-reports',
     'direct-local-inputs', 'historical-conference-local-sources', 'historical-conference-page-projections',
@@ -53,6 +56,7 @@ const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-cros
     'historical-direct-rewrite-registries', 'historical-direct-rewrite-executions', 'historical-direct-rewrite-staging',
     'historical-direct-aggregate-projections', 'historical-direct-aggregates',
     'historical-direct-tag-supplements', 'historical-direct-taxonomy-supplements',
+    'historical-source-identity-supplements', 'historical-direct-publications', 'historical-direct-visual-dispositions',
     'historical-source-tag-classifications', 'historical-source-taxonomy-classifications', 'historical-local-crawl-identities',
     'historical-icml-pdf-sources', 'historical-openreview-pdf-sources', 'historical-icml-alternate-pdf-sources',
     'historical-local-crawl-identity-snapshots', 'historical-local-crawl-batches', 'historical-archive-crawl-identities',
@@ -1609,6 +1613,71 @@ describe('运行时重复 PDF 写时复制克隆去重 (pdf-dedupe)', () => {
                     err => err.code === 'STORAGE_PDF_DEDUPE_BLOCKED'
                         && err.plan.blockers.some(item => item.type === 'symlink')
                 );
+            }
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('receipt-declared 模式下同一 PDF 存在冲突哈希时标记 declaredHashMismatch 并输出 blocker', () => {
+        const projectRoot = makeProject();
+        try {
+            const pdf = writeFile(projectRoot, 'data/runtime/official-conference-acquisitions/demo-2026/pdfs/conflict.pdf', '%PDF-conflict');
+            const receiptA = path.join(projectRoot, 'data/runtime/official-conference-acquisitions/demo-2026/receipts/a.json');
+            const receiptB = path.join(projectRoot, 'data/runtime/official-conference-acquisitions/demo-2026/receipts/b.json');
+            fs.mkdirSync(path.dirname(receiptA), { recursive: true });
+            fs.writeFileSync(receiptA, JSON.stringify({ pdf: { relativePath: 'pdfs/conflict.pdf', sha256: 'a'.repeat(64) } }));
+            fs.writeFileSync(receiptB, JSON.stringify({ pdf: { relativePath: 'pdfs/conflict.pdf', sha256: 'b'.repeat(64) } }));
+            const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+            const record = report.pdfFiles.find(item => item.path === pdf);
+            assert.strictEqual(record.declaredHashMismatch, true);
+            assert.strictEqual(record.hash, null);
+            assert.strictEqual(report.blockers.some(item => item.type === 'declared_hash_conflict' && item.path === pdf), true);
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('buildPrunePlan 纳入共享博客锁检查并拒绝符号链接/硬链接 .env', () => {
+        const projectRoot = makeProject();
+        try {
+            writeFile(projectRoot, 'logs/old.log', 'old', OLD_MS);
+            const blogDir = path.join(projectRoot, 'fake-blog');
+            const gitCommon = path.join(blogDir, '.git');
+            const lockDir = path.join(gitCommon, '.paper-digest-locks', 'blog-publication.lock');
+            fs.mkdirSync(lockDir, { recursive: true });
+            fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({
+                pid: process.pid,
+                hostname: os.hostname(),
+                startedAt: new Date(NOW_MS).toISOString()
+            }));
+            const envFile = path.join(projectRoot, '.env');
+            fs.writeFileSync(envFile, `PAPER_DIGEST_BLOG_REPO=${blogDir}\nPD_STORAGE_RETENTION_DAYS="\n`, { mode: 0o600 });
+            const realLockDir = fs.realpathSync(lockDir);
+            const plan = buildPrunePlan({
+                projectRoot,
+                nowMs: NOW_MS,
+                envFile,
+                spawnSync: () => ({ status: 0, stdout: `${fs.realpathSync(gitCommon)}\n`, stderr: '' })
+            });
+            assert.strictEqual(plan.retentionDays, 30);
+            assert.strictEqual(plan.blockers.some(item => item.type === 'active_lock' && item.path === realLockDir), true);
+
+            if (process.platform !== 'win32') {
+                const targetEnv = path.join(projectRoot, 'real.env');
+                fs.writeFileSync(targetEnv, 'PD_STORAGE_RETENTION_DAYS=7\n', { mode: 0o600 });
+                const linkEnv = path.join(projectRoot, 'symlink.env');
+                fs.symlinkSync(targetEnv, linkEnv);
+                const symPlan = buildPrunePlan({ projectRoot, nowMs: NOW_MS, envFile: linkEnv });
+                assert.strictEqual(symPlan.retentionDays, 30);
+                assert.ok(symPlan.retentionReadError);
+                assert.strictEqual(symPlan.blockers.some(item => item.type === 'active_lock_unknown'), true);
+
+                const hardEnv = path.join(projectRoot, 'hardlink.env');
+                fs.linkSync(targetEnv, hardEnv);
+                const hardPlan = buildPrunePlan({ projectRoot, nowMs: NOW_MS, envFile: hardEnv });
+                assert.strictEqual(hardPlan.retentionDays, 30);
+                assert.strictEqual(hardPlan.retentionReadError?.code, 'UNSAFE_FILE');
             }
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });

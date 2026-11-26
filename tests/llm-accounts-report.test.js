@@ -193,3 +193,41 @@ test('账号报告和真实公共endpoint门一致拒公网HTTP而保留本机�
     const localHttp = report.describeConfigured({ ...one, PAPER_ANALYZER_ENDPOINT: 'http://127.0.0.1:9000/v1' }, null, NOW);
     assert.strictEqual(localHttp.configured.status, 'configured');
 });
+
+test('P3-3: describe 使用 evaluateAccountQuota 识别窗口/0%快照冷却，readState 拒绝 symlink', t => {
+    const idWin = 'c'.repeat(64);
+    const idPct0 = 'd'.repeat(64);
+    const state = {
+        services: {
+            service1: {
+                accounts: {
+                    [idWin]: {
+                        status: 'eligible',
+                        blockedUntilMs: 0,
+                        windows: { rolling_5h: { blockedUntilMs: NOW + 120_000 } }
+                    },
+                    [idPct0]: {
+                        status: 'eligible',
+                        blockedUntilMs: 0,
+                        quota: { weeklyRemainingPct: 0, weeklySnapshotAtMs: NOW - 1000, weeklyResetAtMs: NOW + 3600_000 }
+                    }
+                },
+                groups: {}
+            }
+        }
+    };
+    const desc = report.describe(state, NOW);
+    assert.strictEqual(desc.accountCount, 2);
+    assert.strictEqual(desc.cooling, 2);
+    assert.ok(desc.rows.every(r => r.status === 'quota_blocked' && Boolean(r.blockedUntil)));
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-report-sym-'));
+    t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+    const target = path.join(tmpDir, 'real.json');
+    const sym = path.join(tmpDir, 'sym.json');
+    fs.writeFileSync(target, '{"services":{}}');
+    fs.symlinkSync(target, sym);
+    const res = report.readState(sym);
+    assert.strictEqual(res.state, null);
+    assert.ok(res.error);
+});

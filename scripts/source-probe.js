@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // 只读探测 arXiv Atom/官方 OAI/RSS 三个入口，不抓取、不写 data/current。
-const fs = require('node:fs');
 const path = require('node:path');
 const doctor = require('./doctor');
-const { parseEnvText } = require('./lib/env-schema');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const ENV_FILE = path.join(PROJECT_ROOT, '.env');
@@ -48,11 +46,17 @@ function parseArgs(argv) {
 }
 
 async function probe(options = {}) {
-    const text = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf8') : '';
-    const env = parseEnvText(text);
+    const envFile = options.envFile || ENV_FILE;
+    const envInfo = doctor.readEnvFileReadOnly(envFile);
+    if (envInfo.error || envInfo.readError) {
+        throw new Error(envInfo.error || envInfo.readError);
+    }
+    const env = envInfo.exists ? envInfo.entries : {};
     const target = options.date || doctor.beijingDateString();
     const network = await doctor.probeNetwork({ env, timeoutMs: options.timeoutMs });
-    const checks = doctor.evaluateNetworkProbes(network, target, { todayDate: doctor.beijingDateString() });
+    const rawChecks = doctor.evaluateNetworkProbes(network, target, { todayDate: doctor.beijingDateString() });
+    const secrets = doctor.collectRuntimeSecrets(PROJECT_ROOT, env, process.env);
+    const checks = doctor.redactChecks(rawChecks, secrets);
     return { date: target, checks };
 }
 
@@ -82,7 +86,9 @@ module.exports = { parseArgs, probe, render, main };
 
 if (require.main === module) {
     main().then(code => { process.exitCode = code; }).catch(error => {
-        console.error(`[source-probe] ${error.message}`);
+        const secrets = doctor.collectRuntimeSecrets(PROJECT_ROOT, null, process.env);
+        const safeMessage = doctor.redactText(error?.message || String(error), secrets);
+        console.error(`[source-probe] ${safeMessage}`);
         process.exitCode = 2;
     });
 }

@@ -227,11 +227,12 @@ class ZoteroService(
             val worker=currentCoroutineContext()[Job]?:error("缺少原生操作")
             synchronized(workerGate){credentialLease.capture();workers[worker]=true}
             try {mutex.withLock {
-            val network=command.removePrefix("zotero.") in setOf("check","collections","prepare","archive","resume")
+            val network=command.removePrefix("zotero.") in setOf("check","checkDav","collections","prepare","archive","resume")
             credentialOperation=if(network)CredentialOperation(credentialLease.capture(),credentialTarget(connection()))else null
             busy=true
             try { when(command.removePrefix("zotero.")) {
                 "check"->{try{check()}catch(_:ZoteroCredentialSuperseded){ /* An obsolete read cannot confirm the new credential. */ };state()}
+                "checkDav"->{checkDav();state()}
                 "collections"->{val c=validatedConnection();check();val all=mutableListOf<JSONObject>();var start=0
                     while(true){val result=api("GET","/${c.getString("libraryType")}/${c.getString("libraryID")}/collections?format=json&limit=100&start=$start");val rows=JSONArray(result.bytes.toString(Charsets.UTF_8));for(i in 0 until rows.length())all+=rows.getJSONObject(i);if(rows.length()<100)break;start+=100;require(start<=10000){"分类数量超过安全读取上限"}}
                     JSONObject().put("collections",JSONArray(all))}
@@ -443,6 +444,12 @@ class ZoteroService(
     }
 
     private fun validatedConnection():JSONObject=connection().also{require(it.optString("libraryType") in listOf("users","groups")&&it.optString("libraryID").matches(Regex("[1-9][0-9]{0,15}"))){"请先保存文库类型和 ID"}}
+    private suspend fun checkDav(){
+        val c=validatedConnection()
+        require(backend(c)=="webdav"){"当前未启用 WebDAV 附件后端"}
+        davFactory(davRoot(),secrets).probe(davLease(c))
+        requireCredentialCurrent()
+    }
     private suspend fun check(){
         credentialLease.clearConfirmation()
         val c=validatedConnection()

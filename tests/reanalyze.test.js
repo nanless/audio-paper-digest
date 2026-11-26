@@ -74,3 +74,86 @@ test('强制全量重分析清 Reader 前登记序号接替历史，并保留主
     // 原始对象不被就地修改。
     assert.equal(stage.status, 'complete');
 });
+
+test('reanalyze-selected CLI 事实反馈参数正确映射到 reanalyzeSelected 键，未知/旧别名键显式失败', async () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const Config = require('../scripts/config.js');
+    const selected = require('../scripts/reanalyze-selected.js');
+
+    const parsed = selected.parseSelectedReanalyzeCliArgs([
+        '--natural-resource-prose',
+        '--fact-feedback-file', '/tmp/a.json',
+        '--fact-feedback-file', '/tmp/a2.json',
+        '--reader-fact-feedback-file', '/tmp/r.json',
+        '--core-summary-fact-feedback-file', '/tmp/c.json',
+        '2611.00001', '2611.00002'
+    ]);
+    assert.deepEqual(parsed.ids, ['2611.00001', '2611.00002']);
+    assert.deepEqual(parsed.options, {
+        naturalResourceProse: true,
+        feedbackFiles: ['/tmp/a.json', '/tmp/a2.json'],
+        readerFeedbackFiles: ['/tmp/r.json'],
+        coreFeedbackFiles: ['/tmp/c.json']
+    });
+    assert.equal(Object.hasOwn(parsed.options, 'factReviewFeedbackFiles'), false);
+    assert.equal(Object.hasOwn(parsed.options, 'readerFactFeedbackFiles'), false);
+    assert.equal(Object.hasOwn(parsed.options, 'coreSummaryFactFeedbackFiles'), false);
+
+    // 旧别名键或未知键必须立即报错，不能静默丢弃。
+    for (const badOptions of [
+        { factReviewFeedbackFiles: ['/tmp/a.json'] },
+        { readerFactFeedbackFiles: ['/tmp/r.json'] },
+        { coreSummaryFactFeedbackFiles: ['/tmp/c.json'] },
+        { unknownOptionKey: true }
+    ]) {
+        await assert.rejects(
+            selected.reanalyzeSelected(['2611.00001'], badOptions),
+            /未知或已废弃的参数键/
+        );
+    }
+
+    // legacy 文件缺少有效 dailyFreshSourceRun 时，必须在写入 RESULT_FILE 之前拒绝（不污染权威路径）。
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reanalyze-legacy-precheck-'));
+    const prevResult = Config.FILES.deepAnalysisResult;
+    const prevLegacy = Config.FILES.deepAnalysisResultLegacy;
+    try {
+        Config.FILES.deepAnalysisResult = path.join(root, 'deep-analysis-result.json');
+        Config.FILES.deepAnalysisResultLegacy = path.join(root, 'deep-analysis-result-legacy.json');
+        fs.writeFileSync(Config.FILES.deepAnalysisResultLegacy, JSON.stringify({
+            batchDate: '2026-11-25',
+            papers: [{ arxivId: '2611.00001', title: 'legacy paper' }]
+        }));
+        delete require.cache[require.resolve('../scripts/reanalyze-selected.js')];
+        const freshSelected = require('../scripts/reanalyze-selected.js');
+        await assert.rejects(
+            freshSelected.reanalyzeSelected(['2611.00001']),
+            /每日封存来源计划检查未通过/
+        );
+        assert.equal(fs.existsSync(Config.FILES.deepAnalysisResult), false, '校验失败前不得把 legacy 写入 RESULT_FILE');
+    } finally {
+        Config.FILES.deepAnalysisResult = prevResult;
+        Config.FILES.deepAnalysisResultLegacy = prevLegacy;
+        delete require.cache[require.resolve('../scripts/reanalyze-selected.js')];
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('reanalyze.js 模块加载不执行顶层环境检查、日志设置或 CLI 解析', async () => {
+    const { spawnSync } = require('node:child_process');
+    const path = require('node:path');
+    const root = path.resolve(__dirname, '..');
+    const env = { ...process.env };
+    delete env.PAPER_ANALYZER_API_KEY;
+    delete env.PAPER_ANALYZER_MODEL;
+    delete env.PAPER_ANALYZER_ENDPOINT;
+    const child = spawnSync(process.execPath, [
+        '-e',
+        'const mod = require("./scripts/reanalyze.js"); if (typeof mod.reanalyzeAll !== "function") process.exit(2); console.log("ok");',
+        '--',
+        '--unknown-flag-should-not-kill-require'
+    ], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(child.stdout.trim(), 'ok');
+});

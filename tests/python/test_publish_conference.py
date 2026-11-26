@@ -318,7 +318,21 @@ class ConferencePublishTests(unittest.TestCase):
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
             with self.assertRaisesRegex(M.ConferencePublicationError, '语义 review'):
                 M.review('icassp-2026', 'f4e4a4e4-a4e4-44e4-a4e4-a4e4a4e4a4e4')
-            hugo.assert_not_called()
+            hugo.assert_called_once()
+        self.assertFalse(list((self.root / 'receipts').rglob('review.json')))
+
+    def test_review_hugo_failure_skips_paid_semantic_review(self):
+        r = self.record()
+        generation = {'files': [r]}
+        with mock.patch.object(M, 'blog_repo', return_value=self.repo), \
+                mock.patch.object(M, 'image_repo', return_value=self.repo), \
+                mock.patch.object(M, 'validate_generation', return_value=(generation, {}, {})), \
+                mock.patch.object(M, 'require_content_review_runtime'), \
+                mock.patch.object(M, 'run_hugo', side_effect=M.ConferencePublicationError('Hugo gate 构建失败')), \
+                mock.patch.object(M, 'review_pages') as paid_review:
+            with self.assertRaisesRegex(M.ConferencePublicationError, 'Hugo gate 构建失败'):
+                M.review('icassp-2026', 'f4e4a4e4-a4e4-44e4-a4e4-a4e4a4e4a4e4')
+            paid_review.assert_not_called()
         self.assertFalse(list((self.root / 'receipts').rglob('review.json')))
 
     def test_review_without_hugo_runtime_refuses_to_seal_a_pass(self):
@@ -1153,6 +1167,160 @@ class FindManifestIndexTest(unittest.TestCase):
         root = self._root()
         with self.assertRaises(Exception):
             M.find_manifest(root, 'not-a-sha', 'probe')
+
+
+class RepoRenameAndHardeningTest(unittest.TestCase):
+    def test_portal_repo_rename_remote_identity_compatibility(self):
+        old_ssh = 'git@github.com:nanless/audio-paper-digest-blog.git'
+        new_ssh = 'git@github.com:nanless/audio-research-portal.git'
+        old_https = 'https://github.com/nanless/audio-paper-digest-blog.git'
+        new_https = 'https://github.com/nanless/audio-research-portal.git'
+        foreign = 'git@github.com:evil/audio-paper-digest-blog.git'
+        other_host = 'https://evil.example/nanless/audio-paper-digest-blog.git'
+
+        snap_ssh = {'remoteUrl': new_ssh, 'remoteIdentitySha256': M.sha_bytes(new_ssh.encode())}
+        snap_https = {'remoteUrl': new_https, 'remoteIdentitySha256': M.sha_bytes(new_https.encode())}
+
+        self.assertTrue(M.remote_identity_matches(snap_ssh, M.sha_bytes(new_ssh.encode())))
+        self.assertTrue(M.remote_identity_matches(snap_ssh, M.sha_bytes(old_ssh.encode())))
+        self.assertTrue(M.remote_identity_matches(snap_https, M.sha_bytes(old_https.encode())))
+        # 跨协议、跨主机和无关仓库必须拒绝
+        self.assertFalse(M.remote_identity_matches(snap_ssh, M.sha_bytes(old_https.encode())))
+        self.assertFalse(M.remote_identity_matches(snap_https, M.sha_bytes(old_ssh.encode())))
+        self.assertFalse(M.remote_identity_matches(snap_ssh, M.sha_bytes(foreign.encode())))
+        self.assertFalse(M.remote_identity_matches(snap_https, M.sha_bytes(other_host.encode())))
+
+    def test_resolve_runtime_source_path_and_records_match_relocated(self):
+        old_path = str(M.RUNTIME).replace('/audio-research-workbench/', '/audio-paper-digest/') + '/x/y.md'
+        new_path = str(M.RUNTIME / 'x/y.md')
+        self.assertEqual(M.resolve_runtime_source_path(old_path), Path(new_path))
+        self.assertTrue(M.records_match_relocated(
+            [{'path': 'content/posts/a.md', 'sourcePath': old_path, 'sourceSha256': 'a' * 64}],
+            [{'path': 'content/posts/a.md', 'sourcePath': new_path, 'sourceSha256': 'a' * 64}],
+        ))
+        self.assertFalse(M.records_match_relocated(
+            [{'path': 'content/posts/a.md', 'sourcePath': '/foreign/audio-paper-digest/x/y.md', 'sourceSha256': 'a' * 64}],
+            [{'path': 'content/posts/a.md', 'sourcePath': new_path, 'sourceSha256': 'a' * 64}],
+        ))
+
+    def test_tag_format_error_messages_name_allowed_key(self):
+        current_agg = {**M.current_header('conference-aggregate-staging'), 'taxonomy': {}}
+        with self.assertRaisesRegex(M.ConferencePublicationError, 'tag-catalog 时只允许 tagMetadata'):
+            M._validate_aggregate_tag_format(current_agg)
+        current_paper = {**M.current_header('conference-paper-page-staging'), 'taxonomy': {}}
+        with self.assertRaisesRegex(M.ConferencePublicationError, 'tag-catalog 时只允许 tagMetadata'):
+            M._validate_paper_tag_format(current_paper)
+
+    def test_conference_sidecar_urls_derives_base_path_from_pages(self):
+        pages = [
+            {'url': 'https://nanless.github.io/audio-research-portal/posts/2026-11-03-a/'},
+            {'url': 'https://nanless.github.io/audio-research-portal/posts/2026-11-03-b/'},
+        ]
+        sidecar = {'kind': 'sidecar', 'path': 'static/client/papers/2026-11-03/conference-abc/citation.json'}
+        with mock.patch.object(M, 'load_publish_to_blog', side_effect=AssertionError('must not read mutable BASE_PATH')):
+            urls = M.conference_sidecar_urls(pages, {'files': [sidecar]})
+        self.assertEqual(urls, [
+            ('https://nanless.github.io/audio-research-portal/client/papers/2026-11-03/conference-abc/citation.json', sidecar)
+        ])
+
+    def test_run_hugo_uses_no_build_lock_and_wraps_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / 'repo'
+            repo.mkdir()
+            M.git(repo, 'init', '-b', 'main')
+            M.git(repo, 'config', 'user.email', 't@example.com')
+            M.git(repo, 'config', 'user.name', 't')
+            (repo / 'hugo.toml').write_text('baseURL = "https://example.org/"\n', encoding='utf-8')
+            M.git(repo, 'add', '.')
+            M.git(repo, 'commit', '-m', 'init')
+            head = M.git(repo, 'rev-parse', 'HEAD').stdout.strip()
+            page_path = repo / 'content/posts/demo.md'
+            page_path.parent.mkdir(parents=True)
+            data = b'---\ntitle: demo\n---\nbody\n'
+            page_path.write_bytes(data)
+            generation = {
+                'baseHead': head,
+                'files': [{'kind': 'paper', 'path': 'content/posts/demo.md',
+                           'sourcePath': str(page_path), 'sourceSha256': M.sha_bytes(data), 'size': len(data)}],
+                'imageFiles': [],
+            }
+            seen_cmds = []
+            def fake_run(cmd, **kwargs):
+                seen_cmds.append(cmd)
+                raise M.subprocess.TimeoutExpired(cmd=cmd, timeout=300)
+            with mock.patch.object(M.shutil, 'which', return_value='/usr/bin/hugo'), \
+                    mock.patch.object(M.subprocess, 'run', side_effect=fake_run):
+                with self.assertRaisesRegex(M.ConferencePublicationError, '超时'):
+                    M.run_hugo(repo, generation)
+            self.assertEqual(len(seen_cmds), 1)
+            self.assertIn('--noBuildLock', seen_cmds[0])
+
+    def test_same_blog_and_image_repo_locks_do_not_deadlock_in_generate_reverify_push(self):
+        from contextlib import contextmanager
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            same_repo = root / 'unified-repo'
+            same_repo.mkdir()
+            other_repo = root / 'other-images'
+            other_repo.mkdir()
+            held = set()
+            acquired_log = []
+
+            @contextmanager
+            def non_reentrant_lock(target_repo, *, owner='test'):
+                resolved = Path(target_repo).resolve()
+                if resolved in held:
+                    raise AssertionError(f'self-deadlock on {resolved} (owner={owner})')
+                held.add(resolved)
+                acquired_log.append((resolved, owner))
+                try:
+                    yield
+                finally:
+                    held.remove(resolved)
+
+            pub_dir = root / 'publications' / 'conf-2026' / '11111111-1111-4111-8111-111111111111'
+            pub_dir.mkdir(parents=True)
+
+            class _Sentinel(RuntimeError):
+                pass
+
+            with mock.patch.object(M, 'shared_blog_repository_lock', side_effect=non_reentrant_lock), \
+                    mock.patch.object(M, 'blog_repo', return_value=same_repo), \
+                    mock.patch.object(M, 'image_repo', return_value=same_repo), \
+                    mock.patch.object(M, 'publication_dir', return_value=pub_dir):
+                # 1) generate() with blog_repo == image_repo must acquire lock once without deadlocking
+                with mock.patch.object(M, 'process_bundle', side_effect=_Sentinel('after-generate-lock')):
+                    with self.assertRaisesRegex(_Sentinel, 'after-generate-lock'):
+                        M.generate('conf-2026', '11111111-1111-4111-8111-111111111111')
+                self.assertEqual(acquired_log, [(same_repo, 'conference-generate:conf-2026')])
+                acquired_log.clear()
+
+                # 2) fresh_online_acceptance() with repo == images must acquire lock once without deadlocking
+                generation = {'files': [], 'imageFiles': []}
+                published = {'publishSha256': 'a' * 64}
+                mechanical = {'pages': []}
+                with mock.patch.object(M, 'online_attempts', side_effect=_Sentinel('after-reverify-lock')):
+                    with self.assertRaisesRegex(_Sentinel, 'after-reverify-lock'):
+                        M.fresh_online_acceptance(
+                            pub_dir, same_repo, same_repo, generation, published, mechanical,
+                            'b' * 40, 'c' * 40,
+                        )
+                self.assertEqual(acquired_log, [(same_repo, 'conference-online-reverify')])
+                acquired_log.clear()
+
+                # 3) push() with blog_repo == image_repo must acquire lock once without deadlocking
+                with mock.patch.object(M, 'validate_generation', side_effect=_Sentinel('after-push-lock')):
+                    with self.assertRaisesRegex(_Sentinel, 'after-push-lock'):
+                        M.push('conf-2026', '11111111-1111-4111-8111-111111111111')
+                self.assertEqual(acquired_log, [(same_repo, 'conference-push:conf-2026')])
+                acquired_log.clear()
+
+            # Distinct repos still lock both in (repo, images) order
+            with mock.patch.object(M, 'shared_blog_repository_lock', side_effect=non_reentrant_lock):
+                with M.shared_publication_repository_locks(
+                        same_repo, other_repo, blog_owner='b-own', image_owner='i-own'):
+                    self.assertEqual(held, {same_repo, other_repo})
+            self.assertEqual(acquired_log, [(same_repo, 'b-own'), (other_repo, 'i-own')])
 
 
 if __name__ == '__main__':

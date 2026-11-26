@@ -187,3 +187,49 @@ test('main --help：不探测、退出码 0', async () => {
         capture.restore();
     }
 });
+
+test('probe：拒绝符号链接/硬链接 .env 并脱敏代理凭据', async () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const { spawnSync } = require('node:child_process');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'source-probe-sec-'));
+    try {
+        const realEnv = path.join(dir, 'real.env');
+        fs.writeFileSync(realEnv, 'HTTPS_PROXY=http://user:SUPER_SECRET_PROXY_PASS@127.0.0.1:7897\n', { mode: 0o600 });
+        if (process.platform !== 'win32') {
+            const symEnv = path.join(dir, 'sym.env');
+            fs.symlinkSync(realEnv, symEnv);
+            await assert.rejects(() => sourceProbe.probe({ envFile: symEnv }), /普通文件|符号链接/);
+            const hardEnv = path.join(dir, 'hard.env');
+            fs.linkSync(realEnv, hardEnv);
+            await assert.rejects(() => sourceProbe.probe({ envFile: hardEnv }), /普通文件|硬链接/);
+            fs.unlinkSync(hardEnv);
+        }
+
+        const leakyFixture = {
+            proxyError: 'connect failed via http://user:SUPER_SECRET_PROXY_PASS@127.0.0.1:7897 (SUPER_SECRET_PROXY_PASS)',
+            atom: null, oai: null, rss: null
+        };
+        await withStubbedProbe(leakyFixture, {}, async () => {
+            const result = await sourceProbe.probe({ date: '2026-10-21', envFile: realEnv });
+            const serialized = JSON.stringify(result);
+            assert.ok(!serialized.includes('SUPER_SECRET_PROXY_PASS'), 'checks 不得泄露代理密码');
+        });
+
+        // CLI 未捕获异常分支也必须脱敏 error.message 中的凭据。
+        const cliRes = spawnSync(
+            process.execPath,
+            [path.join(__dirname, '..', 'scripts', 'source-probe.js'), '--unknown-http://user:CLI_PROXY_SECRET@127.0.0.1:7897'],
+            {
+                cwd: path.join(__dirname, '..'),
+                env: { ...process.env, HTTPS_PROXY: 'http://user:CLI_PROXY_SECRET@127.0.0.1:7897' },
+                encoding: 'utf8'
+            }
+        );
+        assert.strictEqual(cliRes.status, 2);
+        assert.ok(!cliRes.stderr.includes('CLI_PROXY_SECRET'), `stderr 不得泄露凭据: ${cliRes.stderr}`);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});

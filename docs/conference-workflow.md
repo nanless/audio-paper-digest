@@ -149,7 +149,7 @@ npm run conference:evidence -- apply \
 
 当前 `conference-filter`（带结构指纹）保存候选发现记录、完整摘要证据目录与报告、逐篇回执和定位信息，并绑定来源 SHA、选择规则、提示词、模型、请求格式和标签词表 SHA；旧 `conference-filter-v6`、`-v5` 记录按原头读取。记录分别标明入选、排除、待处理或失败；全部论文处理完成且没有失败，任务才记为 `complete`。
 
-`conference:filter` 管理配置、状态和显式人工决定；`conference:filter:run` 是生产 LLM 筛选入口。它逐篇核验官方记录和完整输入，通过 `requestLlmJson()` 使用项目路由、代理及同池等权轮转的账号池：
+`conference:filter` 管理配置、状态和显式人工决定；`conference:filter:run` 是生产 LLM 筛选入口。它逐篇核验官方记录和完整输入，通过 `requestLlmJson()` 使用项目路由、代理及共享账号池（默认按月到期优先并自动同步 `/zen/go/v1/usage` 实时额度，可改 `equal_rotation`）：
 
 ```bash
 npm run conference:filter -- spec --catalog NAME.json --report REPORT.json \

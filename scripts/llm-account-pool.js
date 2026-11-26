@@ -45,6 +45,7 @@ const LIVE_SYNC_FAILURE_BACKOFF_MS = 60 * 1000;
 const LIVE_SYNC_MAX_RESPONSE_BYTES = 64 * 1024;
 const QUOTA_WINDOWS = Object.freeze(['monthly', 'weekly', 'rolling_5h', 'balance', 'unknown']);
 const SAFE_ACCOUNT_LABEL_RE = /^[A-Za-z0-9._\u4e00-\u9fff-]{1,40}$/;
+const HTTP_CONNECT_PROXY_ENV_VARS = Object.freeze(['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY']);
 const inFlightLiveSyncs = new Map();
 const lastLiveSyncFailureAt = new Map();
 // 成员集合变化会生成新的 groupId（新组 cursor 从 0 开始）。同一 service
@@ -271,7 +272,17 @@ function assertSafeProjectStatePath(stateFile) {
     const projectRoot = path.resolve(__dirname, '..');
     const absolute = path.resolve(stateFile);
     const relative = path.relative(projectRoot, absolute);
-    if (relative === '' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return;
+    if (relative === '' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        const parentDir = path.dirname(absolute);
+        try {
+            if (fs.lstatSync(parentDir).isSymbolicLink()) {
+                throw new LlmAccountPoolStateError(`LLM 账号池父路径禁止使用 symlink: ${parentDir}`);
+            }
+        } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+        }
+        return;
+    }
     let current = projectRoot;
     for (const segment of relative.split(path.sep).slice(0, -1)) {
         current = path.join(current, segment);
@@ -1057,6 +1068,23 @@ function currentWeeklyCycleStartMs(nowMs) {
     return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysSinceMonday, 0, 0, 0, 0);
 }
 
+function resolveWeeklyCycleStartMs(record, nowMs) {
+    const quota = isPlainObject(record?.quota) ? record.quota : {};
+    if (isNonNegativeFinite(quota.weeklyResetAtMs) && quota.weeklyResetAtMs > 0) {
+        const weekMs = 7 * DAY_MS;
+        const baseStart = quota.weeklyResetAtMs - weekMs;
+        if (nowMs >= baseStart && nowMs < quota.weeklyResetAtMs && baseStart >= 0) {
+            return baseStart;
+        }
+        if (nowMs >= quota.weeklyResetAtMs) {
+            const weeksElapsed = Math.floor((nowMs - quota.weeklyResetAtMs) / weekMs);
+            return quota.weeklyResetAtMs + weeksElapsed * weekMs;
+        }
+        if (baseStart >= 0) return baseStart;
+    }
+    return currentWeeklyCycleStartMs(nowMs);
+}
+
 function resolveMonthlyCycle(record, nowMs) {
     if (!isPlainObject(record)) return null;
     const quota = isPlainObject(record.quota) ? record.quota : {};
@@ -1141,6 +1169,35 @@ function sumRolling5hSpendUsd(usage, nowMs, sinceMs = 0) {
     return total;
 }
 
+function getRolling5hBucketSpendUsd(usage, targetBucketMs) {
+    const buckets = Array.isArray(usage?.rolling5hBuckets) ? usage.rolling5hBuckets : [];
+    let total = 0;
+    for (const bucket of buckets) {
+        if (!isPlainObject(bucket) || !isNonNegativeFinite(bucket.bucketMs) || !isNonNegativeFinite(bucket.spentUsd)) continue;
+        if (bucket.bucketMs === targetBucketMs) total += bucket.spentUsd;
+    }
+    return total;
+}
+
+function sumRolling5hPostSnapshotSpendUsd(usage, nowMs, snapMs, spentAtSnapUsd) {
+    const snapBucketMs = Math.floor(snapMs / ROLLING_5H_BUCKET_MS) * ROLLING_5H_BUCKET_MS;
+    const cutoff = nowMs - ROLLING_5H_MS;
+    const buckets = Array.isArray(usage?.rolling5hBuckets) ? usage.rolling5hBuckets : [];
+    let snapBucketSpend = 0;
+    let laterBucketsSpend = 0;
+    for (const bucket of buckets) {
+        if (!isPlainObject(bucket) || !isNonNegativeFinite(bucket.bucketMs) || !isNonNegativeFinite(bucket.spentUsd)) continue;
+        if (bucket.bucketMs + ROLLING_5H_BUCKET_MS <= cutoff || bucket.bucketMs > nowMs + ROLLING_5H_BUCKET_MS) continue;
+        if (bucket.bucketMs === snapBucketMs) {
+            snapBucketSpend += bucket.spentUsd;
+        } else if (bucket.bucketMs > snapBucketMs) {
+            laterBucketsSpend += bucket.spentUsd;
+        }
+    }
+    const clampedSnap = isNonNegativeFinite(spentAtSnapUsd) ? spentAtSnapUsd : 0;
+    return Math.max(0, snapBucketSpend - clampedSnap) + laterBucketsSpend;
+}
+
 function roundPct4(value) {
     return Math.round(value * 10000) / 10000;
 }
@@ -1151,7 +1208,7 @@ function evaluateAccountQuota(record, nowMs) {
     const quota = isPlainObject(safeRecord.quota) ? safeRecord.quota : {};
     const usage = isPlainObject(safeRecord.usage) ? safeRecord.usage : {};
     const monthlyCycle = resolveMonthlyCycle(safeRecord, nowMs);
-    const weekStartMs = currentWeeklyCycleStartMs(nowMs);
+    const weekStartMs = resolveWeeklyCycleStartMs(safeRecord, nowMs);
     const nextWeekResetMs = weekStartMs + 7 * DAY_MS;
 
     const windowBlockedUntil = name => {
@@ -1162,7 +1219,7 @@ function evaluateAccountQuota(record, nowMs) {
     let monthlyBlockedUntil = windowBlockedUntil('monthly');
     let weeklyBlockedUntil = windowBlockedUntil('weekly');
     let rolling5hBlockedUntil = windowBlockedUntil('rolling_5h');
-    const balanceBlockedUntil = windowBlockedUntil('balance');
+    let balanceBlockedUntil = windowBlockedUntil('balance');
     const unknownBlockedUntil = windowBlockedUntil('unknown');
     const legacyBlockedUntil = isNonNegativeFinite(safeRecord.blockedUntilMs) && safeRecord.blockedUntilMs > nowMs
         ? safeRecord.blockedUntilMs : 0;
@@ -1172,6 +1229,7 @@ function evaluateAccountQuota(record, nowMs) {
         if (safeRecord.limitName === 'monthly') monthlyBlockedUntil = Math.max(monthlyBlockedUntil, legacyBlockedUntil);
         else if (safeRecord.limitName === 'weekly') weeklyBlockedUntil = Math.max(weeklyBlockedUntil, legacyBlockedUntil);
         else if (safeRecord.limitName === 'rolling_5h') rolling5hBlockedUntil = Math.max(rolling5hBlockedUntil, legacyBlockedUntil);
+        else if (safeRecord.limitName === 'balance') balanceBlockedUntil = Math.max(balanceBlockedUntil, legacyBlockedUntil);
     }
 
     const fallbackSnapMs = isNonNegativeFinite(quota.snapshotAtMs) ? quota.snapshotAtMs : 0;
@@ -1226,7 +1284,9 @@ function evaluateAccountQuota(record, nowMs) {
     // 计算三窗口有效估算剩余百分比（同一天到期按月剩余最多优先，月剩余相同再比周/5h）
     const currentMonthlySpentUsd = (
         isNonNegativeFinite(usage.monthlySpentUsd)
-        && (!monthlyCycle || !isNonNegativeFinite(usage.monthlyCycleStartMs) || usage.monthlyCycleStartMs === monthlyCycle.cycleStartMs)
+        && (monthlyCycle
+            ? (isNonNegativeFinite(usage.monthlyCycleStartMs) && usage.monthlyCycleStartMs === monthlyCycle.cycleStartMs)
+            : (usage.monthlyCycleStartMs === null || usage.monthlyCycleStartMs === undefined))
     ) ? usage.monthlySpentUsd : 0;
     let effectiveMonthlyRemainingPct;
     if (!hasMonthlyQuota) {
@@ -1267,8 +1327,7 @@ function evaluateAccountQuota(record, nowMs) {
     if (!hasRolling5hQuota) {
         effectiveRolling5hRemainingPct = 0;
     } else if (rolling5hSnapshotActive) {
-        const spentAtSnap = isNonNegativeFinite(quota.rolling5hSpentAtSnapshotUsd) ? quota.rolling5hSpentAtSnapshotUsd : 0;
-        const deltaUsd = Math.max(0, current5hSpentUsd - spentAtSnap);
+        const deltaUsd = sumRolling5hPostSnapshotSpendUsd(usage, nowMs, rolling5hSnapMs, quota.rolling5hSpentAtSnapshotUsd);
         effectiveRolling5hRemainingPct = roundPct4(
             Math.max(MIN_ESTIMATED_REMAINING_PCT, Math.min(100, quota.rolling5hRemainingPct - (deltaUsd / budget5h) * 100))
         );
@@ -1453,12 +1512,17 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
         .replace(/^(\d{4}\.\d{4,5})v\d+$/i, '$1');
     const byId = new Map(keys.map(key => [getAccountId(key), key]));
 
+    assertSafeProjectStatePath(stateFile);
+
     // 只读快路径：affinity 与同账号 expiry_priority 不推进 rotationCursor，若现有组已锚定且无需清理旧组、
     // 命中账号可用且无需状态跃迁、且 60s 内已有活跃时间戳，则免锁免 fsync 直接返回。
     if (options.forceWrite !== true) {
         try {
             const state = readStateStrict(stateFile);
             const service = state?.services?.[identity.serviceId];
+            if (service && service.endpoint !== identity.service) {
+                throw new LlmAccountPoolStateError('LLM 账号池 service 身份与 endpoint 不一致');
+            }
             const group = service?.groups?.[identity.groupId];
             const groupCount = service?.groups ? Object.keys(service.groups).length : 0;
             const stalePruneNeeded = groupCount > 1 && Object.entries(service.groups).some(
@@ -1482,8 +1546,9 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
                     }
                 }
             }
-        } catch {
-            // 任何状态缺失或读取异常均退回受锁完整路径。
+        } catch (error) {
+            if (error instanceof LlmAccountPoolStateError) throw error;
+            // 仅对瞬态读取异常退回受锁完整路径。
         }
     }
 
@@ -1558,9 +1623,9 @@ function markQuotaExhausted(selection, quota, stateFile, options = {}) {
 
         const nextQuota = isPlainObject(previous.quota) ? { ...previous.quota } : {};
         if (limitClass === 'monthly') {
-            // 自动从真实 monthly 429 学习并校准月账单重置锚点；仅当用户未手动覆盖时同步主锚点
+            // 自动从真实 monthly 429 学习并校准月账单重置锚点；仅当用户未手动覆盖且非实时 API 锚定时同步主锚点
             nextQuota.autoMonthlyAnchorMs = windowUntilMs;
-            if (nextQuota.monthlyResetSource !== 'manual') {
+            if (nextQuota.monthlyResetSource !== 'manual' && nextQuota.monthlyResetSource !== 'live_api') {
                 nextQuota.monthlyResetAtMs = windowUntilMs;
                 nextQuota.monthlyResetTzOffsetMin = 0;
                 nextQuota.monthlyResetDay = new Date(windowUntilMs).getUTCDate();
@@ -1647,7 +1712,7 @@ function recordAccountUsage(selection, usageInfo, stateFile, options = {}) {
         const previous = isPlainObject(service.accounts[selection.accountId]) ? service.accounts[selection.accountId] : {};
         const monthlyCycle = resolveMonthlyCycle(previous, nowMs);
         const monthlyCycleStartMs = monthlyCycle ? monthlyCycle.cycleStartMs : null;
-        const weekStartMs = currentWeeklyCycleStartMs(nowMs);
+        const weekStartMs = resolveWeeklyCycleStartMs(previous, nowMs);
         const prevUsage = isPlainObject(previous.usage) ? previous.usage : {};
 
         const sameMonth = monthlyCycleStartMs !== null
@@ -1711,7 +1776,7 @@ function parseMonthlyExpiryInput(value) {
         const month = Number(dateOnly[2]);
         const day = Number(dateOnly[3]);
         const checkMs = buildStrictUtcMs(year, month, day, 23, 59, 59, 999, 480);
-        if (!Number.isFinite(checkMs)) {
+        if (!Number.isFinite(checkMs) || checkMs <= 0) {
             throw new LlmAccountPoolConfigError(`非法月到期日期: ${raw}`);
         }
         return {
@@ -1721,16 +1786,19 @@ function parseMonthlyExpiryInput(value) {
         };
     }
     const isoMs = parseHttpDateMs(raw);
-    if (!Number.isFinite(isoMs)) {
+    if (!Number.isFinite(isoMs) || isoMs <= 0) {
         throw new LlmAccountPoolConfigError(`无法解析月到期时间（请使用 YYYY-MM-DD 或 ISO-8601）: ${raw}`);
     }
     const tzMatch = /([+-](?:[01]\d|2[0-3]):?[0-5]\d|Z)$/i.exec(raw);
     const tzOffsetMin = tzMatch && tzMatch[1].toUpperCase() !== 'Z' ? parseHttpTzOffsetMinutes(tzMatch[1]) : 0;
-    const local = new Date(isoMs + (tzOffsetMin || 0) * 60000);
+    if (!Number.isInteger(tzOffsetMin) || tzOffsetMin < -720 || tzOffsetMin > 840) {
+        throw new LlmAccountPoolConfigError(`月到期时间时区偏移超出范围（-12:00 至 +14:00）: ${raw}`);
+    }
+    const local = new Date(isoMs + tzOffsetMin * 60000);
     return {
         monthlyResetAtMs: isoMs,
         monthlyResetDay: local.getUTCDate(),
-        monthlyResetTzOffsetMin: tzOffsetMin || 0
+        monthlyResetTzOffsetMin: tzOffsetMin
     };
 }
 
@@ -1753,7 +1821,7 @@ function setAccountQuota(apiKey, endpoint, patch, stateFile, options = {}) {
             } else {
                 const label = String(patch.label).trim();
                 if (!SAFE_ACCOUNT_LABEL_RE.test(label) || /^sk-/i.test(label) || /^[a-f0-9]{32,}$/i.test(label)) {
-                    throw new LlmAccountPoolConfigError(`账号备注非法（仅允许 1-40 位字母/数字/中文/._-，且不能类似密钥）: ${label}`);
+                    throw new LlmAccountPoolConfigError('账号备注非法（仅允许 1-40 位字母/数字/中文/._-，且不能类似密钥）');
                 }
                 nextQuota.label = label;
             }
@@ -1793,6 +1861,14 @@ function setAccountQuota(apiKey, endpoint, patch, stateFile, options = {}) {
             monthlyPct = Math.min(100, roundPct4((usd / effectiveBudget) * 100));
         }
 
+        let validatedWeeklyPct = null;
+        if (patch.weeklyRemainingPct !== undefined && patch.weeklyRemainingPct !== null) {
+            const pct = Number(patch.weeklyRemainingPct);
+            if (!isPercentValue(pct)) throw new LlmAccountPoolConfigError(`weeklyRemainingPct 必须在 0-100 之间: ${patch.weeklyRemainingPct}`);
+            validatedWeeklyPct = pct;
+            delete nextQuota.weeklyResetAtMs;
+        }
+
         const preRecord = { ...previous, quota: nextQuota, windows: nextWindows };
         const preEval = evaluateAccountQuota(preRecord, nowMs);
 
@@ -1808,15 +1884,12 @@ function setAccountQuota(apiKey, endpoint, patch, stateFile, options = {}) {
                 delete nextWindows.monthly;
             }
         }
-        if (patch.weeklyRemainingPct !== undefined && patch.weeklyRemainingPct !== null) {
-            const pct = Number(patch.weeklyRemainingPct);
-            if (!isPercentValue(pct)) throw new LlmAccountPoolConfigError(`weeklyRemainingPct 必须在 0-100 之间: ${patch.weeklyRemainingPct}`);
-            nextQuota.weeklyRemainingPct = roundPct4(pct);
+        if (validatedWeeklyPct !== null) {
+            nextQuota.weeklyRemainingPct = roundPct4(validatedWeeklyPct);
             nextQuota.weeklySpentAtSnapshotUsd = preEval.currentWeeklySpentUsd;
             nextQuota.weeklySnapshotAtMs = nowMs;
-            delete nextQuota.weeklyResetAtMs;
             touchedSnapshot = true;
-            if (pct > 0 && nextWindows.weekly && nextWindows.weekly.blockedUntilMs > nowMs) {
+            if (validatedWeeklyPct > 0 && nextWindows.weekly && nextWindows.weekly.blockedUntilMs > nowMs) {
                 delete nextWindows.weekly;
             }
         }
@@ -1824,7 +1897,8 @@ function setAccountQuota(apiKey, endpoint, patch, stateFile, options = {}) {
             const pct = Number(patch.rolling5hRemainingPct);
             if (!isPercentValue(pct)) throw new LlmAccountPoolConfigError(`rolling5hRemainingPct 必须在 0-100 之间: ${patch.rolling5hRemainingPct}`);
             nextQuota.rolling5hRemainingPct = roundPct4(pct);
-            nextQuota.rolling5hSpentAtSnapshotUsd = preEval.current5hSpentUsd;
+            const currentBucketMs = Math.floor(nowMs / ROLLING_5H_BUCKET_MS) * ROLLING_5H_BUCKET_MS;
+            nextQuota.rolling5hSpentAtSnapshotUsd = getRolling5hBucketSpendUsd(previous.usage, currentBucketMs);
             nextQuota.rolling5hSnapshotAtMs = nowMs;
             delete nextQuota.rolling5hResetAtMs;
             touchedSnapshot = true;
@@ -1882,6 +1956,7 @@ function setAccountQuota(apiKey, endpoint, patch, stateFile, options = {}) {
         };
         if (Object.keys(nextWindows).length > 0) nextRecord.windows = nextWindows;
         else delete nextRecord.windows;
+        validateAccountSubrecords(nextRecord, stateFile);
         service.accounts[accountId] = nextRecord;
         evaluatedAfter = evaluateAccountQuota(nextRecord, nowMs);
         return state;
@@ -1926,6 +2001,10 @@ function initQuotasFromHistory(apiKeys, endpoint, stateFile, options = {}) {
                 skipped.push({ slot: idx + 1, reason: 'already_manual' });
                 return;
             }
+            if (record.quota?.monthlyResetSource === 'live_api') {
+                skipped.push({ slot: idx + 1, reason: 'already_live_api' });
+                return;
+            }
             const monthlyAnchor = (record.windows?.monthly && isNonNegativeFinite(record.windows.monthly.blockedUntilMs) && record.windows.monthly.blockedUntilMs > 0)
                 ? record.windows.monthly.blockedUntilMs
                 : (record.limitName === 'monthly' && isNonNegativeFinite(record.blockedUntilMs) && record.blockedUntilMs > 0
@@ -1942,6 +2021,7 @@ function initQuotasFromHistory(apiKeys, endpoint, stateFile, options = {}) {
             nextQuota.monthlyResetDay = new Date(monthlyAnchor).getUTCDate();
             nextQuota.monthlyResetSource = 'auto_429';
             const nextRecord = { ...record, quota: nextQuota };
+            validateAccountSubrecords(nextRecord, stateFile);
             service.accounts[accountId] = nextRecord;
             const cycle = resolveMonthlyCycle(nextRecord, nowMs);
             initialized.push({
@@ -1963,6 +2043,12 @@ function describePoolPriorities(apiKeys, endpoint, state, options = {}) {
     const strategy = resolvePoolStrategy(options);
     const service = state?.services?.[identity.serviceId] || { accounts: {}, groups: {} };
     const orderedAccountIds = getOrderedAccountIds(identity);
+    const group = service.groups?.[identity.groupId] || {};
+    const cursor = resolveRotationCursor(group, orderedAccountIds);
+    const rotatedOrder = accountId => {
+        const idx = orderedAccountIds.indexOf(accountId);
+        return idx < 0 ? orderedAccountIds.length : (idx - cursor + orderedAccountIds.length) % orderedAccountIds.length;
+    };
     const slotById = new Map(keys.map((key, idx) => [getAccountId(key), idx + 1]));
     const rows = keys.map((key, idx) => {
         const accountId = getAccountId(key);
@@ -1998,20 +2084,20 @@ function describePoolPriorities(apiKeys, endpoint, state, options = {}) {
     const eligibleTier1 = rows.filter(r => r.eligible && r.tier === 1)
         .sort((a, b) => comparePriorityTier1(a, b) || (orderedAccountIds.indexOf(a.accountId) - orderedAccountIds.indexOf(b.accountId)));
     const eligibleTier2 = rows.filter(r => r.eligible && r.tier === 2)
-        .sort((a, b) => orderedAccountIds.indexOf(a.accountId) - orderedAccountIds.indexOf(b.accountId));
+        .sort((a, b) => rotatedOrder(a.accountId) - rotatedOrder(b.accountId));
     const blockedRows = rows.filter(r => !r.eligible)
         .sort((a, b) => (a.eval.activeBlockedUntilMs - b.eval.activeBlockedUntilMs) || (a.slot - b.slot));
 
     const rankBySlot = new Map();
     const ordered = strategy === 'equal_rotation'
-        ? [...rows.filter(r => r.eligible).sort((a, b) => orderedAccountIds.indexOf(a.accountId) - orderedAccountIds.indexOf(b.accountId)), ...blockedRows]
+        ? [...rows.filter(r => r.eligible).sort((a, b) => rotatedOrder(a.accountId) - rotatedOrder(b.accountId)), ...blockedRows]
         : [...eligibleTier1, ...eligibleTier2, ...blockedRows];
     ordered.forEach((row, idx) => {
         rankBySlot.set(row.slot, row.eligible ? idx + 1 : null);
     });
 
     const nextCandidate = choosePoolCandidate(
-        service, orderedAccountIds, service.groups?.[identity.groupId] || {}, new Set(), nowMs, '', strategy
+        service, orderedAccountIds, group, new Set(), nowMs, '', strategy
     );
     const nextSlot = nextCandidate ? slotById.get(nextCandidate.accountId) : null;
     const nextMode = nextCandidate ? nextCandidate.selectionMode : null;
@@ -2297,6 +2383,67 @@ function replaceCredentialHeaders(headers, apiKey) {
     return result;
 }
 
+function isValidHttpConnectProxyUrl(rawUrl) {
+    if (typeof rawUrl !== 'string' || rawUrl.length === 0 || /[\u0000-\u0020\u007f\\]/.test(rawUrl)) return false;
+    const authMatch = /^https?:\/\/([^/?#]+)/i.exec(rawUrl);
+    if (!authMatch) return false;
+    const rawHostPort = authMatch[1].includes('@')
+        ? authMatch[1].slice(authMatch[1].lastIndexOf('@') + 1)
+        : authMatch[1];
+    if (!rawHostPort || rawHostPort.includes('%')) return false;
+    try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+        if (!parsed.hostname || parsed.port === '0') return false;
+        if (parsed.port) {
+            const portNum = Number.parseInt(parsed.port, 10);
+            if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) return false;
+        }
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function resolveUsageProxyUrl(explicitProxyUrl, env = process.env) {
+    if (explicitProxyUrl !== undefined && explicitProxyUrl !== null && explicitProxyUrl !== '') {
+        const raw = String(explicitProxyUrl);
+        return isValidHttpConnectProxyUrl(raw) ? raw : null;
+    }
+    const source = env || {};
+    const firstKey = HTTP_CONNECT_PROXY_ENV_VARS.find(key => Boolean(source[key]));
+    if (!firstKey) return null;
+    const raw = String(source[firstKey]);
+    return isValidHttpConnectProxyUrl(raw) ? raw : null;
+}
+
+function redactUsageSyncError(err, apiKey = null, fallback = 'usage 查询失败') {
+    let raw = '';
+    if (err instanceof Error) {
+        raw = err.message || err.name || '';
+    } else if (err !== null && typeof err === 'object' && typeof err.message === 'string') {
+        raw = err.message;
+    } else if (err !== undefined && err !== null) {
+        raw = String(err);
+    }
+    if (!raw.trim()) raw = fallback;
+    const keys = typeof apiKey === 'string'
+        ? [apiKey]
+        : (Array.isArray(apiKey) ? apiKey.filter(k => typeof k === 'string') : []);
+    for (const key of keys) {
+        const trimmed = key.trim();
+        if (trimmed.length >= 4) {
+            raw = raw.split(trimmed).join('[REDACTED]');
+        }
+    }
+    raw = raw.replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/\s@]+@/g, '$1[REDACTED]@');
+    raw = raw.replace(/\b(Bearer|Basic)\s+[^\s,'";)}\]]+/gi, '$1 [REDACTED]');
+    raw = raw.replace(/\bsk-[A-Za-z0-9._-]{4,}/gi, '[REDACTED]');
+    raw = raw.replace(/\b[a-f0-9]{64}\b/gi, '[REDACTED]');
+    const cleaned = sanitizeLimitName(raw);
+    return cleaned || fallback;
+}
+
 function getOpenCodeGoUsageUrl(endpoint) {
     const service = normalizeOpenCodeGoService(endpoint);
     return service ? `${service}/v1/usage` : null;
@@ -2327,16 +2474,17 @@ function parseOpenCodeGoUsageWindow(rawWindow, name) {
     if (!isPlainObject(rawWindow)) {
         throw new Error(`usage.${name} 缺失或不是对象`);
     }
-    const usedPercent = Number(rawWindow.percent);
-    if (!Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) {
+    if (typeof rawWindow.percent !== 'number' || !Number.isFinite(rawWindow.percent)
+        || rawWindow.percent < 0 || rawWindow.percent > 100) {
         throw new Error(`usage.${name}.percent 非法`);
     }
+    const usedPercent = rawWindow.percent;
     const status = typeof rawWindow.status === 'string' && rawWindow.status.trim()
         ? rawWindow.status.trim().toLowerCase()
         : 'ok';
     const limited = usedPercent >= 100 || /^(?:rate_limited|limited|exceeded|exhausted|blocked)$/.test(status);
     const remainingPct = limited ? 0 : roundPct4(Math.max(0, Math.min(100, 100 - usedPercent)));
-    const resetsAtMs = parseHttpDateMs(rawWindow.resetsAt);
+    const resetsAtMs = typeof rawWindow.resetsAt === 'string' ? parseHttpDateMs(rawWindow.resetsAt) : NaN;
     if (!Number.isFinite(resetsAtMs) || resetsAtMs <= 0) {
         throw new Error(`usage.${name}.resetsAt 时间戳非法`);
     }
@@ -2369,6 +2517,7 @@ function applyLiveUsageSnapshots(apiKeys, endpoint, snapshotsByAccountId, stateF
     let appliedCount = 0;
     updateState(stateFile, state => {
         const service = ensureService(state, identity);
+        const currentBucketMs = Math.floor(nowMs / ROLLING_5H_BUCKET_MS) * ROLLING_5H_BUCKET_MS;
         for (const [accountId, snap] of entries) {
             if (!snap || !snap.monthly || !snap.weekly || !snap.rolling) continue;
             const previous = isPlainObject(service.accounts[accountId]) ? { ...service.accounts[accountId] } : {};
@@ -2380,6 +2529,8 @@ function applyLiveUsageSnapshots(apiKeys, endpoint, snapshotsByAccountId, stateF
             nextQuota.monthlyResetTzOffsetMin = 0;
             nextQuota.monthlyResetSource = 'live_api';
             nextQuota.autoMonthlyAnchorMs = snap.monthly.resetsAtMs;
+            nextQuota.weeklyResetAtMs = snap.weekly.resetsAtMs;
+            nextQuota.rolling5hResetAtMs = snap.rolling.resetsAtMs;
 
             const preRecord = { ...previous, quota: nextQuota, windows: nextWindows };
             const preEval = evaluateAccountQuota(preRecord, nowMs);
@@ -2389,13 +2540,11 @@ function applyLiveUsageSnapshots(apiKeys, endpoint, snapshotsByAccountId, stateF
             nextQuota.monthlySnapshotAtMs = nowMs;
 
             nextQuota.weeklyRemainingPct = snap.weekly.remainingPct;
-            nextQuota.weeklyResetAtMs = snap.weekly.resetsAtMs;
             nextQuota.weeklySpentAtSnapshotUsd = preEval.currentWeeklySpentUsd;
             nextQuota.weeklySnapshotAtMs = nowMs;
 
             nextQuota.rolling5hRemainingPct = snap.rolling.remainingPct;
-            nextQuota.rolling5hResetAtMs = snap.rolling.resetsAtMs;
-            nextQuota.rolling5hSpentAtSnapshotUsd = preEval.current5hSpentUsd;
+            nextQuota.rolling5hSpentAtSnapshotUsd = getRolling5hBucketSpendUsd(previous.usage, currentBucketMs);
             nextQuota.rolling5hSnapshotAtMs = nowMs;
 
             nextQuota.snapshotAtMs = nowMs;
@@ -2450,6 +2599,7 @@ function applyLiveUsageSnapshots(apiKeys, endpoint, snapshotsByAccountId, stateF
                     nextRecord.status = 'eligible';
                 }
             }
+            validateAccountSubrecords(nextRecord, stateFile);
             service.accounts[accountId] = nextRecord;
             appliedCount += 1;
         }
@@ -2464,6 +2614,9 @@ async function fetchOpenCodeGoAccountUsage(apiKey, endpoint, options = {}) {
         return { ok: false, statusCode: null, error: '非 OpenCode Go 官方端点' };
     }
     const timeoutMs = resolveLiveSyncTimeoutMs(options);
+    const classifyOpts = Number.isFinite(options.nowMs)
+        ? { endpoint, nowMs: options.nowMs }
+        : { endpoint };
     if (typeof options.fetcher === 'function') {
         try {
             const res = await options.fetcher({ url, apiKey, timeoutMs, proxyUrl: options.proxyUrl || null });
@@ -2474,7 +2627,7 @@ async function fetchOpenCodeGoAccountUsage(apiKey, endpoint, options = {}) {
             if (statusCode === 200) {
                 return { ok: true, statusCode: 200, parsed: parseOpenCodeGoUsagePayload(body) };
             }
-            const quota = classifyOpenCodeGoQuotaResponse({ statusCode, body, headers: res?.headers || {} }, { endpoint });
+            const quota = classifyOpenCodeGoQuotaResponse({ statusCode, body, headers: res?.headers || {} }, classifyOpts);
             if (quota && quota.limitClass === 'balance') {
                 return { ok: false, statusCode, insufficientBalance: true, quota, error: 'HTTP 401 Insufficient balance' };
             }
@@ -2483,21 +2636,26 @@ async function fetchOpenCodeGoAccountUsage(apiKey, endpoint, options = {}) {
             }
             return { ok: false, statusCode: statusCode || null, error: `HTTP ${statusCode || 'unknown'}` };
         } catch (error) {
-            return { ok: false, statusCode: null, error: sanitizeLimitName(error?.message || 'usage 查询失败') };
+            return { ok: false, statusCode: null, error: redactUsageSyncError(error, apiKey, 'usage 查询失败') };
         }
     }
 
-    const proxyUrl = String(
-        options.proxyUrl || process.env.HTTPS_PROXY || process.env.HTTP_PROXY
-        || process.env.https_proxy || process.env.http_proxy || ''
-    ).trim();
-    if (!proxyUrl || !/^https?:\/\//i.test(proxyUrl)) {
-        return { ok: false, statusCode: null, error: '缺少项目 HTTP CONNECT 代理配置' };
+    const proxyUrl = resolveUsageProxyUrl(options.proxyUrl, options.env);
+    if (!proxyUrl) {
+        return { ok: false, statusCode: null, error: '缺少或非法的项目 HTTP CONNECT 代理配置' };
     }
-    const { ProxyAgent, fetch: undiciFetch } = require('undici');
-    const ownDispatcher = !options.dispatcher;
-    const dispatcher = options.dispatcher || new ProxyAgent(proxyUrl);
+    let dispatcher = options.dispatcher || null;
+    const ownDispatcher = !dispatcher;
     try {
+        const { ProxyAgent, fetch: undiciFetch } = require('undici');
+        if (!dispatcher) {
+            dispatcher = new ProxyAgent({
+                uri: proxyUrl,
+                connectTimeout: timeoutMs,
+                proxyTls: { timeout: timeoutMs },
+                requestTls: { timeout: timeoutMs }
+            });
+        }
         const response = await undiciFetch(url, {
             method: 'GET',
             headers: {
@@ -2527,7 +2685,7 @@ async function fetchOpenCodeGoAccountUsage(apiKey, endpoint, options = {}) {
         if (statusCode === 200) {
             return { ok: true, statusCode: 200, parsed: parseOpenCodeGoUsagePayload(body) };
         }
-        const quota = classifyOpenCodeGoQuotaResponse({ statusCode, body, raw: rawText, headers: response.headers }, { endpoint });
+        const quota = classifyOpenCodeGoQuotaResponse({ statusCode, body, raw: rawText, headers: response.headers }, classifyOpts);
         if (quota && quota.limitClass === 'balance') {
             return { ok: false, statusCode, insufficientBalance: true, quota, error: 'HTTP 401 Insufficient balance' };
         }
@@ -2536,9 +2694,9 @@ async function fetchOpenCodeGoAccountUsage(apiKey, endpoint, options = {}) {
         }
         return { ok: false, statusCode, error: `HTTP ${statusCode}` };
     } catch (error) {
-        return { ok: false, statusCode: null, error: sanitizeLimitName(error?.message || 'usage 网络请求失败') };
+        return { ok: false, statusCode: null, error: redactUsageSyncError(error, apiKey, 'usage 网络请求失败') };
     } finally {
-        if (ownDispatcher) {
+        if (ownDispatcher && dispatcher) {
             try { await dispatcher.close(); } catch (_) { /* ignore */ }
         }
     }
@@ -2553,19 +2711,15 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
     if (!force && (!isLiveSyncEnabled(options) || resolvePoolStrategy(options) !== 'expiry_priority')) {
         return { synced: 0, failed: 0, skipped: keys.length, authErrors: [], fromCache: true, results: [] };
     }
-    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const hasExplicitNow = Number.isFinite(options.nowMs);
+    const checkNowMs = hasExplicitNow ? options.nowMs : Date.now();
     const ttlMs = resolveLiveSyncTtlMs(options);
+    const resolvedTimeoutMs = resolveLiveSyncTimeoutMs(options);
     const identity = getPoolIdentity(keys, endpoint);
     const syncKey = `${path.resolve(String(stateFile || ''))}|${identity.serviceId}|${identity.groupId}`;
 
-    if (!force) {
-        const lastFail = lastLiveSyncFailureAt.get(syncKey);
-        if (lastFail && (nowMs - lastFail) < LIVE_SYNC_FAILURE_BACKOFF_MS) {
-            return { synced: 0, failed: 0, skipped: keys.length, authErrors: [], fromCache: true, backoff: true, results: [] };
-        }
-        if (inFlightLiveSyncs.has(syncKey)) {
-            return inFlightLiveSyncs.get(syncKey);
-        }
+    if (!force && inFlightLiveSyncs.has(syncKey)) {
+        return inFlightLiveSyncs.get(syncKey);
     }
 
     const doSync = async () => {
@@ -2578,34 +2732,71 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
         const accounts = currentState?.services?.[identity.serviceId]?.accounts || {};
         const targets = [];
         let skipped = 0;
+        let backoffSkipped = 0;
         keys.forEach((key, idx) => {
             const accountId = getAccountId(key);
             const rec = accounts[accountId];
             const lastSync = rec?.quota?.lastLiveSyncAtMs;
-            const windowExpired = (
-                (isNonNegativeFinite(rec?.quota?.rolling5hResetAtMs) && rec.quota.rolling5hResetAtMs > 0 && rec.quota.rolling5hResetAtMs <= nowMs)
-                || (isNonNegativeFinite(rec?.quota?.weeklyResetAtMs) && rec.quota.weeklyResetAtMs > 0 && rec.quota.weeklyResetAtMs <= nowMs)
-                || (isNonNegativeFinite(rec?.quota?.monthlyResetAtMs) && rec.quota.monthlyResetAtMs > 0 && rec.quota.monthlyResetAtMs <= nowMs)
+            const windowExpired = isNonNegativeFinite(lastSync) && (
+                (isNonNegativeFinite(rec?.quota?.rolling5hResetAtMs) && rec.quota.rolling5hResetAtMs > lastSync && rec.quota.rolling5hResetAtMs <= checkNowMs)
+                || (isNonNegativeFinite(rec?.quota?.weeklyResetAtMs) && rec.quota.weeklyResetAtMs > lastSync && rec.quota.weeklyResetAtMs <= checkNowMs)
+                || (isNonNegativeFinite(rec?.quota?.monthlyResetAtMs) && rec.quota.monthlyResetAtMs > lastSync && rec.quota.monthlyResetAtMs <= checkNowMs)
             );
-            const isFresh = !force && isNonNegativeFinite(lastSync) && (nowMs - lastSync) < ttlMs && !windowExpired;
+            const isFresh = !force
+                && isNonNegativeFinite(lastSync)
+                && checkNowMs >= lastSync
+                && (checkNowMs - lastSync) < ttlMs
+                && !windowExpired;
             if (isFresh) {
                 skipped += 1;
-            } else {
-                targets.push({ slot: idx + 1, key, accountId });
+                return;
             }
+            if (!force) {
+                const lastFail = lastLiveSyncFailureAt.get(`${syncKey}|${accountId}`);
+                if (isNonNegativeFinite(lastFail) && checkNowMs >= lastFail && (checkNowMs - lastFail) < LIVE_SYNC_FAILURE_BACKOFF_MS) {
+                    skipped += 1;
+                    backoffSkipped += 1;
+                    return;
+                }
+            }
+            targets.push({ slot: idx + 1, key, accountId });
         });
         if (targets.length === 0) {
-            return { synced: 0, failed: 0, skipped, authErrors: [], fromCache: true, results: [] };
+            return {
+                synced: 0,
+                failed: 0,
+                skipped,
+                authErrors: [],
+                fromCache: true,
+                ...(backoffSkipped > 0 ? { backoff: true } : {}),
+                results: []
+            };
         }
 
-        const proxyUrl = String(
-            options.proxyUrl || process.env.HTTPS_PROXY || process.env.HTTP_PROXY
-            || process.env.https_proxy || process.env.http_proxy || ''
-        ).trim();
+        const resolvedProxyUrl = typeof options.fetcher === 'function'
+            ? (options.proxyUrl || null)
+            : resolveUsageProxyUrl(options.proxyUrl, options.env);
         let sharedDispatcher = null;
-        if (typeof options.fetcher !== 'function' && proxyUrl && /^https?:\/\//i.test(proxyUrl)) {
-            const { ProxyAgent } = require('undici');
-            sharedDispatcher = new ProxyAgent(proxyUrl);
+        if (typeof options.fetcher !== 'function' && resolvedProxyUrl) {
+            try {
+                const { ProxyAgent } = require('undici');
+                sharedDispatcher = new ProxyAgent({
+                    uri: resolvedProxyUrl,
+                    connectTimeout: resolvedTimeoutMs,
+                    proxyTls: { timeout: resolvedTimeoutMs },
+                    requestTls: { timeout: resolvedTimeoutMs }
+                });
+            } catch (proxyErr) {
+                const errMsg = redactUsageSyncError(proxyErr, keys, '代理初始化失败');
+                const failNowMs = hasExplicitNow ? options.nowMs : Date.now();
+                const results = targets.map(t => ({ slot: t.slot, ok: false, statusCode: null, error: errMsg }));
+                if (!force) {
+                    for (const t of targets) {
+                        lastLiveSyncFailureAt.set(`${syncKey}|${t.accountId}`, failNowMs);
+                    }
+                }
+                return { synced: 0, failed: targets.length, skipped, authErrors: [], fromCache: false, results };
+            }
         }
 
         let fetched;
@@ -2613,7 +2804,8 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
             fetched = await Promise.all(targets.map(async target => {
                 const outcome = await fetchOpenCodeGoAccountUsage(target.key, endpoint, {
                     ...options,
-                    proxyUrl,
+                    timeoutMs: resolvedTimeoutMs,
+                    ...(hasExplicitNow ? { nowMs: checkNowMs } : {}),
                     dispatcher: sharedDispatcher
                 });
                 return { ...target, outcome };
@@ -2624,14 +2816,17 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
             }
         }
 
+        const finishNowMs = hasExplicitNow ? options.nowMs : Date.now();
         const snapshotsByAccountId = {};
         const authErrors = [];
         const results = [];
         let failed = 0;
         for (const item of fetched) {
+            const failKey = `${syncKey}|${item.accountId}`;
             if (item.outcome.ok) {
                 const p = item.outcome.parsed;
                 snapshotsByAccountId[item.accountId] = p;
+                lastLiveSyncFailureAt.delete(failKey);
                 results.push({
                     slot: item.slot,
                     ok: true,
@@ -2643,6 +2838,9 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
                 });
             } else {
                 failed += 1;
+                if (!force) {
+                    lastLiveSyncFailureAt.set(failKey, finishNowMs);
+                }
                 if (item.outcome.authError) authErrors.push(item.slot);
                 if (item.outcome.insufficientBalance && item.outcome.quota) {
                     try {
@@ -2650,7 +2848,7 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
                             { serviceId: identity.serviceId, service: identity.service, accountId: item.accountId },
                             item.outcome.quota,
                             stateFile,
-                            { nowMs }
+                            { nowMs: finishNowMs }
                         );
                     } catch (_) { /* ignore */ }
                 }
@@ -2663,12 +2861,7 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
             }
         }
 
-        const synced = applyLiveUsageSnapshots(keys, endpoint, snapshotsByAccountId, stateFile, { nowMs });
-        if (synced === 0 && failed > 0 && !force) {
-            lastLiveSyncFailureAt.set(syncKey, nowMs);
-        } else if (synced > 0) {
-            lastLiveSyncFailureAt.delete(syncKey);
-        }
+        const synced = applyLiveUsageSnapshots(keys, endpoint, snapshotsByAccountId, stateFile, { nowMs: finishNowMs });
         return { synced, failed, skipped, authErrors, fromCache: false, results };
     };
 
@@ -2680,6 +2873,7 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
 
 module.exports = {
     ACCOUNT_POOL_CONTRACT,
+    STALE_GROUP_MS,
     hasAccountPoolHeader,
     LlmAccountPoolExhaustedError,
     LlmAccountAuthError,
@@ -2698,11 +2892,16 @@ module.exports = {
     getPoolIdentity,
     classifyOpenCodeGoQuotaResponse,
     sanitizeLimitName,
+    redactUsageSyncError,
+    isValidHttpConnectProxyUrl,
+    resolveUsageProxyUrl,
+    resolveLiveSyncTimeoutMs,
     replaceCredentialHeaders,
     acquireStateLock,
     selectApiKey,
     markQuotaExhausted,
     recordAccountUsage,
+    parseMonthlyExpiryInput,
     setAccountQuota,
     clearAccountQuota,
     initQuotasFromHistory,

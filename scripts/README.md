@@ -13,7 +13,7 @@
 | 历史更新 | `historical-direct-rewrite-inputs.js`、`historical-direct-rewrite-plan.js`、`historical-direct-rewrite-run.js`、`history-resume.js` | 同一引擎，来源与断点由历史适配器独立核验 |
 | 页面与引用 | `generate-blog.py`、`conference-page-render.py`、`historical-page-render.py`、`lib/historical-direct-aggregate.js` | `publish-to-blog.py`、`paper_reader_presentation.py`、`tag_presentation.py` |
 | 审查与发布 | `review-blog.py`、`push-blog.py`、`publish-conference.py`、`lib/historical-direct-publication.js`、`verify-web.js` | `publish_common.py`、`blog_reader_binding_verifier.py`、`markdown_hugo_gate.py` |
-| 基础设施 | `env-loader.js`、`project_env.py`、`workspace-role.js`、`runtime_guard.py`、`utils.js`、`llm-account-pool.js` | `config/workspace-roles.json`、`lib/env-schema.js`、`lib/arxiv-origin-gate.js`、`publish_node_replay_client.py` |
+| 基础设施 | `env-loader.js`、`project_env.py`、`workspace-role.js`、`runtime_guard.py`、`utils.js`、`llm-account-pool.js`、`llm_account_pool.py` | `config/workspace-roles.json`、`lib/env-schema.js`、`lib/arxiv-origin-gate.js`、`publish_node_replay_client.py` |
 
 ## 常用运维与可选 CLI
 
@@ -21,14 +21,18 @@
 |---|---|---|
 | `npm run doctor -- --offline` | `doctor.js` | 只读体检（环境、代理、账号池、磁盘、博客仓库）；加 `--network` 探测 arXiv |
 | `npm run config:check` | `config-check.js` | 按 `lib/env-schema.js` 核对 `.env` 必填项、范围、推理档与拼写 |
+| `npm run source:probe -- --date YYYY-MM-DD` | `source-probe.js` | 只读探测 arXiv Atom/官方 OAI/RSS 三入口与目标日公告状态 |
+| `npm run llm:accounts` / `llm:accounts:quota` | `llm-accounts-report.js` / `llm-accounts-quota.js` | 查看共享账号池调度与冷却；同步或管理 OpenCode Go 官方 `/zen/go/v1/usage` 三窗口额度与月到期日 |
 | `npm run digest:status` / `digest:scorecard` | `digest-run-report.js` / `digest-scorecard.js` | 查完整冷核状态与单日各阶段耗时、缓存命中、推理占比 |
+| `npm run locks` | `locks.js` | 有界只读观测本地与共享博客运行锁及陈旧锁预览 |
 | `npm run recover` / `manifest:new` | `recover.js` / `manifest-new.js` | 汇总失败原因与建议入口；准备来源绑定的人工修正清单 |
+| `npm run table:check` / `review:overrides` | `table-check.js` / `review-overrides-cli.js` | 离线预检表格排版；核对严格 schema 的审查误报说明 |
 | `npm run papers:compact` | `compact-papers-ledger.js` | 原子压缩 `data/current/papers.json` 账本，保留完整记录并瘦身体积 |
-| `npm run storage:pdf-dedupe` | `runtime-storage.js` | 逐字节核验 `data/runtime/` 重复 PDF，支持 APFS 独占写时复制去重 |
+| `npm run storage:pdf-dedupe` / `storage:report` / `storage:prune` | `runtime-storage.js` / `storage-report.js` | 核验并写时复制去重重复 PDF、输出保留建议、引用感知清理预览 |
 | `npm run digest:calibrate` | `calibrate-batch-scores.js` | 可选 CLI：批后瑞士轮 Bradley-Terry 相对分校准（只读输入，产出伴生文件） |
 | `npm run podcast:generate` | `publish-daily-podcast.js` | 可选 CLI：基于已分析日批生成每日音频播客脚本/音频并可选发至 GitHub Release |
 | `npm run impact -- --git` | `impact.js` | 静态反向依赖分析，列出改动影响面与精确单测列表 |
-| `npm run docs:check` | `docs-consistency.js` | 核验命令、版本、链接锚点、双语索引、环境变量与 `AGENTS.md` 体积 |
+| `npm run docs:check` | `docs-consistency.js` | 核验命令、版本、链接锚点、双语索引、环境变量、`env.example` 同步与 `AGENTS.md` 体积 |
 | `node scripts/test-api-key.js` | `test-api-key.js` | 显式路由诊断（发送真实最小请求核对主/副模型与代理） |
 
 ### 独立演进 / 可选实验模块

@@ -235,17 +235,33 @@ import Foundation
     func invalidateFullSyncReceipts() throws {
         try write(UUID().uuidString, relative: "full-sync-generation.json")
     }
-    func archivePending() throws -> URL {
-        guard try hasPendingMaterials() else { throw DesktopError.message("当前没有未完成的云端快照") }
-        let folder = try pendingFolder(profile.destinationID)
+    func hasAnyPendingMaterials() throws -> Bool {
+        try hasPendingMaterials(fullSync: false) || hasPendingMaterials(fullSync: true)
+    }
+    private func archivePendingFolder(fullSync: Bool) throws -> URL {
+        let relativeDir = pendingPath(profile.destinationID, fullSync: fullSync)
+        let folder = try pendingFolder(profile.destinationID, fullSync: fullSync)
         let existing = try FileManager.default.contentsOfDirectory(atPath: folder.path)
         let connection = existing.contains("connection.json") ? "connection-" + UUID().uuidString + ".json" : "connection.json"
-        try write(profile, relative: profile.destinationID.uuidString + "/" + connection)
+        try write(profile, relative: relativeDir + "/" + connection)
         let retained = root.appendingPathComponent("archived-" + UUID().uuidString, isDirectory: true)
         // One atomic rename retains every original byte and checkpoint. No
         // remote request or deletion, credential copy or target change occurs.
         try FileManager.default.moveItem(at: folder, to: retained)
         return retained
+    }
+    func archiveAllPending() throws -> [URL] {
+        let hasManual = try hasPendingMaterials(fullSync: false)
+        let hasFullSync = try hasPendingMaterials(fullSync: true)
+        guard hasManual || hasFullSync else { throw DesktopError.message("当前没有未完成的云端快照") }
+        var retained: [URL] = []
+        if hasManual { retained.append(try archivePendingFolder(fullSync: false)) }
+        if hasFullSync { retained.append(try archivePendingFolder(fullSync: true)) }
+        return retained
+    }
+    func archivePending() throws -> URL {
+        let retained = try archiveAllPending()
+        return retained[0]
     }
     private func write<T: Encodable>(_ value: T, relative: String) throws {
         try PrivateStoragePaths.path(relative)

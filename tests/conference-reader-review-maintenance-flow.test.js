@@ -214,6 +214,7 @@ function setup(t,{failFirst=[],failTerminal=[]}={}) {
                 if(bridgeState.afterRoundIntent)bridgeState.afterRoundIntent(info);
             }});
         }};
+        if(id==='./repo-rename-path'||id==='./repo-rename-path.js')return require(path.join(root,'scripts/lib/repo-rename-path.js'));
         throw new Error('unexpected dependency '+id);
     };
     const sandbox={require:requireFake,module:{exports:{}},Buffer,console,structuredClone,setImmediate};

@@ -38,7 +38,7 @@ test('核心三次内容修复耗尽不再触发整篇自动重试，原稿与�
     let responses = 0;
     const result = await engine.analyzePaperWithRetry(paper, { maxRetries: 2, retryDelayMs: 0,
         analyzeFn: current => deep.repairCoreSummarySection(current, original, source, null, {
-            callModelFn: async () => { responses += 1; return '## 核心摘要\n仍是过短的摘要。'; }
+            callModelFn: async () => { responses += 1; return `## 核心摘要\n仍是过短的摘要（第${responses}版）。`; }
         }) });
     assert.equal(result.success, false);
     assert.equal(responses, 5);

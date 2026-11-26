@@ -395,6 +395,18 @@ def _remove_exact(snapshot):
                                        for field in ('identity', 'size', 'mtimeNs', 'bytesSha256')):
                 raise _LockSnapshotChangedError('删除前发现博客锁 owner 文件变了')
             os.unlink('owner.json', dir_fd=directory_fd)
+        for entry_name in os.listdir(directory_fd):
+            if not _is_benign_owner_tmp(entry_name):
+                continue
+            try:
+                entry_stat = os.stat(entry_name, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(entry_stat.st_mode):
+                try:
+                    os.unlink(entry_name, dir_fd=directory_fd)
+                except FileNotFoundError:
+                    pass
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
@@ -484,8 +496,10 @@ def _create_lock_directory(lock_path, owner, lease_seconds):
         _cleanup_created_directory(lock_path, created_identity, owner_identity)
         raise creation_error
     snapshot = _snapshot(lock_path)
+    snapshot_record = (snapshot.get('owner') or {}).get('record')
     if snapshot['directoryIdentity'] != created_identity \
-            or snapshot['owner']['record']['token'] != token:
+            or not isinstance(snapshot_record, dict) \
+            or snapshot_record.get('token') != token:
         _cleanup_created_directory(lock_path, created_identity, owner_identity)
         raise BlogRepositoryLockError('新建的博客锁身份复核对不上：目录 inode 或 owner token 与刚写入的不一致')
     return snapshot
@@ -494,9 +508,10 @@ def _create_lock_directory(lock_path, owner, lease_seconds):
 def _renew(snapshot):
     lock_path = snapshot['path']
     current = _snapshot(lock_path)
-    if not _same_snapshot(snapshot, current):
+    current_record = (current.get('owner') or {}).get('record')
+    if not _same_snapshot(snapshot, current) or not isinstance(current_record, dict):
         raise BlogRepositoryLockError('续租前发现博客锁已变化')
-    record = dict(current['owner']['record'])
+    record = dict(current_record)
     record['heartbeatAt'] = _now_iso()
     record['heartbeatUptimeNs'] = _awake_uptime_ns()
     body = dict(record)
@@ -545,7 +560,8 @@ def _renew(snapshot):
     finally:
         os.close(directory_fd)
     renewed = _snapshot(lock_path)
-    if renewed['owner']['record']['token'] != record['token']:
+    renewed_record = (renewed.get('owner') or {}).get('record')
+    if not isinstance(renewed_record, dict) or renewed_record.get('token') != record['token']:
         raise BlogRepositoryLockError('博客锁续租时已失去所有权')
     return renewed
 
@@ -716,8 +732,12 @@ def shared_blog_repository_lock(blog_repo, *, owner='paper-digest-publisher',
             current = state['snapshot']
         try:
             replay = _snapshot(lock_path)
+            replay_record = (replay.get('owner') or {}).get('record')
+            current_record = (current.get('owner') or {}).get('record')
             if replay['directoryIdentity'] == current['directoryIdentity'] \
-                    and replay['owner']['record']['token'] == current['owner']['record']['token'] \
+                    and isinstance(replay_record, dict) \
+                    and isinstance(current_record, dict) \
+                    and replay_record.get('token') == current_record.get('token') \
                     and _same_snapshot(replay, current):
                 _remove_exact(current)
         except (FileNotFoundError, BlogRepositoryLockError):

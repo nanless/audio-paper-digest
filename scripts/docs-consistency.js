@@ -323,35 +323,63 @@ function checkForbidden(files, root = ROOT) {
 // 仅面向人工测试验收的清单或明确说明 tests/ 命令的行允许引用 tests/ 中的真实样例夹具变量。
 const ENV_NAME = /\bPD_[A-Z0-9_]+\b/g;
 const ENV_DIRS = ['scripts', 'apps/macos', 'apps/android'];
+const ENV_ROOT_FILES = ['run-daily-digest.sh'];
+const ENV_EXCLUDED_FILES = new Set(['scripts/lib/env-schema.js']);
+const ENV_EXCLUDED_TEST_PATH = /^apps\/[^/]+\/Tests(?:\/|$)/;
 const TEST_ENV_DOC_ALLOWLIST = new Set(['docs/manual-acceptance-checklist.md']);
+// 临时/内部或小写别名变量有意不在 env.example 示例中展示。
+const ENV_EXAMPLE_OMIT_ALLOWLIST = new Set([
+    'PD_ALLOW_EMPTY_DAILY',
+    'https_proxy',
+    'http_proxy'
+]);
 
-function collectEnvNamesFromDirs(root, dirs) {
+function collectEnvNamesFromDirs(root, dirs, options = {}) {
     const names = new Set();
+    const excludeProdOnly = options.excludeSchemaAndClientTests !== false;
+    const scanFile = target => {
+        const rel = path.relative(root, target).split(path.sep).join('/');
+        if (excludeProdOnly && (ENV_EXCLUDED_FILES.has(rel) || ENV_EXCLUDED_TEST_PATH.test(rel))) return;
+        const text = fs.readFileSync(target, 'utf8');
+        for (const match of text.matchAll(ENV_NAME)) names.add(match[0]);
+        // scripts/publish-conference.py 动态拼接 f'PD_GIT_{kind}_TIMEOUT_SECONDS'（含 ARCHIVE）。
+        if (/\bPD_GIT_\{kind\}_TIMEOUT_SECONDS\b/.test(text)) names.add('PD_GIT_ARCHIVE_TIMEOUT_SECONDS');
+    };
     const walk = directory => {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
             if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
             const target = path.join(directory, entry.name);
-            if (entry.isDirectory()) { walk(target); continue; }
+            const rel = path.relative(root, target).split(path.sep).join('/');
+            if (entry.isDirectory()) {
+                if (excludeProdOnly && ENV_EXCLUDED_TEST_PATH.test(rel)) continue;
+                walk(target);
+                continue;
+            }
             if (!/\.(js|mjs|cjs|py|sh|ts|kt|swift)$/.test(entry.name)) continue;
-            for (const match of fs.readFileSync(target, 'utf8').matchAll(ENV_NAME)) names.add(match[0]);
+            scanFile(target);
         }
     };
     for (const directory of dirs) {
         const target = path.join(root, directory);
-        if (fs.existsSync(target)) walk(target);
+        if (fs.existsSync(target)) {
+            if (fs.statSync(target).isFile()) scanFile(target);
+            else walk(target);
+        }
     }
     return names;
 }
 
 function collectEnvNames(root = ROOT) {
-    return collectEnvNamesFromDirs(root, ENV_DIRS);
+    return collectEnvNamesFromDirs(root, [...ENV_DIRS, ...ENV_ROOT_FILES]);
 }
 
 function checkEnvNames(files, root = ROOT, known = collectEnvNames(root), testKnown = null) {
     const issues = [];
     let resolvedTestKnown = testKnown;
     const getTestKnown = () => {
-        if (resolvedTestKnown === null) resolvedTestKnown = collectEnvNamesFromDirs(root, ['tests']);
+        if (resolvedTestKnown === null) {
+            resolvedTestKnown = collectEnvNamesFromDirs(root, ['tests'], { excludeSchemaAndClientTests: false });
+        }
         return resolvedTestKnown;
     };
     for (const file of files) {
@@ -371,22 +399,39 @@ function checkEnvNames(files, root = ROOT, known = collectEnvNames(root), testKn
     return issues;
 }
 
-// env.example 里展示的配置项必须在 scripts/lib/env-schema.js 中登记，防止示例和 schema 漂移。
-function checkEnvExampleSync(root = ROOT) {
+// env.example 与 scripts/lib/env-schema.js 双向同步：
+// 1. env.example 里展示的配置项必须在 env-schema.js 登记；
+// 2. env-schema.js 里未废弃且非临时白名单的正式配置项必须在 env.example 展示。
+function checkEnvExampleSync(root = ROOT, options = {}) {
     const examplePath = path.join(root, 'env.example');
     if (!fs.existsSync(examplePath)) return [];
-    const { KNOWN_NAMES } = require('./lib/env-schema.js');
-    const known = new Set(KNOWN_NAMES);
+    const { SCHEMA, KNOWN_NAMES } = require('./lib/env-schema.js');
+    const schemaItems = Array.isArray(options.schema) ? options.schema : SCHEMA;
+    const known = new Set(Array.isArray(options.schema) ? schemaItems.map(item => item.name) : KNOWN_NAMES);
     const issues = [];
+    const shown = new Set();
     const lines = fs.readFileSync(examplePath, 'utf8').split(/\r?\n/);
     lines.forEach((line, index) => {
         const match = line.match(/^#?\s*([A-Z][A-Z0-9_]{2,})=/);
         if (!match) return;
         const key = match[1];
+        shown.add(key);
         if (!known.has(key)) {
             issues.push({ file: 'env.example', line: index + 1, message: `env.example 中的 ${key} 未在 scripts/lib/env-schema.js 登记` });
         }
     });
+    if (options.checkMissing !== false) {
+        for (const item of schemaItems) {
+            if (item.deprecated) continue;
+            if (ENV_EXAMPLE_OMIT_ALLOWLIST.has(item.name)) continue;
+            if (!shown.has(item.name)) {
+                issues.push({
+                    file: 'env.example',
+                    message: `scripts/lib/env-schema.js 中的正式配置项 ${item.name} 未在 env.example 展示`
+                });
+            }
+        }
+    }
     return issues;
 }
 

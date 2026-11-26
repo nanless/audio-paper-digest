@@ -731,11 +731,22 @@ function appendStageSummaryLine(filePath, line) {
     const noFollow = fs.constants.O_NOFOLLOW || 0;
     const flags = fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | noFollow;
     const fd = fs.openSync(filePath, flags, STAGE_SUMMARY_FILE_MODE);
+    let permissionsTightened = true;
     try {
         fs.writeSync(fd, `${line}\n`);
+        if (process.platform !== 'win32') {
+            try {
+                // 已有文件的权限不受 open 的 mode 影响；在关 fd 前用 fchmodSync 收紧，避免路径竞态。
+                fs.fchmodSync(fd, STAGE_SUMMARY_FILE_MODE);
+            } catch (error) {
+                permissionsTightened = false;
+                warnStageSummaryFailure('阶段摘要文件权限收紧失败', error);
+            }
+        }
     } finally {
         try { fs.closeSync(fd); } catch (_) { /* 已尽力写入 */ }
     }
+    return permissionsTightened;
 }
 
 /**
@@ -770,19 +781,11 @@ function writeStageSummary(options = {}) {
         }
     }
     try {
-        appendStageSummaryLine(filePath, built.line);
+        const filePermissionsTightened = appendStageSummaryLine(filePath, built.line);
+        if (!filePermissionsTightened) permissionsTightened = false;
     } catch (error) {
         warnStageSummaryFailure('阶段摘要写入失败', error);
         return null;
-    }
-    if (process.platform !== 'win32') {
-        try {
-            // appendFileSync 的 mode 只在新建文件时生效；已有文件要显式收紧。
-            fs.chmodSync(filePath, STAGE_SUMMARY_FILE_MODE);
-        } catch (error) {
-            permissionsTightened = false;
-            warnStageSummaryFailure('阶段摘要文件权限收紧失败', error);
-        }
     }
     return { filePath, line: built.line, status: built.status, permissionsTightened };
 }

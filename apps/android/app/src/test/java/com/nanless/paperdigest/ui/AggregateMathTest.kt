@@ -25,7 +25,19 @@ class AggregateMathTest {
         assertEquals(listOf("x_1","x^2"),p.formulae.map{it.tex});assertFalse(p.formulae[0].display);assertTrue(p.formulae[1].display)
     }
     @Test fun existingMathMLAnnotationIsNotParsedTwice(){val p=ResearchRenderer.prepareHTMLMath("<span class='katex'><math><semantics><mi>x</mi><annotation encoding='application/x-tex'>x_1</annotation></semantics></math><span class='katex-html'>duplicate</span></span><math><mi>y</mi></math>");assertEquals(listOf("x_1"),p.formulae.map{it.tex});assertTrue(p.missingAnnotation);assertEquals(1,p.targets.size)}
-    @Test fun badTexStaysDataAndBoundsAreEnforced(){val p=ResearchRenderer.prepareHTMLMath("<p>\\(\\unknownCommand{a}\\)</p>");assertEquals("\\unknownCommand{a}",p.formulae.single().tex);assertThrows(IllegalArgumentException::class.java){ResearchRenderer.prepareHTMLMath("<p>"+"\\(x\\) ".repeat(257)+"</p>")}}
+    @Test fun badTexStaysDataAndBoundsAreEnforced(){
+        val p=ResearchRenderer.prepareHTMLMath("<p>\\(\\unknownCommand{a}\\)</p>")
+        assertEquals("\\unknownCommand{a}",p.formulae.single().tex)
+        assertEquals(512,ResearchRenderer.prepareHTMLMath("<p>"+"\\(x\\) ".repeat(512)+"</p>").formulae.size)
+        assertThrows(IllegalArgumentException::class.java){ResearchRenderer.prepareHTMLMath("<p>"+"\\(x\\) ".repeat(513)+"</p>")}
+    }
+    @Test fun currencyDollarRangesDoNotCorruptPublishedProse(){
+        val p=ResearchRenderer.prepareHTMLMath("<p>设备定价从 \$1099 降至 \$269，节省 \$830；另含公式 \$x_1 + y_2\$。</p>")
+        assertEquals(listOf("x_1 + y_2"),p.formulae.map{it.tex})
+        val tokenized=p.textTargets.single().tokenized.text
+        assertTrue(tokenized.contains("\$1099"))
+        assertTrue(tokenized.contains("\$269"))
+    }
     @Test fun typedAggregateWithoutAuthorityUsesOnlyItsBody()=runBlocking{val d=view();val old=d.bodyHTML;var checks=0;val result=ResearchRenderer.renderAggregateBound(d,{checks++}){body->assertEquals(old,body);"<p>local-only-result</p>"};assertEquals(2,checks);assertEquals("<p>local-only-result</p>",result);assertEquals(old,d.bodyHTML);assertEquals("daily",d.descriptor.kind)}
     @Test fun staleOwnerRejectedBeforeRenderer()=runBlocking{var called=false;try{ResearchRenderer.renderAggregateBound(view(),{error("retired")}){called=true;it};fail("Expected owner rejection")}catch(expected:IllegalStateException){};assertFalse(called)}
     @Test fun lateResultCannotAdoptAfterNewDocumentOwner()=runBlocking{val d=view();var owner=true;val started=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>();val result=async{runCatching{ResearchRenderer.renderAggregateBound(d,{check(owner)}){started.complete(Unit);release.await();"late"}}};started.await();owner=false;release.complete(Unit);assertTrue(result.await().isFailure)}

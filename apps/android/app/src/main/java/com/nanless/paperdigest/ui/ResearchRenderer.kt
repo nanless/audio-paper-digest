@@ -47,12 +47,30 @@ object ResearchRenderer {
         }
         return null
     }
+    private const val MAX_HTML_FORMULAE = 512
+    private val CURRENCY_START_REGEX = Regex("^\\d[\\d,.]*(?:[kKmMbB])?(?:[^0-9A-Za-z_^{}\\\\]|\\s|$)")
+    private val HAS_CJK_OR_FULLWIDTH_REGEX = Regex("[\\u3000-\\u303F\\u4E00-\\u9FFF\\uFF00-\\uFFEF]")
+    private val HAS_MATH_SYNTAX_REGEX = Regex("[\\\\^_{}=<>±×÷∑∏∫√∞≈≠≤≥]")
+
+    private fun isCurrencyDollarSpan(text: String, match: ScientificMath): Boolean {
+        if (match.display || !match.raw.startsWith("$") || match.raw.startsWith("$$")) return false
+        val inner = match.text
+        if (inner.isEmpty()) return false
+        val nextChar = text.getOrNull(match.end)
+        val startsWithDigit = inner[0].isDigit()
+        val hasBackslash = '\\' in inner
+        if (startsWithDigit && nextChar != null && nextChar.isDigit()) return true
+        if (!hasBackslash && HAS_CJK_OR_FULLWIDTH_REGEX.containsMatchIn(inner)) return true
+        if (startsWithDigit && inner.last().isWhitespace() && !HAS_MATH_SYNTAX_REGEX.containsMatchIn(inner) && CURRENCY_START_REGEX.containsMatchIn(inner)) return true
+        return false
+    }
+
     internal data class TokenizedText(val text:String,val formulae:List<Formula>)
     private fun tokenizeHTMLText(text:String):TokenizedText {
         require(text.length<=1_000_000){"原文文字超过安全渲染上限"}
         val prefix="PDMATH${UUID.randomUUID().toString().replace("-", "")}X";val output=StringBuilder();val formulae=mutableListOf<Formula>();var i=0
-        while(i<text.length){val match=scientificMathAt(text,i);if(match==null){output.append(text[i++]);continue}
-            require(match.text.length<=12000&&formulae.size<256){"原文公式超过安全渲染上限"}
+        while(i<text.length){val match=scientificMathAt(text,i);if(match==null||isCurrencyDollarSpan(text,match)){output.append(text[i++]);continue}
+            require(match.text.length<=12000&&formulae.size<MAX_HTML_FORMULAE){"原文公式超过安全渲染上限"}
             val token="$prefix${formulae.size}END";formulae+=Formula(token,match.text,match.display);output.append(token);i=match.end
         }
         return TokenizedText(output.toString(),formulae)
@@ -187,7 +205,7 @@ object ResearchRenderer {
             if(annotation==null){missing=true;return@forEach}
             val target=math.closest(".katex-display")?:math.closest(".katex")?:math
             if(seen.add(target)){
-                val tex=annotation.wholeText();require(tex.length<=12000&&formulas.size<256){"原文公式超过安全渲染上限"}
+                val tex=annotation.wholeText();require(tex.length<=12000&&formulas.size<MAX_HTML_FORMULAE){"原文公式超过安全渲染上限"}
                 targets.add(target);formulas+=Formula("",tex,math.attr("display")=="block"||target.hasClass("katex-display"))
             }
         }
@@ -200,7 +218,7 @@ object ResearchRenderer {
                 if(text.contains('\\')||text.contains('$')){
                     val tokenized=tokenizeHTMLText(text)
                     if(tokenized.formulae.isNotEmpty()){
-                        require(formulas.size+tokenized.formulae.size<=256){"原文公式超过安全渲染上限"}
+                        require(formulas.size+tokenized.formulae.size<=MAX_HTML_FORMULAE){"原文公式超过安全渲染上限"}
                         textTargets+=TextTarget(node,tokenized,formulas.size);formulas+=tokenized.formulae
                     }
                 }

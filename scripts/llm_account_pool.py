@@ -65,8 +65,10 @@ LIVE_SYNC_FAILURE_BACKOFF_MS = 60 * 1000
 LIVE_SYNC_MAX_RESPONSE_BYTES = 64 * 1024
 QUOTA_WINDOWS = ('monthly', 'weekly', 'rolling_5h', 'balance', 'unknown')
 SAFE_ACCOUNT_LABEL_RE = re.compile(r'^[A-Za-z0-9._\u4e00-\u9fff-]{1,40}$')
+_HTTP_CONNECT_PROXY_ENV_VARS = ('https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY')
 _LIVE_SYNC_LOCK = threading.Lock()
 _LIVE_SYNC_LAST_FAIL_MS = {}
+_IN_FLIGHT_LIVE_SYNCS = {}
 # 成员集合变化会生成新的 group_id（新组 cursor 从 0 开始）。同一 service
 # 下超过这段时间没有被任何选择使用的其他分组会被清理，避免状态文件随历次
 # key 变更无限增长；仍在并行使用的不同 key 集合（例如主/副模型各自的池）
@@ -909,9 +911,12 @@ def _validate_account_subrecords(record, target):
         u = record['usage']
         if not isinstance(u, dict):
             raise LlmAccountPoolStateError(f'LLM 账号池状态 account.usage 非法，已阻止覆盖 {target}')
-        for num_field in ('monthlyCycleStartMs', 'monthlySpentUsd', 'weeklyCycleStartMs', 'weeklySpentUsd', 'lastUpdatedAtMs'):
-            val = u.get(num_field)
+        for nullable_field in ('monthlyCycleStartMs', 'weeklyCycleStartMs'):
+            val = u.get(nullable_field)
             if val is not None and not _is_non_negative_finite(val):
+                raise LlmAccountPoolStateError(f'LLM 账号池状态 account.usage 非法，已阻止覆盖 {target}')
+        for req_num_field in ('monthlySpentUsd', 'weeklySpentUsd', 'lastUpdatedAtMs'):
+            if req_num_field in u and not _is_non_negative_finite(u[req_num_field]):
                 raise LlmAccountPoolStateError(f'LLM 账号池状态 account.usage 非法，已阻止覆盖 {target}')
         for int_field in ('monthlyTokens', 'monthlyRequests'):
             if int_field in u:
@@ -1066,6 +1071,23 @@ def _current_weekly_cycle_start_ms(now_ms):
     return int(round(start.timestamp() * 1000))
 
 
+def _resolve_weekly_cycle_start_ms(record, now_ms):
+    quota = record.get('quota') if isinstance(record, dict) and isinstance(record.get('quota'), dict) else {}
+    weekly_reset_raw = quota.get('weeklyResetAtMs')
+    if _is_non_negative_finite(weekly_reset_raw) and weekly_reset_raw > 0:
+        week_ms = 7 * DAY_MS
+        weekly_reset_ms = int(round(weekly_reset_raw))
+        base_start = weekly_reset_ms - week_ms
+        if base_start <= now_ms < weekly_reset_ms and base_start >= 0:
+            return base_start
+        if now_ms >= weekly_reset_ms:
+            weeks_elapsed = int((now_ms - weekly_reset_ms) // week_ms)
+            return weekly_reset_ms + weeks_elapsed * week_ms
+        if base_start >= 0:
+            return base_start
+    return _current_weekly_cycle_start_ms(now_ms)
+
+
 def _round_pct4(value):
     return math.floor(value * 10000.0 + 0.5) / 10000.0
 
@@ -1164,13 +1186,55 @@ def _sum_rolling_5h_spend_usd(usage, now_ms, since_ms=0):
     return total
 
 
+def _get_rolling_5h_bucket_spend_usd(usage, target_bucket_ms):
+    buckets = usage.get('rolling5hBuckets') if isinstance(usage, dict) else None
+    if not isinstance(buckets, list):
+        return 0.0
+    total = 0.0
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        b_ms = bucket.get('bucketMs')
+        spent = bucket.get('spentUsd')
+        if not _is_non_negative_finite(b_ms) or not _is_non_negative_finite(spent):
+            continue
+        if b_ms == target_bucket_ms:
+            total += float(spent)
+    return total
+
+
+def _sum_rolling_5h_post_snapshot_spend_usd(usage, now_ms, snap_ms, spent_at_snap_usd):
+    snap_bucket_ms = (int(snap_ms) // ROLLING_5H_BUCKET_MS) * ROLLING_5H_BUCKET_MS
+    cutoff = now_ms - ROLLING_5H_MS
+    buckets = usage.get('rolling5hBuckets') if isinstance(usage, dict) else None
+    if not isinstance(buckets, list):
+        return 0.0
+    snap_bucket_spend = 0.0
+    later_buckets_spend = 0.0
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        b_ms = bucket.get('bucketMs')
+        spent = bucket.get('spentUsd')
+        if not _is_non_negative_finite(b_ms) or not _is_non_negative_finite(spent):
+            continue
+        if b_ms + ROLLING_5H_BUCKET_MS <= cutoff or b_ms > now_ms + ROLLING_5H_BUCKET_MS:
+            continue
+        if b_ms == snap_bucket_ms:
+            snap_bucket_spend += float(spent)
+        elif b_ms > snap_bucket_ms:
+            later_buckets_spend += float(spent)
+    clamped_snap = float(spent_at_snap_usd) if _is_non_negative_finite(spent_at_snap_usd) else 0.0
+    return max(0.0, snap_bucket_spend - clamped_snap) + later_buckets_spend
+
+
 def evaluate_account_quota(record, now_ms):
     safe_record = record if isinstance(record, dict) else {}
     windows = safe_record.get('windows') if isinstance(safe_record.get('windows'), dict) else {}
     quota = safe_record.get('quota') if isinstance(safe_record.get('quota'), dict) else {}
     usage = safe_record.get('usage') if isinstance(safe_record.get('usage'), dict) else {}
     monthly_cycle = resolve_monthly_cycle(safe_record, now_ms)
-    week_start_ms = _current_weekly_cycle_start_ms(now_ms)
+    week_start_ms = _resolve_weekly_cycle_start_ms(safe_record, now_ms)
     next_week_reset_ms = week_start_ms + 7 * DAY_MS
 
     def window_blocked_until(name):
@@ -1193,6 +1257,8 @@ def evaluate_account_quota(record, now_ms):
             weekly_blocked = max(weekly_blocked, legacy_blocked)
         elif safe_record.get('limitName') == 'rolling_5h':
             rolling5h_blocked = max(rolling5h_blocked, legacy_blocked)
+        elif safe_record.get('limitName') == 'balance':
+            balance_blocked = max(balance_blocked, legacy_blocked)
 
     fallback_snap = quota['snapshotAtMs'] if _is_non_negative_finite(quota.get('snapshotAtMs')) else 0
     monthly_snap = quota['monthlySnapshotAtMs'] if _is_non_negative_finite(quota.get('monthlySnapshotAtMs')) else fallback_snap
@@ -1244,7 +1310,11 @@ def evaluate_account_quota(record, now_ms):
     usage_month_start = usage.get('monthlyCycleStartMs')
     current_monthly_spent = float(usage['monthlySpentUsd']) if (
         _is_non_negative_finite(usage.get('monthlySpentUsd'))
-        and (monthly_cycle is None or not _is_non_negative_finite(usage_month_start) or usage_month_start == monthly_cycle['cycle_start_ms'])
+        and (
+            (_is_non_negative_finite(usage_month_start) and usage_month_start == monthly_cycle['cycle_start_ms'])
+            if monthly_cycle is not None
+            else (usage_month_start is None)
+        )
     ) else 0.0
     if not has_monthly:
         eff_monthly = 0.0
@@ -1273,8 +1343,9 @@ def evaluate_account_quota(record, now_ms):
     if not has_r5h:
         eff_5h = 0.0
     elif r5h_snapshot_active:
-        spent_at_snap = float(quota['rolling5hSpentAtSnapshotUsd']) if _is_non_negative_finite(quota.get('rolling5hSpentAtSnapshotUsd')) else 0.0
-        delta_usd = max(0.0, current_5h_spent - spent_at_snap)
+        delta_usd = _sum_rolling_5h_post_snapshot_spend_usd(
+            usage, now_ms, rolling5h_snap, quota.get('rolling5hSpentAtSnapshotUsd'),
+        )
         eff_5h = _round_pct4(max(MIN_ESTIMATED_REMAINING_PCT, min(100.0, float(r5h_pct_raw) - (delta_usd / budget_5h) * 100.0)))
     else:
         eff_5h = _round_pct4(max(MIN_ESTIMATED_REMAINING_PCT, min(100.0, 100.0 - (current_5h_spent / budget_5h) * 100.0)))
@@ -1454,11 +1525,15 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
         normalized_affinity = re.sub(r'^(\d{4}\.\d{4,5})v\d+$', r'\1', normalized_affinity, flags=re.IGNORECASE)
     keys_by_id = dict(zip(identity['account_ids'], keys))
 
+    _assert_safe_project_state_path(state_file)
+
     # 只读快路径：与 JS 实现保持一致，减少高并发亲和或同账号 expiry_priority 命中时的同步 fsync。
     if not force_write:
         try:
             state = read_state_strict(state_file)
             service = (state.get('services') or {}).get(identity['service_id'])
+            if service is not None and service.get('endpoint') != identity['service']:
+                raise LlmAccountPoolStateError('LLM 账号池 service 身份与 endpoint 不一致')
             groups = (service or {}).get('groups') or {}
             group = groups.get(identity['group_id'])
             stored_cursor = group.get('rotationCursor') if isinstance(group, dict) else None
@@ -1489,6 +1564,8 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
                             'selection_mode': candidate['selection_mode'],
                             **identity,
                         }
+        except LlmAccountPoolStateError:
+            raise
         except Exception:
             pass
 
@@ -1573,7 +1650,7 @@ def mark_quota_exhausted(selection, quota, state_file=LLM_ACCOUNT_POOL_STATE_FIL
         next_quota = dict(previous.get('quota')) if isinstance(previous.get('quota'), dict) else {}
         if limit_class == 'monthly':
             next_quota['autoMonthlyAnchorMs'] = window_until_ms
-            if next_quota.get('monthlyResetSource') != 'manual':
+            if next_quota.get('monthlyResetSource') not in ('manual', 'live_api'):
                 next_quota['monthlyResetAtMs'] = window_until_ms
                 next_quota['monthlyResetTzOffsetMin'] = 0
                 next_quota['monthlyResetDay'] = datetime.fromtimestamp(window_until_ms / 1000, tz=timezone.utc).day
@@ -1611,35 +1688,47 @@ def mark_quota_exhausted(selection, quota, state_file=LLM_ACCOUNT_POOL_STATE_FIL
     return effective_until_box[0]
 
 
+def _first_present(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _estimate_usage_spend_usd(usage_info):
     if not isinstance(usage_info, dict):
         return 0.0, 0
-    explicit_cost = None
-    for cost_key in ('costUsd', 'cost_usd', 'estimatedCostUsd', 'estimated_cost_usd', 'cost'):
-        if cost_key in usage_info and usage_info[cost_key] is not None:
-            explicit_cost = usage_info[cost_key]
-            break
+    explicit_cost = _first_present(
+        usage_info.get('costUsd'),
+        usage_info.get('cost_usd'),
+        usage_info.get('estimatedCostUsd'),
+        usage_info.get('estimated_cost_usd'),
+        usage_info.get('cost'),
+    )
     raw_usage = usage_info.get('usage') if isinstance(usage_info.get('usage'), dict) else usage_info
 
     def _as_num(val):
         return float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) else 0.0
 
-    inp = _as_num(raw_usage.get('inputTokens') if 'inputTokens' in raw_usage else (
-        raw_usage.get('input_tokens') if 'input_tokens' in raw_usage else raw_usage.get('prompt_tokens')
+    inp = _as_num(_first_present(
+        raw_usage.get('inputTokens'),
+        raw_usage.get('input_tokens'),
+        raw_usage.get('prompt_tokens'),
     ))
     input_details = raw_usage.get('input_tokens_details') if isinstance(raw_usage.get('input_tokens_details'), dict) else {}
     prompt_details = raw_usage.get('prompt_tokens_details') if isinstance(raw_usage.get('prompt_tokens_details'), dict) else {}
-    cached = _as_num(
-        raw_usage.get('cachedInputTokens') if 'cachedInputTokens' in raw_usage else (
-            input_details.get('cached_tokens') if 'cached_tokens' in input_details else (
-                prompt_details.get('cached_tokens') if 'cached_tokens' in prompt_details else raw_usage.get('cache_read_input_tokens')
-            )
-        )
-    )
-    out = _as_num(raw_usage.get('outputTokens') if 'outputTokens' in raw_usage else (
-        raw_usage.get('output_tokens') if 'output_tokens' in raw_usage else raw_usage.get('completion_tokens')
+    cached = _as_num(_first_present(
+        raw_usage.get('cachedInputTokens'),
+        input_details.get('cached_tokens'),
+        prompt_details.get('cached_tokens'),
+        raw_usage.get('cache_read_input_tokens'),
     ))
-    total_raw = raw_usage.get('totalTokens') if 'totalTokens' in raw_usage else raw_usage.get('total_tokens')
+    out = _as_num(_first_present(
+        raw_usage.get('outputTokens'),
+        raw_usage.get('output_tokens'),
+        raw_usage.get('completion_tokens'),
+    ))
+    total_raw = _first_present(raw_usage.get('totalTokens'), raw_usage.get('total_tokens'))
     total_tokens = max(0, int(round(_as_num(total_raw) if total_raw is not None else (inp + out))))
     if isinstance(explicit_cost, (int, float)) and not isinstance(explicit_cost, bool) \
             and math.isfinite(explicit_cost) and explicit_cost >= 0:
@@ -1673,7 +1762,7 @@ def record_account_usage(selection, usage_info, state_file=LLM_ACCOUNT_POOL_STAT
         previous = dict(previous) if isinstance(previous, dict) else {}
         monthly_cycle = resolve_monthly_cycle(previous, now_ms)
         monthly_cycle_start = monthly_cycle['cycle_start_ms'] if monthly_cycle is not None else None
-        week_start_ms = _current_weekly_cycle_start_ms(now_ms)
+        week_start_ms = _resolve_weekly_cycle_start_ms(previous, now_ms)
         prev_usage = previous.get('usage') if isinstance(previous.get('usage'), dict) else {}
 
         same_month = (
@@ -2003,8 +2092,73 @@ def classify_opencode_go_quota_response(status, headers, body, *, raw='', now_ms
 
 
 class _UsageNoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+    def http_error_302(self, req, fp, code, msg, headers):
+        if fp is not None:
+            try:
+                fp.close()
+            except Exception:
+                pass
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, None)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def _is_valid_http_connect_proxy_url(raw_url):
+    if not isinstance(raw_url, str) or not raw_url or re.search(r'[\x00-\x20\x7f\\]', raw_url):
+        return False
+    auth_match = re.match(r'^https?://([^/?#]+)', raw_url, re.IGNORECASE)
+    if not auth_match:
+        return False
+    authority = auth_match.group(1)
+    raw_host_port = authority.rsplit('@', 1)[-1] if '@' in authority else authority
+    if not raw_host_port or '%' in raw_host_port:
+        return False
+    try:
+        parsed = urlsplit(raw_url)
+        scheme = (parsed.scheme or '').lower()
+        hostname = parsed.hostname or ''
+        port = parsed.port
+    except ValueError:
+        return False
+    if scheme not in ('http', 'https') or not hostname:
+        return False
+    if port is not None and not (1 <= port <= 65535):
+        return False
+    return True
+
+
+def _resolve_usage_proxy_url(explicit_proxy_url=None, env=None):
+    if explicit_proxy_url is not None and explicit_proxy_url != '':
+        raw = str(explicit_proxy_url)
+        return raw if _is_valid_http_connect_proxy_url(raw) else None
+    source = os.environ if env is None else env
+    for key in _HTTP_CONNECT_PROXY_ENV_VARS:
+        val = source.get(key)
+        if val:
+            raw = str(val)
+            return raw if _is_valid_http_connect_proxy_url(raw) else None
+    return None
+
+
+def redact_usage_sync_error(err, api_key=None, fallback='usage 查询失败'):
+    raw = str(err) if err is not None else ''
+    if not raw.strip():
+        raw = fallback
+    keys = []
+    if isinstance(api_key, str):
+        keys = [api_key]
+    elif isinstance(api_key, (list, tuple, set)):
+        keys = [k for k in api_key if isinstance(k, str)]
+    for key in keys:
+        trimmed = key.strip()
+        if len(trimmed) >= 4:
+            raw = raw.replace(trimmed, '[REDACTED]')
+    raw = re.sub(r'([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@]+@', r'\1[REDACTED]@', raw)
+    raw = re.sub(r'\b(Bearer|Basic)\s+[^\s,\'";)}\]]+', r'\1 [REDACTED]', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'\bsk-[A-Za-z0-9._-]{4,}', '[REDACTED]', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'\b[a-f0-9]{64}\b', '[REDACTED]', raw, flags=re.IGNORECASE)
+    cleaned = _sanitize_limit_name(raw)
+    return cleaned or fallback
 
 
 def get_opencode_go_usage_url(endpoint):
@@ -2032,7 +2186,7 @@ def _resolve_live_sync_ttl_ms(ttl_ms=None):
     return DEFAULT_LIVE_SYNC_TTL_MS
 
 
-def _resolve_live_sync_timeout_ms(timeout_ms=None):
+def resolve_live_sync_timeout_ms(timeout_ms=None):
     raw = timeout_ms if timeout_ms is not None else os.environ.get('PD_LLM_ACCOUNT_POOL_SYNC_TIMEOUT_MS')
     try:
         val = int(float(raw))
@@ -2041,6 +2195,9 @@ def _resolve_live_sync_timeout_ms(timeout_ms=None):
     except (TypeError, ValueError):
         pass
     return DEFAULT_LIVE_SYNC_TIMEOUT_MS
+
+
+_resolve_live_sync_timeout_ms = resolve_live_sync_timeout_ms
 
 
 def _parse_usage_window(raw_window, name):
@@ -2090,6 +2247,7 @@ def apply_live_usage_snapshots(api_keys, endpoint, snapshots_by_account_id, stat
     def updater(state):
         service = _ensure_service(state, identity)
         now_iso = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat()
+        current_bucket_ms = (now_ms // ROLLING_5H_BUCKET_MS) * ROLLING_5H_BUCKET_MS
         for account_id, snap in items:
             if not isinstance(snap, dict) or not snap.get('monthly') or not snap.get('weekly') or not snap.get('rolling'):
                 continue
@@ -2104,6 +2262,8 @@ def apply_live_usage_snapshots(api_keys, endpoint, snapshots_by_account_id, stat
             next_quota['monthlyResetTzOffsetMin'] = 0
             next_quota['monthlyResetSource'] = 'live_api'
             next_quota['autoMonthlyAnchorMs'] = m_reset_ms
+            next_quota['weeklyResetAtMs'] = snap['weekly']['resets_at_ms']
+            next_quota['rolling5hResetAtMs'] = snap['rolling']['resets_at_ms']
 
             pre_eval = evaluate_account_quota({**previous, 'quota': next_quota, 'windows': next_windows}, now_ms)
 
@@ -2112,13 +2272,13 @@ def apply_live_usage_snapshots(api_keys, endpoint, snapshots_by_account_id, stat
             next_quota['monthlySnapshotAtMs'] = now_ms
 
             next_quota['weeklyRemainingPct'] = snap['weekly']['remaining_pct']
-            next_quota['weeklyResetAtMs'] = snap['weekly']['resets_at_ms']
             next_quota['weeklySpentAtSnapshotUsd'] = pre_eval['current_weekly_spent_usd']
             next_quota['weeklySnapshotAtMs'] = now_ms
 
             next_quota['rolling5hRemainingPct'] = snap['rolling']['remaining_pct']
-            next_quota['rolling5hResetAtMs'] = snap['rolling']['resets_at_ms']
-            next_quota['rolling5hSpentAtSnapshotUsd'] = pre_eval['current_5h_spent_usd']
+            next_quota['rolling5hSpentAtSnapshotUsd'] = _get_rolling_5h_bucket_spend_usd(
+                previous.get('usage'), current_bucket_ms,
+            )
             next_quota['rolling5hSnapshotAtMs'] = now_ms
 
             next_quota['snapshotAtMs'] = now_ms
@@ -2163,6 +2323,7 @@ def apply_live_usage_snapshots(api_keys, endpoint, snapshots_by_account_id, stat
                 next_record.pop('blockedUntil', None)
                 if next_record.get('status') in (None, 'quota_blocked'):
                     next_record['status'] = 'eligible'
+            _validate_account_subrecords(next_record, state_file)
             service['accounts'][account_id] = next_record
             applied_box[0] += 1
         return state if applied_box[0] > 0 else None
@@ -2171,7 +2332,7 @@ def apply_live_usage_snapshots(api_keys, endpoint, snapshots_by_account_id, stat
     return applied_box[0]
 
 
-def fetch_opencode_go_account_usage(api_key, endpoint, *, proxy_url=None, timeout_ms=None, fetcher=None):
+def fetch_opencode_go_account_usage(api_key, endpoint, *, proxy_url=None, timeout_ms=None, fetcher=None, now_ms=None):
     url = get_opencode_go_usage_url(endpoint)
     if not url:
         return {'ok': False, 'status_code': None, 'error': '非 OpenCode Go 官方端点'}
@@ -2185,21 +2346,20 @@ def fetch_opencode_go_account_usage(api_key, endpoint, *, proxy_url=None, timeou
                 body = json.loads(res['text'])
             if status_code == 200:
                 return {'ok': True, 'status_code': 200, 'parsed': parse_opencode_go_usage_payload(body)}
-            quota = classify_opencode_go_quota_response(status_code, res.get('headers') or {}, body, endpoint=endpoint)
+            quota = classify_opencode_go_quota_response(
+                status_code, res.get('headers') or {}, body, endpoint=endpoint, now_ms=now_ms,
+            )
             if quota and quota.get('limit_class') == 'balance':
                 return {'ok': False, 'status_code': status_code, 'insufficient_balance': True, 'quota': quota, 'error': 'HTTP 401 Insufficient balance'}
             if status_code == 401:
                 return {'ok': False, 'status_code': 401, 'auth_error': True, 'error': 'HTTP 401 认证失败'}
             return {'ok': False, 'status_code': status_code or None, 'error': f'HTTP {status_code or "unknown"}'}
         except Exception as exc:
-            return {'ok': False, 'status_code': None, 'error': _sanitize_limit_name(str(exc) or 'usage 查询失败')}
+            return {'ok': False, 'status_code': None, 'error': redact_usage_sync_error(exc, api_key, 'usage 查询失败')}
 
-    resolved_proxy = str(
-        proxy_url or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
-        or os.environ.get('https_proxy') or os.environ.get('http_proxy') or ''
-    ).strip()
-    if not resolved_proxy or not re.match(r'^https?://', resolved_proxy, re.I):
-        return {'ok': False, 'status_code': None, 'error': '缺少项目 HTTP CONNECT 代理配置'}
+    resolved_proxy = _resolve_usage_proxy_url(proxy_url)
+    if not resolved_proxy:
+        return {'ok': False, 'status_code': None, 'error': '缺少或非法的项目 HTTP CONNECT 代理配置'}
 
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({'http': resolved_proxy, 'https': resolved_proxy}),
@@ -2214,31 +2374,72 @@ def fetch_opencode_go_account_usage(api_key, endpoint, *, proxy_url=None, timeou
         },
         method='GET',
     )
+    deadline = time.monotonic() + (resolved_timeout_ms / 1000.0)
     try:
         with opener.open(req, timeout=resolved_timeout_ms / 1000.0) as resp:
-            raw = resp.read(LIVE_SYNC_MAX_RESPONSE_BYTES + 1)
-            if len(raw) > LIVE_SYNC_MAX_RESPONSE_BYTES:
-                return {'ok': False, 'status_code': resp.status, 'error': 'usage 响应超过 64 KiB 安全上限'}
+            status_code = getattr(resp, 'status', None)
+            if status_code is None and hasattr(resp, 'getcode'):
+                status_code = resp.getcode()
+            if status_code != 200:
+                return {'ok': False, 'status_code': status_code, 'error': f'HTTP {status_code or "unknown"}'}
+            chunks = []
+            total = 0
+            raw_io = getattr(getattr(resp, 'fp', None), 'raw', None)
+            sock = getattr(raw_io, '_sock', None)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('usage 响应读取超过总超时时间')
+                if sock is not None and hasattr(sock, 'settimeout'):
+                    try:
+                        sock.settimeout(remaining)
+                    except OSError:
+                        pass
+                chunk = resp.read(8192)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > LIVE_SYNC_MAX_RESPONSE_BYTES:
+                    return {'ok': False, 'status_code': status_code, 'error': 'usage 响应超过 64 KiB 安全上限'}
+                chunks.append(chunk)
+            if time.monotonic() > deadline:
+                raise TimeoutError('usage 响应读取超过总超时时间')
+            raw = b''.join(chunks)
             body = json.loads(raw.decode('utf-8'))
-            return {'ok': True, 'status_code': resp.status, 'parsed': parse_opencode_go_usage_payload(body)}
+            return {'ok': True, 'status_code': 200, 'parsed': parse_opencode_go_usage_payload(body)}
     except urllib.error.HTTPError as exc:
         status_code = exc.code
         raw_text = ''
         body = None
         try:
-            raw_bytes = exc.read(LIVE_SYNC_MAX_RESPONSE_BYTES)
-            raw_text = raw_bytes.decode('utf-8', errors='replace')
-            body = json.loads(raw_text) if raw_text else None
+            if exc.fp is not None and (deadline - time.monotonic()) > 0:
+                raw_io = getattr(getattr(exc, 'fp', None), 'raw', None)
+                err_sock = getattr(raw_io, '_sock', None)
+                if err_sock is not None and hasattr(err_sock, 'settimeout'):
+                    try:
+                        err_sock.settimeout(max(0.05, deadline - time.monotonic()))
+                    except OSError:
+                        pass
+                raw_bytes = exc.read(LIVE_SYNC_MAX_RESPONSE_BYTES)
+                raw_text = raw_bytes.decode('utf-8', errors='replace')
+                body = json.loads(raw_text) if raw_text else None
         except Exception:
             body = None
-        quota = classify_opencode_go_quota_response(status_code, dict(exc.headers or {}), body, raw=raw_text, endpoint=endpoint)
+        finally:
+            try:
+                exc.close()
+            except Exception:
+                pass
+        quota = classify_opencode_go_quota_response(
+            status_code, dict(exc.headers or {}), body, raw=raw_text, endpoint=endpoint, now_ms=now_ms,
+        )
         if quota and quota.get('limit_class') == 'balance':
             return {'ok': False, 'status_code': status_code, 'insufficient_balance': True, 'quota': quota, 'error': 'HTTP 401 Insufficient balance'}
         if status_code == 401:
             return {'ok': False, 'status_code': 401, 'auth_error': True, 'error': 'HTTP 401 认证失败'}
         return {'ok': False, 'status_code': status_code, 'error': f'HTTP {status_code}'}
     except Exception as exc:
-        return {'ok': False, 'status_code': None, 'error': _sanitize_limit_name(str(exc) or 'usage 网络请求失败')}
+        return {'ok': False, 'status_code': None, 'error': redact_usage_sync_error(exc, api_key, 'usage 网络请求失败')}
 
 
 def sync_opencode_go_pool_usage(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *,
@@ -2249,44 +2450,88 @@ def sync_opencode_go_pool_usage(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_
         return {'synced': 0, 'failed': 0, 'skipped': len(keys), 'auth_errors': [], 'from_cache': True, 'results': []}
     if not force and (not _is_live_sync_enabled(force=False, live_sync=live_sync) or _resolve_pool_strategy(strategy) != 'expiry_priority'):
         return {'synced': 0, 'failed': 0, 'skipped': len(keys), 'auth_errors': [], 'from_cache': True, 'results': []}
-    now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    has_explicit_now = now_ms is not None
+    check_now_ms = int(now_ms) if has_explicit_now else int(time.time() * 1000)
     resolved_ttl = _resolve_live_sync_ttl_ms(ttl_ms)
     identity = get_pool_identity(keys, endpoint)
     sync_key = f'{Path(state_file).resolve()}|{identity["service_id"]}|{identity["group_id"]}'
 
-    with _LIVE_SYNC_LOCK:
-        if not force:
-            last_fail = _LIVE_SYNC_LAST_FAIL_MS.get(sync_key)
-            if last_fail is not None and (now_ms - last_fail) < LIVE_SYNC_FAILURE_BACKOFF_MS:
-                return {'synced': 0, 'failed': 0, 'skipped': len(keys), 'auth_errors': [], 'from_cache': True, 'backoff': True, 'results': []}
+    inflight = None
+    if not force:
+        existing = None
+        with _LIVE_SYNC_LOCK:
+            existing = _IN_FLIGHT_LIVE_SYNCS.get(sync_key)
+            if existing is None:
+                inflight = {'event': threading.Event(), 'result': None, 'error': None}
+                _IN_FLIGHT_LIVE_SYNCS[sync_key] = inflight
+        if existing is not None:
+            existing['event'].wait()
+            if existing['error'] is not None:
+                raise existing['error']
+            return existing['result']
+
+    try:
         try:
             current_state = read_state_strict(state_file) if Path(state_file).exists() else None
         except Exception:
             current_state = None
         accounts = ((current_state or {}).get('services') or {}).get(identity['service_id'], {}).get('accounts') or {}
+
+        account_fail_times = {}
+        if not force:
+            with _LIVE_SYNC_LOCK:
+                for key in keys:
+                    aid = get_account_id(key)
+                    ts = _LIVE_SYNC_LAST_FAIL_MS.get((sync_key, aid))
+                    if ts is not None:
+                        account_fail_times[aid] = ts
+
         targets = []
         skipped = 0
+        backoff_skipped = 0
         for idx, key in enumerate(keys):
             account_id = get_account_id(key)
             rec = accounts.get(account_id) if isinstance(accounts, dict) else None
             q = rec.get('quota') if isinstance(rec, dict) and isinstance(rec.get('quota'), dict) else {}
             last_sync = q.get('lastLiveSyncAtMs')
-            window_expired = any(
-                _is_non_negative_finite(q.get(f)) and q.get(f) > 0 and q.get(f) <= now_ms
+            window_expired = _is_non_negative_finite(last_sync) and any(
+                _is_non_negative_finite(q.get(f))
+                and float(q.get(f)) > float(last_sync)
+                and float(q.get(f)) <= check_now_ms
                 for f in ('rolling5hResetAtMs', 'weeklyResetAtMs', 'monthlyResetAtMs')
             )
-            is_fresh = not force and _is_non_negative_finite(last_sync) and (now_ms - float(last_sync)) < resolved_ttl and not window_expired
+            is_fresh = (
+                not force
+                and _is_non_negative_finite(last_sync)
+                and check_now_ms >= float(last_sync)
+                and (check_now_ms - float(last_sync)) < resolved_ttl
+                and not window_expired
+            )
             if is_fresh:
                 skipped += 1
-            else:
-                targets.append((idx + 1, key, account_id))
+                continue
+            if not force:
+                last_fail = account_fail_times.get(account_id)
+                if _is_non_negative_finite(last_fail) and check_now_ms >= float(last_fail) \
+                        and (check_now_ms - float(last_fail)) < LIVE_SYNC_FAILURE_BACKOFF_MS:
+                    skipped += 1
+                    backoff_skipped += 1
+                    continue
+            targets.append((idx + 1, key, account_id))
+
         if not targets:
-            return {'synced': 0, 'failed': 0, 'skipped': skipped, 'auth_errors': [], 'from_cache': True, 'results': []}
+            res = {'synced': 0, 'failed': 0, 'skipped': skipped, 'auth_errors': [], 'from_cache': True, 'results': []}
+            if backoff_skipped > 0:
+                res['backoff'] = True
+            if inflight is not None:
+                inflight['result'] = res
+            return res
 
         def _worker(item):
             slot, key, account_id = item
             outcome = fetch_opencode_go_account_usage(
-                key, endpoint, proxy_url=proxy_url, timeout_ms=timeout_ms, fetcher=fetcher,
+                key, endpoint, proxy_url=proxy_url, timeout_ms=timeout_ms,
+                fetcher=fetcher, now_ms=(check_now_ms if has_explicit_now else None),
             )
             return slot, account_id, outcome
 
@@ -2294,14 +2539,18 @@ def sync_opencode_go_pool_usage(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_
         with ThreadPoolExecutor(max_workers=max_workers) as pool_exec:
             fetched = list(pool_exec.map(_worker, targets))
 
+        finish_now_ms = check_now_ms if has_explicit_now else int(time.time() * 1000)
         snapshots = {}
         auth_errors = []
         results = []
         failed = 0
+        succeeded_ids = []
+        failed_ids = []
         for slot, account_id, outcome in fetched:
             if outcome.get('ok'):
                 p = outcome['parsed']
                 snapshots[account_id] = p
+                succeeded_ids.append(account_id)
                 results.append({
                     'slot': slot, 'ok': True, 'status_code': 200,
                     'monthly_expiry_beijing': beijing_date_from_ms(p['monthly']['resets_at_ms']),
@@ -2311,24 +2560,40 @@ def sync_opencode_go_pool_usage(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_
                 })
             else:
                 failed += 1
+                failed_ids.append(account_id)
                 if outcome.get('auth_error'):
                     auth_errors.append(slot)
                 if outcome.get('insufficient_balance') and outcome.get('quota'):
                     try:
                         mark_quota_exhausted(
                             {'service_id': identity['service_id'], 'service': identity['service'], 'account_id': account_id},
-                            outcome['quota'], state_file, now_ms=now_ms,
+                            outcome['quota'], state_file, now_ms=finish_now_ms,
                         )
                     except Exception:
                         pass
                 results.append({'slot': slot, 'ok': False, 'status_code': outcome.get('status_code'), 'error': outcome.get('error')})
 
-        synced = apply_live_usage_snapshots(keys, endpoint, snapshots, state_file, now_ms=now_ms)
-        if synced == 0 and failed > 0 and not force:
-            _LIVE_SYNC_LAST_FAIL_MS[sync_key] = now_ms
-        elif synced > 0:
-            _LIVE_SYNC_LAST_FAIL_MS.pop(sync_key, None)
-        return {'synced': synced, 'failed': failed, 'skipped': skipped, 'auth_errors': auth_errors, 'from_cache': False, 'results': results}
+        synced = apply_live_usage_snapshots(keys, endpoint, snapshots, state_file, now_ms=finish_now_ms)
+        with _LIVE_SYNC_LOCK:
+            for aid in succeeded_ids:
+                _LIVE_SYNC_LAST_FAIL_MS.pop((sync_key, aid), None)
+            if not force:
+                for aid in failed_ids:
+                    _LIVE_SYNC_LAST_FAIL_MS[(sync_key, aid)] = finish_now_ms
+        res = {'synced': synced, 'failed': failed, 'skipped': skipped, 'auth_errors': auth_errors, 'from_cache': False, 'results': results}
+        if inflight is not None:
+            inflight['result'] = res
+        return res
+    except BaseException as exc:
+        if inflight is not None:
+            inflight['error'] = exc
+        raise
+    finally:
+        if inflight is not None:
+            with _LIVE_SYNC_LOCK:
+                if _IN_FLIGHT_LIVE_SYNCS.get(sync_key) is inflight:
+                    _IN_FLIGHT_LIVE_SYNCS.pop(sync_key, None)
+            inflight['event'].set()
 
 
 __all__ = [
@@ -2342,6 +2607,8 @@ __all__ = [
     'get_pool_identity', 'select_api_key', 'mark_quota_exhausted', 'record_account_usage',
     'parse_opencode_go_usage_payload', 'apply_live_usage_snapshots',
     'fetch_opencode_go_account_usage', 'sync_opencode_go_pool_usage',
+    'resolve_live_sync_timeout_ms',
+    'redact_usage_sync_error',
     'evaluate_account_quota', 'resolve_monthly_cycle', 'beijing_date_from_ms',
     'classify_opencode_go_quota_response', 'read_state_strict',
 ]

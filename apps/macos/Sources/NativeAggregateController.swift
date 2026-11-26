@@ -163,9 +163,13 @@ struct AggregateReadingAppearance:Equatable {
     private func applyNativeAppearance(){
         view.appearance=readingAppearance.scheme=="dark" ? NSAppearance(named:.darkAqua):readingAppearance.scheme=="light" ? NSAppearance(named:.aqua):nil
         container.updatePalette()
+        let dark=view.effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua
         title.font = .systemFont(ofSize:readingAppearance.font+4,weight:.semibold)
         status.font = .systemFont(ofSize:max(12,readingAppearance.font-5));sourceText.font = .systemFont(ofSize:max(12,readingAppearance.font-4))
-        title.textColor = .labelColor;status.textColor = .secondaryLabelColor;sourceText.textColor = .labelColor;sourceText.backgroundColor = .textBackgroundColor
+        title.textColor = dark ? NSColor(srgbRed:0.922,green:0.941,blue:0.933,alpha:1) : NSColor(srgbRed:0.094,green:0.129,blue:0.125,alpha:1)
+        status.textColor = dark ? NSColor(srgbRed:0.604,green:0.682,blue:0.663,alpha:1) : NSColor(srgbRed:0.337,green:0.388,blue:0.380,alpha:1)
+        sourceText.textColor = title.textColor
+        sourceText.backgroundColor = dark ? NSColor(srgbRed:0.078,green:0.102,blue:0.110,alpha:1) : NSColor(srgbRed:0.984,green:0.980,blue:0.969,alpha:1)
     }
     func updateAppearance(_ value:AggregateReadingAppearance){
         guard !retired,value != readingAppearance else{return};readingAppearance=value;applyNativeAppearance();layout();applyBodyAppearance()

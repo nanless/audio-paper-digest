@@ -106,6 +106,16 @@ class ProjectEnvTest(unittest.TestCase):
             load_project_env(explicit)
             self.assertEqual(os.environ['PD_PUBLISH_RASTER_RECOVERY_FILE'], '')
 
+    def test_verified_python_runtime_bin_survives_load_project_env(self):
+        with project_env_scope(), tempfile.TemporaryDirectory() as tmp:
+            explicit = Path(tmp) / '.env'
+            explicit.write_text('PAPER_ANALYZER_MODEL=inner-model\n', encoding='utf-8')
+            os.environ['PD_PYTHON_RUNTIME_VERIFIED_BIN'] = '/opt/venv/bin/python3'
+            os.environ['PD_UNRELATED_OUTER'] = 'drop-me'
+            load_project_env(explicit)
+            self.assertEqual(os.environ['PD_PYTHON_RUNTIME_VERIFIED_BIN'], '/opt/venv/bin/python3')
+            self.assertNotIn('PD_UNRELATED_OUTER', os.environ)
+
     def test_fresh_process_actual_publication_loader_receives_input_and_still_rejects_invalid_manifest(self):
         # The key is supplied at process creation, before the real shared entry
         # loader imports publish-to-blog.py and calls load_project_env().

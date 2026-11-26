@@ -398,6 +398,18 @@ function validateDailyFetchContinuityCheckpoint(boundary, checkpointBytes) {
     }
     return true;
 }
+function indexBody(bytes) {
+    const text = bytes.toString('utf8');
+    const match = text.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
+    return match ? text.slice(match[0].length) : text;
+}
+function isDeclaredEmptyDailyIndex(bytes, pagePaths) {
+    if (pagePaths.length !== 0) return false;
+    const body = indexBody(bytes);
+    const match = body.match(/共分析 \*\*(\d+)\*\* 篇论文/);
+    if (!match || Number(match[1]) !== 0) return false;
+    return /今日没有新论文|本批没有进入分析的论文/.test(body);
+}
 function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__dirname, '../../data'),
     requirePreviouslyFetched = false, fetchWitnessRecoveryManifest = null, replayBoundary = null } = {}) {
     if (replayBoundary) validateDailyFetchBoundary(replayBoundary);
@@ -413,37 +425,45 @@ function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__
     } catch { throw new Error('缺少可验证的 origin/main 发布基线，或本地 HEAD 不包含该基线'); }
     const paths = git('ls-tree', '-r', '--name-only', head).toString().trim().split('\n');
     const indices = paths.filter(name => /^content\/posts\/\d{4}-\d{2}-\d{2}\.md$/.test(name)).sort().reverse();
-    let indexPath; let indexBytes;
-    for (const name of indices) {
+    let indexPath; let indexBytes; let indexIdx = -1;
+    for (let i = 0; i < indices.length; i++) {
+        const name = indices[i];
         const bytes = git('show', `${head}:${name}`); const metadata = frontmatter(bytes);
         if (metadata.paper_digest_pipeline_owned === true && metadata.paper_digest_page_type === 'index'
-            && metadata.draft === false) { indexPath = name; indexBytes = bytes; break; }
+            && metadata.draft === false) { indexPath = name; indexBytes = bytes; indexIdx = i; break; }
     }
     if (!indexPath) throw new Error('没有合法已提交日更汇总；请先明确初次抓取起始时间，不能自动默认七天');
     const date = indexPath.match(/(\d{4}-\d{2}-\d{2})\.md$/)[1];
     const linked = [...indexBytes.toString().matchAll(/\]\([^\n)]*\/posts\/([^/)]+)\)/g)].map(m => `content/posts/${m[1]}.md`);
     const pagePaths = [...new Set(linked)].filter(name => name.startsWith(`content/posts/${date}-`)).sort();
-    const declaredCount = Number(indexBytes.toString().match(/共分析 \*\*(\d+)\*\* 篇论文/)?.[1]);
-    if (!pagePaths.length || declaredCount !== pagePaths.length) throw new Error('上一日更汇总与独立页面数量不符');
+    const declaredCount = Number(indexBody(indexBytes).match(/共分析 \*\*(\d+)\*\* 篇论文/)?.[1]);
+    const isEmptyDailyIndex = isDeclaredEmptyDailyIndex(indexBytes, pagePaths);
+    if (pagePaths.length ? declaredCount !== pagePaths.length : !isEmptyDailyIndex) {
+        throw new Error('上一日更汇总与独立页面数量不符');
+    }
     const digestDateLimit = new Date(Date.parse(until) + 8 * 3600000).toISOString().slice(0, 10);
     if (!validDate(date) || frontmatter(indexBytes).date !== date || date > digestDateLimit) throw new Error('日更汇总日期无效或晚于抓取结束日期');
-    const papers = pagePaths.map(name => {
-        const bytes = git('show', `${head}:${name}`); const text = bytes.toString();
-        const metadata = frontmatter(bytes);
-        const id = normalizedId(metadata.paper_digest_arxiv_id);
-        if (!/^\d{4}\.\d{4,5}$/.test(id) || metadata.paper_digest_pipeline_owned !== true || metadata.paper_digest_page_type !== 'paper'
-            || metadata.draft !== false || metadata.date !== date) throw new Error(`日更独立页身份不完整：${name}`);
-        const sidecars = metadata.paper_digest_sidecars || {};
-        const legacyCitationPath = `static/data/papers/${date}/${id.replace('.', '-')}/citation.json`;
-        const citationPath = paths.includes(legacyCitationPath) ? legacyCitationPath
-            : `static/client/papers/${date}/${id.replace('.', '-')}/citation.json`;
-        const citationBytes = git('show', `${head}:${citationPath}`); const citation = JSON.parse(citationBytes);
-        if (normalizedId(citation.arxivId) !== id || sidecars['citation.json']?.sha256 !== hash(citationBytes)) throw new Error(`日更引用元数据不符：${name}`);
-        const month = Number(id.slice(2, 4)); if (month < 1 || month > 12) throw new Error('论文编号月份无效');
-        return { arxivId: id, path: name, sha256: hash(bytes), citationPath, citationSha256: hash(citationBytes),
-            conservativeSubmissionMonthStart: `20${id.slice(0, 2)}-${id.slice(2, 4)}-01T00:00:00.000Z` };
-    });
-    if (new Set(papers.map(p => p.arxivId)).size !== papers.length) throw new Error('上一日更论文身份重复');
+    const loadDigestPapers = (targetDate, targetPagePaths) => {
+        const loaded = targetPagePaths.map(name => {
+            const bytes = git('show', `${head}:${name}`);
+            const metadata = frontmatter(bytes);
+            const id = normalizedId(metadata.paper_digest_arxiv_id);
+            if (!/^\d{4}\.\d{4,5}$/.test(id) || metadata.paper_digest_pipeline_owned !== true || metadata.paper_digest_page_type !== 'paper'
+                || metadata.draft !== false || metadata.date !== targetDate) throw new Error(`日更独立页身份不完整：${name}`);
+            const sidecars = metadata.paper_digest_sidecars || {};
+            const legacyCitationPath = `static/data/papers/${targetDate}/${id.replace('.', '-')}/citation.json`;
+            const citationPath = paths.includes(legacyCitationPath) ? legacyCitationPath
+                : `static/client/papers/${targetDate}/${id.replace('.', '-')}/citation.json`;
+            const citationBytes = git('show', `${head}:${citationPath}`); const citation = JSON.parse(citationBytes);
+            if (normalizedId(citation.arxivId) !== id || sidecars['citation.json']?.sha256 !== hash(citationBytes)) throw new Error(`日更引用元数据不符：${name}`);
+            const month = Number(id.slice(2, 4)); if (month < 1 || month > 12) throw new Error('论文编号月份无效');
+            return { arxivId: id, path: name, sha256: hash(bytes), citationPath, citationSha256: hash(citationBytes),
+                conservativeSubmissionMonthStart: `20${id.slice(0, 2)}-${id.slice(2, 4)}-01T00:00:00.000Z` };
+        });
+        if (new Set(loaded.map(p => p.arxivId)).size !== loaded.length) throw new Error('上一日更论文身份重复');
+        return loaded;
+    };
+    const papers = loadDigestPapers(date, pagePaths);
     if (fetchWitnessRecoveryManifest !== null) {
         if (!requirePreviouslyFetched) throw new Error('显式旧获取见证恢复必须同时要求实际遇到旧见证');
         return require('./daily-fetch-witness-recovery').resolveBoundary({ blogRepo, dataRoot, until,
@@ -459,7 +479,39 @@ function resolveDailyFetchBoundary(blogRepo, { until, dataRoot = path.resolve(__
         : null;
     const continuity = requirePreviouslyFetched ? deriveContinuity(prior, date, replayBoundary?.continuity
         ? readHeader(replayBoundary.continuity, CONTINUITY_CONTRACT) : undefined, replayCategories) : null;
-    const since = continuity ? overlapStart(continuity) : prior ? prior.until : papers.map(p => p.conservativeSubmissionMonthStart).sort()[0];
+    let fallbackSince = null;
+    if (!continuity && !prior) {
+        if (papers.length > 0) {
+            fallbackSince = papers.map(p => p.conservativeSubmissionMonthStart).sort()[0];
+        } else {
+            for (const earlierName of indices.slice(indexIdx + 1)) {
+                const earlierBytes = git('show', `${head}:${earlierName}`);
+                const earlierMeta = frontmatter(earlierBytes);
+                if (earlierMeta.paper_digest_pipeline_owned !== true
+                    || earlierMeta.paper_digest_page_type !== 'index'
+                    || earlierMeta.draft !== false) continue;
+                const earlierDate = earlierName.match(/(\d{4}-\d{2}-\d{2})\.md$/)[1];
+                const earlierLinked = [...earlierBytes.toString().matchAll(/\]\([^\n)]*\/posts\/([^/)]+)\)/g)].map(m => `content/posts/${m[1]}.md`);
+                const earlierPagePaths = [...new Set(earlierLinked)].filter(name => name.startsWith(`content/posts/${earlierDate}-`)).sort();
+                const earlierDeclaredCount = Number(indexBody(earlierBytes).match(/共分析 \*\*(\d+)\*\* 篇论文/)?.[1]);
+                const earlierIsEmpty = isDeclaredEmptyDailyIndex(earlierBytes, earlierPagePaths);
+                if (earlierPagePaths.length ? earlierDeclaredCount !== earlierPagePaths.length : !earlierIsEmpty) {
+                    throw new Error('上一日更汇总与独立页面数量不符');
+                }
+                if (!validDate(earlierDate) || earlierMeta.date !== earlierDate || earlierDate > digestDateLimit) {
+                    throw new Error('日更汇总日期无效或晚于抓取结束日期');
+                }
+                if (!earlierPagePaths.length) continue;
+                const earlierPapers = loadDigestPapers(earlierDate, earlierPagePaths);
+                fallbackSince = earlierPapers.map(p => p.conservativeSubmissionMonthStart).sort()[0];
+                break;
+            }
+            if (!fallbackSince) {
+                throw new Error('上一已发布日更为零论文空批次且缺少完整 v7 抓取证明，且未找到更早的非空已发布日更以推导保守起始月');
+            }
+        }
+    }
+    const since = continuity ? overlapStart(continuity) : prior ? prior.until : fallbackSince;
     const body = { ...header, lastDigestDate: date, since, until,
         ...(continuity ? { continuity } : {}),
         provenance: { blogHead: head, indexPath, indexSha256: hash(indexBytes), papers,
@@ -503,7 +555,7 @@ function readCommittedPublishedPaperIds(blogRepo) {
             if (!Number.isFinite(size) || size < 0) break;
             const bytes = raw.subarray(offset, offset + size);
             offset += size + 1; // trailing LF
-            const block = bytes.toString('utf8').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] || '';
+            const block = (bytes.toString('utf8').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] || '').replace(/\r\n/g, '\n');
             if (!/^paper_digest_pipeline_owned:\s*true(?:\s*#.*)?$/m.test(block)
                 || !/^paper_digest_page_type:\s*(?:paper|"paper"|'paper')(?:\s*#.*)?$/m.test(block)
                 || !/^paper_digest_arxiv_id:/m.test(block)) { skippedLegacyPages++; continue; }
@@ -537,7 +589,9 @@ function readPublishedDigest(blogRepo, date, head = null) {
         || meta.paper_digest_page_type !== 'index' || meta.draft !== false) throw new Error('已发布来源汇总身份非法');
     const pagePaths = [...new Set([...indexBytes.toString().matchAll(/\]\([^\n)]*\/posts\/([^/)]+)\)/g)]
         .map(m => `content/posts/${m[1]}.md`))].filter(name => name.startsWith(`content/posts/${date}-`)).sort();
-    if (!pagePaths.length || Number(indexBytes.toString().match(/共分析 \*\*(\d+)\*\* 篇论文/)?.[1]) !== pagePaths.length) {
+    const declaredCount = Number(indexBody(indexBytes).match(/共分析 \*\*(\d+)\*\* 篇论文/)?.[1]);
+    const isEmptyDailyIndex = isDeclaredEmptyDailyIndex(indexBytes, pagePaths);
+    if (pagePaths.length ? declaredCount !== pagePaths.length : !isEmptyDailyIndex) {
         throw new Error('已发布来源汇总与论文集合不一致');
     }
     const papers = pagePaths.map(name => {

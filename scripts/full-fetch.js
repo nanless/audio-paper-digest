@@ -2633,6 +2633,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     if (fs.existsSync(outputFile) && existingPapers.length > 0) {
         const backupName = `deep-analysis-result-${getBeijingCompactTimestamp()}.bak.json`;
         const backupPath = path.join(ARCHIVE_DIR, backupName);
+        fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
         fs.copyFileSync(outputFile, backupPath);
         console.log(`  已备份: ${backupName}`);
 

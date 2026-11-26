@@ -14,6 +14,7 @@ import com.nanless.paperdigest.secret.SecretStore
 import com.nanless.paperdigest.secret.SecretVault
 import com.nanless.paperdigest.ui.*
 import com.nanless.paperdigest.zotero.*
+import com.nanless.paperdigest.zotero.webdav.ZoteroDavFailure
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -778,8 +779,13 @@ class RootController private constructor(
                             val force = payload.optBoolean("refresh", false)
                             val silent = payload.optBoolean("silent", false)
                             if (silent) {
-                                runCatching { podcastCoordinator.fetchFeed(forceRefresh = force, silent = true) }
-                                    .getOrElse { _state.value.podcast.json() }
+                                try {
+                                    podcastCoordinator.fetchFeed(forceRefresh = force, silent = true)
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (_: Exception) {
+                                    _state.value.podcast.json()
+                                }
                             } else {
                                 podcastCoordinator.fetchFeed(forceRefresh = force, silent = false)
                             }
@@ -1122,7 +1128,7 @@ class RootController private constructor(
         } catch (error: Exception) {
             refresh()
             val message = when (error) {
-                is AppFailure, is CloudFailure, is IllegalArgumentException, is IllegalStateException -> error.message ?: "操作未完成"
+                is AppFailure, is CloudFailure, is ZoteroDavFailure, is IllegalArgumentException, is IllegalStateException -> error.message ?: "操作未完成"
                 else -> "操作未完成，原资料已保留；请检查连接、权限或所选文件"
             }
             _state.update { it.copy(error = message) }

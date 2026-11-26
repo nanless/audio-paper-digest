@@ -559,3 +559,215 @@ test('缺清单时先于 --wait 快速失败；会议专题汇总标题放行；
     assert.strictEqual(partialCode, 1);
     assert.match(out.join('\n'), /不完整|partial|--deploy/);
 });
+
+test('F3 安全与稳定性：readEnv 只读防污染、gh 环境白名单与仓库校验、DNS IP 绑定防 SSRF、OID 小写、旧站点标题剥离与瞬时退避', async t => {
+    const dir = tempDir(t);
+
+    // 1) readEnv uses readEnvFileReadOnly: fails closed on symlink and does NOT pollute process.env
+    const realEnv = path.join(dir, 'real.env');
+    fs.writeFileSync(realEnv, 'PAPER_ANALYZER_API_KEY=sk-must-not-pollute-env\nPAPER_DIGEST_BLOG_URL=https://blog.example.com/posts\n');
+    const symEnv = path.join(dir, 'sym.env');
+    fs.symlinkSync(realEnv, symEnv);
+    assert.throws(() => verifyWeb.readEnv(symEnv), /符号链接|普通文件/);
+    const beforeKey = process.env.PAPER_ANALYZER_API_KEY;
+    const parsedEnv = verifyWeb.readEnv(realEnv);
+    assert.strictEqual(parsedEnv.PAPER_DIGEST_BLOG_URL, 'https://blog.example.com/posts');
+    assert.strictEqual(process.env.PAPER_ANALYZER_API_KEY, beforeKey);
+
+    // 2) gh child env strips PAPER_* / PD_* and preserves PATH / HOME / GH_TOKEN / HTTPS_PROXY; invalid repo rejected
+    let capturedGhOpts = null;
+    const prevPaperKey = process.env.PAPER_ANALYZER_API_KEY;
+    const prevPdFlag = process.env.PD_SECRET_TEST;
+    process.env.PAPER_ANALYZER_API_KEY = 'sk-secret-leak-check';
+    process.env.PD_SECRET_TEST = 'pd-secret-leak-check';
+    try {
+        verifyWeb.deployStatus(OID, {
+            repository: 'nanless/audio-research-portal',
+            env: {
+                GH_TOKEN: 'ghp_allowed_token',
+                HTTPS_PROXY: 'http://127.0.0.1:7897',
+                PAPER_ANALYZER_API_KEY: 'sk-also-blocked',
+                PD_INTERNAL_SECRET: 'pd-also-blocked'
+            },
+            spawnSync: (_cmd, _args, opts) => {
+                capturedGhOpts = opts;
+                return { status: 0, stdout: '[]' };
+            }
+        });
+    } finally {
+        if (prevPaperKey === undefined) delete process.env.PAPER_ANALYZER_API_KEY;
+        else process.env.PAPER_ANALYZER_API_KEY = prevPaperKey;
+        if (prevPdFlag === undefined) delete process.env.PD_SECRET_TEST;
+        else process.env.PD_SECRET_TEST = prevPdFlag;
+    }
+    assert.ok(capturedGhOpts && capturedGhOpts.env);
+    assert.strictEqual(capturedGhOpts.env.GH_TOKEN, 'ghp_allowed_token');
+    assert.strictEqual(capturedGhOpts.env.HTTPS_PROXY, 'http://127.0.0.1:7897');
+    assert.strictEqual(capturedGhOpts.env.PAPER_ANALYZER_API_KEY, undefined);
+    assert.strictEqual(capturedGhOpts.env.PD_SECRET_TEST, undefined);
+    assert.strictEqual(capturedGhOpts.env.PD_INTERNAL_SECRET, undefined);
+    assert.throws(() => verifyWeb.deployStatus(OID, { repository: 'owner/repo/../../evil', spawnSync: () => { throw new Error('must not run'); } }), /非法 GitHub 仓库/);
+    assert.throws(() => verifyWeb.verifyWorkflowSource(OID, { repository: '--flag/repo', spawnSync: () => { throw new Error('must not run'); } }), /非法 GitHub 仓库/);
+
+    // 3) parseVerifyArgs normalizes --deploy OID to lowercase
+    assert.strictEqual(verifyWeb.parseVerifyArgs(['--date', DATE, '--deploy', 'A'.repeat(40)]).deploy, 'a'.repeat(40));
+
+    // 4) Legacy site title marker alone (with | or -) fails single-paper titleOk check
+    writeManifest(dir, DATE, [`${DATE}-single`]);
+    const legacyOnly = await verifyWeb.verify(DATE, {
+        currentDir: dir,
+        noWrite: true,
+        env: { PAPER_DIGEST_BLOG_URL: 'https://example.com/posts' },
+        fetchImpl: async () => ({ status: 200, text: async () => '<title> | 语音/音乐/音频论文速递 - </title>' })
+    });
+    assert.strictEqual(legacyOnly.results[0].titleOk, false);
+    assert.strictEqual(legacyOnly.ok, 0);
+
+    // 5) waitForDeploy retries transient !deploy.available errors, breaks immediately on permanent missing gh / auth error
+    let transientAttempts = 0;
+    const transientWait = await verifyWeb.waitForDeploy(OID, {
+        spawnSync: (_cmd, args) => {
+            if (args.includes('view')) {
+                return { status: 0, stdout: JSON.stringify({ jobs: [{ name: 'deploy', conclusion: 'success' }] }) };
+            }
+            transientAttempts += 1;
+            if (transientAttempts === 1) {
+                return { status: 1, stdout: '', stderr: 'error connecting to api.github.com: i/o timeout' };
+            }
+            return {
+                status: 0,
+                stdout: JSON.stringify([{ headSha: OID, status: 'completed', conclusion: 'success', workflowName: 'pages', event: 'push', databaseId: 9 }])
+            };
+        },
+        sleep: async () => {},
+        pollIntervalMs: 1,
+        waitSeconds: 5
+    });
+    assert.strictEqual(transientAttempts, 2);
+    assert.strictEqual(transientWait.deploy.conclusion, 'success');
+
+    let permanentAttempts = 0;
+    const permanentWait = await verifyWeb.waitForDeploy(OID, {
+        spawnSync: () => {
+            permanentAttempts += 1;
+            return { status: 1, stdout: '', stderr: 'You are not logged into any GitHub hosts. Run gh auth login' };
+        },
+        sleep: async () => {},
+        pollIntervalMs: 1,
+        waitSeconds: 5
+    });
+    assert.strictEqual(permanentAttempts, 1);
+    assert.strictEqual(permanentWait.deploy.available, false);
+
+    // 6) fetchPage DNS validation + IP pinning on every hop blocks private IP & DNS-rebinding redirect
+    const EventEmitter = require('node:events');
+    let reqCalls = 0;
+    await assert.rejects(
+        verifyWeb.fetchPage('https://rebind.example.com/posts/', {
+            env: {},
+            lookupImpl: async () => [{ address: '169.254.169.254', family: 4 }],
+            httpsRequestImpl: () => { reqCalls += 1; throw new Error('must not dial private IP'); }
+        }),
+        /非公网 IP/
+    );
+    assert.strictEqual(reqCalls, 0);
+
+    // Redirect hop 1 (public IP) -> hop 2 (resolves to 127.0.0.1) rejected before dialing hop 2
+    let pinnedReqOpts = null;
+    const fakeHttps = (reqOpts, cb) => {
+        reqCalls += 1;
+        pinnedReqOpts = reqOpts;
+        const req = new EventEmitter();
+        req.destroyed = false;
+        req.destroy = () => { req.destroyed = true; };
+        req.end = () => {
+            const res = new EventEmitter();
+            res.statusCode = 302;
+            res.headers = { location: 'https://internal.example.com/secret' };
+            res.resume = () => {};
+            res.destroy = () => {};
+            cb(res);
+        };
+        return req;
+    };
+    await assert.rejects(
+        verifyWeb.fetchPage('https://public.example.com/posts/', {
+            env: {},
+            lookupImpl: async host => (
+                host === 'public.example.com'
+                    ? [{ address: '93.184.216.34', family: 4 }]
+                    : [{ address: '127.0.0.1', family: 4 }]
+            ),
+            httpsRequestImpl: fakeHttps
+        }),
+        /非公网 IP/
+    );
+    assert.strictEqual(reqCalls, 1);
+    assert.strictEqual(pinnedReqOpts.servername, 'public.example.com');
+    await new Promise((resolve, reject) => {
+        pinnedReqOpts.lookup('public.example.com', { all: false }, (err, addr, fam) => {
+            if (err) return reject(err);
+            assert.strictEqual(addr, '93.184.216.34');
+            assert.strictEqual(fam, 4);
+            resolve();
+        });
+    });
+});
+
+test('verify() 读取 .env 后将 env 代理配置透传给 fetchPage()', async t => {
+    const EventEmitter = require('node:events');
+    const doctor = require('../scripts/doctor.js');
+    const dir = tempDir(t);
+    writeManifest(dir, DATE, [DATE]);
+    const proxyKeys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'];
+    const savedEnv = Object.fromEntries(proxyKeys.map(key => [key, process.env[key]]));
+    for (const key of proxyKeys) delete process.env[key];
+    t.after(() => {
+        for (const key of proxyKeys) {
+            if (savedEnv[key] === undefined) delete process.env[key];
+            else process.env[key] = savedEnv[key];
+        }
+    });
+    t.mock.method(doctor, 'readEnvFileReadOnly', () => ({
+        exists: true,
+        entries: {
+            PAPER_DIGEST_BLOG_URL: 'https://public.example.com/posts',
+            HTTPS_PROXY: 'http://127.0.0.1:18080'
+        }
+    }));
+    const proxyCalls = [];
+    const summary = await verifyWeb.verify(DATE, {
+        currentDir: dir,
+        noWrite: true,
+        lookupImpl: async () => [{ address: '93.184.216.34', family: 4 }],
+        createProxyAgentImpl: (proxyUrl, address, port, hostname) => {
+            proxyCalls.push({ proxyUrl, address, port, hostname });
+            return { destroy() {} };
+        },
+        httpsRequestImpl: (_reqOpts, cb) => {
+            const req = new EventEmitter();
+            req.destroyed = false;
+            req.destroy = () => { req.destroyed = true; };
+            req.end = () => {
+                const res = new EventEmitter();
+                res.statusCode = 200;
+                res.headers = {};
+                res.resume = () => {};
+                res.destroy = () => {};
+                cb(res);
+                res.emit('data', Buffer.from(`<html><title>${DATE} | 音频研究门户</title></html>`));
+                res.emit('end');
+            };
+            return req;
+        }
+    });
+    assert.strictEqual(summary.ok, 1);
+    assert.strictEqual(summary.failed, 0);
+    assert.strictEqual(proxyCalls.length, 1);
+    assert.deepStrictEqual(proxyCalls[0], {
+        proxyUrl: 'http://127.0.0.1:18080',
+        address: '93.184.216.34',
+        port: 443,
+        hostname: 'public.example.com'
+    });
+});

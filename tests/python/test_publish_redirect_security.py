@@ -116,6 +116,7 @@ class Fixture:
                 HTTPHandler=urllib.request.HTTPHandler,
                 HTTPSHandler=urllib.request.HTTPSHandler,
                 ProxyHandler=urllib.request.ProxyHandler, Request=urllib.request.Request,
+                OpenerDirector=urllib.request.OpenerDirector,
                 build_opener=build_opener)),
             'http': types.SimpleNamespace(client=http.client), 'socket': socket,
             'os': types.SimpleNamespace(environ={
@@ -138,6 +139,7 @@ class Fixture:
                 'model': model, 'messages': [{'role': 'user', 'content': prompt}]},
             '_publish_llm_requires_proxy': lambda endpoint, model: model.startswith('muse-spark-'),
             'get_required_fetch_proxy': self.proxy_lookup,
+            'resolve_http_connect_proxy_url': lambda env=None: (self.proxy_lookup() if proxy else None),
             'with_llm_usage_context': lambda *args: contextlib.nullcontext(),
             'begin_pending_llm_request': lambda **kwargs: {'eventId': 'synthetic-event-' + str(len(self.events))},
             'record_llm_usage': lambda **kwargs: self.events.append(kwargs),

@@ -698,6 +698,26 @@ class FileLockHeartbeatProcessRaceTest(unittest.TestCase):
                 parent.close()
                 child.close()
 
+    def test_lock_create_writes_boot_time_and_pid_start_time_for_reclaim(self):
+        import path_config
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / 'boot-pid-check.lock'
+            with mock.patch('blog_repository_lock._boot_time_seconds', return_value=1700000000), \
+                    mock.patch('blog_repository_lock._pid_start_time', return_value='Mon Nov 26 10:00:00 2026'):
+                snapshot = path_config._lock_create(lock_path, 600)
+            record = snapshot['owner']['record']
+            self.assertEqual(record.get('bootTime'), 1700000000)
+            self.assertEqual(record.get('pidStartTime'), 'Mon Nov 26 10:00:00 2026')
+            # 重启后 bootTime 变化时即使同 PID 存活也可判定可回收。
+            with mock.patch('blog_repository_lock._boot_time_seconds', return_value=1700000100), \
+                    mock.patch('blog_repository_lock._pid_start_time', return_value='Mon Nov 26 10:00:00 2026'):
+                self.assertTrue(path_config._lock_snapshot_reclaimable(snapshot, 600))
+            # 同次开机但 PID 被复用（pidStartTime 变化）时也可判定可回收。
+            with mock.patch('blog_repository_lock._boot_time_seconds', return_value=1700000000), \
+                    mock.patch('blog_repository_lock._pid_start_time', return_value='Mon Nov 26 11:00:00 2026'):
+                self.assertTrue(path_config._lock_snapshot_reclaimable(snapshot, 600))
+            self.assertTrue(path_config._lock_remove(snapshot))
+
 
 if __name__ == '__main__':
     unittest.main()

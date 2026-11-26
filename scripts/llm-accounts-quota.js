@@ -133,6 +133,7 @@ function parseArgs(argv) {
         file: null,
         patch: {}
     };
+    let explicitLive = false;
 
     for (let i = startIndex; i < args.length; i += 1) {
         const flag = args[i];
@@ -140,6 +141,7 @@ function parseArgs(argv) {
             opts.json = true;
         } else if (flag === '--live') {
             opts.live = true;
+            explicitLive = true;
         } else if (flag === '--state') {
             opts.stateFile = path.resolve(readOptionValue(args, i, '--state'));
             i += 1;
@@ -187,6 +189,10 @@ function parseArgs(argv) {
         } else {
             throw new QuotaCliUsageError(`未知参数：${flag}`);
         }
+    }
+
+    if (explicitLive && command !== 'status' && command !== 'sync') {
+        throw new QuotaCliUsageError(`--live 只能用于 status 或 sync 子命令，不能与 ${command} 同时使用`);
     }
 
     if (command === 'set') {
@@ -251,53 +257,37 @@ function resolveRoutePool(env, route) {
 }
 
 function readStateReadOnly(stateFile) {
-    let stat;
     try {
-        stat = fs.lstatSync(stateFile);
+        fs.lstatSync(stateFile);
     } catch (error) {
         if (error && error.code === 'ENOENT') return { state: null, present: false };
         throw new Error('账号池状态文件无法访问');
     }
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-        throw new Error('账号池状态路径必须是普通文件，禁止使用 symlink 或特殊节点');
-    }
-    let state;
     try {
-        state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    } catch (_) {
-        throw new Error('账号池状态文件 JSON 损坏或不可读');
+        const state = pool.readStateStrict(stateFile);
+        return { state, present: true };
+    } catch (error) {
+        if (error && error.code === 'ENOENT') return { state: null, present: false };
+        throw error;
     }
-    if (!pool.hasAccountPoolHeader(state) || !state.services || typeof state.services !== 'object' || Array.isArray(state.services)) {
-        throw new Error('账号池状态文件 schema 非法');
-    }
-    for (const service of Object.values(state.services)) {
-        if (!service || typeof service !== 'object' || Array.isArray(service)
-            || !service.accounts || typeof service.accounts !== 'object' || Array.isArray(service.accounts)
-            || !service.groups || typeof service.groups !== 'object' || Array.isArray(service.groups)) {
-            throw new Error('账号池状态文件 service 记录非法');
-        }
-        for (const record of Object.values(service.accounts)) {
-            if (!record || typeof record !== 'object' || Array.isArray(record)) {
-                throw new Error('账号池状态文件 account 记录非法');
-            }
-            pool.validateAccountSubrecords(record, stateFile);
-        }
-    }
-    return { state, present: true };
 }
 
 function normalizeImportPatch(entry, index, totalAccounts) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
         throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项不是 JSON 对象`);
     }
-    const account = Number(entry.account ?? entry.slot);
-    if (!Number.isInteger(account) || account < 1 || account > totalAccounts) {
-        throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项的 account 超出范围（应为 1..${totalAccounts}）`);
+    const rawAccount = entry.account !== undefined ? entry.account : entry.slot;
+    if (typeof rawAccount !== 'number' || !Number.isInteger(rawAccount) || rawAccount < 1 || rawAccount > totalAccounts) {
+        throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项的 account 超出范围（应为 1..${totalAccounts} 的整数）`);
     }
+    const account = rawAccount;
     const patch = {};
     if (entry.label !== undefined) {
+        if (entry.label !== null && typeof entry.label !== 'string') {
+            throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 label 必须为字符串或 null`);
+        }
         if (entry.label !== null && entry.label !== '') {
-            const label = String(entry.label).trim();
+            const label = entry.label.trim();
             if (!/^[A-Za-z0-9\u4e00-\u9fff._-]{1,40}$/.test(label) || /^sk-/i.test(label) || /^[a-f0-9]{32,}$/i.test(label)) {
                 throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 label 非法（仅允许 1-40 位字母/数字/中文/._-，且不能类似密钥）`);
             }
@@ -305,68 +295,65 @@ function normalizeImportPatch(entry, index, totalAccounts) {
         patch.label = entry.label;
     }
     if (entry.monthlyExpiry !== undefined) {
-        const raw = String(entry.monthlyExpiry ?? '').trim();
-        if (raw) {
-            const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-            if (dateMatch) {
-                const y = Number(dateMatch[1]), m = Number(dateMatch[2]), d = Number(dateMatch[3]);
-                const probe = new Date(Date.UTC(y, m - 1, d));
-                if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== m - 1 || probe.getUTCDate() !== d) {
-                    throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 monthlyExpiry 日期不存在`);
-                }
-            } else if (!Number.isFinite(Date.parse(raw))) {
-                throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 monthlyExpiry 格式非法`);
-            }
-            patch.monthlyExpiry = raw;
+        if (typeof entry.monthlyExpiry !== 'string' || !entry.monthlyExpiry.trim()) {
+            throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 monthlyExpiry 必须为非空日期字符串`);
         }
+        const raw = entry.monthlyExpiry.trim();
+        try {
+            pool.parseMonthlyExpiryInput(raw);
+        } catch (error) {
+            throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 monthlyExpiry 非法：${error.message}`);
+        }
+        patch.monthlyExpiry = raw;
     }
     const resetDay = entry.monthlyResetDay !== undefined ? entry.monthlyResetDay : entry.monthlyDay;
     if (resetDay !== undefined) {
-        const day = Number(resetDay);
-        if (!Number.isInteger(day) || day < 1 || day > 31) {
+        if (typeof resetDay !== 'number' || !Number.isInteger(resetDay) || resetDay < 1 || resetDay > 31) {
             throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 monthlyResetDay 必须为 1-31 整数`);
         }
-        patch.monthlyResetDay = day;
+        patch.monthlyResetDay = resetDay;
     }
     if (entry.monthlyBudgetUsd !== undefined) {
-        const budget = Number(entry.monthlyBudgetUsd);
-        if (!Number.isFinite(budget) || budget <= 0) {
+        const budget = entry.monthlyBudgetUsd;
+        if (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0) {
             throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 monthlyBudgetUsd 必须为正数`);
         }
         patch.monthlyBudgetUsd = budget;
     }
     const monthlyPct = entry.monthlyRemainingPct !== undefined ? entry.monthlyRemainingPct : entry.monthlyRemaining;
     if (monthlyPct !== undefined) {
-        const pct = Number(monthlyPct);
-        if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        if (typeof monthlyPct !== 'number' || !Number.isFinite(monthlyPct) || monthlyPct < 0 || monthlyPct > 100) {
             throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 monthlyRemainingPct 必须在 0-100 之间`);
         }
-        patch.monthlyRemainingPct = pct;
+        patch.monthlyRemainingPct = monthlyPct;
     }
     if (entry.monthlyRemainingUsd !== undefined) {
-        const usd = Number(entry.monthlyRemainingUsd);
-        if (!Number.isFinite(usd) || usd < 0) {
+        const usd = entry.monthlyRemainingUsd;
+        if (typeof usd !== 'number' || !Number.isFinite(usd) || usd < 0) {
             throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 monthlyRemainingUsd 不能为负数`);
         }
         patch.monthlyRemainingUsd = usd;
     }
     const weeklyPct = entry.weeklyRemainingPct !== undefined ? entry.weeklyRemainingPct : entry.weeklyRemaining;
     if (weeklyPct !== undefined) {
-        const pct = Number(weeklyPct);
-        if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        if (typeof weeklyPct !== 'number' || !Number.isFinite(weeklyPct) || weeklyPct < 0 || weeklyPct > 100) {
             throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 weeklyRemainingPct 必须在 0-100 之间`);
         }
-        patch.weeklyRemainingPct = pct;
+        patch.weeklyRemainingPct = weeklyPct;
     }
     const rolling5hPct = entry.rolling5hRemainingPct !== undefined ? entry.rolling5hRemainingPct : entry['5hRemaining'];
     if (rolling5hPct !== undefined) {
-        const pct = Number(rolling5hPct);
-        if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        if (typeof rolling5hPct !== 'number' || !Number.isFinite(rolling5hPct) || rolling5hPct < 0 || rolling5hPct > 100) {
             throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 rolling5hRemainingPct 必须在 0-100 之间`);
         }
-        patch.rolling5hRemainingPct = pct;
+        patch.rolling5hRemainingPct = rolling5hPct;
     }
-    if (entry.clearCooldown === true) patch.clearCooldown = true;
+    if (entry.clearCooldown !== undefined) {
+        if (typeof entry.clearCooldown !== 'boolean') {
+            throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项 clearCooldown 必须为布尔值`);
+        }
+        if (entry.clearCooldown === true) patch.clearCooldown = true;
+    }
     if (Object.keys(patch).length === 0) {
         throw new QuotaCliUsageError(`导入文件第 ${index + 1} 项未提供任何可更新的额度或到期字段`);
     }
@@ -544,11 +531,10 @@ async function runSyncCommand(opts, env, options = {}) {
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
     const resolved = resolveRoutePool(env, opts.route);
     const strategy = env.PD_LLM_ACCOUNT_POOL_STRATEGY;
-    const proxyUrl = env.HTTPS_PROXY || env.HTTP_PROXY || env.https_proxy || env.http_proxy || '';
     const syncResult = await pool.syncOpenCodeGoPoolUsage(resolved.keys, resolved.endpoint, opts.stateFile, {
         force: true,
         nowMs,
-        proxyUrl,
+        env,
         ...(typeof options.fetcher === 'function' ? { fetcher: options.fetcher } : {})
     });
     const { state } = readStateReadOnly(opts.stateFile);

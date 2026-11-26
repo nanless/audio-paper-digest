@@ -382,7 +382,7 @@ extension LibraryService {
             } else { resources.append(.init(sourceURL: source, kind: "image", missingReason: "原图片地址不受本入口支持，未下载或隐藏缺项")) }
         }
         for node in try body.nodes(forXPath: ".//img") { (node as? XMLElement)?.removeAttribute(forName: "src") }
-        try PublishedAggregateReader.require(resources.count <= 128, "汇总图片数量超过本入口上限")
+        try PublishedAggregateReader.require(resources.count <= 512, "汇总图片数量超过本入口上限")
         let plain = try articlePlainText(body)
         try PublishedAggregateReader.require(!plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "汇总没有连续可读正文")
         let html = (body.children ?? []).map { $0.xmlString(options: [.nodePreserveWhitespace]) }.joined()
@@ -499,7 +499,7 @@ extension LibraryService {
             guard let element = n as? XMLElement, let source = element.attribute(forName: "src")?.stringValue else { return nil }
             return Resource(sourceURL: source, kind: "image", localPath: nil, sha256: nil, missingReason: nil)
         }
-        guard images.count <= 32 else { throw ServiceError.invalid("单篇图片超过32张，未开始批量下载。") }
+        guard images.count <= 64 else { throw ServiceError.invalid("单篇图片超过64张，未开始批量下载。") }
         let html = (body.children ?? []).map { $0.xmlString(options: [.nodePreserveWhitespace]) }.joined()
         return presentSourceWarning(Article(paperID: paper.id, html: html, markdown: nil, plainText: try articlePlainText(body), citation: citation,
                        resources: images, sourceURL: paper.sourceURL ?? paper.blogURL, pdfURL: paper.pdfURL, sourceVersion: paper.sourceVersion,
@@ -508,7 +508,7 @@ extension LibraryService {
     }
 
     static func sanitize(_ root: XMLElement, pageURL: URL) throws {
-        let allowed: Set<String> = ["div", "p", "span", "a", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "img", "figure", "figcaption", "strong", "b", "em", "i", "u", "s", "sup", "sub", "br", "hr", "details", "summary", "dl", "dt", "dd", "math", "mrow", "mi", "mo", "mn", "msup", "msub", "msubsup", "mfrac", "msqrt", "mroot", "mtext", "mtable", "mtr", "mtd", "mover", "munder", "munderover", "semantics", "annotation"]
+        let allowed: Set<String> = ["div", "p", "span", "a", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "img", "figure", "figcaption", "strong", "b", "em", "i", "u", "s", "del", "ins", "small", "kbd", "abbr", "cite", "sup", "sub", "br", "hr", "details", "summary", "dl", "dt", "dd", "math", "mrow", "mi", "mo", "mn", "msup", "msub", "msubsup", "mfrac", "msqrt", "mroot", "mtext", "mtable", "mtr", "mtd", "mover", "munder", "munderover", "semantics", "annotation"]
         let attributes: Set<String> = ["id", "class", "title", "alt", "width", "height", "colspan", "rowspan", "scope", "display", "mathvariant", "xmlns", "encoding"]
         for child in root.children ?? [] {
             guard let element = child as? XMLElement else { if child.kind != .text { child.detach() }; continue }
@@ -538,6 +538,13 @@ extension LibraryService {
                     element.removeAttribute(forName: attr.name ?? "")
                 } else if name == "open" && tag == "details" {
                     continue
+                } else if (name == "start" && tag == "ol") || (name == "value" && tag == "li") {
+                    let rawNumber = (attr.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if rawNumber.range(of: #"\A-?[0-9]{1,9}\z"#, options: .regularExpression) != nil {
+                        attr.stringValue = rawNumber
+                    } else {
+                        element.removeAttribute(forName: attr.name ?? "")
+                    }
                 } else if !attributes.contains(name) { element.removeAttribute(forName: attr.name ?? "") }
             }
             if let alignClass = cellAlignClass {

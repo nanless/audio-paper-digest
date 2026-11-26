@@ -6,7 +6,7 @@
 // scripts/analysis-contract.js 的 validateExperimentTableContract 和
 // publish_common.py 的 validate_experiment_table_contract（经
 // tests/python/parity_contract_probe.py），结论不一致才动手。
-// 语料与结论的来源见 _understanding/docs-review-20261113/js-contract.md。
+// 语料与结论的原始核对记录保存在本地未跟踪的评审归档 _understanding/docs-review-20261113/js-contract.md。
 //
 // 本文件固定三件事：
 //   1. 本轮已经对齐的两条 Node 词表（训练配置词排除、未能完成）；

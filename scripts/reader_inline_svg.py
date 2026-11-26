@@ -165,7 +165,12 @@ class UnsupportedSvgDependency(ValueError):
     """Intact source requires a specifically identified, unsealed CSS rule."""
 
     def __init__(self, message, reason='external_css_icon_glyph'):
-        if reason not in {'external_css_icon_glyph', 'external_latexml_layout_css'}:
+        if reason not in {
+            'external_css_icon_glyph',
+            'external_latexml_layout_css',
+            'raw_latex_leak_in_svg',
+            'foreign_object_text_overlap',
+        }:
             raise ValueError('未知的内联 SVG 依赖分类')
         super().__init__(message)
         self.reason = reason
@@ -599,7 +604,7 @@ def render_svg(raw, *, hidpi=False, deterministic_v2=False):
                             return null;
                         }""")
                         if quality_issue:
-                            raise UnsupportedSvgDependency(quality_issue)
+                            raise UnsupportedSvgDependency(quality_issue, reason=quality_issue)
                     # 原图允许内容超出 viewBox 时，元素截图会裁掉文字和公式。
                     # 在页面内量取真实渲染范围，不猜测字号或改写封存图形。
                     painted = figure.evaluate("""svg => {

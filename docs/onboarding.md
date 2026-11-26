@@ -67,7 +67,7 @@ Git 推送、站点部署和网页可读是不同结果。只有它们都核验�
 | `data/current/blog-republications/<date>.json` | `blog:generate --republish` | 重发布日期标记；事务待激活时会阻断普通生成、审查和推送 |
 | `data/runtime/analysis-batch-reports/` | 分析与恢复入口 | 批次轮次、当前失败集合和 `manualHandoff` 报告 |
 | `data/current/web-verification-<date>.json` | `verify:web` | 部署状态与逐页 HTTP 200、正式地址、标题的核验记录 |
-| `data/runtime/llm-account-pool.json` | Node/Python 账号池 | 轮转游标和冷却状态，权限 `0600` |
+| `data/runtime/llm-account-pool.json` | Node/Python 账号池 | 官方 `/zen/go/v1/usage` 实时额度快照、到期优先/轮转游标与冷却状态，权限 `0600` |
 | `data/runtime/llm-usage/` | 公共请求封装 | 请求开始、终态和实际用量；费用未知时保留未知 |
 | `logs/summaries/<date>-summary.log` | Node/Python 入口 | 本次各阶段的摘要 |
 
@@ -93,7 +93,7 @@ npm run digest:prepare -- YYYY-MM-DD --allow-empty-daily
 
 ### 模型认证、额度或冷却问题
 
-停止生产新派发，保存在途结果。用 `npm run llm:accounts` 核对账号状态，再按[模型排障](troubleshooting.md#2-主模型请求失败超时或空响应)处理。普通认证 401 和 arXiv 来源限流需要分别诊断，不能因为一项失败就换掉所有配置。
+停止生产新派发，保存在途结果。用 `npm run llm:accounts` 查看调度优先级与冷却，并用 `npm run llm:accounts:quota -- status` 或 `sync` 核对各账号三窗口实时额度与月到期日，再按[模型排障](troubleshooting.md#2-主模型请求失败超时或空响应)处理。普通认证 401 和 arXiv 来源限流需要分别诊断，不能因为一项失败就换掉所有配置。
 
 ### 分析、解读长文或表格未通过
 

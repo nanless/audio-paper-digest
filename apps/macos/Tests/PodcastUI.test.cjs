@@ -384,6 +384,153 @@ async function run() {
     assert.ok(callsAfterClear.some(c => c.command === 'podcast.clearCache'), 'clearCache command dispatched');
     assert.deepEqual(errors2, [], 'Zero page errors during full podcast flow');
     await page2.close();
+
+    // Scenario 3: Multi-episode switching via #podcast-episode-select while playing, ticking, and paused
+    const multiEpisodes = [
+      ...sampleEpisodes,
+      {
+        id: 'daily-2026-11-23',
+        date: '2026-11-23',
+        title: '2026-11-23 音频论文速递播客（第 B 期）',
+        summary: '第二期测试节目简介。',
+        audioUrl: 'https://github.com/nanless/audio-paper-digest/releases/download/podcast-2026-11-23/daily-2026-11-23.mp3',
+        bytes: 3145728,
+        sha256: 'b'.repeat(64),
+        durationSeconds: 240,
+        mimeType: 'audio/mpeg',
+        cached: false,
+        chapters: [
+          {title: '第 B 期开场', startSeconds: 0, endSeconds: 60, paperId: null},
+          {title: 'Audio Synthesis Overview', startSeconds: 60, endSeconds: 240, paperId: 'arxiv:2611.00003'},
+        ],
+        paperIds: ['arxiv:2611.00003'],
+      },
+    ];
+    const page3 = await browser.newPage();
+    const errors3 = [];
+    page3.on('pageerror', e => errors3.push(e.message));
+    await page3.addInitScript(({papers, episodes}) => {
+      window.__calls = [];
+      let pState = {
+        available: true,
+        episodes: structuredClone(episodes),
+        activeEpisodeId: null,
+        downloadingEpisodeId: null,
+        isPlaying: false,
+        currentTime: 0,
+        duration: 0,
+        rate: 1.0,
+        cachedEpisodeIds: [],
+        cachedBytes: 0,
+      };
+      window.webkit = {
+        messageHandlers: {
+          desktop: {
+            postMessage: async ({command, payload = {}}) => {
+              window.__calls.push({command, payload});
+              switch (command) {
+                case 'app.bootstrap':
+                  return {
+                    nativePodcast: true,
+                    nativeResourceBadges: true,
+                    personal: {favorites: [], reading: [], notes: {}, sessions: [], readingState: {}, annotations: {}},
+                    settings: {appearance: 'light', font: 18, endpoint: '', model: '', protocol: 'auto', maxTokens: 8192, dailyRequests: 50, syncHours: 12, httpProxy: '', reduceMotion: true, hasKey: false},
+                    paper: null,
+                    library: {paperCount: papers.length, recordCount: papers.length},
+                  };
+                case 'podcast.feed':
+                  return structuredClone(pState);
+                case 'podcast.play': {
+                  const target = pState.episodes.find(e => e.id === payload.episodeId) || pState.episodes[0];
+                  pState.activeEpisodeId = target.id;
+                  pState.isPlaying = true;
+                  pState.currentTime = Number(payload.startSeconds || 0);
+                  pState.duration = target.durationSeconds;
+                  target.cached = true;
+                  if (!pState.cachedEpisodeIds.includes(target.id)) pState.cachedEpisodeIds.push(target.id);
+                  pState.cachedBytes = pState.episodes.filter(e => e.cached).reduce((a, e) => a + e.bytes, 0);
+                  return structuredClone(pState);
+                }
+                case 'podcast.pause':
+                  pState.isPlaying = false;
+                  return structuredClone(pState);
+                case 'library.resourceBadges':
+                  return {available: false, papers: {}, cachedDemoIds: []};
+                case 'library.list':
+                  return {papers, count: papers.length, total: papers.length, totalInLibrary: papers.length, snapshotID: 'snap-1'};
+                case 'library.tagIndex':
+                  return {papers: {}, count: 0, snapshotID: 'snap-1', websiteTaxonomy: null};
+                case 'aggregates.list':
+                  return {records: [], available: false};
+                case 'personal.snapshot':
+                  return {favorites: [], reading: [], notes: {}, sessions: [], readingState: {}, annotations: {}};
+                case 'personal.noteConflicts':
+                  return {conflicts: []};
+                default:
+                  return {};
+              }
+            },
+          },
+        },
+      };
+    }, {papers: samplePapers, episodes: multiEpisodes});
+
+    await page3.goto(url, {waitUntil: 'networkidle'});
+    await page3.waitForSelector('#podcast-episode-select');
+
+    // Start playing Episode A
+    await page3.click('#podcast-toggle-play');
+    await page3.waitForTimeout(80);
+    assert.equal(await page3.locator('#podcast-toggle-play').getAttribute('aria-label'), '暂停播客');
+    assert.ok((await page3.locator('.podcast-episode-title').innerText()).includes('2026-11-24'));
+
+    // Select Episode B while Episode A is actively playing
+    await page3.selectOption('#podcast-episode-select', 'daily-2026-11-23');
+    await page3.waitForTimeout(60);
+    assert.equal(await page3.locator('#podcast-episode-select').inputValue(), 'daily-2026-11-23', 'Episode selector stays on Episode B while Episode A plays');
+    assert.ok((await page3.locator('.podcast-episode-title').innerText()).includes('第 B 期'), 'Displayed title switches to Episode B');
+    assert.equal(await page3.locator('#podcast-toggle-play').getAttribute('aria-label'), '播放播客', 'Play button shows Play for newly selected non-active Episode B');
+
+    // Background progress tick for Episode A must NOT snap displayed selection back to Episode A
+    await page3.evaluate(() => {
+      window.dispatchEvent(new CustomEvent('podcast.state', {
+        detail: {activeEpisodeId: 'daily-2026-11-24', isPlaying: true, currentTime: 35, duration: 300},
+      }));
+    });
+    await page3.waitForTimeout(50);
+    assert.equal(await page3.locator('#podcast-episode-select').inputValue(), 'daily-2026-11-23', 'Progress tick for Episode A preserves selected Episode B');
+    assert.ok((await page3.locator('.podcast-episode-title').innerText()).includes('第 B 期'), 'Displayed episode remains Episode B after tick');
+
+    // Clicking Play on Episode B must switch native playback to Episode B
+    await page3.click('#podcast-toggle-play');
+    await page3.waitForTimeout(80);
+    assert.equal(await page3.locator('#podcast-toggle-play').getAttribute('aria-label'), '暂停播客', 'Episode B is now playing');
+    const playCalls1 = await page3.evaluate(() => window.__calls.filter(c => c.command === 'podcast.play'));
+    assert.equal(playCalls1.at(-1).payload.episodeId, 'daily-2026-11-23', 'Play dispatches podcast.play for Episode B');
+
+    // Pause Episode B, then select Episode A and click Play -> must switch playback back to Episode A
+    await page3.click('#podcast-toggle-play');
+    await page3.waitForTimeout(80);
+    assert.equal(await page3.locator('#podcast-toggle-play').getAttribute('aria-label'), '播放播客', 'Episode B paused');
+    await page3.selectOption('#podcast-episode-select', 'daily-2026-11-24');
+    await page3.waitForTimeout(60);
+    assert.ok((await page3.locator('.podcast-episode-title').innerText()).includes('2026-11-24'), 'Displayed title switches back to Episode A while Episode B is paused');
+    await page3.click('#podcast-toggle-play');
+    await page3.waitForTimeout(80);
+    const playCalls2 = await page3.evaluate(() => window.__calls.filter(c => c.command === 'podcast.play'));
+    assert.equal(playCalls2.at(-1).payload.episodeId, 'daily-2026-11-24', 'Play switches playback to Episode A from paused Episode B');
+
+    // Playback completion clears activeEpisodeId cleanly while keeping selected episode usable
+    await page3.evaluate(() => {
+      window.dispatchEvent(new CustomEvent('podcast.state', {
+        detail: {activeEpisodeId: null, isPlaying: false, currentTime: 0, duration: 0},
+      }));
+    });
+    await page3.waitForTimeout(50);
+    assert.equal(await page3.locator('#podcast-toggle-play').getAttribute('aria-label'), '播放播客');
+    assert.ok((await page3.locator('.podcast-episode-title').innerText()).includes('2026-11-24'));
+    assert.deepEqual(errors3, [], 'Zero page errors during multi-episode switching flow');
+    await page3.close();
   } finally {
     await browser.close();
     server.close();

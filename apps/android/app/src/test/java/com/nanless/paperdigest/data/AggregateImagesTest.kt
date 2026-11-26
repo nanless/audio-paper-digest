@@ -323,4 +323,49 @@ class AggregateImagesTest {
         assertEquals(2,retry.savedCount);assertEquals(0,retry.missingCount)
         assertEquals(first.records[1].sha256,retry.records[0].sha256)
     }
+
+    @Test fun aggregateSupportsUpTo512ImagesAndSingleSlotErrorDoesNotAbortRemainingSlots()=runBlocking {
+        val large=fixture(markup(230))
+        val plan=large.store.imagePlan(large.descriptor,large.raw)
+        assertEquals(230,plan.slots.size)
+        val largeAccess=online(large)
+        assertEquals(230,largeAccess.savedCount);assertEquals(0,largeAccess.missingCount)
+
+        val u1="https://arxiv.org/html/2501.00001v1/broken.png"
+        val u2="https://arxiv.org/html/2501.00001v1/ok1.png"
+        val u3="https://arxiv.org/html/2501.00001v1/ok2.png"
+        val partial=fixture("<img src='$u1' alt='Broken'/><img src='$u2' alt='OK1'/><img src='$u3' alt='OK2'/>")
+        val requested=mutableListOf<String>()
+        val result=requireNotNull(AggregateImageLoader.read(partial.store,partial.descriptor,partial.raw,true,{true},{address,_->
+            requested+=address
+            if(address==u1)throw java.io.IOException("Simulated 404 on first figure")
+            png()
+        }))
+        assertEquals(listOf(u1,u2,u3),requested)
+        assertEquals(2,result.savedCount);assertEquals(1,result.missingCount)
+        assertNull(result.records[0].sha256);assertNotNull(result.records[1].sha256);assertNotNull(result.records[2].sha256)
+    }
+
+    @Test fun safeStaticSvgRendersOnAggregatePagesWhileActiveOrBareSvgRemainsRejected()=runBlocking {
+        val safeSvg="""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" fill="#0f5c58"/></svg>""".toByteArray(Charsets.UTF_8)
+        val activeSvg="""<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect width="10" height="10"/></svg>""".toByteArray(Charsets.UTF_8)
+        assertEquals("image/svg+xml",AggregateImages.imageMIME(safeSvg))
+        assertThrows(IllegalArgumentException::class.java){AggregateImages.imageMIME(activeSvg)}
+        assertThrows(IllegalArgumentException::class.java){AggregateImages.imageMIME("<svg/>".toByteArray(Charsets.UTF_8))}
+
+        val svgUrl="https://nanless.github.io/audio-research-portal/images/daily-chart.svg"
+        val f=fixture("<figure><img src='$svgUrl' alt='Daily SVG'/><figcaption>Chart</figcaption></figure>")
+        val access=requireNotNull(AggregateImageLoader.read(f.store,f.descriptor,f.raw,true,{it==svgUrl},{_,_->safeSvg}))
+        assertEquals(1,access.savedCount);assertEquals(0,access.missingCount)
+        assertEquals("image/svg+xml",access.records.single().mime)
+        val (servedMime,stream)=requireNotNull(access.open(access.cspImageSource+access.records.single().sha256,false,"GET"))
+        assertEquals("image/svg+xml",servedMime)
+        stream.use{
+            assertArrayEquals(safeSvg,it.readBytes())
+        }
+
+        val badF=fixture("<figure><img src='$svgUrl' alt='Bad SVG'/></figure>")
+        val badAccess=requireNotNull(AggregateImageLoader.read(badF.store,badF.descriptor,badF.raw,true,{it==svgUrl},{_,_->activeSvg}))
+        assertEquals(0,badAccess.savedCount);assertEquals(1,badAccess.missingCount)
+    }
 }

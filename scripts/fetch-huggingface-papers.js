@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 const { setupScriptLogging } = require('./log-setup');
-setupScriptLogging(__filename);
 
 /**
  * 从 HuggingFace Papers 获取过去一周的论文
@@ -19,7 +18,7 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
-const { buildChildProcessEnv } = require('./env-loader.js');
+const { buildChildProcessEnv, requireExternalRuntime } = require('./env-loader.js');
 
 const { getBeijingDateString, getBeijingISOString, normalizeToBeijingISOString, normalizedId, detectProxyUrl } = require('./utils.js');
 const { HUGGINGFACE_CONFIG } = require('./config.js');
@@ -1069,6 +1068,8 @@ module.exports = {
 
 // 直接运行时默认只预览窗口，--probe 才真正抓取。
 if (require.main === module) {
+    requireExternalRuntime('fetch-huggingface-papers.js');
+    setupScriptLogging(__filename);
     runDirectProbe().catch(error => {
         console.error(`[fetch-huggingface-papers] ${error.message}`);
         process.exitCode = 1;

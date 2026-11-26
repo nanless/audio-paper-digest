@@ -581,3 +581,74 @@ test('cold OAI routing propagates only genuine file-bridge operational errors in
     source.hasVerifiedOaiCoverage = () => { throw lookalike; };
     assert.equal(hasVerifiedCategoryPrefix(previous, boundary, 'eess.AS'), false);
 });
+
+test('when categoryPrefix is already active and officialOaiRecovery=true, a 429 on a later category falls back to windowFetch once (succeeding or triggering OAI)', async t => {
+    const plainBoundary = { ...boundary, continuity: { required: false, witnesses: { arxiv: [] } } };
+    const eessOwnFailure = {
+        categoryId: 'eess.AS', source: 'arxiv-api-since', attempts: 2, successfulRequests: 0,
+        failures: [{ error: 'HTTP 429' }], coverageComplete: false, ok: false, allFailed: true,
+        provider: { boundaryIdentity: plainBoundary.identitySha256,
+            window: { since: plainBoundary.since, until: plainBoundary.until, covered: false } }
+    };
+    const state = {
+        categoryPrefix: true,
+        categoryPrefixFailure: { message: 'date query HTTP 429', health: eessOwnFailure }
+    };
+    const prefix429Opts = {
+        pageSize: 2,
+        requestScheduler: { run: async (_host, task) => task() },
+        requestFn: async () => ({ status: 429, data: '' })
+    };
+
+    // Case 1: fallback windowFetch('cs.SD') succeeds once -> returns papers directly without OAI
+    const fallbackResult = [{ arxivId: '2610.05555v1' }];
+    let windowCalls = 0;
+    const recovered = await fetchDailyArxivCategory('cs.SD', plainBoundary, null, {
+        ...prefix429Opts,
+        strategyState: state,
+        officialOaiRecovery: true,
+        windowFetch: async categoryId => {
+            windowCalls += 1;
+            assert.equal(categoryId, 'cs.SD');
+            return fallbackResult;
+        }
+    });
+    assert.equal(windowCalls, 1);
+    assert.equal(recovered, fallbackResult);
+
+    // Case 2: fallback windowFetch('cs.SD') ALSO hits HTTP 429 -> records cs.SD's own dateQueryFailure and triggers OAI recovery
+    const source = require('../scripts/lib/daily-arxiv-oai-source');
+    const origOai = source.fetchDailyOaiCategory;
+    t.after(() => { source.fetchDailyOaiCategory = origOai; });
+    let oaiCalls = 0;
+    const oaiResult = [{ arxivId: '2610.06666v1' }];
+    source.fetchDailyOaiCategory = async (categoryId, _bound, _existing, opts) => {
+        oaiCalls += 1;
+        assert.equal(categoryId, 'cs.SD');
+        assert.equal(hasEligibleOaiTrigger(opts.triggerFailure, plainBoundary, 'cs.SD'), true);
+        assert.equal(opts.triggerFailure.provider.categoryPrefix.dateQueryFailure.health.categoryId, 'cs.SD');
+        assert.equal(opts.triggerFailure.provider.categoryPrefix.routeSwitch, undefined);
+        return oaiResult;
+    };
+    const csWindow429 = {
+        categoryId: 'cs.SD', source: 'arxiv-api-since', attempts: 2, successfulRequests: 0,
+        failures: [{ error: 'HTTP 429' }], coverageComplete: false, ok: false, allFailed: true,
+        provider: { boundaryIdentity: plainBoundary.identitySha256,
+            window: { since: plainBoundary.since, until: plainBoundary.until, covered: false } }
+    };
+    let windowCalls2 = 0;
+    const fromOai = await fetchDailyArxivCategory('cs.SD', plainBoundary, null, {
+        ...prefix429Opts,
+        strategyState: state,
+        officialOaiRecovery: true,
+        createOaiEvidenceDir: () => '/tmp/oai-later-cat-cs-sd',
+        windowFetch: async categoryId => {
+            windowCalls2 += 1;
+            assert.equal(categoryId, 'cs.SD');
+            throw Object.assign(new Error('cs.SD date query HTTP 429'), { sourceHealth: csWindow429 });
+        }
+    });
+    assert.equal(windowCalls2, 1);
+    assert.equal(oaiCalls, 1);
+    assert.equal(fromOai, oaiResult);
+});

@@ -1,12 +1,29 @@
 import AppKit
 
 @MainActor private final class NotesCanvas:NSView {override var isFlipped:Bool{true}}
+@MainActor private final class NotesRootView:NSView {
+    override init(frame:NSRect){super.init(frame:frame);wantsLayer=true;palette()}
+    required init?(coder:NSCoder){fatalError("Not archived")}
+    override func viewDidChangeEffectiveAppearance(){super.viewDidChangeEffectiveAppearance();palette()}
+    private func palette(){
+        effectiveAppearance.performAsCurrentDrawingAppearance{
+            let dark=effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua
+            layer?.backgroundColor=(dark ? NSColor(srgbRed:0.051,green:0.067,blue:0.071,alpha:1) : NSColor(srgbRed:0.969,green:0.961,blue:0.941,alpha:1)).cgColor
+        }
+    }
+}
 @MainActor final class NativeNotesButton:NSButton {var lease:NativeNotesLease?}
 @MainActor private final class NotesCard:NSView {
     override init(frame:NSRect){super.init(frame:frame);wantsLayer=true;layer?.cornerRadius=10;layer?.borderWidth=1;palette()}
     required init?(coder:NSCoder){fatalError("Not archived")}
     override func viewDidChangeEffectiveAppearance(){super.viewDidChangeEffectiveAppearance();palette()}
-    private func palette(){effectiveAppearance.performAsCurrentDrawingAppearance{layer?.backgroundColor=NSColor.controlBackgroundColor.cgColor;layer?.borderColor=NSColor.separatorColor.cgColor}}
+    private func palette(){
+        effectiveAppearance.performAsCurrentDrawingAppearance{
+            let dark=effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua
+            layer?.backgroundColor=(dark ? NSColor(srgbRed:0.078,green:0.102,blue:0.110,alpha:1) : NSColor(srgbRed:0.984,green:0.980,blue:0.969,alpha:1)).cgColor
+            layer?.borderColor=(dark ? NSColor(srgbRed:0.153,green:0.204,blue:0.220,alpha:1) : NSColor(srgbRed:0.867,green:0.847,blue:0.800,alpha:1)).cgColor
+        }
+    }
 }
 
 /// Native read-only index. Its only external effects are the fixed existing open-note path and leaving this view.
@@ -30,7 +47,7 @@ import AppKit
     required init?(coder:NSCoder){fatalError("Not archived")}
     private func label(_ text:String,size:CGFloat=13,secondary:Bool=false)->NSTextField{let f=NSTextField(wrappingLabelWithString:text);f.font = .systemFont(ofSize:size);f.textColor=secondary ? .secondaryLabelColor:.labelColor;f.maximumNumberOfLines=0;f.isSelectable=true;f.lineBreakMode = .byWordWrapping;f.setContentCompressionResistancePriority(.defaultLow,for:.horizontal);return f}
     override func loadView(){
-        view=NSView(frame:.init(x:0,y:0,width:850,height:650));view.setAccessibilityRole(.group);view.setAccessibilityLabel("我的笔记")
+        view=NotesRootView(frame:.init(x:0,y:0,width:850,height:650));view.setAccessibilityRole(.group);view.setAccessibilityLabel("我的笔记")
         let heading=label("我的笔记",size:24);heading.font = .systemFont(ofSize:24,weight:.semibold)
         let help=label("从读过的论文中，找回自己的问题和判断。Control-Tab 进入操作区，Tab 或 Shift-Tab 切换。",secondary:true)
         view.setAccessibilityHelp("Control-Tab 进入操作区，Control-Shift-Tab 从末项进入；Tab 或 Shift-Tab 到边界时返回页面。")

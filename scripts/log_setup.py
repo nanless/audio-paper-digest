@@ -9,6 +9,7 @@ import errno
 import threading
 import time
 from datetime import datetime
+from urllib.parse import unquote, urlsplit
 from zoneinfo import ZoneInfo
 
 from project_env import load_project_env
@@ -271,23 +272,40 @@ def prune_log_files(logs_dir, *, retention_days=None, max_total_bytes=None, now=
     return {'removed': removed, 'reclaimedBytes': reclaimed, 'problems': problems}
 
 
+def _collect_environment_secrets():
+    secrets = {}
+    for key, value in os.environ.items():
+        raw = str(value if value is not None else '')
+        if re.search(r'(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$', key, re.IGNORECASE) and len(raw) >= 6:
+            for item in raw.split(','):
+                stripped = item.strip()
+                if len(stripped) >= 6:
+                    secrets[stripped] = True
+        if re.fullmatch(r'(?:HTTP_PROXY|HTTPS_PROXY|ALL_PROXY)', key, re.IGNORECASE) and '@' in raw:
+            try:
+                parsed = urlsplit(raw)
+                password = parsed.password
+                if password and len(password) >= 4:
+                    secrets[password] = True
+                    decoded = unquote(password)
+                    if decoded and decoded != password and len(decoded) >= 4:
+                        secrets[decoded] = True
+            except ValueError:
+                pass
+    return tuple(sorted(secrets, key=len, reverse=True))
+
+
 def setup_script_logging(script_path=None):
     global _LOG_SETUP_DONE, _ACTIVE_LOGGER, _CONFIGURED_SECRETS
     if _LOG_SETUP_DONE:
         return _ACTIVE_LOGGER
     _LOG_SETUP_DONE = True
     load_project_env()
-    _CONFIGURED_SECRETS = tuple(sorted((
-        item.strip()
-        for key, value in os.environ.items()
-        if re.search(r'(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$', key, re.IGNORECASE)
-        and len(str(value)) >= 6
-        for item in str(value).split(',')
-        if len(item.strip()) >= 6
-    ), key=len, reverse=True))
+    _CONFIGURED_SECRETS = _collect_environment_secrets()
     disable_file_logs = (
         os.environ.get("PAPER_DIGEST_DISABLE_FILE_LOGS") == "1"
         or os.environ.get("PD_DISABLE_FILE_LOGS") == "1"
+        or os.environ.get("VERIFY_PROJECT_DISABLE_FILE_LOGS") == "1"
     )
 
     if not script_path:
@@ -342,13 +360,9 @@ def _stage_summary_line_text(value):
 
 def _stage_summary_secrets():
     merged = {}
-    for key, value in os.environ.items():
-        if not re.search(r'(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$', key, re.IGNORECASE):
-            continue
-        for item in str(value).split(','):
-            item = item.strip()
-            if len(item) >= 6:
-                merged[item] = True
+    for secret in _collect_environment_secrets():
+        if secret:
+            merged[secret] = True
     for secret in _CONFIGURED_SECRETS:
         if secret:
             merged[str(secret)] = True
@@ -637,10 +651,19 @@ def _append_stage_summary_line(file_path, line):
     except Exception:
         os.close(fd)
         raise
+    permissions_tightened = True
     with handle:
         handle.write(line)
         handle.flush()
         os.fsync(handle.fileno())
+        if os.name == 'posix' and hasattr(os, 'fchmod'):
+            try:
+                # 已有文件的权限不受 open 的 mode 影响；在关 fd 前用 fchmod 收紧，避免路径竞态。
+                os.fchmod(handle.fileno(), STAGE_SUMMARY_FILE_MODE)
+            except OSError as error:
+                permissions_tightened = False
+                _stage_summary_warn_failure('阶段摘要文件权限收紧失败', error)
+    return permissions_tightened
 
 
 def _assert_stage_summary_not_symlink(target_path, label):
@@ -698,13 +721,14 @@ def write_stage_summary(stage, status, message, elapsed_ms=None, date=None, extr
             _stage_summary_warn_failure('阶段摘要目录权限收紧失败', error)
     try:
         _assert_stage_summary_not_symlink(file_path, '阶段摘要文件')
-        _append_stage_summary_line(file_path, f'{line}\n')
+        file_permissions_tightened = _append_stage_summary_line(file_path, f'{line}\n')
+        if not file_permissions_tightened:
+            permissions_tightened = False
     except Exception as error:
         _stage_summary_warn_failure('阶段摘要写入失败', error)
         return None
-    if os.name == 'posix':
+    if os.name == 'posix' and not hasattr(os, 'fchmod'):
         try:
-            # 已有文件的权限不受 open 的 mode 影响，显式收紧。
             os.chmod(file_path, STAGE_SUMMARY_FILE_MODE)
         except OSError as error:
             permissions_tightened = False

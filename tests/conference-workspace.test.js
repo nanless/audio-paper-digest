@@ -283,3 +283,113 @@ test('命令行只接受无参数调用，未使用的 --json 开关已删除', 
     assert.throws(() => workspace.parseArgs(['--json']), /只读诊断.*JSON/);
     assert.throws(() => workspace.parseArgs(['--other']), /只读诊断/);
 });
+
+test('工作区盘点接受合法的 readerRevision 与 sourceUpgradePromotion 论文项并拒绝篡改', t => {
+    const root = tempRoot();
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const processRoot = path.join(root, 'conference-processes');
+    const processId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const processDir = path.join(processRoot, processId);
+    fs.mkdirSync(processDir, { recursive: true });
+
+    const adapter = require('../scripts/lib/conference-analysis-adapter.js');
+    const grantApi = require('../scripts/lib/conference-recovery-grant.js');
+    const codec = require('../scripts/lib/protocol-codec');
+    const crypto = require('node:crypto');
+    const canonical = v => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object'
+        ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v;
+    const sha = v => crypto.createHash('sha256').update(JSON.stringify(canonical(v))).digest('hex');
+
+    const paperRev = 'conference:icassp:2026:icassp-arnumber:101';
+    const paperWin = 'conference:icassp:2026:icassp-arnumber:102';
+    const paperPreserved = 'conference:icassp:2026:icassp-arnumber:103';
+
+    const parentExecRev = workspace.deterministicUuid(processId, paperRev, 'analysis');
+    const parentShaRev = sha('parent-analysis-rev');
+    const revHeader = codec.recordHeader('conference-reader-source-revision', 'conference-reader-source-revision');
+    const revBody = {
+        ...revHeader,
+        paperId: paperRev,
+        parentExecutionId: parentExecRev,
+        parentAnalysisFileSha256: parentShaRev,
+        executionId: adapter.readerRevisionExecutionId(parentExecRev, parentShaRev, revHeader)
+    };
+    const readerRevision = { ...revBody, revisionSha256: sha(revBody) };
+
+    const parentExecWin = workspace.deterministicUuid(processId, paperWin, 'analysis');
+    const grantId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const grantSha256 = sha('grant');
+    const failedAnalysisFileSha256 = sha('failed-analysis');
+    const failedExecutionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const winHeader = codec.recordHeader('conference-reader-recovery-window', 'conference-reader-recovery-window');
+    const winBody = {
+        ...winHeader,
+        paperId: paperWin,
+        originalMemberPaperId: paperWin,
+        parentExecutionId: parentExecWin,
+        grantId,
+        grantSha256,
+        failedExecutionId,
+        failedAnalysisFileSha256,
+        maxAttempts: 3,
+        executionId: grantApi.grantedRecoveryExecutionId(grantId, failedExecutionId, failedAnalysisFileSha256, winHeader)
+    };
+    const windowRevision = { ...winBody, revisionSha256: sha(winBody) };
+
+    const stateBody = {
+        ...codec.recordHeader('conference-process', 'conference-process'),
+        processId,
+        status: 'partial',
+        authority: {
+            conferenceId: 'icassp-2026',
+            implementationSha256: sha('impl'),
+            tagCatalogVersion: 'paper-tag-catalog-v2',
+            tagCatalogSha256: sha('catalog')
+        },
+        sourceUpgradePromotion: {
+            preservedOriginalCompletePaperIds: [paperPreserved]
+        },
+        items: {
+            [paperRev]: {
+                paperId: paperRev,
+                status: 'analysis_partial',
+                analysisRunId: readerRevision.executionId,
+                readerRevision,
+                attempts: 2
+            },
+            [paperWin]: {
+                paperId: paperWin,
+                status: 'analysis_partial',
+                analysisRunId: windowRevision.executionId,
+                readerRevision: windowRevision,
+                attempts: 3
+            },
+            [paperPreserved]: {
+                paperId: paperPreserved,
+                status: 'complete',
+                analysisRunId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+                preservedOriginalComplete: true,
+                attempts: 1,
+                sourceProof: { textSha256: sha('src') },
+                analysisProof: { analysisSha256: sha('ana') },
+                pageProof: { contentSha256: sha('page') }
+            }
+        },
+        aggregate: null,
+        completionReceiptSha256: null
+    };
+    const validState = { ...stateBody, stateSha256: sha(stateBody) };
+    fs.writeFileSync(path.join(processDir, 'state.json'), JSON.stringify(validState));
+
+    const report = workspace.inspectProcessStates({ processRoot });
+    assert.equal(report.counts.invalid, 0);
+    assert.equal(report.processes[0].classification, 'stale');
+    assert.equal(report.processes[0].stateStatus, 'partial');
+
+    const badBody = structuredClone(stateBody);
+    badBody.items[paperRev].readerRevision.revisionSha256 = '0'.repeat(64);
+    fs.writeFileSync(path.join(processDir, 'state.json'), JSON.stringify({ ...badBody, stateSha256: sha(badBody) }));
+    const tamperedReport = workspace.inspectProcessStates({ processRoot });
+    assert.equal(tamperedReport.counts.invalid, 1);
+    assert.equal(tamperedReport.processes[0].reason, 'invalid_state_schema');
+});

@@ -527,3 +527,32 @@ test('来源配对记录必须绑定原请求，损坏记录和竞争正式文�
     assert.deepEqual(fs.readFileSync(pairFile), pairBytes);
     assert.equal(calls, 1);
 });
+
+test('接受 bindStructuredArtifactsToText 产出的键序重排 payloadSha256 并继续拒绝篡改', () => {
+    const { bindStructuredArtifactsToText } = require('../scripts/lib/arxiv-html-structured-artifacts.js');
+    const text = `${'Official paper body with methods, experiments, evidence, and references. '.repeat(200)}\n`;
+    const structuredArtifacts = bindStructuredArtifactsToText({
+        version: 1,
+        source: 'arxiv_html',
+        tables: [{ ordinal: 1, rows: [['WER', '3.1%']] }],
+        formulas: [{ ordinal: 1, tex: 'x^2 + y^2 = z^2' }]
+    }, text);
+    const fetched = {
+        text,
+        source: 'html',
+        sourceId: '2601.00001',
+        imageInfos: [],
+        readerAuthors: [],
+        htmlAvailability: 'available',
+        htmlAttempts: 1,
+        warnings: [],
+        structuredArtifacts
+    };
+    const normalized = api.normalizeFetchedSource(fetched, '2601.00001', stamp);
+    assert.equal(normalized.observation.structuredArtifacts.payloadSha256, structuredArtifacts.payloadSha256);
+    assert.equal(normalized.sourceDetails.structuredArtifacts.payloadSha256, structuredArtifacts.payloadSha256);
+
+    const tampered = structuredClone(fetched);
+    tampered.structuredArtifacts.payloadSha256 = '0'.repeat(64);
+    assert.throws(() => api.normalizeFetchedSource(tampered, '2601.00001', stamp), /结构化来源 SHA-256/);
+});

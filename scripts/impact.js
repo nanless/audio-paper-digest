@@ -12,8 +12,10 @@ const REAL_ROOT = fs.realpathSync(ROOT);
 
 const SKIP_DIRS = new Set([
     'node_modules', '.venv', 'data', 'logs', 'tmp', '.git',
-    '__pycache__', '.pytest_cache', 'fixtures', '_understanding', 'output'
+    '__pycache__', '.pytest_cache', 'fixtures', '_understanding', 'output',
+    '.claude', '.dsh-meow'
 ]);
+const PY_TEST_FILE_PATTERN = /^(?:(?:tests|manual\/tests)\/python\/test_[^/]+\.py|tests\/reader_pdf_[^/]*_test\.py)$/;
 const GENERATED_CLIENT_DIRS = new Set([
     'apps/macos/.build', 'apps/macos/.qa',
     'apps/android/.build', 'apps/android/.qa', 'apps/android/.gradle', 'apps/android/.kotlin',
@@ -230,7 +232,7 @@ function buildDependencyGraph(options = {}) {
     walkControlled('manual/scripts', rel => /\.(?:js|cjs|mjs|py|sh|json)$/.test(rel), true);
     walkControlled('config', rel => /\.json$/.test(rel), true);
     walkControlled('prompts/current', rel => /\.md$/.test(rel), true);
-    walkControlled('tests', (_rel, name) => /\.(?:js|cjs|mjs)$/.test(name), false);
+    walkControlled('tests', (_rel, name) => /\.(?:js|cjs|mjs)$/.test(name) || /^reader_pdf_[^/]*_test\.py$/.test(name), false);
     walkControlled('tests/helpers', (_rel, name) => /\.(?:js|cjs|mjs|py)$/.test(name), true);
     walkControlled('manual/tests', (_rel, name) => /\.(?:js|cjs|mjs)$/.test(name), false);
     walkControlled('manual/tests/helpers', (_rel, name) => /\.(?:js|cjs|mjs|py)$/.test(name), true);
@@ -363,7 +365,7 @@ function buildDependencyGraph(options = {}) {
     } catch { /* ignore absent package.json in custom minimal fixtures */ }
 
     const jsTestFiles = [...files].filter(file => /^(?:tests|manual\/tests)\/[^/]+\.test\.js$/.test(file)).sort();
-    const pyTestFiles = [...files].filter(file => /^(?:tests|manual\/tests)\/python\/test_[^/]+\.py$/.test(file)).sort();
+    const pyTestFiles = [...files].filter(file => PY_TEST_FILE_PATTERN.test(file)).sort();
 
     const graph = { root: baseRoot, files, forward, reverse, scriptEntries, jsTestFiles, pyTestFiles };
     GRAPH_CACHE.set(baseRoot, graph);
@@ -585,7 +587,9 @@ function matchStemTests(graph, relativeFiles) {
         for (const pyFile of graph.pyTestFiles) {
             const pyStem = path.posix.basename(pyFile, '.py');
             if (pyStem === `test_${rawStem}` || pyStem.startsWith(`test_${rawStem}_`)
-                || pyStem === `test_${snake}` || pyStem.startsWith(`test_${snake}_`)) {
+                || pyStem === `test_${snake}` || pyStem.startsWith(`test_${snake}_`)
+                || pyStem === `${rawStem}_test` || pyStem === `${snake}_test`
+                || (pyStem.endsWith('_test') && (pyStem.startsWith(`${rawStem}_`) || pyStem.startsWith(`${snake}_`)))) {
                 pyMatched.add(pyFile);
             }
         }
@@ -625,7 +629,7 @@ function impactOfTargets(targets, options = {}) {
     const exactPyTests = new Set(stemHits.pyMatched);
     for (const file of reverseClosureSet) {
         if (/^(?:tests|manual\/tests)\/[^/]+\.test\.js$/.test(file)) exactJsTests.add(file);
-        else if (/^(?:tests|manual\/tests)\/python\/test_[^/]+\.py$/.test(file)) exactPyTests.add(file);
+        else if (PY_TEST_FILE_PATTERN.test(file)) exactPyTests.add(file);
     }
     if (uniqueRelFiles.some(rel => closures.find(c => c.id === 'clientProtocols')?.files.has(rel))
         && graph.files.has('tests/python/test_client_protocol_generation.py')) {

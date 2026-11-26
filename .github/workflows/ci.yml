@@ -205,7 +205,7 @@ jobs:
         run: |
           set -euo pipefail
           sdk=/usr/local/lib/android/sdk
-          cli="$(ls -d "$sdk"/cmdline-tools/*/bin 2>/dev/null | sort -V | tail -1)"
+          cli="$(ls -d "$sdk"/cmdline-tools/*/bin 2>/dev/null | sort -V | tail -1 || true)"
           echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
           if [ -n "$cli" ]; then

@@ -235,3 +235,40 @@ test('下载元数据、来源身份和命令行输入都做严格校验', async
     assert.equal(parsed.importFile, path.join(f.root, 'download.pdf'));
     assert.throws(() => cli.parseArgs(['--apply', '--snapshot', 'relative.json', '--forum-id', f.forumId]), /Use/);
 });
+
+test('默认下载器在重定向/非200/非法类型时释放响应体，并对 arXiv 走共享源站闸门', async () => {
+    const profile = api.profileForForum(TTS.forumId);
+    const gateCalls = [];
+    const rateLimits = [];
+    const fakeGate = {
+        async run(fn, meta) { gateCalls.push(meta); return fn(); },
+        recordRateLimitResponse(headers) { rateLimits.push(headers?.get?.('retry-after')); }
+    };
+    const makeCancelBody = counter => ({ cancel: async () => { counter.canceled += 1; } });
+
+    // 1) 重定向超限时先 cancel 响应体
+    const c1 = { canceled: 0 };
+    await assert.rejects(api.defaultFetchPdf({ profile, maxRedirects: 0 }, {
+        detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}), arxivOriginGate: fakeGate,
+        fetchImpl: async () => ({ status: 302, headers: { get: () => `${profile.requestedUrl}.pdf` }, body: makeCancelBody(c1) })
+    }), /重定向/);
+    assert.equal(c1.canceled, 1);
+
+    // 2) HTTP 429 时 cancel 响应体并登记 Retry-After
+    const c2 = { canceled: 0 };
+    await assert.rejects(api.defaultFetchPdf({ profile }, {
+        detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}), arxivOriginGate: fakeGate,
+        fetchImpl: async () => ({ status: 429, headers: { get: k => k === 'retry-after' ? '15' : null }, body: makeCancelBody(c2) })
+    }), /HTTP 429/);
+    assert.equal(c2.canceled, 1);
+    assert.deepEqual(rateLimits, ['15']);
+
+    // 3) 非法 Content-Type 时 cancel 响应体
+    const c3 = { canceled: 0 };
+    await assert.rejects(api.defaultFetchPdf({ profile }, {
+        detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}), arxivOriginGate: fakeGate,
+        fetchImpl: async () => ({ status: 200, headers: { get: k => k === 'content-type' ? 'text/html' : null }, body: makeCancelBody(c3) })
+    }), /Content-Type/);
+    assert.equal(c3.canceled, 1);
+    assert.equal(gateCalls.length, 3);
+});

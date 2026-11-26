@@ -951,24 +951,39 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
         const availableCoreResources = verifiedResourceIdentity.resources.filter(
             item => item?.availability === 'available' && ['code', 'model', 'dataset'].includes(item.type)
         );
+        const substantiveCoreResources = availableCoreResources.filter(resource => (
+            !isConfirmedPlaceholderArtifactProbe(findMatchingArtifactProbe(resource, artifactProbes))
+        ));
+        const substantiveAvailableTypes = new Set(substantiveCoreResources.map(item => item.type));
         const allAvailableCorePlaceholder = artifactProbes.length > 0
             && availableCoreResources.length > 0
-            && availableCoreResources.every(resource => (
-                isConfirmedPlaceholderArtifactProbe(findMatchingArtifactProbe(resource, artifactProbes))
-            ));
-        if (allAvailableCorePlaceholder && openSource.score <= scores.partial) {
-            return applyScoringEvidenceCaps(audit);
+            && substantiveCoreResources.length === 0;
+        if (substantiveAvailableTypes.size === 0 && allAvailableCorePlaceholder) {
+            if (openSource.score <= scores.promise) {
+                return applyScoringEvidenceCaps(audit);
+            }
+            const normalizedAudit = {
+                ...audit,
+                dimensions: {
+                    ...audit.dimensions,
+                    openSource: {
+                        score: scores.promise,
+                        reason: `[A_OPEN] 自动探测确认当前可访问的核心仓库仅为占位框架、尚未包含实质代码、模型权重或数据文件，按未实质发布核心产物上限计 ${scores.promise.toFixed(1)} 分。`
+                    }
+                }
+            };
+            return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
         }
         const isDatasetPaper = audit.documentType === '数据集与基准';
         const isCodeOnlyType = ['理论研究', '综述'].includes(audit.documentType);
         const hasCompleteCoreRelease = !allAvailableCorePlaceholder && (
             isV2 && isDatasetPaper
-                ? verifiedAvailableTypes.has('dataset')
+                ? substantiveAvailableTypes.has('dataset')
                 : (isV2 && isCodeOnlyType
-                    ? (verifiedAvailableTypes.has('code') || verifiedAvailableTypes.has('dataset'))
-                    : (verifiedAvailableTypes.has('code') && verifiedAvailableTypes.has('model')))
+                    ? (substantiveAvailableTypes.has('code') || substantiveAvailableTypes.has('dataset'))
+                    : (substantiveAvailableTypes.has('code') && substantiveAvailableTypes.has('model')))
         );
-        const hasCompleteDocumentation = verifiedResourceIdentity.resources.some(resource => (
+        const hasCompleteDocumentation = substantiveCoreResources.some(resource => (
             (resource?.type === 'code' || (isDatasetPaper && isV2 && resource?.type === 'dataset'))
             && resource?.availability === 'available'
             && resource?.documentationEvidence?.completeness === 'complete'
@@ -976,7 +991,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
                 resource.documentationEvidence, resource.originalUrl
             )
         ));
-        const hasPartialDocumentation = verifiedResourceIdentity.resources.some(resource => (
+        const hasPartialDocumentation = substantiveCoreResources.some(resource => (
             (resource?.type === 'code' || (isDatasetPaper && isV2 && resource?.type === 'dataset'))
             && resource?.availability === 'available'
             && resource?.documentationEvidence?.completeness === 'partial'
@@ -1016,7 +1031,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
             };
             return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
         }
-        if (isDatasetPaper && isV2 && verifiedAvailableTypes.has('dataset') && openSource.score < scores.incompleteDocs && verifiedAvailableTypes.has('code')) {
+        if (isDatasetPaper && isV2 && substantiveAvailableTypes.has('dataset') && openSource.score < scores.incompleteDocs && substantiveAvailableTypes.has('code')) {
             const normalizedAudit = {
                 ...audit,
                 dimensions: {
@@ -1032,7 +1047,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
         if (isV2 && !hasCompleteCoreRelease && openSource.score > scores.partial) {
             const labels = { code: '代码', model: '模型权重', dataset: '数据集' };
             const available = ['code', 'model', 'dataset']
-                .filter(type => verifiedAvailableTypes.has(type))
+                .filter(type => substantiveAvailableTypes.has(type))
                 .map(type => labels[type])
                 .join('、');
             const normalizedAudit = {
@@ -1061,13 +1076,13 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
             return applyScoringEvidenceCaps(recalculateScoringAudit(normalizedAudit));
         }
         const reasonText = String(openSource.reason || '');
-        if (!allAvailableCorePlaceholder && (
+        if (substantiveAvailableTypes.size > 0 && (
             openSource.score < scores.partial
-            || reasonDeniesVerifiedAvailableResourceType(reasonText, verifiedAvailableTypes)
+            || reasonDeniesVerifiedAvailableResourceType(reasonText, substantiveAvailableTypes)
         )) {
             const labels = { code: '代码', model: '模型权重', dataset: '数据集' };
             const available = ['code', 'model', 'dataset']
-                .filter(type => verifiedAvailableTypes.has(type))
+                .filter(type => substantiveAvailableTypes.has(type))
                 .map(type => labels[type])
                 .join('、');
             const normalizedAudit = {

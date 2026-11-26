@@ -388,3 +388,43 @@ test('详细收集显式记录IO/查询超时而旧数组API保留，Git子环�
         }
     }
 });
+
+test('locks 覆盖新增 5 个目录、.lock.reclaim、拒绝布尔 pid 且捕获共享锁目录符号链接', t => {
+    const f = cliFixture(t, { withLock: false });
+    const extraDirs = [
+        'historical-direct-rewrite-registries',
+        'fetched-arxiv-sources',
+        'paper-source-authorities',
+        'conference-executions',
+        'daily-deployment-observations'
+    ];
+    for (const name of extraDirs) {
+        const lockDir = path.join(f.root, 'data/runtime', name, 'item.lock');
+        fs.mkdirSync(lockDir, { recursive: true });
+        fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({
+            pid: process.pid, hostname: os.hostname(), startedAt: f.timestamp, heartbeatAt: f.timestamp
+        }));
+    }
+    const reclaimDir = path.join(f.root, 'data/runtime/locks/stale.lock.reclaim');
+    fs.mkdirSync(reclaimDir, { recursive: true });
+    fs.writeFileSync(path.join(reclaimDir, 'owner.json'), JSON.stringify({
+        pid: true, hostname: os.hostname(), startedAt: f.timestamp, heartbeatAt: f.timestamp
+    }));
+
+    const sharedLocksDir = path.join(f.common, '.paper-digest-locks');
+    fs.mkdirSync(sharedLocksDir, { recursive: true });
+    const outside = path.join(f.root, 'outside.txt');
+    fs.writeFileSync(outside, 'secret');
+    fs.symlinkSync(outside, path.join(sharedLocksDir, 'stray-link'));
+
+    const report = locks.collectLockView({ root: f.root });
+    for (const name of extraDirs) {
+        assert.ok(report.locks.some(row => row.file === `data/runtime/${name}/item.lock`), `应发现 ${name} 下的锁`);
+    }
+    const reclaimRow = report.locks.find(row => row.file === 'data/runtime/locks/stale.lock.reclaim');
+    assert.ok(reclaimRow, '应识别 .lock.reclaim 目录');
+    assert.strictEqual(reclaimRow.pid, null, 'boolean pid: true 不得被强转为 1');
+    assert.ok(report.problems.some(item => item.file === 'data/runtime/locks/stale.lock.reclaim' && item.code === 'INVALID_OWNER_FIELDS'));
+    assert.strictEqual(report.scanComplete, false);
+    assert.ok(report.problems.some(item => item.scope === 'shared-blog' && item.code === 'UNSAFE_FILE'));
+});

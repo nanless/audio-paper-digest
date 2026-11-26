@@ -428,9 +428,17 @@ def _lock_create(lock_path, stale_seconds):
             owner_identity = _lock_identity(os.fstat(owner_fd))
             os.fchmod(owner_fd, 0o600)
             acquired_at = datetime_now_iso()
-            record = {'pid': os.getpid(), 'hostname': socket.gethostname(),
+            pid = os.getpid()
+            record = {'pid': pid, 'hostname': socket.gethostname(),
                       'token': uuid.uuid4().hex, 'acquiredAt': acquired_at,
                       'heartbeatAt': acquired_at, 'leaseSeconds': stale_seconds}
+            from blog_repository_lock import _boot_time_seconds, _pid_start_time
+            boot_time = _boot_time_seconds()
+            if boot_time is not None:
+                record['bootTime'] = boot_time
+            pid_start = _pid_start_time(pid)
+            if pid_start is not None:
+                record['pidStartTime'] = pid_start
             data = (json.dumps(record, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
             _lock_write_all(owner_fd, data)
             os.fsync(owner_fd)

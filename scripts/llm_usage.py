@@ -51,6 +51,30 @@ def _digest(value):
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
+def _valid_batch_date(value):
+    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        return None
+    try:
+        parsed = datetime.strptime(value, '%Y-%m-%d')
+    except ValueError:
+        return None
+    return value if parsed.strftime('%Y-%m-%d') == value else None
+
+
+def _normalize_platform_root_symlink(resolved_path: Path) -> Path:
+    if sys.platform != 'darwin':
+        return resolved_path
+    text = str(resolved_path)
+    for alias, real in (('/var', '/private/var'), ('/tmp', '/private/tmp')):
+        if text == alias or text.startswith(f'{alias}/'):
+            try:
+                if Path(alias).is_symlink() and os.path.realpath(alias) == real:
+                    return Path(f'{real}{text[len(alias):]}')
+            except OSError:
+                pass
+    return resolved_path
+
+
 def normalize_usage_paper_id(value):
     if not isinstance(value, str):
         return None
@@ -168,6 +192,7 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
     else:
         outcome = 'completed'
     paper_id = context.get('paperId')
+    resolved_batch_date = _valid_batch_date(context.get('batchDate'))
     return {
         **usage_event_header(), 'kind': 'request', 'eventId': event_id or str(uuid.uuid4()),
         'at': at or _now(), 'runtime': 'python',
@@ -176,6 +201,7 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         'stage': _label(context.get('stage')) or 'unknown',
         'unitId': context.get('unitId') if re.fullmatch(r'[a-f0-9]{64}', str(context.get('unitId') or '')) else None,
         'contentAttempt': _count(context.get('contentAttempt')), 'transportAttempt': _count(context.get('transportAttempt')),
+        **({'batchDate': resolved_batch_date} if resolved_batch_date else {}),
         'protocol': _label(protocol), 'model': _label(model), 'outcome': outcome,
         **({'accountId': resolved_account_id} if resolved_account_id else {}),
         'statusCode': _count(status_code), 'errorCode': _label(error_code), 'durationMs': _count(round(duration_ms)),
@@ -196,7 +222,7 @@ def write_llm_usage_event(event, directory=None):
     - 每次生成新的 uuid4 文件名，不用于改写某个指定的已有用量文件。
     - 临时文件以 O_EXCL|O_NOFOLLOW 创建，写完并同步文件后再改名。
     """
-    target_dir = Path(directory or LLM_USAGE_DIR).absolute()
+    target_dir = _normalize_platform_root_symlink(Path(directory or LLM_USAGE_DIR).absolute())
     current = Path(target_dir.anchor)
     for part in target_dir.parts[1:]:
         current /= part

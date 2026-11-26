@@ -1292,6 +1292,52 @@ Ours & 3.55 & 0.03 \tabularnewline
             extractor.extract_tex_ast_from_bytes(hostile_pax_tar)
         self.assertEqual(ctx.exception.code, "INVALID_ARCHIVE")
 
+    def test_tabular_nested_env_empty_rule_rows_and_bracket_row_label_regressions(self):
+        tex = (
+            r"\documentclass{article}" "\n"
+            r"\begin{document}" "\n"
+            r"\begin{abstract}Table parser edge-case regression.\end{abstract}" "\n"
+            r"\section{Experiments}" "\n"
+            r"\begin{table}[t]" "\n"
+            r"\caption{Nested env, empty rule row, and bracket model prefix.}" "\n"
+            r"\label{tab:edge}" "\n"
+            r"\begin{tabular}{lcc}" "\n"
+            r"\toprule" "\n"
+            r"Model & \multicolumn{2}{c}{Metrics} \\" "\n"
+            r" & WER & Matrix \\" "\n"
+            r"\midrule \\" "\n"
+            r"Baseline & 5.8\% & $\begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}$ \\[2pt]" "\n"
+            r"[Ours] Model & \begin{tabular}{c} 3.2\% \\ (best) \end{tabular} & 9.1 \\" "\n"
+            r"\bottomrule" "\n"
+            r"\end{tabular}" "\n"
+            r"\end{table}" "\n"
+            r"\begin{table}[t]" "\n"
+            r"\caption{Empty hline row and same-line bracket label.}" "\n"
+            r"\begin{tabular}{lc}" "\n"
+            r"System & Score \\" "\n"
+            r"\hline \\" "\n"
+            r"Base & 1.0 \\ [Ours] Fast & 2.0 \\" "\n"
+            r"\end{tabular}" "\n"
+            r"\end{table}" "\n"
+            r"\end{document}" "\n"
+        ).encode("utf-8")
+        ast = extractor.extract_tex_ast_from_bytes(tex, arxiv_id="2611.99001")
+        self.assertEqual(len(ast["tables"]), 2)
+        t0 = ast["tables"][0]
+        self.assertEqual(t0["headers"], ["Model", "Metrics / WER", "Metrics / Matrix"])
+        self.assertEqual(len(t0["rows"]), 2)
+        self.assertEqual(t0["rows"][0][0], "Baseline")
+        self.assertEqual(t0["rows"][0][1], "5.8%")
+        self.assertIn("1", t0["rows"][0][2])
+        self.assertIn("4", t0["rows"][0][2])
+        self.assertEqual(t0["rows"][1][0], "[Ours] Model")
+        self.assertIn("3.2%", t0["rows"][1][1])
+        self.assertEqual(t0["rows"][1][2], "9.1")
+
+        t1 = ast["tables"][1]
+        self.assertEqual(t1["headers"], ["System", "Score"])
+        self.assertEqual(t1["rows"], [["Base", "1.0"], ["[Ours] Fast", "2.0"]])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -66,7 +67,7 @@ internal fun websiteDirectoryNodes(taxonomy:WebsiteTaxonomy,facet:String,parent:
     val nodes=remember(taxonomy,facet,parent,query){taxonomy?.let{websiteDirectoryNodes(it,facet,parent,query)}.orEmpty()}
     LazyColumn(modifier.testTag("website-directory"),state=scroll,contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
         if(!compact)item("heading") {Column(verticalArrangement=Arrangement.spacedBy(3.dp)){Text("研究方向",style=MaterialTheme.typography.titleLarge);Text("${taxonomy?.nodes?.size?:0} 个方向 · 九个维度",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)}}
-        item("search") {OutlinedTextField(query,onQuery,Modifier.fillMaxWidth(),singleLine=true,placeholder={Text("搜索目录、英文或别名",style=MaterialTheme.typography.bodyMedium)},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton({onQuery("")}){Icon(Icons.Outlined.Close,"清除目录搜索")}},keyboardOptions=KeyboardOptions(imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={keyboard?.hide()}))}
+        item("search") {OutlinedTextField(query,onQuery,Modifier.fillMaxWidth(),shape=MaterialTheme.shapes.medium,singleLine=true,placeholder={Text("搜索目录、英文或别名",style=MaterialTheme.typography.bodyMedium)},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton({onQuery("")}){Icon(Icons.Outlined.Close,"清除目录搜索")}},keyboardOptions=KeyboardOptions(imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={keyboard?.hide()}))}
         if(!compact)item("facets") {LazyRow(Modifier.testTag("website-facets"),horizontalArrangement=Arrangement.spacedBy(6.dp)){items(WebsiteTaxonomy.facets.entries.toList(),key={it.key}){(key,label)->FilterChip(facet==key,{onFacet(key);onParent("");onQuery("")},label={Text("$label ${view?.facetCounts?.get(key)?:0}")},modifier=Modifier.semantics{contentDescription="目录维度：$label"})}}}
         if(!compact)item("options") {Row(verticalAlignment=Alignment.CenterVertically){TextButton({advanced=!advanced},Modifier.weight(1f)){Text((if(direction.subtree)"含子方向"else"仅直接标签")+" · "+if(direction.primary)"仅主要角色"else"任意标签",style=MaterialTheme.typography.labelMedium);Icon(Icons.Outlined.ExpandMore,null,Modifier.size(18.dp))};if(direction.ids.isNotEmpty()||direction.unclassified||direction.domain!="all"||direction.research!="all")TextButton({onChange(WebsiteDirection(subtree=direction.subtree,primary=direction.primary))}){Text("清除")}}}
         if(advanced&&!compact)item("advanced") {Column(verticalArrangement=Arrangement.spacedBy(6.dp)){
@@ -80,22 +81,32 @@ internal fun websiteDirectoryNodes(taxonomy:WebsiteTaxonomy,facet:String,parent:
         if(taxonomy==null)item("missing"){Text("同步已发布内容后，完整目录会保存在本机；已有论文和个人资料仍可阅读。",style=MaterialTheme.typography.bodySmall)}
         else {
             if(query.isBlank()&&!compact)item("breadcrumbs") {FlowRow(verticalArrangement=Arrangement.spacedBy(0.dp)){TextButton({onParent("")}){Text(WebsiteTaxonomy.facets[facet].orEmpty())};taxonomy.nodes[parent]?.let{node->(node.ancestors+node.id).forEach{id->TextButton({onParent(id)}){Text("› ${taxonomy.nodes.getValue(id).label}")}}}}}
-            if(parent.isNotEmpty()&&query.isBlank()&&!compact)taxonomy.nodes[parent]?.let{node->item("parent") {Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer,MaterialTheme.shapes.medium).padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
-                Row(verticalAlignment=Alignment.CenterVertically){Checkbox(node.id in direction.ids,{checked->onChange(direction.copy(ids=if(checked)direction.ids+node.id else direction.ids-node.id,unclassified=false))},modifier=Modifier.semantics{contentDescription="筛选网站方向：${node.label}"});Text(node.label,Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);Text("${view?.counts?.get(node.id)?:0}",color=MaterialTheme.colorScheme.primary)}
-                Text(websiteNodeDescription(node.description),style=MaterialTheme.typography.bodySmall,maxLines=3,overflow=TextOverflow.Ellipsis)
+            if(parent.isNotEmpty()&&query.isBlank()&&!compact)taxonomy.nodes[parent]?.let{node->item("parent") {Surface(Modifier.fillMaxWidth(),shape=MaterialTheme.shapes.medium,color=MaterialTheme.colorScheme.surfaceContainerLow,border=BorderStroke(1.dp,MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.72f))){Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+                Row(verticalAlignment=Alignment.CenterVertically){Checkbox(node.id in direction.ids,{checked->onChange(direction.copy(ids=if(checked)direction.ids+node.id else direction.ids-node.id,unclassified=false))},modifier=Modifier.semantics{contentDescription="筛选网站方向：${node.label}"});Text(node.label,Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);MonographPill("${view?.counts?.get(node.id)?:0}",MaterialTheme.colorScheme.primaryContainer,MaterialTheme.colorScheme.onPrimaryContainer)}
+                Text(websiteNodeDescription(node.description),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=3,overflow=TextOverflow.Ellipsis)
                 TextButton({details=node.id}){Text("定义与完整路径",style=MaterialTheme.typography.labelMedium)}
-            }}}
+            }}}}
             if(nodes.isEmpty())item("empty"){Text(if(query.isBlank())"此方向没有下一级。"else"目录没有匹配项，试试中文名称、英文或别名。",style=MaterialTheme.typography.bodySmall)}
             items(nodes,key={it.id}){node->
-                Row(Modifier.testTag("website-node-${node.id}").fillMaxWidth().background(if(node.id in direction.ids)MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.55f)else MaterialTheme.colorScheme.surface,MaterialTheme.shapes.small).heightIn(min=60.dp),verticalAlignment=Alignment.CenterVertically){
-                    Checkbox(node.id in direction.ids,{checked->onChange(direction.copy(ids=if(checked)direction.ids+node.id else direction.ids-node.id,unclassified=false))},enabled=node.active,modifier=Modifier.semantics{contentDescription="筛选网站方向：${node.label}"})
+                val picked=node.id in direction.ids
+                Surface(
+                    modifier=Modifier.testTag("website-node-${node.id}").fillMaxWidth(),
+                    shape=MaterialTheme.shapes.small,
+                    color=if(picked)MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.45f)else MaterialTheme.colorScheme.surfaceContainerLowest,
+                    border=BorderStroke(1.dp,if(picked)MaterialTheme.colorScheme.primary.copy(alpha=0.55f)else MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.65f)),
+                ){
+                Row(Modifier.fillMaxWidth().heightIn(min=60.dp),verticalAlignment=Alignment.CenterVertically){
+                    Checkbox(picked,{checked->onChange(direction.copy(ids=if(checked)direction.ids+node.id else direction.ids-node.id,unclassified=false))},enabled=node.active,modifier=Modifier.semantics{contentDescription="筛选网站方向：${node.label}"})
                     Column(Modifier.weight(1f).clickable(onClickLabel="浏览方向：${node.label}"){focus.clearFocus();keyboard?.hide();onFacet(node.facet);onParent(node.id);onQuery("")}.padding(vertical=10.dp),verticalArrangement=Arrangement.spacedBy(3.dp)){
                         Text(node.label,style=MaterialTheme.typography.titleSmall)
                         if(query.isNotBlank())Text((node.ancestors+node.id).joinToString(" › "){taxonomy.nodes.getValue(it).label},style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=TextOverflow.Ellipsis)
                         else if(node.english.isNotBlank())Text(node.english,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
                     }
-                    Text("${view?.counts?.get(node.id)?:0}",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(horizontal=8.dp))
-                    IconButton({focus.clearFocus();keyboard?.hide();onFacet(node.facet);onParent(node.id);onQuery("")}){Icon(Icons.Outlined.ChevronRight,"展开网站方向：${node.label}",Modifier.size(18.dp))}
+                    Surface(shape=MaterialTheme.shapes.extraSmall,color=MaterialTheme.colorScheme.surfaceContainerHigh,modifier=Modifier.padding(horizontal=6.dp)){
+                        Text("${view?.counts?.get(node.id)?:0}",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(horizontal=6.dp,vertical=2.dp))
+                    }
+                    IconButton({focus.clearFocus();keyboard?.hide();onFacet(node.facet);onParent(node.id);onQuery("")}){Icon(Icons.Outlined.ChevronRight,"展开网站方向：${node.label}",Modifier.size(18.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant)}
+                }
                 }
             }
             item("unclassified"){TextButton({onChange(direction.copy(ids=emptySet(),unclassified=!direction.unclassified))}){Text("分类资料待就绪 · ${view?.unclassified?:0}")}}

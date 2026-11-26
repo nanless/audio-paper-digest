@@ -635,6 +635,7 @@ function previousProjectionHarness() {
             if (name === './conference-reader-publication-evidence') return {replayCanonicalReaderPdfSource:(presented,identity)=>{controls.pdfPaper=presented;controls.pdfIdentity=identity;return {};}};
             if (name === './conference-analysis-context') return {withConferenceAnalysisSource:(identity,callback)=>{controls.actualSourceScope=identity;return callback();}};
             if (name === './conference-postprocess') return {readOriginalTagProof:()=>({rules:{}})};
+            if (name === './repo-rename-path' || name === './repo-rename-path.js') return require('../scripts/lib/repo-rename-path.js');
             if (name === '../analysis-engine') return {isSuccessfulAnalysisRecordForReadOnlyConferencePublication:()=>controls.wholePass};
             throw Error(`Unexpected projection dependency ${name}`);
         } };

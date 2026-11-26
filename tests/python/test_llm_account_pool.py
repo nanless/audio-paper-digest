@@ -1192,6 +1192,317 @@ class LlmAccountPoolTest(unittest.TestCase):
             self.assertTrue(sync_cached['from_cache'])
             self.assertEqual(len(calls), 3)
 
+    def test_live_sync_concurrency_does_not_hold_global_lock_across_io_and_coalesces_same_key(self):
+        import threading
+        import time
+        from llm_account_pool import sync_opencode_go_pool_usage
+
+        now_ms = int(datetime(2026, 11, 26, 4, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        body = {
+            'usage': {
+                'rolling': {'status': 'ok', 'percent': 0, 'resetsAt': '2026-11-26T09:00:00.000Z'},
+                'weekly': {'status': 'ok', 'percent': 5, 'resetsAt': '2026-11-30T00:00:00.000Z'},
+                'monthly': {'status': 'ok', 'percent': 10, 'resetsAt': '2026-12-10T00:00:00.000Z'},
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            state_a = Path(tmp) / 'pool_a.json'
+            state_b = Path(tmp) / 'pool_b.json'
+            entered_a = threading.Event()
+            release_a = threading.Event()
+            b_finished_while_a_blocked = [False]
+            same_key_calls = []
+
+            def fetcher_a(url, api_key, timeout_ms, proxy_url):
+                same_key_calls.append(api_key)
+                entered_a.set()
+                release_a.wait(timeout=2.0)
+                return {'status_code': 200, 'body': body}
+
+            def fetcher_b(url, api_key, timeout_ms, proxy_url):
+                return {'status_code': 200, 'body': body}
+
+            results = {}
+
+            def run_a1():
+                results['a1'] = sync_opencode_go_pool_usage(['sk-ca-1', 'sk-ca-2'], ENDPOINT, state_a, now_ms=now_ms, fetcher=fetcher_a)
+
+            def run_a2():
+                entered_a.wait(timeout=2.0)
+                results['a2'] = sync_opencode_go_pool_usage(['sk-ca-1', 'sk-ca-2'], ENDPOINT, state_a, now_ms=now_ms, fetcher=fetcher_a)
+
+            def run_b():
+                entered_a.wait(timeout=2.0)
+                results['b'] = sync_opencode_go_pool_usage(['sk-cb-1', 'sk-cb-2'], ENDPOINT, state_b, now_ms=now_ms, fetcher=fetcher_b)
+                b_finished_while_a_blocked[0] = not release_a.is_set()
+                release_a.set()
+
+            t1 = threading.Thread(target=run_a1)
+            t2 = threading.Thread(target=run_a2)
+            t3 = threading.Thread(target=run_b)
+            t1.start()
+            t2.start()
+            t3.start()
+            t1.join(timeout=5.0)
+            t2.join(timeout=5.0)
+            t3.join(timeout=5.0)
+
+            self.assertTrue(b_finished_while_a_blocked[0], '不同 sync_key 必须并发完成，不能被全局锁阻塞在网络 I/O 上')
+            self.assertEqual(len(same_key_calls), 2, '同一 sync_key 并发调用必须合并为一次拉取')
+            self.assertEqual(results['a1']['synced'], 2)
+            self.assertEqual(results['a2']['synced'], 2)
+            self.assertEqual(results['b']['synced'], 2)
+
+    def test_fetch_wall_clock_deadline_no_redirect_proxy_order_and_redaction(self):
+        import urllib.error
+        import urllib.request
+        from llm_account_pool import (
+            _UsageNoRedirectHandler,
+            _resolve_usage_proxy_url,
+            fetch_opencode_go_account_usage,
+            redact_usage_sync_error,
+        )
+
+        # P2-4: proxy canonical order + fail-closed validation
+        self.assertIsNone(_resolve_usage_proxy_url(None, {
+            'https_proxy': 'socks5://127.0.0.1:7897',
+            'HTTP_PROXY': 'http://127.0.0.1:7897',
+        }))
+        self.assertEqual(_resolve_usage_proxy_url(None, {
+            'https_proxy': 'http://127.0.0.1:8080',
+            'HTTPS_PROXY': 'http://127.0.0.1:9090',
+        }), 'http://127.0.0.1:8080')
+
+        # P1-6: redaction
+        redacted = redact_usage_sync_error(
+            RuntimeError(f'https://u:p@proxy:8080 Bearer tok123 Basic abc== sk-secret8888 {"a" * 64} raw-key-77'),
+            'raw-key-77',
+        )
+        for secret in ('u:p', 'tok123', 'abc==', 'sk-secret8888', 'a' * 64, 'raw-key-77'):
+            self.assertNotIn(secret, redacted)
+
+        # P2-6: _UsageNoRedirectHandler closes fp and raises immediately without reading Location
+        handler = _UsageNoRedirectHandler()
+        closed = [False]
+
+        class _FakeFp:
+            def close(self):
+                closed[0] = True
+
+        req = urllib.request.Request('https://opencode.ai/zen/go/v1/usage')
+        for code in (301, 302, 303, 307, 308):
+            closed[0] = False
+            method = getattr(handler, f'http_error_{code}')
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                method(req, _FakeFp(), code, 'Redirect', {'Location': 'http://169.254.169.254/latest'})
+            self.assertEqual(raised.exception.code, code)
+            self.assertTrue(closed[0])
+
+        # P1-1: wall-clock read deadline + non-200 rejection
+        class _SlowResp:
+            status = 200
+            fp = None
+
+            def __init__(self, status=200):
+                self.status = status
+                self.reads = 0
+
+            def read(self, n=-1):
+                self.reads += 1
+                return b'{"usage":'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        class _FakeOpener:
+            def __init__(self, resp):
+                self._resp = resp
+
+            def open(self, req, timeout=None):
+                return self._resp
+
+        with mock.patch('llm_account_pool.urllib.request.build_opener', return_value=_FakeOpener(_SlowResp(status=204))):
+            res_204 = fetch_opencode_go_account_usage('sk-k1', ENDPOINT, proxy_url='http://127.0.0.1:7897')
+            self.assertFalse(res_204['ok'])
+            self.assertEqual(res_204['status_code'], 204)
+
+        ticks = iter([100.0, 100.5, 102.0])
+        with mock.patch('llm_account_pool.urllib.request.build_opener', return_value=_FakeOpener(_SlowResp(status=200))), \
+                mock.patch('llm_account_pool.time.monotonic', side_effect=lambda: next(ticks, 200.0)):
+            res_timeout = fetch_opencode_go_account_usage('sk-k1', ENDPOINT, proxy_url='http://127.0.0.1:7897', timeout_ms=1000)
+            self.assertFalse(res_timeout['ok'])
+            self.assertIn('超时', res_timeout['error'])
+
+    def test_fast_path_guards_parity_spend_accounting_and_per_account_backoff(self):
+        from llm_account_pool import (
+            _estimate_usage_spend_usd,
+            apply_live_usage_snapshots,
+            evaluate_account_quota,
+            fetch_opencode_go_account_usage,
+            record_account_usage,
+            sync_opencode_go_pool_usage,
+        )
+
+        now_ms = int(datetime(2026, 11, 26, 4, 0, tzinfo=timezone.utc).timestamp() * 1000)
+
+        # P3-1: _validate_account_subrecords rejects None for monthlySpentUsd / weeklySpentUsd / lastUpdatedAtMs
+        with tempfile.TemporaryDirectory() as tmp:
+            for bad_field in ('monthlySpentUsd', 'weeklySpentUsd', 'lastUpdatedAtMs'):
+                bad_file = Path(tmp) / f'bad_{bad_field}.json'
+                bad_file.write_text(json.dumps({
+                    **record_header(ACCOUNT_POOL_CONTRACT, ACCOUNT_POOL_CONTRACT),
+                    'generation': 1,
+                    'services': {
+                        'svc': {
+                            'endpoint': 'https://opencode.ai/zen/go',
+                            'accounts': {'acct': {'usage': {bad_field: None}}},
+                            'groups': {},
+                        },
+                    },
+                }), encoding='utf-8')
+                with self.assertRaises(LlmAccountPoolStateError):
+                    read_state_strict(bad_file)
+
+        # P3-2: _estimate_usage_spend_usd skips None via _first_present
+        spent, tokens = _estimate_usage_spend_usd({
+            'inputTokens': None,
+            'input_tokens': 1_000_000,
+            'outputTokens': None,
+            'output_tokens': 0,
+        })
+        self.assertAlmostEqual(spent, 0.6, places=6)
+        self.assertEqual(tokens, 1_000_000)
+
+        # P3-2: fetch_opencode_go_account_usage passes now_ms to classify_opencode_go_quota_response
+        bal_res = fetch_opencode_go_account_usage(
+            'sk-bal', ENDPOINT, now_ms=now_ms,
+            fetcher=lambda **_: {'status_code': 401, 'body': {'error': {'message': 'Insufficient balance'}}},
+        )
+        self.assertTrue(bal_res['insufficient_balance'])
+        self.assertEqual(bal_res['quota']['blocked_until_ms'], now_ms + 30 * 60 * 1000)
+
+        # P3-3: legacy limitName='balance' without windows maps to balance_blocked
+        bal_ev = evaluate_account_quota({'limitName': 'balance', 'blockedUntilMs': now_ms + 60_000}, now_ms)
+        self.assertFalse(bal_ev['eligible'])
+        self.assertFalse(bal_ev['has_balance_quota'])
+
+        # P1-4: fast path enforces parent symlink and service.endpoint mismatch
+        with tempfile.TemporaryDirectory() as tmp:
+            real_dir = Path(tmp) / 'real'
+            real_dir.mkdir()
+            linked_dir = Path(tmp) / 'linked'
+            linked_dir.symlink_to(real_dir, target_is_directory=True)
+            state_file = real_dir / 'pool.json'
+            keys = ['py-fp-1', 'py-fp-2']
+            select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms, affinity_key='2611.00001')
+            with self.assertRaises(LlmAccountPoolStateError):
+                select_api_key(keys, ENDPOINT, linked_dir / 'pool.json', now_ms=now_ms + 1000, affinity_key='2611.00001')
+            raw = json.loads(state_file.read_text(encoding='utf-8'))
+            identity = get_pool_identity(keys, ENDPOINT)
+            raw['services'][identity['service_id']]['endpoint'] = 'https://evil.invalid/zen/go'
+            state_file.write_text(json.dumps(raw), encoding='utf-8')
+            with self.assertRaises(LlmAccountPoolStateError):
+                select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms + 1000, affinity_key='2611.00001')
+
+        # P1-2, P2-1, P2-2, P2-3: spend accounting, live_api preservation, per-account backoff, stale resetsAt
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'spend_pool.json'
+            keys = ['py-sp-a', 'py-sp-b']
+            sel_a = selection_for(keys, keys[0])
+            # 04:05:00Z（桶内第 5 分钟），保证 snap_now - 60s 与 snap_now + 60s 同属 04:00 桶
+            snap_now = now_ms + 5 * 60_000
+            # Pre-sync spend without monthlyCycle + old 5h bucket + current 5h bucket
+            record_account_usage(sel_a, {'estimated_cost_usd': 5.0, 'total_tokens': 1000}, state_file, now_ms=snap_now - 4 * 3600_000 - 45 * 60_000)
+            record_account_usage(sel_a, {'estimated_cost_usd': 0.5, 'total_tokens': 500}, state_file, now_ms=snap_now - 60_000)
+
+            wed_reset = int(datetime(2026, 12, 2, 10, 0, tzinfo=timezone.utc).timestamp() * 1000)
+            live_m_reset = int(datetime(2026, 12, 10, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+            apply_live_usage_snapshots(keys, ENDPOINT, {
+                sel_a['account_id']: {
+                    'monthly': {'status': 'ok', 'used_percent': 20, 'remaining_pct': 80.0, 'limited': False, 'resets_at_ms': live_m_reset},
+                    'weekly': {'status': 'ok', 'used_percent': 10, 'remaining_pct': 90.0, 'limited': False, 'resets_at_ms': wed_reset},
+                    'rolling': {'status': 'ok', 'used_percent': 25, 'remaining_pct': 75.0, 'limited': False, 'resets_at_ms': snap_now + 3 * 3600_000},
+                },
+            }, state_file, now_ms=snap_now)
+            # Adjust monthlyBudgetUsd to 10 for exact arithmetic
+            st = read_state_strict(state_file)
+            identity = get_pool_identity(keys, ENDPOINT)
+            acct = st['services'][identity['service_id']]['accounts'][sel_a['account_id']]
+            self.assertEqual(acct['quota']['monthlySpentAtSnapshotUsd'], 0.0)
+            self.assertEqual(acct['quota']['rolling5hSpentAtSnapshotUsd'], 0.5)
+            acct['quota']['monthlyBudgetUsd'] = 10
+            state_file.write_text(json.dumps(st), encoding='utf-8')
+
+            record_account_usage(sel_a, {'estimated_cost_usd': 0.25, 'total_tokens': 250}, state_file, now_ms=snap_now + 60_000)
+            later_ms = snap_now + 30 * 60_000
+            record_account_usage(sel_a, {'estimated_cost_usd': 0.75, 'total_tokens': 750}, state_file, now_ms=later_ms)
+            rec_later = read_state_strict(state_file)['services'][identity['service_id']]['accounts'][sel_a['account_id']]
+            ev = evaluate_account_quota(rec_later, later_ms)
+            self.assertEqual(ev['effective_monthly_remaining_pct'], 70.0)
+            self.assertEqual(ev['effective_weekly_remaining_pct'], 70.0)
+            self.assertEqual(ev['effective_rolling5h_remaining_pct'], 25.0)
+
+            # Across Monday UTC 00:00 before Wednesday reset -> weekly cycle must not reset
+            mon_ms = int(datetime(2026, 11, 30, 1, 0, tzinfo=timezone.utc).timestamp() * 1000)
+            record_account_usage(sel_a, {'estimated_cost_usd': 0.5, 'total_tokens': 500}, state_file, now_ms=mon_ms)
+            rec_mon = read_state_strict(state_file)['services'][identity['service_id']]['accounts'][sel_a['account_id']]
+            self.assertEqual(evaluate_account_quota(rec_mon, mon_ms)['effective_weekly_remaining_pct'], 60.0)
+
+            # P2-2: mark_quota_exhausted preserves live_api monthly anchor
+            mark_quota_exhausted(sel_a, {'limit_class': 'monthly', 'blocked_until_ms': live_m_reset + 5 * 86400_000}, state_file, now_ms=snap_now + 5000)
+            rec_after_429 = read_state_strict(state_file)['services'][identity['service_id']]['accounts'][sel_a['account_id']]
+            self.assertEqual(rec_after_429['quota']['monthlyResetSource'], 'live_api')
+            self.assertEqual(rec_after_429['quota']['monthlyResetAtMs'], live_m_reset)
+
+        # P2-1: per-account backoff & stale resetsAt guard & backwards clock
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'backoff_pool.json'
+            keys = ['py-bo-ok', 'py-bo-fail']
+            counts = {'py-bo-ok': 0, 'py-bo-fail': 0}
+
+            def bo_fetcher(url, api_key, timeout_ms, proxy_url):
+                counts[api_key] += 1
+                if api_key == 'py-bo-fail':
+                    return {'status_code': 500, 'body': {'error': 'err'}}
+                stale_iso = datetime.fromtimestamp((now_ms - 10_000) / 1000, tz=timezone.utc).isoformat()
+                return {
+                    'status_code': 200,
+                    'body': {
+                        'usage': {
+                            'rolling': {'status': 'ok', 'percent': 0, 'resetsAt': stale_iso},
+                            'weekly': {'status': 'ok', 'percent': 5, 'resetsAt': '2026-11-30T00:00:00.000Z'},
+                            'monthly': {'status': 'ok', 'percent': 10, 'resetsAt': '2026-12-10T00:00:00.000Z'},
+                        },
+                    },
+                }
+
+            r1 = sync_opencode_go_pool_usage(keys, ENDPOINT, state_file, now_ms=now_ms, fetcher=bo_fetcher)
+            self.assertEqual(r1['synced'], 1)
+            self.assertEqual(r1['failed'], 1)
+            r2 = sync_opencode_go_pool_usage(keys, ENDPOINT, state_file, now_ms=now_ms + 10_000, fetcher=bo_fetcher)
+            self.assertTrue(r2['from_cache'])
+            self.assertTrue(r2.get('backoff'))
+            self.assertEqual(counts, {'py-bo-ok': 1, 'py-bo-fail': 1})
+            r3 = sync_opencode_go_pool_usage(keys, ENDPOINT, state_file, now_ms=now_ms + 70_000, fetcher=bo_fetcher)
+            self.assertFalse(r3['from_cache'])
+            self.assertEqual(counts, {'py-bo-ok': 1, 'py-bo-fail': 2})
+            sync_opencode_go_pool_usage(keys, ENDPOINT, state_file, now_ms=now_ms - 5000, fetcher=bo_fetcher)
+            self.assertEqual(counts['py-bo-ok'], 2)
+
+    def test_resolve_live_sync_timeout_ms_exported_and_honors_env(self):
+        import os
+        import llm_account_pool as lap
+        self.assertIn('resolve_live_sync_timeout_ms', lap.__all__)
+        self.assertIs(lap.resolve_live_sync_timeout_ms, lap._resolve_live_sync_timeout_ms)
+        with mock.patch.dict(os.environ, {'PD_LLM_ACCOUNT_POOL_SYNC_TIMEOUT_MS': '25000'}, clear=False):
+            self.assertEqual(lap.resolve_live_sync_timeout_ms(), 25000)
+        with mock.patch.dict(os.environ, {'PD_LLM_ACCOUNT_POOL_SYNC_TIMEOUT_MS': '999999'}, clear=False):
+            self.assertEqual(lap.resolve_live_sync_timeout_ms(), lap.DEFAULT_LIVE_SYNC_TIMEOUT_MS)
+        self.assertEqual(lap.resolve_live_sync_timeout_ms(18000), 18000)
+
 
 if __name__ == '__main__':
     unittest.main()

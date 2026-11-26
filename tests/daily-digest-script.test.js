@@ -237,3 +237,12 @@ test('--previous-day-batch 在 --help 中记录且禁止与非抓取 --from 阶�
     assert.equal(badCombo.status, 2);
     assert.match(badCombo.stderr, /--previous-day-batch 仅适用于抓取阶段/);
 });
+
+test('重复 --from 与重复 --api 在启动业务阶段前被明确拒绝', () => {
+    const dupFrom = spawnSync('bash', [scriptPath, '2026-11-16', '--from', 'generate', '--from', 'review'], { encoding: 'utf8' });
+    assert.equal(dupFrom.status, 2);
+    assert.match(dupFrom.stderr, /--from 不能重复使用/);
+    const dupApi = spawnSync('bash', [scriptPath, '2026-11-16', '--api', '--api', '--from', 'review'], { encoding: 'utf8' });
+    assert.equal(dupApi.status, 2);
+    assert.match(dupApi.stderr, /--api 不能重复使用/);
+});

@@ -212,12 +212,19 @@ class RegistryTest(unittest.TestCase):
 
     def test_current_resolution_only_exposes_active_chinese_preferred_labels(self):
         data = registry()
+        data['concepts'].append(concept('method.transformer', 'Transformer', 'Transformer architecture'))
         self.assertIs(validate_tag_catalog(data), data)
-        for label in ('语音识别', '#语音识别', ' ＃语音识别 '):
+        # current 模式要求与 JS resolveCurrentTag 完全一致：必须带 ASCII # 前缀且大小写完全一致
+        for label in ('#语音识别', ' #语音识别 '):
             self.assertEqual(resolve_current_label(data, label)['id'], 'task.asr')
-        for label in ('ASR', 'asr', ' ＃ＡＳＲ ', '\ufeff#ASR\ufeff',
+        self.assertEqual(resolve_current_label(data, '#Transformer')['id'], 'method.transformer')
+        for label in ('语音识别', ' ＃语音识别 ', '#transformer', '#TRANSFORMER', 'Transformer',
+                      'ASR', 'asr', ' ＃ＡＳＲ ', '\ufeff#ASR\ufeff',
                       'Automatic speech recognition'):
-            self.assertIsNone(resolve_current_label(data, label))
+            self.assertIsNone(resolve_current_label(data, label), label)
+        for label in ('语音识别', '#语音识别', ' ＃语音识别 ',
+                      'ASR', 'asr', ' ＃ＡＳＲ ', '\ufeff#ASR\ufeff',
+                      'Automatic speech recognition'):
             # 通用库里的解析函数仍保留历史命名空间；
             # 生产解析另行选择当前模式。
             self.assertEqual(resolve_label(data, label)['id'], 'task.asr')

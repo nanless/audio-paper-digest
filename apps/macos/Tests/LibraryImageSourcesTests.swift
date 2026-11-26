@@ -64,8 +64,57 @@ actor PublishedImageFixture {
         ]
         for address in rejected{try expect(!approved(address),"untrusted owner branch path alias or redirect target rejected")}
         for address in ["https://arxiv.org/pdf/2610.27491v1.pdf","https://www.isca-archive.org/interspeech_2026/cui26_interspeech.pdf","https://openreview.net/pdf?id=fixture"]{try expect(approved(address),"existing official source policy retained")}
+        let conferenceOfficialPDFs = [
+            "https://ojs.aaai.org/index.php/AAAI/article/view/35001/37200",
+            "https://openaccess.thecvf.com/content/CVPR2026/papers/Author_Paper_CVPR_2026_paper.pdf",
+            "https://proceedings.iclr.cc/paper_files/paper/2026/file/abcd1234-Paper-Conference.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/smith26a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/doe_26-a/doe_26-a.pdf",
+            "https://eurasip.org/Proceedings/Eusipco/Eusipco2026/pdfs/1571000001.pdf",
+            "https://www.eurasip.org/Proceedings/Eusipco/Eusipco2026/pdfs/1571000001.pdf",
+            "https://nime.org/proceedings/2026/nime2026_12.pdf",
+            "https://www.nime.org/proceedings/2026/nime2026_12.pdf",
+            "https://dafx26.mit.edu/assets/papers/DAFx26_paper_42.pdf",
+            "https://icmc2026.ligeti-zentrum.de/wp-content/uploads/2026/07/ICMC2026_proceedings_V2showcase.pdf"
+        ]
+        for address in conferenceOfficialPDFs {
+            try expect(approved(address), "official conference proceedings PDF host allowed: " + address)
+        }
+        try expect(LibraryService.isApprovedOfficialProceedingsPdf(URL(string:"https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/smith26a.pdf")!), "PMLR mlresearch raw PDF explicitly approved")
+        let untrustedConferenceLookalikes = [
+            "http://ojs.aaai.org/index.php/AAAI/article/view/35001/37200",
+            "https://ojs.aaai.org.evil.invalid/paper.pdf",
+            "https://proceedings.iclr.cc.evil.invalid/paper.pdf",
+            "https://openaccess.thecvf.com:8443/content/CVPR2026/papers/paper.pdf",
+            "https://user@dafx26.mit.edu/assets/papers/DAFx26_paper_1.pdf",
+            "https://evil-eurasip.org/Proceedings/Eusipco/Eusipco2026/pdfs/1.pdf",
+            "https://evil.nime.org/proceedings/2026/nime2026_1.pdf",
+            "https://icmc2026.ligeti-zentrum.de.evil.invalid/paper.pdf",
+            "https://untrusted.example.org/proceedings/paper.pdf",
+            "http://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/smith26a.pdf",
+            "https://user@raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/smith26a.pdf",
+            "https://raw.githubusercontent.com:8443/mlresearch/v267/main/assets/smith26a/smith26a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/smith26a.pdf?raw=1",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/smith26a.pdf#page=1",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/%2e%2e/secret.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/..%2fsecret.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/../assets/smith26a/smith26a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/./smith26a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets//smith26a/smith26a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/dev/assets/smith26a/smith26a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/vABC/main/assets/smith26a/smith26a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/papers/smith26a/smith26a.pdf",
+            "https://raw.githubusercontent.com/otherorg/v267/main/assets/smith26a/smith26a.pdf",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/smith26a.html",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/smith26a.png",
+            "https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/extra/smith26a.pdf"
+        ]
+        for address in untrustedConferenceLookalikes {
+            try expect(!approved(address), "untrusted conference host or non-HTTPS URL rejected: " + address)
+        }
         let proxy=URL(string:"http://127.0.0.1:7897")!
-        for address in images+historical+["https://arxiv.org/pdf/2610.27491v1.pdf"]{try expect(LibraryService.externalResourceProxy(URL(string:address)!,configured:proxy)==proxy,"explicit configured CONNECT used only for supported route")}
+        for address in images+historical+["https://arxiv.org/pdf/2610.27491v1.pdf","https://raw.githubusercontent.com/mlresearch/v267/main/assets/smith26a/smith26a.pdf"]{try expect(LibraryService.externalResourceProxy(URL(string:address)!,configured:proxy)==proxy,"explicit configured CONNECT used only for supported route")}
+        try expect(LibraryService.externalResourceProxy(URL(string:"https://proceedings.iclr.cc/paper_files/paper/2026/file/abcd1234-Paper-Conference.pdf")!,configured:proxy)==nil,"proceedings.iclr.cc keeps direct route")
         try expect(LibraryService.externalResourceProxy(URL(string:images[0])!,configured:nil)==nil,"no environment proxy or implicit connection is invented")
         try expect(LibraryService.externalResourceProxy(URL(string:"https://www.isca-archive.org/interspeech_2026/cui26_interspeech.pdf")!,configured:proxy)==nil,"ordinary official source keeps existing direct route")
         try expect(LibraryService.externalResourceProxy(URL(string:rejected[0])!,configured:proxy)==nil,"unapproved GitHub repository receives no proxy capability")

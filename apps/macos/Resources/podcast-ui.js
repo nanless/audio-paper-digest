@@ -72,19 +72,20 @@ export function mountPodcast(app, {dockElement, onOpenPaper} = {}) {
   function currentEpisode() {
     const list = Array.isArray(state.episodes) ? state.episodes : [];
     if (!list.length) return null;
-    if (state.activeEpisodeId) {
-      const playing = list.find(e => e.id === state.activeEpisodeId);
-      if (playing) return playing;
-    }
     if (selectedEpisodeId) {
       const picked = list.find(e => e.id === selectedEpisodeId);
       if (picked) return picked;
+    }
+    if (state.activeEpisodeId) {
+      const playing = list.find(e => e.id === state.activeEpisodeId);
+      if (playing) return playing;
     }
     return list[0];
   }
 
   function applyState(next) {
     if (!next || typeof next !== 'object') return;
+    const prevActiveId = state.activeEpisodeId;
     state = {
       ...state,
       ...next,
@@ -92,8 +93,11 @@ export function mountPodcast(app, {dockElement, onOpenPaper} = {}) {
       cachedEpisodeIds: Array.isArray(next.cachedEpisodeIds) ? next.cachedEpisodeIds : state.cachedEpisodeIds,
       error: next.error || null,
     };
-    if (state.activeEpisodeId) selectedEpisodeId = state.activeEpisodeId;
-    else if (!selectedEpisodeId && state.episodes.length) selectedEpisodeId = state.episodes[0].id;
+    if (state.activeEpisodeId && state.activeEpisodeId !== prevActiveId) {
+      selectedEpisodeId = state.activeEpisodeId;
+    } else if ((!selectedEpisodeId || !state.episodes.some(e => e.id === selectedEpisodeId)) && state.episodes.length) {
+      selectedEpisodeId = state.activeEpisodeId || state.episodes[0].id;
+    }
     render();
   }
 
@@ -105,6 +109,7 @@ export function mountPodcast(app, {dockElement, onOpenPaper} = {}) {
     const epSig = episodes.map(e => `${e.id}:${e.cached ? 1 : 0}:${(e.chapters || []).length}`).join('|');
     return JSON.stringify([
       episode.id,
+      selectedEpisodeId || '',
       epSig,
       state.activeEpisodeId || '',
       state.downloadingEpisodeId || '',

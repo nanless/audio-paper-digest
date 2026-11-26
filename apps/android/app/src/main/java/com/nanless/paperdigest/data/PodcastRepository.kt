@@ -366,7 +366,7 @@ class PodcastRepository(
         val ALLOWED_RATES = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
         private val INITIAL_RELEASE_URL_REGEX =
-            Regex("^https://github\\.com/nanless/(?:audio-paper-digest|audio-paper-digest-blog|audio-research-workbench|audio-research-portal)/releases/download/[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._-]{1,128}\\.mp3$")
+            Regex("^https://github\\.com/nanless/(?:audio-paper-digest|audio-paper-digest-blog|audio-research-workbench|audio-research-portal)/releases/download/(?!\\.{1,2}/)[A-Za-z0-9._-]{1,128}/(?!\\.{1,2}\\.mp3$)[A-Za-z0-9._-]{1,128}\\.mp3$")
         private val SHA256_REGEX = Regex("^[a-f0-9]{64}$")
         private val DATE_REGEX = Regex("^\\d{4}-\\d{2}-\\d{2}$")
         private val EPISODE_ID_REGEX = Regex("^[A-Za-z0-9._:-]{1,128}$")
@@ -390,7 +390,7 @@ class PodcastRepository(
             if (uri.port != -1 && uri.port != 443) return false
             if (uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null) return false
             val rawPath = uri.rawPath ?: return false
-            if ('%' in rawPath || '\\' in rawPath || "//" in rawPath || ".." in rawPath) return false
+            if ('%' in rawPath || '\\' in rawPath || "//" in rawPath || ".." in rawPath || rawPath.split('/').any { it == "." || it == ".." }) return false
             return true
         }
 
@@ -406,6 +406,7 @@ class PodcastRepository(
             val lowerRaw = rawPath.lowercase()
             if (rawPath.isEmpty() || decodedPath.isEmpty()) return false
             if (".." in rawPath || ".." in decodedPath || '\\' in rawPath || '\\' in decodedPath) return false
+            if (rawPath.split('/').any { it == "." || it == ".." } || decodedPath.split('/').any { it == "." || it == ".." }) return false
             if ("%2e" in lowerRaw || "%5c" in lowerRaw || "%00" in lowerRaw || '\u0000' in decodedPath) return false
             return true
         }

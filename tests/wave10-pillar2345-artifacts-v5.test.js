@@ -198,6 +198,16 @@ doc.close()
     const desc = pdfCrop.pdfCropSourceDescriptor(extracted.figures[0].images[0], '2611.99123');
     assert.ok(desc, 'Python 整数坐标 bbox 必须通过 JS pdfCropSourceDescriptor 签名核验');
 
+    // Non-modern arXiv ID (cs/0601001) and conference ID must fall back to pdfSha[:12] and pass JS validator
+    for (const nonModernId of ['cs/0601001', 'conference:icml:2026:paper-1']) {
+        const altExtracted = pdfCrop.extractPdfStructuredArtifactsSync(pdfBytes, nonModernId);
+        assert.equal(altExtracted.figures.length, 1);
+        const img = altExtracted.figures[0].images[0];
+        assert.ok(img.url.includes(`/pdf/${altExtracted.pdfSha256.slice(0, 12)}.pdf#`), nonModernId);
+        const altDesc = pdfCrop.pdfCropSourceDescriptor(img, nonModernId);
+        assert.ok(altDesc, `${nonModernId} 的 PDF 裁切 URL 必须通过 JS pdfCropSourceDescriptor 核验`);
+    }
+
     // H3 partial recovery + C1 ephemeralReaderFigures against a real sealed four-file bundle + run.json
     const tmpBase = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'pd-wave10-c1h3-'));
     const prevRunsDir = Config.FILES.dailyFreshSourceRunsDir;

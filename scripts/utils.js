@@ -26,7 +26,9 @@ const {
     selectApiKey,
     markQuotaExhausted,
     recordAccountUsage,
-    syncOpenCodeGoPoolUsage
+    syncOpenCodeGoPoolUsage,
+    resolveLiveSyncTimeoutMs,
+    redactUsageSyncError
 } = require('./llm-account-pool.js');
 
 // ═══════════════════════════════════════════════════════
@@ -271,6 +273,8 @@ function stripMd(text) {
     t = t.replace(/\*\*(.+?)\*\*/g, '$1');
     t = t.replace(/__(.+?)__/g, '$1');
     t = t.replace(/\*(.+?)\*/g, '$1');
+    t = t.replace(/(?<!\w)_(.+?)_(?!\w)/g, '$1');
+    t = t.replace(/`(.+?)`/g, '$1');
     // 清理残留的不成对 ** 和 __
     t = t.replace(/\*\*/g, '');
     t = t.replace(/__/g, '');
@@ -355,7 +359,7 @@ function parseMachineSummary(analysis) {
 
     if (!analysis) return result;
 
-    const blockMatch = analysis.match(/#{2,3}\s*机器摘要\s*\n([\s\S]*?)(?=#{2,3}\s*(?:评分规则|标签)|$)/);
+    const blockMatch = analysis.match(/#{2,3}\s*机器摘要\s*\n([\s\S]*?)(?=#{2,3}\s|\n【|$)/);
     if (!blockMatch) return result;
 
     const keyMap = {
@@ -393,6 +397,10 @@ function parseMachineSummary(analysis) {
         'top_50_percent': '前50%', 'bottom_50_percent': '后50%',
         'top 10%': '前10%', 'top 25%': '前25%', 
         'top 50%': '前50%', 'bottom 50%': '后50%',
+        'top-tier': '前10%', 'top': '前10%', '前10': '前10%',
+        'high': '前25%', '前25': '前25%',
+        'mid': '前50%', 'medium': '前50%', '前50': '前50%',
+        'low': '后50%', 'bottom': '后50%', '后50': '后50%',
         // 中文描述映射
         '高': '前10%', '很高': '前10%', '上': '前10%', '上上': '前10%',
         '中高': '前25%', '中上': '前25%', '较高': '前25%', '优秀': '前25%',
@@ -414,7 +422,7 @@ function parseMachineSummary(analysis) {
         const m = line.match(/^(?:[-*]\s*)?(?:\*\*)?([a-z_]+)(?:\*\*)?\s*[：:]\s*(.+)$/i);
         if (!m) continue;
         
-        const mappedKey = keyMap[m[1]];
+        const mappedKey = keyMap[m[1].toLowerCase()];
             if (mappedKey) {
                 let val = stripMd(m[2]).trim();
 
@@ -741,9 +749,11 @@ const STAGE_REASONING_EFFORT_TIERS = Object.freeze({
     apiReaderConceptTerms: 'minimal',
     apiReaderImageProbe: 'minimal',
     repair_review_payload: 'minimal',
-    // low tier: 日更筛选、会议筛选与发布文本审查
+    'historical-source-tag-classification': 'minimal',
+    // low tier: 日更筛选、会议筛选、历史标签复核与发布文本审查
     dailyFilter: 'low',
     'conference-filter': 'low',
+    'historical-source-tag-classification-review': 'low',
     'publish.text': 'low',
     'publish.review_text': 'low',
     'publish.index_text': 'low',
@@ -1383,11 +1393,13 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
                 // Custom sinks have the same durable-storage obligation as the
                 // default ledger. Never turn a storage failure into API retry.
                 const event = usageEvent || require('./lib/llm-usage').buildLlmUsageEvent({
-                    ...(pendingRequest ? { eventId: pendingRequest.eventId } : {}),
+                    ...(pendingRequest ? { eventId: pendingRequest.eventId }
+                        : failure?.pendingRequestEventId ? { eventId: failure.pendingRequestEventId } : {}),
                     protocol: resolveRequestProtocol(endpoint, model, options), model, request: bodyObj,
                     response: response?.body, statusCode: response?.statusCode,
                     durationMs: Date.now() - started, transportStarted,
-                    errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null), context: options.usageContext
+                    errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null), context: options.usageContext,
+                    ...(options.accountId ? { accountId: options.accountId } : {})
                 });
                 throw require('./lib/llm-response-recovery').persistenceError(cause, event,
                     response, { directory: options.usageDirectory });
@@ -1479,8 +1491,8 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
         return response;
     }
 
-    const stateFile = options.accountPoolStateFile
-        || require('./config.js').FILES.llmAccountPoolState;
+    const defaultStateFile = require('./config.js').FILES.llmAccountPoolState;
+    const stateFile = options.accountPoolStateFile || defaultStateFile;
     const totalTimeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0
         ? options.timeoutMs : 60000;
     const startedAt = Date.now();
@@ -1490,23 +1502,28 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
     const affinityKey = typeof options.affinityKey === 'string' && options.affinityKey.trim()
         ? options.affinityKey.trim()
         : (typeof scopedPaperId === 'string' ? scopedPaperId.trim() : '');
+    const usesProductionStateFile = !options.accountPoolStateFile
+        || path.resolve(String(options.accountPoolStateFile)) === path.resolve(defaultStateFile);
     const canLiveSync = isOpenCodeGoEndpoint(endpoint) && (
         typeof options.usageFetcher === 'function'
-        || (!options.accountPoolStateFile
-            && typeof options.transport !== 'function'
-            && typeof options.requestImpl !== 'function'
-            && typeof options.httpsRequest !== 'function')
+        || (usesProductionStateFile
+            && !process.env.NODE_TEST_CONTEXT
+            && typeof options.transportRequestFn !== 'function')
     );
     if (canLiveSync) {
-        const liveProxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
+        const liveProxy = detectHttpConnectProxyUrl();
         if (liveProxy || typeof options.usageFetcher === 'function') {
+            const configuredSyncTimeout = resolveLiveSyncTimeoutMs();
+            const syncTimeoutMs = Math.min(configuredSyncTimeout, Math.max(1000, Math.floor(totalTimeoutMs / 2)));
             try {
                 await syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, {
-                    proxyUrl: liveProxy,
+                    ...(liveProxy ? { proxyUrl: liveProxy } : {}),
+                    timeoutMs: syncTimeoutMs,
+                    ...(options.liveSync !== undefined ? { liveSync: options.liveSync } : {}),
                     ...(typeof options.usageFetcher === 'function' ? { fetcher: options.usageFetcher } : {})
                 });
             } catch (syncErr) {
-                console.warn(`[llm-account-pool] 实时同步额度失败（回退至本地状态）: ${syncErr.message}`);
+                console.warn(`[llm-account-pool] 实时同步额度失败（回退至本地状态）: ${redactUsageSyncError(syncErr, apiKeys)}`);
             }
         }
     }
@@ -2334,9 +2351,12 @@ function createProxyDispatcher(proxyUrl) {
         throw new Error('Node fetch 代理地址缺少主机名或端口非法');
     }
     const { ProxyAgent } = require('undici');
+    const connectTimeoutMs = 60000;
     const dispatcher = new ProxyAgent({
         uri: proxyUrl,
-        connectTimeout: 60000
+        connectTimeout: connectTimeoutMs,
+        proxyTls: { timeout: connectTimeoutMs },
+        requestTls: { timeout: connectTimeoutMs }
     });
     proxyDispatcherCache.set(proxyUrl, dispatcher);
     return dispatcher;

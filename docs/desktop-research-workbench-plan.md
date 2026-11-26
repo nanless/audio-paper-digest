@@ -45,7 +45,7 @@ Mac 应用直接消费已经发布的网站成果，默认单栏阅读，打开 
 
 目前索引的 `summary` 是短摘要，`date` 是博客日期，不一定是论文发表日期。正文、完整评分解释、图片及 PDF 锚点不在搜索索引中。部分字段缺失是实际状态，不能根据页面位置或模型猜测补齐。
 
-以已发布的 [RubatoCodec 页面](https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-rubatocodec-budgeted-adaptive-speech-tokenization-2610-29434/)为抽样：页面有完整导读和 4 个图片元素，图片来自 arXiv 外部地址；引用指向 `2610.29434v1`，公开引用记录的完整性标志仍为 `complete:false`。这意味着“缓存 HTML”不等于“图文已经离线”，“已有身份核验”也不等于“所有书目字段齐全”。
+以 2026-10-24 调研抽样的旧站地址 [RubatoCodec 页面](https://nanless.github.io/audio-paper-digest-blog/posts/2026-10-23-rubatocodec-budgeted-adaptive-speech-tokenization-2610-29434/)（现行门户前缀已迁至 `/audio-research-portal/`，旧前缀保持兼容）为例：页面有完整导读和 4 个图片元素，图片来自 arXiv 外部地址；引用指向 `2610.29434v1`，公开引用记录的完整性标志仍为 `complete:false`。这意味着“缓存 HTML”不等于“图文已经离线”，“已有身份核验”也不等于“所有书目字段齐全”。
 
 现有博客明确退役了收藏、私人笔记、本地助手和直接 Zotero 桥接等功能，详见[博客阅读资料](blog-reading-tools.md)。这些个人功能适合放在新客户端。公开静态站本身并非无法使用 Zotero Connector；新增应用的价值是把阅读、追加研究和完整附件存档做成连续流程，而不是因为 GitHub Pages 原理上不能保存引用。
 

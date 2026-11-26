@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { relocatePathWithinRoot, matchesRelocatedRepoPath } = require('./repo-rename-path.js');
 const handles = new WeakMap();
 const registrations = new Map();
 const codec = require('./protocol-codec');
@@ -373,8 +374,8 @@ function openRecoveryGrant({ manifestPath, processDirectory, analysisRoot, insta
     if (!codec.hasValidHeader(receipt, 'conference-recovery-grant-registration') || receiptSha256 !== hash(receiptBody)
         || !registered.bytes.equals(original.bytes) || receipt.manifestFileSha256 !== original.sha256
         || receipt.grantId !== manifest.grantId || receipt.grantSha256 !== manifest.manifestSha256
-        || receipt.processId !== manifest.processId || receipt.analysisRoot !== directory(analysisRoot)
-        || receipt.processDirectory !== directory(processDirectory)
+        || receipt.processId !== manifest.processId || !matchesRelocatedRepoPath(receipt.analysisRoot, directory(analysisRoot))
+        || !matchesRelocatedRepoPath(receipt.processDirectory, directory(processDirectory))
         || receipt.inventorySha256 !== manifest.inventorySha256) fail('已登记追加许可身份不匹配');
     checkBaseline(manifest, read(path.join(target, 'baseline-state.json')), analysisRoot);
     const handle = makeHandle(manifest, target, analysisRoot, processDirectory);
@@ -430,7 +431,9 @@ function resolveRegisteredRecoveryGrant(grantId, grantSha256, { analysisRoot }) 
     const manifest = assertManifest(read(registeredPath).value);
     if (manifest.manifestSha256 !== grantSha256) fail('冷恢复许可SHA不匹配');
     const receipt = read(path.join(path.dirname(registeredPath), 'registration.json')).value;
-    return openRecoveryGrant({ manifestPath: registeredPath, processDirectory: receipt.processDirectory, analysisRoot });
+    const runtimeRoot = path.dirname(directory(analysisRoot));
+    const processDirectory = relocatePathWithinRoot(receipt.processDirectory, runtimeRoot) || receipt.processDirectory;
+    return openRecoveryGrant({ manifestPath: registeredPath, processDirectory, analysisRoot });
 }
 function reopenRecoveryGrantForWindow({ analysisRoot, windowRecord }) {
     const record = windowRecord;

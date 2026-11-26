@@ -26,7 +26,10 @@ function main(argv = process.argv.slice(2)) {
     }
     let statusFailed = false;
     if (!argv.includes('--advice-only')) {
-        try { storage.main(['status']); if (process.exitCode === 1) statusFailed = true; } catch (error) { console.error(`[storage-report] status 失败：${error.message}`); statusFailed = true; }
+        try {
+            const status = storage.main(['status']);
+            if (status?.targets?.some(target => target.errors.length > 0)) statusFailed = true;
+        } catch (error) { console.error(`[storage-report] status 失败：${error.message}`); statusFailed = true; }
     }
     console.log('\n保留建议：');
     for (const line of adviceLines()) console.log(line);

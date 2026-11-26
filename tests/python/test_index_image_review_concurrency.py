@@ -136,7 +136,7 @@ class IndexImageReviewConcurrencyTests(unittest.TestCase):
             f=Path(td)/'2026-10-11.md';text='合法汇总页面。';f.write_text(text)
             with mock.patch.object(blog,'review_and_fix_post',return_value=(0,[])),mock.patch.object(blog,'llm_review_post',return_value=(True,[],text)),mock.patch.object(blog,'multimodal_review_images',return_value=(True,[])) as image_review,mock.patch.object(blog,'get_blog_review_concurrency',return_value=3):
                 blog.review_all_posts('2026-10-11', {}, [], content_dir=td,review_paths=[f],require_llm=False)
-            image_review.assert_called_once_with(text,'汇总页面',required=False,image_concurrency=3)
+            image_review.assert_called_once_with(text,'汇总页',required=False,image_concurrency=3)
 
     def test_invalid_parallel_limits_are_rejected(self):
         for value in [0,6,True,'5']:

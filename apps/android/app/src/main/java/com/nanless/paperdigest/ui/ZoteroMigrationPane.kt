@@ -50,7 +50,7 @@ import org.json.JSONObject
    }
   }
  }
- fun retire(){val old=preview;previewJSON=null;details=false;old?.optString("previewID")?.takeIf{it.isNotBlank()}?.let{id->scope.launch{runCatching{controller.execute("zotero.migration.discard",obj("previewID" to id))}}}}
+ fun retire(){val old=preview;previewJSON=null;details=false;old?.optString("previewID")?.takeIf{it.isNotBlank()}?.let{id->scope.launch{try{controller.execute("zotero.migration.discard",obj("previewID" to id))}catch(cancelled:CancellationException){throw cancelled}catch(_:Exception){}}}}
  fun baseURL():String{
   val uri=java.net.URI(root.trim());require(uri.scheme=="https"&&uri.host=="dav.jianguoyun.com"&&uri.port in setOf(-1,443)&&uri.rawUserInfo==null&&uri.rawQuery==null&&uri.rawFragment==null&&uri.rawPath.endsWith("/zotero/")){"请填写 Zotero 客户端正在使用的 HTTPS 附件目录，并保留末尾 /zotero/"}
   return root.trim().removeSuffix("zotero/")

@@ -2619,80 +2619,117 @@ def _strip_longtable_directives(body: str) -> str:
     return cleaned[last_marker["after"] :]
 
 
+_ROW_SPACING_LENGTH_RE = re.compile(
+    r"^\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:pt|em|ex|mm|cm|in|bp|dd|pc|sp|mu)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _skip_row_spacing_opt(text: str, pos: int, kmap: dict[int, int]) -> int:
+    n = len(text)
+    if pos < n and text[pos] == "*":
+        pos += 1
+    p2 = pos
+    while p2 < n and text[p2] in (" ", "\t"):
+        p2 += 1
+    if p2 < n and text[p2] == "[":
+        opt = _read_balanced(text, p2, "[", "]", kmap)
+        if opt is not None and _ROW_SPACING_LENGTH_RE.match(opt[0]):
+            return opt[1]
+    return pos
+
+
 def _split_tabular_rows(tabular_content: str) -> list[str]:
     kmap = build_delimiter_map(tabular_content, "[", "]")
+    bmap = build_delimiter_map(tabular_content, "{", "}")
     rows: list[str] = []
     n = len(tabular_content)
-    depth = 0
+    brace_depth = 0
+    env_depth = 0
     start = 0
     i = 0
     while i < n:
         ch = tabular_content[i]
         if ch == "\\":
             if i + 1 < n and tabular_content[i + 1] == "\\":
-                if depth == 0:
+                if brace_depth == 0 and env_depth == 0:
                     rows.append(tabular_content[start:i])
-                    pos = i + 2
-                    if pos < n and tabular_content[pos] == "*":
-                        pos += 1
-                    p2 = _skip_ws(tabular_content, pos)
-                    if p2 < n and tabular_content[p2] == "[":
-                        opt = _read_balanced(tabular_content, p2, "[", "]", kmap)
-                        if opt is not None:
-                            pos = opt[1]
+                    pos = _skip_row_spacing_opt(tabular_content, i + 2, kmap)
                     start = pos
                     i = pos
                     continue
                 i += 2
                 continue
             name, after = _read_command_name(tabular_content, i)
-            if name == "tabularnewline" and depth == 0:
+            if name == "tabularnewline" and brace_depth == 0 and env_depth == 0:
                 rows.append(tabular_content[start:i])
-                pos = after
-                if pos < n and tabular_content[pos] == "*":
-                    pos += 1
-                p2 = _skip_ws(tabular_content, pos)
-                if p2 < n and tabular_content[p2] == "[":
-                    opt = _read_balanced(tabular_content, p2, "[", "]", kmap)
-                    if opt is not None:
-                        pos = opt[1]
+                pos = _skip_row_spacing_opt(tabular_content, after, kmap)
                 start = pos
                 i = pos
                 continue
+            if name in ("begin", "end"):
+                p2 = _skip_ws(tabular_content, after)
+                arg = _read_balanced(tabular_content, p2, "{", "}", bmap) if p2 < n and tabular_content[p2] == "{" else None
+                if arg is not None:
+                    if name == "begin":
+                        env_depth += 1
+                    else:
+                        env_depth = max(0, env_depth - 1)
+                    i = arg[1]
+                    continue
             i = after
             continue
         if ch == "{":
-            depth += 1
+            brace_depth += 1
         elif ch == "}":
-            depth = max(0, depth - 1)
+            brace_depth = max(0, brace_depth - 1)
         i += 1
     rows.append(tabular_content[start:])
     return rows
 
 
 def _split_tabular_cells(row_str: str) -> list[str]:
+    bmap = build_delimiter_map(row_str, "{", "}")
     cells: list[str] = []
     n = len(row_str)
-    depth = 0
-    bs_count = 0
+    brace_depth = 0
+    env_depth = 0
     start = 0
     i = 0
     while i < n:
         ch = row_str[i]
         if ch == "\\":
-            bs_count += 1
-            i += 1
+            bs_end = i
+            while bs_end < n and row_str[bs_end] == "\\":
+                bs_end += 1
+            bs_count = bs_end - i
+            if bs_count % 2 == 1:
+                cmd_pos = bs_end - 1
+                if bs_end < n and (row_str[bs_end].isalpha() or row_str[bs_end] == "@"):
+                    name, after = _read_command_name(row_str, cmd_pos)
+                    if name in ("begin", "end"):
+                        p2 = _skip_ws(row_str, after)
+                        arg = _read_balanced(row_str, p2, "{", "}", bmap) if p2 < n and row_str[p2] == "{" else None
+                        if arg is not None:
+                            if name == "begin":
+                                env_depth += 1
+                            else:
+                                env_depth = max(0, env_depth - 1)
+                            i = arg[1]
+                            continue
+                    i = after
+                    continue
+                i = min(n, bs_end + 1)
+                continue
+            i = bs_end
             continue
-        escaped = (bs_count % 2 == 1)
-        bs_count = 0
-        if not escaped:
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth = max(0, depth - 1)
-            elif ch == "&" and depth == 0:
-                cells.append(row_str[start:i])
-                start = i + 1
+        if ch == "{":
+            brace_depth += 1
+        elif ch == "}":
+            brace_depth = max(0, brace_depth - 1)
+        elif ch == "&" and brace_depth == 0 and env_depth == 0:
+            cells.append(row_str[start:i])
+            start = i + 1
         i += 1
     cells.append(row_str[start:])
     return cells
@@ -2727,13 +2764,20 @@ def _parse_tabular_grid(env_name: str, env_body: str) -> tuple[list[str], list[l
     raw_rows = _split_tabular_rows(content)
 
     parsed_rows: list[tuple[list[tuple[str, int]], bool, bool]] = []
+    pending_midrule = False
+    pending_hline = False
     for raw_row in raw_rows:
-        has_midrule = "\\midrule" in raw_row
-        has_hline = "\\hline" in raw_row
+        has_midrule = pending_midrule or ("\\midrule" in raw_row)
+        has_hline = pending_hline or ("\\hline" in raw_row)
         raw_cells = _split_tabular_cells(raw_row)
         cell_specs = [_parse_cell_with_multicolumn(c) for c in raw_cells]
         if any(txt for txt, _ in cell_specs):
             parsed_rows.append((cell_specs, has_midrule, has_hline))
+            pending_midrule = False
+            pending_hline = False
+        else:
+            pending_midrule = has_midrule
+            pending_hline = has_hline
 
     if not parsed_rows:
         return [], []

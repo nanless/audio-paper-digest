@@ -105,6 +105,89 @@ enum PublishedAggregateReader {
     struct Manifest: Codable {let contract:String;let recordCount:Int;let totalBytes:Int;let shards:[Shard]}
     struct DesktopSnapshot: Codable {let contract:String;let recordCount:Int;let paperCount:Int;let appearanceCount:Int;let catalogShards:[Shard]}
     static let site=URL(string:"https://nanless.github.io/audio-research-portal/")!
+    static let canonicalDesktopPagesShardURL = "desktop-canonical-pages"
+    private struct CanonicalPortalPage {
+        let slug: String
+        let title: String
+        let summary: String
+    }
+    private static let canonicalDesktopPages: [CanonicalPortalPage] = [
+        .init(slug: "about/", title: "关于与使用方法", summary: "找到值得读的论文，核对原文与证据，使用专题导航、快捷键与引用工具高效精读。"),
+        .init(slug: "conferences/", title: "会议论文集", summary: "先按会议档次浏览，再按年份与举办月日查找语音、音乐、音频和相关领域研究。"),
+        .init(slug: "links/", title: "研究资源指南", summary: "按发现论文、核对来源、整理阅读和研究写作的顺序，选择真正能进入日常工作的工具。")
+    ]
+    static func isOfficialPortalSite(_ siteBase: URL) -> Bool {
+        guard siteBase.scheme?.lowercased() == "https",
+              siteBase.host?.lowercased() == "nanless.github.io",
+              siteBase.port == nil || siteBase.port == 443,
+              let basePath = URLComponents(url: siteBase, resolvingAgainstBaseURL: false)?.percentEncodedPath else { return false }
+        let prefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+        return prefix == "/audio-research-portal/" || prefix == "/audio-paper-digest-blog/"
+    }
+    static func canonicalDesktopPageRow(at index: Int, siteBase: URL = site) throws -> [String: Any] {
+        guard isOfficialPortalSite(siteBase), canonicalDesktopPages.indices.contains(index) else {
+            throw AggregateFailure.invalid("桌面规范站点页面索引无效")
+        }
+        let item = canonicalDesktopPages[index]
+        let basePath = URLComponents(url: siteBase, resolvingAgainstBaseURL: false)!.percentEncodedPath
+        let prefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+        let permalink = prefix + item.slug
+        _ = try pageURL(permalink, siteBase: siteBase)
+        return [
+            "pageType": "page",
+            "permalink": permalink,
+            "title": item.title,
+            "titleZh": item.title,
+            "summary": item.summary,
+            "date": "",
+            "categories": [] as [String],
+            "tags": [] as [String],
+            "canonicalPortalPage": true
+        ]
+    }
+    static func supplementCanonicalDesktopPages(_ catalog: PublishedAggregateCatalog, manifestRaw: Data, siteBase: URL = site) throws -> PublishedAggregateCatalog {
+        guard isDesktopSnapshotManifest(manifestRaw), isOfficialPortalSite(siteBase) else { return catalog }
+        let rowEncoding = ClientProtocols.contract("foundation-sorted-keys-json")
+        let basePath = URLComponents(url: siteBase, resolvingAgainstBaseURL: false)!.percentEncodedPath
+        let prefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+        var existingURLs = Set(catalog.records.map(\.sourceURL))
+        var merged = catalog.records
+        for (index, item) in canonicalDesktopPages.enumerated() {
+            let url = try pageURL(prefix + item.slug, siteBase: siteBase)
+            guard existingURLs.insert(url.absoluteString).inserted else { continue }
+            let row = try canonicalDesktopPageRow(at: index, siteBase: siteBase)
+            let source = PublishedAggregate.Source(
+                manifestSHA256: catalog.snapshotSHA256,
+                shardSHA256: catalog.snapshotSHA256,
+                shardBytes: 0,
+                shardURL: canonicalDesktopPagesShardURL,
+                rowIndex: index,
+                normalizedRowSHA256: sha(try normalizedRow(row)),
+                normalizedRowAlgorithm: rowEncoding
+            )
+            merged.append(PublishedAggregate(
+                id: "page:" + URLComponents(url: url, resolvingAgainstBaseURL: false)!.percentEncodedPath,
+                kind: .page,
+                conferenceScope: nil,
+                title: item.title,
+                titleZh: item.title,
+                summary: item.summary,
+                rawDate: "",
+                displayDate: nil,
+                categories: [],
+                tags: [],
+                sourceURL: url.absoluteString,
+                source: source
+            ))
+        }
+        guard merged.count != catalog.records.count else { return catalog }
+        return PublishedAggregateCatalog(
+            snapshotSHA256: catalog.snapshotSHA256,
+            sourceRecordCount: catalog.sourceRecordCount,
+            aggregateCount: merged.count,
+            records: merged.sorted { $0.id < $1.id }
+        )
+    }
     static func sha(_ bytes:Data)->String {SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined()}
     static func require(_ condition:Bool,_ reason:String)throws {if !condition{throw AggregateFailure.invalid(reason)}}
     static func validSHA(_ value:String)->Bool {value.range(of:#"\A[a-f0-9]{64}\z"#,options:.regularExpression) != nil}
@@ -180,8 +263,13 @@ enum PublishedAggregateReader {
             let displayDate=rawDate.isEmpty || rawDate.hasPrefix("0001-01-01") ? nil : rawDate
             let explicitScope=row["conferenceScope"] as? String
             try require(explicitScope==nil || (kind == .conference && ["overview","task"].contains(explicitScope!)), "会议范围字段无效")
+            let tags: [String] = {
+                if let conceptIds = row["tagConceptIds"] as? [String], !conceptIds.isEmpty { return conceptIds }
+                if let flat = row["flatTags"] as? [String], !flat.isEmpty { return flat }
+                return row["tags"] as? [String] ?? []
+            }()
             let source=PublishedAggregate.Source(manifestSHA256:snapshot, shardSHA256:shard.sha256, shardBytes:shard.bytes, shardURL:shard.url, rowIndex:position, normalizedRowSHA256:sha(try normalizedRow(row)), normalizedRowAlgorithm:rowEncoding)
-            chunk.append(PublishedAggregate(id:"page:"+URLComponents(url:url,resolvingAgainstBaseURL:false)!.percentEncodedPath, kind:kind, conferenceScope:explicitScope, title:title, titleZh:row["titleZh"] as? String ?? title, summary:row["summary"] as? String ?? "", rawDate:rawDate, displayDate:displayDate, categories:row["categories"] as? [String] ?? [], tags:row["tagConceptIds"] as? [String] ?? [], sourceURL:url.absoluteString, source:source))
+            chunk.append(PublishedAggregate(id:"page:"+URLComponents(url:url,resolvingAgainstBaseURL:false)!.percentEncodedPath, kind:kind, conferenceScope:explicitScope, title:title, titleZh:row["titleZh"] as? String ?? title, summary:row["summary"] as? String ?? "", rawDate:rawDate, displayDate:displayDate, categories:row["categories"] as? [String] ?? [], tags:tags, sourceURL:url.absoluteString, source:source))
         }
         return chunk
     }

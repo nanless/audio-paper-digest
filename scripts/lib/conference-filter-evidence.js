@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const analysisEngine = require('../analysis-engine.js');
 const { spawnSync } = require('node:child_process');
+const { buildChildProcessEnv } = require('../env-loader.js');
 const discoveryApi = require('./conference-discovery.js');
 const ledgerApi = require('./conference-source-ledger.js');
 const paperIdentity = require('./paper-identity.js');
@@ -380,12 +381,20 @@ function normalizeBlockedVerification(value) {
     if (value.verificationSha256 !== stableHash(body)) fail('blocked extraction verification self-SHA drifted');
     return clone(value);
 }
+const EXTRACTOR_ALLOWED_ENV_KEYS = Object.freeze([
+    'CODEX_SANDBOX',
+    'PD_PYTHON_RUNTIME_VERIFIED_BIN',
+    'PD_PYTHON_RUNTIME_DISABLE_VENV',
+    'AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE',
+    'AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE',
+    'PD_WORKSPACE_ALLOW_CROSS_ROLE'
+]);
 function runExtractorHelper(itemRoot, mode) {
     const runtime = path.resolve(__dirname, '..', 'python-runtime.sh');
     const script = path.resolve(__dirname, '..', 'conference-filter-evidence-extract.py');
     const child = spawnSync('bash', [runtime, script, `--${mode}`, '--manifest', 'request.json', '--source-root', itemRoot], {
         cwd: path.resolve(__dirname, '..', '..'), encoding: 'utf8', timeout: 5 * 60 * 1000,
-        maxBuffer: 8 * 1024 * 1024, env: process.env, stdio: ['ignore', 'pipe', 'pipe']
+        maxBuffer: 8 * 1024 * 1024, env: buildChildProcessEnv({}, EXTRACTOR_ALLOWED_ENV_KEYS), stdio: ['ignore', 'pipe', 'pipe']
     });
     if (child.status !== 0) fail(`pinned extractor failed: ${String(child.stderr || child.error?.message || '').trim().split(/\r?\n/).at(-1)}`);
     try { return JSON.parse(String(child.stdout).trim()); }

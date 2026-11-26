@@ -18,6 +18,8 @@ const freshArxivSourceApi = require('./fresh-arxiv-rewrite-source.js');
 const protocols = require('./protocol-codec');
 const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
 const { hasPageTagMetadata, PAGE_TAG_FIELDS, LEGACY_PAGE_TAG_FIELDS } = require('./page-tag-metadata.js');
+const { buildChildProcessEnv, VCS_CHILD_ENV_KEYS } = require('../env-loader.js');
+const { relocatePathWithinRoot } = require('./repo-rename-path.js');
 
 const PLAN_CONTRACT = 'historical-direct-publication-plan';
 const GENERATION_CONTRACT = 'historical-direct-publication-generation';
@@ -36,7 +38,7 @@ const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-
 const SHA_RE = /^[a-f0-9]{64}$/;
 const GIT_OID_RE = /^[a-f0-9]{40,64}$/;
 const SAFE_ARTIFACT_RE = /^(?:content\/posts\/[A-Za-z0-9._/-]+\.md|static\/(?:images|data)\/papers\/[A-Za-z0-9._/-]+)$/;
-const CLIENT_WORKBENCH_ARTIFACT_RE = /^static\/client\/papers\/\d{4}-\d{2}-\d{2}\/conference-[a-f0-9]{24}\/(?:citation\.(?:bib|json|ris)|rethink-context\.json)(?![\s\S])/u;
+const CLIENT_WORKBENCH_ARTIFACT_RE = /^static\/client\/papers\/\d{4}-\d{2}-\d{2}\/(?:conference-[a-f0-9]{24}|\d{4}-\d{4,5}(?:v[1-9]\d*)?)\/(?:citation\.(?:bib|json|ris)|rethink-context\.json)(?![\s\S])/u;
 const MAX_ARTIFACT_BYTES = 128 * 1024 * 1024;
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
 const HISTORICAL_VERSION_NOTICE_MARKER = '来源版本说明（当前稿不可用）';
@@ -263,7 +265,8 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
     for (const item of plan.queue.filter(item => !sample || selectedSet.has(item.paperId))) {
         const active = byEntry.get(item.paperId); const manifest = runnerApi.replayDirectPageStaging({ plan, item, active,
             stagingRoot, executionRoot, freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
-        const relativeDirectory = path.relative(path.resolve(stagingRoot), path.resolve(active.staging.directory)).split(path.sep).join('/');
+        const relocatedStagingDirectory = relocatePathWithinRoot(active.staging.directory, stagingRoot) || path.resolve(active.staging.directory);
+        const relativeDirectory = path.relative(path.resolve(stagingRoot), relocatedStagingDirectory).split(path.sep).join('/');
         if (!relativeDirectory || relativeDirectory.startsWith('..')) fail(`${item.paperId} 的暂存目录为空或超出配置的根目录`);
         const sourceVersionProof = historicalSourceVersionProof(item, active, manifest);
         stageProofs.push({ paperId: item.paperId, runId: item.runId, manifestSha256: manifest.manifestSha256,
@@ -638,16 +641,17 @@ function semanticReviewProtocol() {
         textReview: format.textReview,
         imageReview: format.imageReview,
         budgets: {
-            chunkChars: Math.min(24000, Math.max(4000, Number.parseInt(process.env.PD_BLOG_REVIEW_CHUNK_CHARS || '8000', 10) || 8000)),
-            maxTokens: Math.min(16000, Math.max(1000, Number.parseInt(process.env.PD_BLOG_REVIEW_MAX_TOKENS || '4000', 10) || 4000)),
-            timeoutSeconds: 120, maxRetries: 5, temperature: 0.1, imageMaxBytes: 8 * 1024 * 1024,
+            chunkChars: Math.min(24000, Math.max(4000, Number.parseInt(process.env.PD_BLOG_REVIEW_CHUNK_CHARS || '20000', 10) || 20000)),
+            maxTokens: Math.min(32000, Math.max(1000, Number.parseInt(process.env.PD_BLOG_REVIEW_MAX_TOKENS || '4000', 10) || 4000)),
+            timeoutSeconds: Math.min(600, Math.max(30, Number.parseInt(process.env.PD_BLOG_REVIEW_TIMEOUT || '120', 10) || 120)),
+            maxRetries: 5, temperature: 0.1, imageMaxBytes: 8 * 1024 * 1024,
             pageConcurrency: historicalReviewConcurrency()
         } };
     return { ...body, protocolSha256: stableHash(body) };
 }
 function defaultHugoVersion() {
     const result = spawnSync('hugo', ['version'], {
-        encoding: 'utf8', timeout: 30_000, env: { ...process.env, LANG: 'C', LC_ALL: 'C' }
+        encoding: 'utf8', timeout: 30_000, env: buildChildProcessEnv({ LANG: 'C', LC_ALL: 'C' })
     });
     if (result.error || result.status !== 0) fail('Hugo 程序无法运行');
     return result.stdout.trim();
@@ -724,7 +728,7 @@ function defaultHugoGate({ blogRepo, generation }) {
         const git = (args, label) => {
             const result = spawnSync('git', ['-C', source, ...args], {
                 encoding: 'utf8', timeout: 60_000,
-                env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' },
+                env: buildChildProcessEnv({ GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' }, VCS_CHILD_ENV_KEYS),
                 maxBuffer: 4 * 1024 * 1024
             });
             if (result.error || result.status !== 0) {
@@ -745,7 +749,7 @@ function defaultHugoGate({ blogRepo, generation }) {
         }
         const result = spawnSync('hugo', ['--source', source, '--destination', path.join(temporary, 'public')], {
             encoding: 'utf8', timeout: 300_000,
-            env: { ...process.env, LANG: 'C', LC_ALL: 'C' }, maxBuffer: 32 * 1024 * 1024
+            env: buildChildProcessEnv({ LANG: 'C', LC_ALL: 'C' }), maxBuffer: 32 * 1024 * 1024
         });
         if (result.error || result.status !== 0) fail(`Hugo 构建检查失败：${String(result.stderr || result.error?.message || '').slice(-2000)}`);
         return { status: 'passed', engine: 'hugo', version: defaultHugoVersion() };
@@ -894,9 +898,27 @@ function preserveOriginalRecord(filename, family) {
 }
 
 function atomicReplace(filename, bytes, mode = 0o600) {
-    fs.mkdirSync(path.dirname(filename), { recursive: true }); const temporary = `${filename}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    try { fs.writeFileSync(temporary, bytes, { mode }); fs.renameSync(temporary, filename); }
-    finally { try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    const temporary = `${filename}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    let fd;
+    try {
+        fd = fs.openSync(
+            temporary,
+            fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0),
+            mode
+        );
+        fs.writeFileSync(fd, bytes);
+        fs.fchmodSync(fd, mode);
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fd = undefined;
+        fs.renameSync(temporary, filename);
+    } finally {
+        if (fd !== undefined) {
+            try { fs.closeSync(fd); } catch {}
+        }
+        try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
 }
 function defaultValidateActivatedWorktree(blogRepo, deltaPaths) {
     const result = runGit(blogRepo, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { binary: true });
@@ -1096,7 +1118,7 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
             const absent = `${rollback}.absent.json`; if (!fs.existsSync(absent)) writeExact(absent, prettyBytes({ absent: true, path: record.path }));
         }
         const source = inside(generation.root, path.posix.join('bundle', record.path), '生成文件集合');
-        (dependencies.replaceFile || atomicReplace)(target, readRegular(source).bytes, fs.existsSync(target) ? fs.statSync(target).mode & 0o777 : 0o600);
+        (dependencies.replaceFile || atomicReplace)(target, readRegular(source).bytes, fs.existsSync(target) ? fs.statSync(target).mode & 0o777 : 0o644);
         if (readRegular(target).sha256 !== record.sha256) fail(`安装页面后的文件 SHA 检查失败：${record.path}`);
     }
     (dependencies.validateActivatedWorktree || defaultValidateActivatedWorktree)(blogRepo, delta.map(item => item.path));
@@ -1132,6 +1154,15 @@ function runGit(blogRepo, args, { binary = false, allowFailure = false } = {}) {
     if (!allowFailure && result.status !== 0) fail(`Git ${args[0]} 操作失败`);
     return binary ? Buffer.from(result.stdout || []) : { status: result.status, stdout: String(result.stdout || '').trim(), stderr: String(result.stderr || '').trim() };
 }
+function defaultVerifyCommittedDelta({ blogRepo, plan, commit }) {
+    const delta = plan.files.filter(item => item.operation !== 'unchanged');
+    const paths = delta.map(item => item.path);
+    const parents = runGit(blogRepo, ['rev-list', '--parents', '-n', '1', commit]).stdout.toLowerCase().split(/\s+/);
+    if (parents.length !== 2 || parents[1] !== plan.blogBaseline.head) fail('历史发布提交必须只有一个父提交，且该父提交为已保存的基线');
+    const changed = runGit(blogRepo, ['diff-tree', '--no-commit-id', '--name-only', '-r', commit]).stdout.split(/\r?\n/).filter(Boolean).sort();
+    if (changed.join('\0') !== paths.slice().sort().join('\0')) fail('历史发布提交的改动集合与计划不同');
+    for (const record of delta) if (sha256(runGit(blogRepo, ['show', `${commit}:${record.path}`], { binary: true })) !== record.sha256) fail(`已提交文件内容与计划不同：${record.path}`);
+}
 function defaultPublishGit({ blogRepo, plan, publicationId, message }) {
     const delta = plan.files.filter(item => item.operation !== 'unchanged'); const paths = delta.map(item => item.path);
     const head = runGit(blogRepo, ['rev-parse', 'HEAD']).stdout.toLowerCase();
@@ -1149,11 +1180,7 @@ function defaultPublishGit({ blogRepo, plan, publicationId, message }) {
         runGit(blogRepo, ['commit', '-m', message || `content: 发布全历史重写 ${publicationId}`]);
     }
     const commit = runGit(blogRepo, ['rev-parse', 'HEAD']).stdout.toLowerCase();
-    const parents = runGit(blogRepo, ['rev-list', '--parents', '-n', '1', commit]).stdout.toLowerCase().split(/\s+/);
-    if (parents.length !== 2 || parents[1] !== plan.blogBaseline.head) fail('历史发布提交必须只有一个父提交，且该父提交为已保存的基线');
-    const changed = runGit(blogRepo, ['diff-tree', '--no-commit-id', '--name-only', '-r', commit]).stdout.split(/\r?\n/).filter(Boolean).sort();
-    if (changed.join('\0') !== paths.slice().sort().join('\0')) fail('历史发布提交的改动集合与计划不同');
-    for (const record of delta) if (sha256(runGit(blogRepo, ['show', `${commit}:${record.path}`], { binary: true })) !== record.sha256) fail(`已提交文件内容与计划不同：${record.path}`);
+    defaultVerifyCommittedDelta({ blogRepo, plan, commit });
     return commit;
 }
 function defaultPrePublishRemote(blogRepo, remoteName) {
@@ -1165,7 +1192,7 @@ function defaultPrePublishRemote(blogRepo, remoteName) {
 function defaultPushAndVerify({ blogRepo, remoteName, commit }) {
     const before = runGit(blogRepo, ['remote', 'get-url', '--push', remoteName]).stdout;
     const identity = stableHash({ remote: remoteName, pushUrl: before });
-    runGit(blogRepo, ['push', remoteName, 'HEAD:main']);
+    runGit(blogRepo, ['push', remoteName, `${commit}:refs/heads/main`]);
     const after = runGit(blogRepo, ['remote', 'get-url', '--push', remoteName]).stdout;
     if (stableHash({ remote: remoteName, pushUrl: after }) !== identity) fail('推送期间远端身份已变化');
     const remoteLine = runGit(blogRepo, ['ls-remote', '--exit-code', remoteName, 'refs/heads/main']).stdout.split(/\r?\n/)[0] || '';
@@ -1188,12 +1215,14 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
         record => readRegular(inside(generation.root, path.posix.join('bundle', record.path), '分类目录检查的生成页面')).bytes, dependencies);
     const reviewReceipt = loadReview(loaded); const activation = loadActivation(loaded); const delta = loaded.plan.files.filter(item => item.operation !== 'unchanged');
     const priorRemotePath = path.join(loaded.directory, 'publication.json');
+    const readLiveRemote = (repo, remote) => {
+        if (dependencies.liveRemote) return dependencies.liveRemote(repo, remote);
+        const url = runGit(repo, ['remote', 'get-url', '--push', remote]).stdout;
+        const line = runGit(repo, ['ls-remote', '--exit-code', remote, 'refs/heads/main']).stdout;
+        return { remoteIdentitySha256: stableHash({ remote, pushUrl: url }), remoteOid: line.split(/\s+/)[0].toLowerCase() };
+    };
     if (fs.existsSync(priorRemotePath)) {
-        const existing = loadPublication(loaded); const live = (dependencies.liveRemote || ((repo, remote) => {
-            const url = runGit(repo, ['remote', 'get-url', '--push', remote]).stdout;
-            const line = runGit(repo, ['ls-remote', '--exit-code', remote, 'refs/heads/main']).stdout;
-            return { remoteIdentitySha256: stableHash({ remote, pushUrl: url }), remoteOid: line.split(/\s+/)[0].toLowerCase() };
-        }))(blogRepo, remoteName);
+        const existing = loadPublication(loaded); const live = readLiveRemote(blogRepo, remoteName);
         if (live.remoteIdentitySha256 !== existing.receipt.remoteIdentitySha256 || live.remoteOid !== existing.receipt.remoteVerifiedOid) fail('当前远端状态未通过已保存发布凭证的重新核验');
         return { status: 'already-published', receipt: existing.receipt };
     }
@@ -1206,37 +1235,78 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
     if (!apply) return { status: 'dry-run', deltaCount: delta.length, baseHead: loaded.plan.blogBaseline.head };
     const preRemote = (dependencies.prePublishRemote || defaultPrePublishRemote)(blogRepo, remoteName);
     if (preRemote.branch !== undefined && preRemote.branch !== 'main') fail('发布要求博客位于 main 分支');
-    // 计划绑定的远端必须原样成立：远端前进（即便本地已同步）同样视为基线失效，
-    // 否则会在过期基线上提交并让发布凭证与远端父提交不一致。
-    if (preRemote.remoteIdentitySha256 !== loaded.plan.blogBaseline.remoteIdentitySha256
-        || preRemote.remoteOid !== loaded.plan.blogBaseline.remoteOid) {
+    if (preRemote.remoteIdentitySha256 !== loaded.plan.blogBaseline.remoteIdentitySha256) {
         fail('保存发布基线后，远端提交已前进或远端身份已变化');
     }
-    const commit = (dependencies.publishGit || defaultPublishGit)({ blogRepo, plan: loaded.plan, publicationId, message });
-    if (!GIT_OID_RE.test(String(commit || '').toLowerCase())) fail('发布提交 OID 无效');
-    const commitBody = { ...currentHeader(COMMIT_CONTRACT), publicationId,
-        planSha256: loaded.plan.planSha256, reviewSha256: reviewReceipt.receipt.reviewSha256,
-        activationSha256: activation.receipt.activationSha256, baseHead: loaded.plan.blogBaseline.head,
-        publicationCommit: commit.toLowerCase(), exactDeltaSha256: loaded.plan.exactDeltaSha256,
-        committedAt: dependencies.now?.() || new Date().toISOString() };
-    let commitReceipt = seal(commitBody, 'commitSha256'); const commitPath = path.join(loaded.directory, 'commit.json');
-    if (!fs.existsSync(commitPath)) writeExact(commitPath, prettyBytes(commitReceipt));
-    else {
-        commitReceipt = loadCommit(loaded).receipt;
-        if (commitReceipt.publicationCommit !== commit.toLowerCase()) fail('现有提交凭证关联了另一发布任务');
+    const commitPath = path.join(loaded.directory, 'commit.json');
+    let commit;
+    let commitReceipt;
+    let remote;
+    if (preRemote.remoteOid !== loaded.plan.blogBaseline.remoteOid) {
+        if (!fs.existsSync(commitPath)) {
+            fail('保存发布基线后，远端提交已前进或远端身份已变化');
+        }
+        const existingCommit = loadCommit(loaded).receipt;
+        if (preRemote.remoteOid !== existingCommit.publicationCommit) {
+            fail('保存发布基线后，远端提交已前进或远端身份已变化');
+        }
+        if (preRemote.localHead !== undefined && preRemote.localHead !== existingCommit.publicationCommit) {
+            fail('本地 HEAD 与已推送的历史发布提交凭证不一致');
+        }
+        (dependencies.verifyCommittedDelta || defaultVerifyCommittedDelta)({
+            blogRepo, plan: loaded.plan, commit: existingCommit.publicationCommit
+        });
+        commit = existingCommit.publicationCommit;
+        commitReceipt = existingCommit;
         if (commitReceipt.reviewSha256 !== reviewReceipt.receipt.reviewSha256
             || commitReceipt.activationSha256 !== activation.receipt.activationSha256) {
+            const commitBody = { ...currentHeader(COMMIT_CONTRACT), publicationId,
+                planSha256: loaded.plan.planSha256, reviewSha256: reviewReceipt.receipt.reviewSha256,
+                activationSha256: activation.receipt.activationSha256, baseHead: loaded.plan.blogBaseline.head,
+                publicationCommit: commit, exactDeltaSha256: loaded.plan.exactDeltaSha256,
+                committedAt: dependencies.now?.() || new Date().toISOString() };
             commitReceipt = seal(commitBody, 'commitSha256');
             preserveOriginalRecord(commitPath, COMMIT_CONTRACT);
             atomicReplace(commitPath, prettyBytes(commitReceipt));
         }
+        const live = dependencies.liveRemote
+            ? dependencies.liveRemote(blogRepo, remoteName)
+            : (dependencies.prePublishRemote
+                ? dependencies.prePublishRemote(blogRepo, remoteName)
+                : readLiveRemote(blogRepo, remoteName));
+        if (live.remoteIdentitySha256 !== loaded.plan.blogBaseline.remoteIdentitySha256
+            || live.remoteOid !== commit) {
+            fail(`当前远端 main 提交 OID 与已记录的发布提交不同：${live.remoteOid}`);
+        }
+        remote = { remoteName, remoteIdentitySha256: live.remoteIdentitySha256, remoteVerifiedOid: live.remoteOid };
+    } else {
+        commit = (dependencies.publishGit || defaultPublishGit)({ blogRepo, plan: loaded.plan, publicationId, message });
+        if (!GIT_OID_RE.test(String(commit || '').toLowerCase())) fail('发布提交 OID 无效');
+        commit = commit.toLowerCase();
+        const commitBody = { ...currentHeader(COMMIT_CONTRACT), publicationId,
+            planSha256: loaded.plan.planSha256, reviewSha256: reviewReceipt.receipt.reviewSha256,
+            activationSha256: activation.receipt.activationSha256, baseHead: loaded.plan.blogBaseline.head,
+            publicationCommit: commit, exactDeltaSha256: loaded.plan.exactDeltaSha256,
+            committedAt: dependencies.now?.() || new Date().toISOString() };
+        commitReceipt = seal(commitBody, 'commitSha256');
+        if (!fs.existsSync(commitPath)) writeExact(commitPath, prettyBytes(commitReceipt));
+        else {
+            commitReceipt = loadCommit(loaded).receipt;
+            if (commitReceipt.publicationCommit !== commit) fail('现有提交凭证关联了另一发布任务');
+            if (commitReceipt.reviewSha256 !== reviewReceipt.receipt.reviewSha256
+                || commitReceipt.activationSha256 !== activation.receipt.activationSha256) {
+                commitReceipt = seal(commitBody, 'commitSha256');
+                preserveOriginalRecord(commitPath, COMMIT_CONTRACT);
+                atomicReplace(commitPath, prettyBytes(commitReceipt));
+            }
+        }
+        remote = (dependencies.pushAndVerify || defaultPushAndVerify)({ blogRepo, remoteName, commit });
+        if (remote.remoteVerifiedOid !== commit || !SHA_RE.test(remote.remoteIdentitySha256 || '')) fail('推送未返回已实时核验的远端身份和提交 OID');
     }
-    const remote = (dependencies.pushAndVerify || defaultPushAndVerify)({ blogRepo, remoteName, commit: commit.toLowerCase() });
-    if (remote.remoteVerifiedOid !== commit.toLowerCase() || !SHA_RE.test(remote.remoteIdentitySha256 || '')) fail('推送未返回已实时核验的远端身份和提交 OID');
     const body = { ...currentHeader(PUBLICATION_CONTRACT), publicationId,
         planSha256: loaded.plan.planSha256, reviewSha256: reviewReceipt.receipt.reviewSha256,
         activationSha256: activation.receipt.activationSha256, commitSha256: commitReceipt.commitSha256,
-        publicationCommit: commit.toLowerCase(), remoteName: remote.remoteName || remoteName,
+        publicationCommit: commit, remoteName: remote.remoteName || remoteName,
         remoteIdentitySha256: remote.remoteIdentitySha256, remoteVerifiedOid: remote.remoteVerifiedOid,
         remoteVerifiedAt: dependencies.now?.() || new Date().toISOString(), exactDeltaSha256: loaded.plan.exactDeltaSha256 };
     if (!iso(body.remoteVerifiedAt)) fail('远端核验时间无效'); const receipt = seal(body, 'publicationSha256');

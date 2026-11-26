@@ -2,6 +2,7 @@ package com.nanless.paperdigest.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -63,7 +64,9 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
         if(state.nativeResourceBadgesEnabled){
             val isPostSyncRefresh=badgesSyncStamp!=null&&badgesSyncStamp!=state.catalogSyncedAt&&!state.settings.optBoolean("offlineMode")
             badgesSyncStamp=state.catalogSyncedAt?:""
-            runCatching{controller.execute("library.resourceBadges",obj("refresh" to isPostSyncRefresh))}
+            try{controller.execute("library.resourceBadges",obj("refresh" to isPostSyncRefresh))}
+            catch(cancelled:kotlinx.coroutines.CancellationException){throw cancelled}
+            catch(_:Exception){}
         }
     }
     LaunchedEffect(query){if(query.isBlank()&&sort=="相关度")sort=if(filter=="收藏")"收藏时间"else"最新"}
@@ -127,26 +130,26 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
     NonOccludingViewport{
         val height=maxHeight;val wide=maxWidth>=840.dp
         Row(Modifier.fillMaxSize()){
-            if(wide)Surface(Modifier.width(300.dp).fillMaxHeight().padding(start=16.dp,top=12.dp,bottom=12.dp),shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surfaceContainerLow){
+            if(wide)Surface(Modifier.width(300.dp).fillMaxHeight().padding(start=16.dp,top=12.dp,bottom=12.dp),shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.surfaceContainerLow,border=BorderStroke(1.dp,MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.72f))){
                 WebsiteDirectoryPanel(state.websiteTaxonomy,view,direction,updateDirection,directoryFacet,changeDirectoryFacet,directoryParent,changeDirectoryParent,directoryQuery,changeDirectoryQuery,directoryScroll,Modifier.fillMaxSize(),!ready)
             }
             Box(Modifier.weight(1f).fillMaxHeight(),contentAlignment=Alignment.TopCenter){
                 LazyColumn(Modifier.widthIn(max=920.dp).fillMaxHeight().testTag("library-results"),state=if(ready||fallback)scroll else loadingScroll,contentPadding=PaddingValues(horizontal=if(wide)24.dp else 18.dp,vertical=12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
-                    item("library-heading"){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.headlineSmall);Text(if(filter=="全部")"${String.format("%,d",state.papers.size)} 篇论文 · 网站完整研究方向"else when(filter){"收藏"->"已收藏 ${scoped.size} 篇 · 分类与收藏时间";"待读"->"${scoped.size} 篇待读论文";else->"${scoped.size} 篇已有导读或原文"},style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)};Box{IconButton({tools=true}){Icon(Icons.Outlined.MoreHoriz,"论文库操作")};DropdownMenu(tools,{tools=false}){DropdownMenuItem({Text("同步已发布内容")},{tools=false;action("library.sync",JSONObject())},leadingIcon={Icon(Icons.Outlined.Sync,null)},enabled=!state.loading);DropdownMenuItem({Text("导入 PDF")},{tools=false;importPDF()},leadingIcon={Icon(Icons.Outlined.FileOpen,null)});DropdownMenuItem({Text("网站全部成果")},{tools=false;action("ui.resources",JSONObject())},leadingIcon={Icon(Icons.Outlined.Language,null)})}}}}
+                    item("library-heading"){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(2.dp)){Text(title,style=MaterialTheme.typography.headlineSmall);Text(if(filter=="全部")"${String.format(java.util.Locale.US,"%,d",state.papers.size)} 篇论文 · 网站完整研究方向"else when(filter){"收藏"->"已收藏 ${scoped.size} 篇 · 分类与收藏时间";"待读"->"${scoped.size} 篇待读论文";else->"${scoped.size} 篇已有导读或原文"},style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)};Box{IconButton({tools=true}){Icon(Icons.Outlined.MoreHoriz,"论文库操作")};DropdownMenu(tools,{tools=false}){DropdownMenuItem({Text("同步已发布内容")},{tools=false;action("library.sync",JSONObject())},leadingIcon={Icon(Icons.Outlined.Sync,null)},enabled=!state.loading);DropdownMenuItem({Text("导入 PDF")},{tools=false;importPDF()},leadingIcon={Icon(Icons.Outlined.FileOpen,null)});DropdownMenuItem({Text("网站全部成果")},{tools=false;action("ui.resources",JSONObject())},leadingIcon={Icon(Icons.Outlined.Language,null)})}}}}
                     item("scope"){LazyRow(horizontalArrangement=Arrangement.spacedBy(7.dp)){items(listOf("全部","收藏","待读","离线")){choice->FilterChip(filter==choice,{onScope(choice)},label={Text(choice)})}}}
                     item("personal-sync") {
                         OutlinedButton({
                             if (state.cloud.optString("account").isBlank()) action("ui.settings", obj("pane" to "坚果云"))
                             else action("cloud.syncWorkspace", JSONObject())
-                        }, enabled = !state.busy && !state.settings.optBoolean("offlineMode")) {
+                        }, enabled = !state.busy && !state.settings.optBoolean("offlineMode"), shape = MaterialTheme.shapes.small) {
                             Icon(Icons.Outlined.Sync, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("一键同步 WebDAV")
                         }
                     }
-                    item("search"){OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),singleLine=true,placeholder={Text("论文、作者、编号或笔记")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton({query=""}){Icon(Icons.Outlined.Close,"清除搜索")}},keyboardOptions=androidx.compose.foundation.text.KeyboardOptions(imeAction=androidx.compose.ui.text.input.ImeAction.Search),keyboardActions=androidx.compose.foundation.text.KeyboardActions(onSearch={keyboard?.hide()}))}
+                    item("search"){OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),shape=MaterialTheme.shapes.medium,singleLine=true,placeholder={Text("论文、作者、编号或笔记")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton({query=""}){Icon(Icons.Outlined.Close,"清除搜索")}},keyboardOptions=androidx.compose.foundation.text.KeyboardOptions(imeAction=androidx.compose.ui.text.input.ImeAction.Search),keyboardActions=androidx.compose.foundation.text.KeyboardActions(onSearch={keyboard?.hide()}))}
                     item("controls"){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                        if(!wide)OutlinedButton({directoryOpen=true},contentPadding=PaddingValues(horizontal=12.dp)){Icon(Icons.Outlined.AccountTree,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text(if(selectedDirections.isEmpty())"研究方向"else"方向 ${selectedDirections.size}")}
+                        if(!wide)OutlinedButton({directoryOpen=true},shape=MaterialTheme.shapes.small,contentPadding=PaddingValues(horizontal=12.dp)){Icon(Icons.Outlined.AccountTree,null,Modifier.size(18.dp));Spacer(Modifier.width(6.dp));Text(if(selectedDirections.isEmpty())"研究方向"else"方向 ${selectedDirections.size}")}
                         TextButton({showFilters=true}){Icon(Icons.Outlined.Tune,null,Modifier.size(18.dp));Spacer(Modifier.width(4.dp));Text(if(active==0)"筛选与排序 · $sort"else"筛选 $active · $sort",style=MaterialTheme.typography.labelMedium)}
                         Spacer(Modifier.weight(1f));IconButton({showSearchInfo=true}){Icon(Icons.Outlined.Info,"目录与检索范围",Modifier.size(20.dp))}
                     }}
@@ -191,21 +194,47 @@ private data class LibraryProjection(val request:LibraryProjectionRequest,val vi
                         if(section.label.isNotEmpty())item("favorite-section-${section.key}"){Text("${section.label} · ${section.papers.size} 篇",style=MaterialTheme.typography.titleSmall,modifier=Modifier.padding(top=8.dp))}
                         items(section.papers,key={it.id}){paper->
                             val matches=view.matchingGuides[paper.id].orEmpty();val otherGuide=matches.isNotEmpty()&&matches.none{it.url==paper.blogURL};val matchedGuide=matches.firstOrNull{it.url==paper.blogURL}?:matches.firstOrNull();val cardAuthors=matchedGuide?.authors?:paper.authors;val cardScore=matchedGuide?.score?:if(otherGuide)null else paper.score
-                            Card(onClick={if(choosing)picked=if(paper.id in picked)picked-paper.id else picked+paper.id else if(otherGuide)infoPaperID=paper.id else action("paper.open",obj("paperID" to paper.id))},enabled=ready,colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surfaceContainerLow),shape=MaterialTheme.shapes.medium,modifier=Modifier.fillMaxWidth()){
-                                Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
-                                    Row(verticalAlignment=Alignment.CenterVertically){if(choosing)Checkbox(paper.id in picked,{checked->picked=if(checked)(picked+paper.id).distinct()else picked-paper.id});Text(matchedGuide?.date?:paper.date,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant);Spacer(Modifier.weight(1f));cardScore?.let{ScoreTierBadge(it)}}
-                                    val cardVenue=parseConferenceVenue(paper.id)
-                                    val cardResources=resolvePaperResources(paper,state.resourceBadges,state.cachedDemoIds)
-                                    if(cardVenue!=null||cardResources.hasAny){
-                                        PaperMetadataBadgesRow(venue=cardVenue,resources=cardResources)
+                            val cardVenue=parseConferenceVenue(paper.id)
+                            val cardResources=resolvePaperResources(paper,state.resourceBadges,state.cachedDemoIds)
+                            val displayTitle=if(otherGuide)matches.first().title.ifBlank{paper.titleZh}else paper.titleZh
+                            val showEnSubtitle=!otherGuide&&paper.title.isNotBlank()&&paper.title!=displayTitle
+                            EditorialCard(
+                                onClick={if(choosing)picked=if(paper.id in picked)picked-paper.id else picked+paper.id else if(otherGuide)infoPaperID=paper.id else action("paper.open",obj("paperID" to paper.id))},
+                                enabled=ready,
+                                selected=choosing&&paper.id in picked,
+                            ){
+                                // Layer 1: Eyebrow date/venue + score tier badge
+                                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                                    if(choosing)Checkbox(paper.id in picked,{checked->picked=if(checked)(picked+paper.id).distinct()else picked-paper.id})
+                                    Text((matchedGuide?.date?:paper.date).ifBlank{"日期未标注"},style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                    cardVenue?.let{VenuePill(it.label)}
+                                    Spacer(Modifier.weight(1f))
+                                    cardScore?.let{ScoreTierBadge(it)}
+                                }
+                                if(paper.id in retiredIDs)Text("本机保留 · 未列入最新网站快照（不表示撤稿）",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.tertiary)
+                                // Layer 2: Semibold Chinese title + muted English subtitle
+                                Column(verticalArrangement=Arrangement.spacedBy(2.dp)){
+                                    Text(displayTitle,style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=3,overflow=TextOverflow.Ellipsis)
+                                    if(showEnSubtitle)Text(paper.title,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
+                                }
+                                // Layer 3: Authors & taxonomy takeaway path
+                                if(cardAuthors.isNotEmpty())Text(cardAuthors.take(3).joinToString(" · "),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
+                                (if(matchedGuide!=null)matchedGuide.paths.firstOrNull()else index?.paths?.get(paper.id)?.firstOrNull()?.joinToString(" › "){it.label})?.let{path->
+                                    Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)){
+                                        Icon(Icons.Outlined.AccountTree,null,Modifier.size(13.dp),tint=MaterialTheme.colorScheme.primary)
+                                        Text(path,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary,maxLines=1,overflow=TextOverflow.Ellipsis)
                                     }
-                                    if(paper.id in retiredIDs)Text("本机保留 · 未列入最新网站快照（不表示撤稿）",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.tertiary)
-                                    Text(if(otherGuide)matches.first().title.ifBlank{paper.titleZh}else paper.titleZh,style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=3,overflow=TextOverflow.Ellipsis)
-                                    if(cardAuthors.isNotEmpty())Text(cardAuthors.take(3).joinToString(" · "),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
-                                    (if(matchedGuide!=null)matchedGuide.paths.firstOrNull()else index?.paths?.get(paper.id)?.firstOrNull()?.joinToString(" › "){it.label})?.let{path->Text(path,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary,maxLines=1,overflow=TextOverflow.Ellipsis)}
-                                    if(paper.id in personalHits||paper.id in criteria.cachedHits)Text("正文、笔记或批注匹配",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.tertiary)
-                                    if(filter=="收藏")Text(favoriteAddedLabel(favoriteView.items[paper.id]?.addedAt,zone),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Row(verticalAlignment=Alignment.CenterVertically){Text(if(otherGuide)"筛选命中了另一份已发布导读"else paperSourceLabel(paper),Modifier.weight(1f),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis);IconButton({infoPaperID=paper.id},Modifier.size(36.dp)){Icon(Icons.Outlined.MoreHoriz,"论文信息与全部已发布导读",Modifier.size(18.dp))}}
+                                }
+                                if(paper.id in personalHits||paper.id in criteria.cachedHits)MonographPill("正文、笔记或批注匹配",MaterialTheme.colorScheme.tertiaryContainer,MaterialTheme.colorScheme.onTertiaryContainer,Icons.Outlined.FindInPage,MaterialTheme.colorScheme.tertiary.copy(alpha=0.3f))
+                                if(filter=="收藏")Text(favoriteAddedLabel(favoriteView.items[paper.id]?.addedAt,zone),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                // Layer 4: Resource badges + source footer
+                                if(cardResources.hasAny){
+                                    PaperMetadataBadgesRow(venue=null,resources=cardResources)
+                                }
+                                HorizontalDivider(color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.45f))
+                                Row(verticalAlignment=Alignment.CenterVertically){
+                                    Text(if(otherGuide)"筛选命中了另一份已发布导读"else paperSourceLabel(paper),Modifier.weight(1f),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
+                                    IconButton({infoPaperID=paper.id},Modifier.size(34.dp)){Icon(Icons.Outlined.MoreHoriz,"论文信息与全部已发布导读",Modifier.size(18.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant)}
                                 }
                             }
                         }
@@ -293,25 +322,46 @@ internal fun libraryResourceFilterLabel(filter:String)=when(filter){
     else->"全部资源"
 }
 
+@Composable internal fun VenuePill(label:String){
+    MonographPill(
+        text=label,
+        containerColor=MaterialTheme.colorScheme.surfaceContainerLowest,
+        contentColor=MaterialTheme.colorScheme.primary,
+        borderColor=MaterialTheme.colorScheme.primary.copy(alpha=0.45f),
+    )
+}
+
 @Composable internal fun ScoreTierBadge(score:Double){
     val tier=scoreTierInfo(score)
     val bg=when(tier?.key){
-        "featured"->MaterialTheme.colorScheme.tertiaryContainer
-        "high"->MaterialTheme.colorScheme.primaryContainer
+        "featured"->MaterialTheme.colorScheme.primaryContainer
+        "high"->MaterialTheme.colorScheme.tertiaryContainer
         "recommended"->MaterialTheme.colorScheme.secondaryContainer
-        else->MaterialTheme.colorScheme.surfaceContainerHighest
+        else->MaterialTheme.colorScheme.surfaceContainerHigh
     }
     val fg=when(tier?.key){
-        "featured"->MaterialTheme.colorScheme.onTertiaryContainer
-        "high"->MaterialTheme.colorScheme.onPrimaryContainer
+        "featured"->MaterialTheme.colorScheme.onPrimaryContainer
+        "high"->MaterialTheme.colorScheme.onTertiaryContainer
         "recommended"->MaterialTheme.colorScheme.onSecondaryContainer
         else->MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val border=when(tier?.key){
+        "featured"->MaterialTheme.colorScheme.primary.copy(alpha=0.32f)
+        "high"->MaterialTheme.colorScheme.tertiary.copy(alpha=0.32f)
+        "recommended"->MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.75f)
+        else->MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.55f)
+    }
     val label=if(tier!=null&&tier.key!="standard")"$score 分 · ${tier.label}" else "$score 分"
-    Surface(color=bg,shape=MaterialTheme.shapes.extraSmall){
-        Text(label,Modifier.padding(horizontal=8.dp,vertical=3.dp),style=MaterialTheme.typography.labelMedium,color=fg)
+    Surface(color=bg,shape=MaterialTheme.shapes.extraSmall,border=BorderStroke(1.dp,border)){
+        Text(label,Modifier.padding(horizontal=8.dp,vertical=3.dp),style=MaterialTheme.typography.labelMedium,fontWeight=FontWeight.SemiBold,color=fg)
     }
 }
+
+private data class MetadataBadgeSpec(
+    val text:String,
+    val style:String,
+    val icon:androidx.compose.ui.graphics.vector.ImageVector?=null,
+)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun PaperMetadataBadgesRow(
@@ -319,31 +369,58 @@ internal fun libraryResourceFilterLabel(filter:String)=when(filter){
     resources:ResourceBadgeSignals?=null,
     rankBucket:String?=null,
     documentType:String?=null,
+    singleRow:Boolean=false,
 ){
     val pills=buildList{
-        if(venue!=null)add(venue.label to true)
-        if(!rankBucket.isNullOrBlank())add(rankBucket to true)
-        if(!documentType.isNullOrBlank())add(documentType to false)
-        if(resources?.hasCode==true)add("开源代码" to false)
-        if(resources?.hasModel==true)add("模型权重" to false)
-        if(resources?.hasDataset==true)add("数据集" to false)
-        if(resources?.hasDemo==true)add("试听 Demo" to true)
-        if(resources?.hasProjectPage==true)add("项目主页" to false)
+        if(venue!=null)add(MetadataBadgeSpec(venue.label,"venue"))
+        if(resources?.hasDemo==true)add(MetadataBadgeSpec("试听 Demo","demo",Icons.Outlined.GraphicEq))
+        if(!rankBucket.isNullOrBlank())add(MetadataBadgeSpec(rankBucket,"teal"))
+        if(resources?.hasCode==true)add(MetadataBadgeSpec("开源代码","teal",Icons.Outlined.Code))
+        if(resources?.hasModel==true)add(MetadataBadgeSpec("模型权重","sage",Icons.Outlined.Memory))
+        if(resources?.hasDataset==true)add(MetadataBadgeSpec("数据集","sage",Icons.Outlined.Storage))
+        if(resources?.hasProjectPage==true)add(MetadataBadgeSpec("项目主页","sage",Icons.Outlined.Public))
+        if(!documentType.isNullOrBlank())add(MetadataBadgeSpec(documentType,"neutral"))
     }
     if(pills.isEmpty())return
-    FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
-        pills.forEach{(text,accent)->
-            Surface(
-                color=if(accent)MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape=MaterialTheme.shapes.extraSmall,
-            ){
-                Text(
-                    text,
-                    Modifier.padding(horizontal=6.dp,vertical=2.dp),
-                    style=MaterialTheme.typography.labelSmall,
-                    color=if(accent)MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+    val renderPill:@Composable (MetadataBadgeSpec)->Unit = { spec ->
+        when(spec.style){
+            "venue" -> VenuePill(spec.text)
+            "demo" -> MonographPill(
+                text=spec.text,
+                containerColor=MaterialTheme.colorScheme.tertiaryContainer,
+                contentColor=MaterialTheme.colorScheme.onTertiaryContainer,
+                icon=spec.icon,
+                borderColor=MaterialTheme.colorScheme.tertiary.copy(alpha=0.35f),
+            )
+            "teal" -> MonographPill(
+                text=spec.text,
+                containerColor=MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.72f),
+                contentColor=MaterialTheme.colorScheme.onPrimaryContainer,
+                icon=spec.icon,
+                borderColor=MaterialTheme.colorScheme.primary.copy(alpha=0.22f),
+            )
+            "sage" -> MonographPill(
+                text=spec.text,
+                containerColor=MaterialTheme.colorScheme.secondaryContainer,
+                contentColor=MaterialTheme.colorScheme.onSecondaryContainer,
+                icon=spec.icon,
+                borderColor=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.65f),
+            )
+            else -> MonographPill(
+                text=spec.text,
+                containerColor=MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor=MaterialTheme.colorScheme.onSurfaceVariant,
+                icon=spec.icon,
+            )
+        }
+    }
+    if(singleRow){
+        Row(horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=Alignment.CenterVertically){
+            pills.forEach{renderPill(it)}
+        }
+    } else {
+        FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp),verticalArrangement=Arrangement.spacedBy(5.dp)){
+            pills.forEach{renderPill(it)}
         }
     }
 }

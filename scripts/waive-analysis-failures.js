@@ -11,11 +11,11 @@ function parseArgs(argv) {
         const flag = argv[index];
         if (flag === '--paper-id') {
             const value = argv[index + 1];
-            if (!value) throw new Error('--paper-id 后面要跟一个论文 ID');
+            if (!value || value.startsWith('--')) throw new Error('--paper-id 后面要跟一个论文 ID');
             values.paperIds.push(value); index += 2; continue;
         }
         const value = argv[index + 1];
-        if (!value || (flag !== '--date' && flag !== '--reason') || values[flag.slice(2)] !== undefined) {
+        if (!value || value.startsWith('--') || (flag !== '--date' && flag !== '--reason') || values[flag.slice(2)] !== undefined) {
             throw new Error('用法: --date YYYY-MM-DD --paper-id ID [--paper-id ID ...] --reason TEXT');
         }
         values[flag.slice(2)] = value; index += 2;

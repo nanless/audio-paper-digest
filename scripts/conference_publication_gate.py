@@ -76,6 +76,8 @@ class Page(HTMLParser):
         self.body_html = []
         self.math_runtime = False
         self.math_ssr_css = False
+        self.math_katex_nodes = False
+        self.math_mathml_nodes = False
         self.math_ssr_nodes = False
         self.titles = []
         self.h1s = []
@@ -124,7 +126,11 @@ class Page(HTMLParser):
                 self.tables.append([])
             if tag in {'th', 'td'}:
                 self.cell = []
-            if 'katex' in attrs.get('class', '').split() or tag == 'math':
+            if 'katex' in attrs.get('class', '').split():
+                self.math_katex_nodes = True
+                self.math_ssr_nodes = True
+            if tag == 'math':
+                self.math_mathml_nodes = True
                 self.math_ssr_nodes = True
             if 'katex-error' in attrs.get('class', '').split() or tag == 'merror':
                 raise ValueError(f"HTML 数学渲染包含错误：{tag}，class={attrs.get('class', '')!r}")
@@ -168,7 +174,11 @@ class Page(HTMLParser):
                 self.cell.append(data)
 
     def has_math_rendering(self):
-        return bool(self.math_runtime or (self.math_ssr_css and self.math_ssr_nodes) or self.math_ssr_nodes)
+        if self.math_runtime:
+            return True
+        if self.math_katex_nodes:
+            return bool(self.math_ssr_css)
+        return bool(self.math_mathml_nodes)
 
     def visible_content_fields(self):
         # 浏览器或压缩工具调整空白，不影响已审内容。

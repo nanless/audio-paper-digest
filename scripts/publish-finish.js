@@ -15,40 +15,70 @@ function coverManifestPath(date, currentDir = CURRENT) { return path.join(curren
 
 function shaOf(file) { try { return require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch (_) { return null; } }
 
-function main(argv = process.argv.slice(2)) {
+function isValidCalendarDate(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const [year, month, day] = value.split('-').map(part => Number.parseInt(part, 10));
+    const dt = new Date(Date.UTC(year, month - 1, day));
+    return dt.getUTCFullYear() === year
+        && dt.getUTCMonth() === month - 1
+        && dt.getUTCDate() === day;
+}
+
+function parseDateArg(argv = []) {
+    if (!Array.isArray(argv)) return null;
+    let date = null;
+    const idx = argv.indexOf('--date');
+    if (idx !== -1) {
+        date = argv[idx + 1] ?? null;
+    } else {
+        const inline = argv.find(arg => typeof arg === 'string' && arg.startsWith('--date='));
+        if (inline) date = inline.slice('--date='.length);
+    }
+    if (typeof date !== 'string' || !date || date.startsWith('-') || !isValidCalendarDate(date)) {
+        return null;
+    }
+    return date;
+}
+
+function main(argv = process.argv.slice(2), options = {}) {
     try { require('./env-loader').requireExternalRuntime('publish-finish.js'); } catch (error) { console.error(`[publish-finish] ${error.message}`); return 1; }
 
-    const date = argv.includes('--date') ? argv[argv.indexOf('--date') + 1] : null;
+    const date = parseDateArg(argv);
     if (!date) { console.log('用法: node scripts/publish-finish.js --date YYYY-MM-DD'); return 2; }
-    const waiver = path.join(CURRENT, 'post-publish-visual-waivers', `${date}.json`);
-    const visualManifest = path.join(CURRENT, 'visual-summary-manifests', `${date}.json`);
+    const currentDir = options.currentDir || CURRENT;
+    const waiver = path.join(currentDir, 'post-publish-visual-waivers', `${date}.json`);
+    const visualManifest = path.join(currentDir, 'visual-summary-manifests', `${date}.json`);
     console.log(`发布收尾清单（${date}）：`);
     console.log('1) digest:status：npm run digest:status -- --date ' + date);
     console.log('2) 网页核验：npm run verify:web -- --date ' + date + ' --deploy <OID>');
     if (fs.existsSync(waiver)) {
         try {
             const data = JSON.parse(fs.readFileSync(waiver, 'utf8'));
-            const manifestFile = path.join(CURRENT, 'blog-generation-manifest-' + date + '.json');
+            const manifestFile = path.join(currentDir, 'blog-generation-manifest-' + date + '.json');
             const manifestExists = fs.existsSync(manifestFile);
             const manifestSha = manifestExists ? require('node:crypto').createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex') : null;
-            const receiptFile = path.join(CURRENT, `blog-review-receipt-${date}.json`);
+            const receiptFile = path.join(currentDir, `blog-review-receipt-${date}.json`);
             const receipt = fs.existsSync(receiptFile) ? JSON.parse(fs.readFileSync(receiptFile, 'utf8')) : null;
             const receiptCommit = receipt && (receipt.publicationCommit || receipt.remoteVerifiedOid) || null;
             const oidPattern = /^[0-9a-f]{40}$/i;
-            const oid = data.publicationCommit || data.remoteVerifiedOid || null;
-            const webArtifact = path.join(CURRENT, `web-verification-${date}.json`);
+            const normalizeOid = value => (typeof value === 'string' && oidPattern.test(value) ? value.toLowerCase() : null);
+            const webArtifact = path.join(currentDir, `web-verification-${date}.json`);
             let webOk = false;
             if (fs.existsSync(webArtifact)) {
                 try {
                     const web = JSON.parse(fs.readFileSync(webArtifact, 'utf8'));
+                    const normalizedReceiptCommit = normalizeOid(receiptCommit);
+                    const normalizedWebOid = normalizeOid(web.publicationOid);
                     webOk = require('./verify-web').hasVerificationArtifactFormat(web)
-                        && web.date === date && web.publicationOid === receiptCommit
+                        && web.date === date
+                        && Boolean(normalizedReceiptCommit)
+                        && normalizedWebOid === normalizedReceiptCommit
                         && web.generationManifestSha256 === manifestSha && web.partial === false
                         && web.deploy?.status === 'completed' && web.deploy.conclusion === 'success';
                 } catch (_) { webOk = false; }
             }
-            const visualSha = shaOf(visualManifestPath(date));
-            const coverSha = shaOf(coverManifestPath(date));
+            const visualSha = shaOf(visualManifestPath(date, currentDir));
+            const coverSha = shaOf(coverManifestPath(date, currentDir));
             const valid = validateWaiver(data, { date, manifestSha, receiptCommit, receiptSha: shaOf(receiptFile),
                 publicationPolicy: manifestExists ? JSON.parse(fs.readFileSync(manifestFile, 'utf8')).postPublicationPolicy : null,
                 postPublishVisuals: receipt?.postPublishVisuals, remoteVerifiedOid: receipt?.remoteVerifiedOid, visualSha, coverSha });

@@ -519,7 +519,12 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if pdfOwner==currentPaperID,let doc,!doc.isLocked,let page=pdfView.currentPage,doc.index(for:page) != NSNotFound {
             pageTextStatus=(page.string ?? "").trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? "empty":"available"
         }else{pageTextStatus="unknown"}
-        return ["pageTextStatus":pageTextStatus,"paperID":currentPaperID,"contextGeneration":contextGeneration,"pageCount":doc?.pageCount ?? 0,"page":pdfView.currentPage.flatMap{doc?.index(for:$0)}.map{$0+1} ?? 1,"scale":pdfView.scaleFactor,"sha256":currentPDFSHA,"version":pdfVersion,"currentness":currentPDFReceipt["currentness"] ?? "not-checked","isStale":currentPDFReceipt["isStale"] ?? false,"notices":currentPDFReceipt["notices"] ?? []]}
+        let currentPageNumber:Int = {
+            guard let doc, let page = pdfView.currentPage else { return 1 }
+            let idx = doc.index(for: page)
+            return (idx != NSNotFound && idx >= 0 && idx < doc.pageCount) ? idx + 1 : 1
+        }()
+        return ["pageTextStatus":pageTextStatus,"paperID":currentPaperID,"contextGeneration":contextGeneration,"pageCount":doc?.pageCount ?? 0,"page":currentPageNumber,"scale":pdfView.scaleFactor,"sha256":currentPDFSHA,"version":pdfVersion,"currentness":currentPDFReceipt["currentness"] ?? "not-checked","isStale":currentPDFReceipt["isStale"] ?? false,"notices":currentPDFReceipt["notices"] ?? []]}
     func installPDFObservers() {
         guard !pdfObserversInstalled else{return};pdfObserversInstalled=true
         NotificationCenter.default.addObserver(self,selector:#selector(pdfPageChanged),name:.PDFViewPageChanged,object:pdfView)
@@ -549,11 +554,37 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         return ["annotations":entries]
     }
     func pdfChapters()->[[String:Any]] {
-        guard pdfOwner==currentPaperID,let doc=pdfView.document,let root=doc.outlineRoot else{return []}
+        guard pdfOwner==currentPaperID,let doc=pdfView.document,doc.pageCount>0,let root=doc.outlineRoot else{return []}
+        let maxDepth=16,maxEntries=1000
         var rows:[[String:Any]]=[]
-        func visit(_ node:PDFOutline,depth:Int){if let page=node.destination?.page,let title=node.label,!title.isEmpty{rows.append(["title":title,"page":doc.index(for:page)+1,"depth":depth])};for index in 0..<node.numberOfChildren{if let child=node.child(at:index){visit(child,depth:depth+1)}}}
-        for index in 0..<root.numberOfChildren{if let node=root.child(at:index){visit(node,depth:0)}}
-        for index in rows.indices {let start=rows[index]["page"] as! Int;let depth=rows[index]["depth"] as! Int;let next=rows.dropFirst(index+1).first{($0["depth"] as? Int ?? 0)<=depth && ($0["page"] as? Int ?? 0)>start}?["page"] as? Int;rows[index]["endPage"]=next.map{$0-1} ?? doc.pageCount}
+        var visited=Set<ObjectIdentifier>()
+        visited.insert(ObjectIdentifier(root))
+        func visit(_ node:PDFOutline,depth:Int){
+            guard depth<=maxDepth,rows.count<maxEntries else{return}
+            guard visited.insert(ObjectIdentifier(node)).inserted else{return}
+            if let page=node.destination?.page,let title=node.label,!title.isEmpty {
+                let idx=doc.index(for:page)
+                if idx != NSNotFound, idx >= 0, idx < doc.pageCount {
+                    rows.append(["title":title,"page":idx+1,"depth":depth])
+                }
+            }
+            guard depth<maxDepth,rows.count<maxEntries else{return}
+            for index in 0..<node.numberOfChildren {
+                guard rows.count<maxEntries else{break}
+                if let child=node.child(at:index){visit(child,depth:depth+1)}
+            }
+        }
+        for index in 0..<root.numberOfChildren {
+            guard rows.count<maxEntries else{break}
+            if let node=root.child(at:index){visit(node,depth:0)}
+        }
+        for index in rows.indices {
+            let start=rows[index]["page"] as! Int
+            let depth=rows[index]["depth"] as! Int
+            let next=rows.dropFirst(index+1).first{($0["depth"] as? Int ?? 0)<=depth && ($0["page"] as? Int ?? 0)>start}?["page"] as? Int
+            let rawEnd=next.map{$0-1} ?? doc.pageCount
+            rows[index]["endPage"]=min(doc.pageCount,max(start,rawEnd))
+        }
         return rows
     }
     func modelSource(_ payload:[String:Any]) throws->[String:Any]{
@@ -562,7 +593,7 @@ final class BundleScheme: NSObject,WKURLSchemeHandler {
         if scope=="selection"{guard pdfOwner==currentPaperID,selectionSource["paperID"] as? String==currentPaperID,selectionSource["pdfSHA"] as? String==currentPDFSHA,selectionSource["sourceVersion"] as? String==pdfVersion,!selectionSource.isEmpty,(selectionSource["text"] as? String ?? "").count<=240000 else{throw DesktopError.message("选区缺失、版本已变化或超过材料上限；请先选择当前 PDF 中的文字，或改用当前页/全文/网站导读")};var source=selectionSource;let defaults:[String:Any]=["currentness":"not-checked","isStale":false,"cacheStatus":"unknown","notices":[],"validatedAt":"","offlineMode":false];for(key,fallback) in defaults{source[key]=currentPDFReceipt[key] ?? fallback};return source}
         if scope=="guide"{guard currentArticle["paperID"] as? String==currentPaperID,let text=currentArticle["plainText"] as? String,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,text.count<=240000 else{throw DesktopError.message("当前导读未准备好或超过材料上限，请选择有效的 PDF 范围")};return ["kind":"published-reader","paperID":currentPaperID,"text":currentArticle["plainText"] ?? "","sourceURL":currentArticle["sourceURL"] ?? "","revision":currentArticle["revisionSHA256"] ?? "","sourceVersion":currentArticle["sourceVersion"] ?? "","isStale":currentArticle["isStale"] ?? false,"offlineMode":currentArticle["offlineMode"] ?? false,"cacheStatus":currentArticle["cacheStatus"] ?? "unknown","notices":currentArticle["notices"] ?? [],"fetchedAt":currentArticle["fetchedAt"] ?? ""]}
         guard pdfOwner==currentPaperID,let doc=pdfView.document,!doc.isLocked else{throw DesktopError.message("请先打开当前论文的原始 PDF")}
-        var pages:[Int]=[];if scope=="chapter"{let chapters=pdfChapters();guard let index=payload["chapter"] as? Int,index>=0,index<chapters.count,let first=chapters[index]["page"] as? Int,let last=chapters[index]["endPage"] as? Int else{throw DesktopError.message("此 PDF 没有可核对的章节目录，请使用实际页范围")};pages=Array((first-1)..<last)}else if scope=="page"{guard let page=pdfView.currentPage,doc.index(for:page) != NSNotFound else{throw DesktopError.message("当前 PDF 页面尚未准备好，未回退发送全文")};pages=[doc.index(for:page)]}else if scope=="range"{let from=payload["from"] as? Int ?? 1,to=payload["to"] as? Int ?? from;guard from>=1,to>=from,to<=doc.pageCount else{throw DesktopError.message("请输入当前 PDF 中有效的物理页范围")};pages=Array((from-1)..<to)}else{pages=Array(0..<doc.pageCount)}
+        var pages:[Int]=[];if scope=="chapter"{let chapters=pdfChapters();guard let index=payload["chapter"] as? Int,index>=0,index<chapters.count,let first=chapters[index]["page"] as? Int,let last=chapters[index]["endPage"] as? Int,1<=first,first<=last,last<=doc.pageCount else{throw DesktopError.message("此 PDF 没有可核对的章节目录，请使用实际页范围")};pages=Array((first-1)..<last)}else if scope=="page"{guard let page=pdfView.currentPage,doc.index(for:page) != NSNotFound else{throw DesktopError.message("当前 PDF 页面尚未准备好，未回退发送全文")};pages=[doc.index(for:page)]}else if scope=="range"{let from=payload["from"] as? Int ?? 1,to=payload["to"] as? Int ?? from;guard from>=1,to>=from,to<=doc.pageCount else{throw DesktopError.message("请输入当前 PDF 中有效的物理页范围")};pages=Array((from-1)..<to)}else{pages=Array(0..<doc.pageCount)}
         var text="",missing:[Int]=[];for index in pages{guard let contents=doc.page(at:index)?.string,!contents.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{missing.append(index+1);continue};text+="\n[p.\(index+1)]\n\(contents)\n"}
         guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw DesktopError.message("此 PDF 未提取到可用文字；可继续阅读原件，当前模型输入不支持扫描图像 OCR")}
         guard text.count<=240000 else{throw DesktopError.message("所选材料超过 240000 字符，未发送付费请求；请使用选区、当前页或较小页范围")};let truncated=false

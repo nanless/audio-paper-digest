@@ -137,3 +137,39 @@ test('--env 缺少参数报错，且副模型 Responses 推理档不匹配时判
         assert.match(effortItem.detail, /副模型 deepseek-v4\.1-flash/);
     });
 });
+
+test('openSync 遇到符号链接/硬链接/权限错误时干净返回退出码 1（不抛未捕获异常）', () => {
+    const os = require('node:os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'config-check-sec-'));
+    const origError = console.error;
+    const errors = [];
+    console.error = msg => errors.push(String(msg));
+    try {
+        const real = path.join(dir, 'real.env');
+        fs.writeFileSync(real, VALID_ENV, { mode: 0o600 });
+        if (process.platform !== 'win32') {
+            const sym = path.join(dir, 'sym.env');
+            fs.symlinkSync(real, sym);
+            assert.strictEqual(configCheck.main(['--env', sym]), 1);
+            const hard = path.join(dir, 'hard.env');
+            fs.linkSync(real, hard);
+            assert.strictEqual(configCheck.main(['--env', hard]), 1);
+            fs.unlinkSync(hard);
+            // 模拟 lstat 与 openSync 之间竞争触发 ELOOP。
+            const origOpen = fs.openSync;
+            fs.openSync = (filePath, ...rest) => {
+                if (filePath === real) throw Object.assign(new Error('ELOOP'), { code: 'ELOOP' });
+                return origOpen(filePath, ...rest);
+            };
+            try {
+                assert.strictEqual(configCheck.main(['--env', real]), 1);
+            } finally {
+                fs.openSync = origOpen;
+            }
+        }
+        assert.ok(errors.some(line => /普通文件|符号链接/.test(line)));
+    } finally {
+        console.error = origError;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});

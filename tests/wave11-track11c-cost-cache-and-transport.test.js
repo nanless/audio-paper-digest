@@ -582,6 +582,130 @@ describe('Wave 11 Track 11C: equal-weight paper-sticky account affinity & scorec
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });
+
+    it('digest-scorecard --batch-date loads D and D+1 for post-midnight events, --fast never scans flat usageDir, and blockedBeforeTransport/providerErrors are reported', () => {
+        const { resolveTargetDates } = require('../scripts/digest-scorecard.js');
+        assert.deepEqual(resolveTargetDates({ batchDate: '2026-11-25' }), ['2026-11-25', '2026-11-26']);
+        assert.deepEqual(resolveTargetDates({ batchDate: '2026-11-25', date: '2026-11-25' }), ['2026-11-25', '2026-11-26']);
+        assert.deepEqual(resolveTargetDates({ batchDate: '2026-11-25', date: '2026-11-25', days: 1 }), ['2026-11-25']);
+
+        const dir = makeTempDir('pd-scorecard-batch-fast-');
+        try {
+            const usageDir = path.join(dir, 'llm-usage');
+            // 1. Record Day D event, post-midnight Day D+1 event with batchDate=D, and unrelated D+1 event
+            const ev1 = recordLlmUsage({
+                protocol: 'openai_responses',
+                model: 'muse-spark-1.3-contributor',
+                request: { input: 'day-d' },
+                response: { status: 'completed', output_text: 'ok', usage: { input_tokens: 100, output_tokens: 20 } },
+                statusCode: 200,
+                durationMs: 1000,
+                transportStarted: true,
+                context: { stage: 'primaryAnalysis', paperId: '2611.00001', batchDate: '2026-11-25' },
+                at: '2026-11-25T23:55:00+08:00'
+            }, { directory: usageDir });
+            assert.equal(ev1.batchDate, '2026-11-25');
+
+            const evPostMidnight = recordLlmUsage({
+                protocol: 'openai_responses',
+                model: 'muse-spark-1.3-contributor',
+                request: { input: 'post-midnight' },
+                response: { status: 'failed' },
+                statusCode: 200,
+                durationMs: 800,
+                transportStarted: true,
+                context: { stage: 'apiReaderArticle', paperId: '2611.00001', batchDate: '2026-11-25' },
+                at: '2026-11-26T00:15:00+08:00'
+            }, { directory: usageDir });
+            assert.equal(evPostMidnight.batchDate, '2026-11-25');
+
+            const evBlocked = recordLlmUsage({
+                protocol: 'openai_responses',
+                model: 'muse-spark-1.3-contributor',
+                request: { input: 'blocked' },
+                response: null,
+                statusCode: null,
+                durationMs: 5,
+                errorCode: 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED',
+                transportStarted: false,
+                context: { stage: 'apiReaderRepair', paperId: '2611.00001', batchDate: '2026-11-25' },
+                at: '2026-11-26T00:20:00+08:00'
+            }, { directory: usageDir });
+            assert.equal(evBlocked.outcome, 'blocked_before_transport');
+
+            // Unrelated next-day batch event must be excluded by batchDate filter
+            recordLlmUsage({
+                protocol: 'openai_responses',
+                model: 'muse-spark-1.3-contributor',
+                request: { input: 'next-batch' },
+                response: { status: 'completed', output_text: 'ok', usage: { input_tokens: 100, output_tokens: 20 } },
+                statusCode: 200,
+                durationMs: 500,
+                transportStarted: true,
+                context: { stage: 'dailyFilter', paperId: '2611.00099', batchDate: '2026-11-26' },
+                at: '2026-11-26T09:00:00+08:00'
+            }, { directory: usageDir });
+
+            const batchDates = resolveTargetDates({ batchDate: '2026-11-25' });
+            const loaded = loadEventsForDates(usageDir, batchDates, { fast: true, batchDate: '2026-11-25' });
+            assert.equal(loaded.events.length, 3);
+            const card = buildScorecard(loaded.events, { dates: batchDates, source: loaded.source });
+            assert.equal(card.totals.requests, 3);
+            assert.equal(card.totals.completed, 1);
+            assert.equal(card.totals.providerErrors, 1);
+            assert.equal(card.totals.blockedBeforeTransport, 1);
+            assert.equal(card.totals.transportErrors, 0);
+            const text = formatTextScorecard(card);
+            assert.match(text, /服务商错: 1/);
+            assert.match(text, /本地拦截: 1/);
+
+            // 2. --fast mode must NEVER scan flat usageDir even when a date is missing from -daily/ or has a 0-line .jsonl!
+            const dailyIndexDir = path.join(dir, 'llm-usage-daily');
+            fs.writeFileSync(path.join(dailyIndexDir, '2026-11-27.jsonl'), '', 'utf8');
+            const origReaddirSync = fs.readdirSync;
+            const origOpendirSync = fs.opendirSync;
+            fs.readdirSync = (target, ...rest) => {
+                assert.notEqual(path.resolve(String(target)), path.resolve(usageDir), '--fast 模式绝不能扫描平铺 usageDir');
+                return origReaddirSync(target, ...rest);
+            };
+            fs.opendirSync = (target, ...rest) => {
+                assert.notEqual(path.resolve(String(target)), path.resolve(usageDir), '--fast 模式绝不能 opendir 平铺 usageDir');
+                return origOpendirSync(target, ...rest);
+            };
+            try {
+                // Missing date + 0-line date in --fast mode never scans flat usageDir
+                const fastEmpty = loadEventsForDates(usageDir, ['2026-11-27', '2026-11-28'], { fast: true });
+                assert.equal(fastEmpty.events.length, 0);
+                assert.equal(fastEmpty.source, 'daily-index-fast');
+
+                const fastCompletelyMissing = loadEventsForDates(usageDir, ['2026-11-28'], { fast: true });
+                assert.equal(fastCompletelyMissing.events.length, 0);
+                assert.equal(fastCompletelyMissing.source, 'empty-fast');
+
+                // Date-sharded subdirectory IS read in --fast mode without scanning flat usageDir
+                recordLlmUsage({
+                    protocol: 'openai_responses',
+                    model: 'muse-spark-1.3-contributor',
+                    request: { input: 'sharded-fast' },
+                    response: { status: 'completed', output_text: 'ok', usage: { input_tokens: 50, output_tokens: 10 } },
+                    statusCode: 200,
+                    durationMs: 300,
+                    transportStarted: true,
+                    context: { stage: 'dailyFilter', paperId: '2611.00050' },
+                    at: '2026-11-29T10:00:00+08:00'
+                }, { directory: usageDir, shardByDate: true });
+                fs.rmSync(path.join(dailyIndexDir, '2026-11-29.jsonl'), { force: true });
+                const fastShard = loadEventsForDates(usageDir, ['2026-11-29'], { fast: true });
+                assert.equal(fastShard.events.length, 1);
+                assert.equal(fastShard.source, 'date-shard-fast');
+            } finally {
+                fs.readdirSync = origReaddirSync;
+                fs.opendirSync = origOpendirSync;
+            }
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
 });
 
 describe('Wave 11 Track 11C: KV prefix caching prompt ordering invariants', () => {

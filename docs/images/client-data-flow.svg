@@ -1,42 +1,94 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1265" viewBox="0 0 640 1265" role="img" aria-labelledby="title description"><title id="title">公开阅读与个人研究资料</title><desc id="description">网站公开内容只读进入Mac和Android工作台。工作台按用户主动操作发送选定文字给模型，Mac和Android各走各自Zotero接口；研究备份独立保存版本，虚线表示确认后恢复，不自动合并，不迁移凭据或本机校验密钥。</desc>
-<defs><style>text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Noto Sans CJK SC",Arial,sans-serif;fill:#183247}.title{font-size:26px;font-weight:700}.head{font-size:23px;font-weight:650}.body{font-size:20px}.note{font-size:18px;fill:#425b70}.bus{fill:none;stroke:#59778e;stroke-width:2.5}.line{fill:none;stroke:#59778e;stroke-width:2.5;marker-end:url(#arrow)}.return{fill:none;stroke:#2d776c;stroke-width:2.5;stroke-dasharray:8 6;marker-end:url(#returnarrow)}</style><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#59778e"/></marker><marker id="returnarrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#2d776c"/></marker></defs>
-<rect width="640" height="1265" rx="18" fill="#f5f8fb"/>
-<text x="32" y="48" class="title">公开阅读与个人研究资料</text>
-<text x="32" y="82" class="note">实线：读取或主动保存　虚线：确认后恢复</text>
-<rect x="32" y="108" width="576" height="122" rx="14" fill="#eaf1fc" stroke="#b9cbd8" stroke-width="1.5"/>
-<text x="54" y="144" class="head">网站已经发布的内容</text>
-<text x="54" y="180" class="body">目录、论文解读、汇总、引用与 PDF 来源</text>
-<text x="54" y="209" class="body">打开内容不会重新运行生产分析</text>
-<path d="M320 234V281" class="line"/>
-<text x="340" y="263" class="note">只读获取</text>
-<rect x="32" y="288" width="576" height="168" rx="14" fill="#fff" stroke="#b9cbd8" stroke-width="1.5"/>
-<text x="54" y="324" class="head">Mac 与 Android 工作台</text>
-<text x="54" y="360" class="body">阅读、原文对照、收藏、笔记与个人研究</text>
-<text x="54" y="389" class="body">个人资料、模型配置与网站生产任务分开</text>
-<path d="M320 460V478H600V1039" class="bus"/>
-<rect x="48" y="500" width="512" height="122" rx="14" fill="#fff" stroke="#b9cbd8" stroke-width="1.5"/>
-<text x="70" y="536" class="head">用户配置的模型服务</text>
-<text x="70" y="572" class="body">仅主动研究或测试连接时调用</text>
-<text x="70" y="601" class="body">研究只发确认的提取文字，不发 PDF 或图片</text>
-<path d="M600 561H564" class="line"/>
-<rect x="48" y="654" width="512" height="122" rx="14" fill="#fff" stroke="#b9cbd8" stroke-width="1.5"/>
-<text x="70" y="690" class="head">仅 Mac：本机 Zotero</text>
-<text x="70" y="726" class="body">使用该设备单独授予的本地接口许可</text>
-<text x="70" y="755" class="body">书目、附件与资料按实际归档结果核验</text>
-<path d="M600 715H564" class="line"/>
-<rect x="48" y="808" width="512" height="122" rx="14" fill="#fff" stroke="#b9cbd8" stroke-width="1.5"/>
-<text x="70" y="844" class="head">仅 Android：Zotero Web API</text>
-<text x="70" y="880" class="body">单独配置官方接口授权</text>
-<text x="70" y="909" class="body">不继承 Mac 的本地许可</text>
-<path d="M600 869H564" class="line"/>
-<rect x="48" y="962" width="512" height="154" rx="14" fill="#edf6f2" stroke="#b9cbd8" stroke-width="1.5"/>
-<text x="70" y="998" class="head">两端：完整研究资料备份</text>
-<text x="70" y="1034" class="body">独立目录保存版本，恢复前确认</text>
-<text x="70" y="1063" class="body">不自动合并两台设备的并行编辑</text>
-<text x="70" y="1092" class="body">与 Zotero 附件同步的目录及授权分开</text>
-<path d="M600 1039H564" class="line"/>
-<path d="M48 1039H16V355H28" class="return"/>
-<text x="32" y="1160" class="note">模型密钥、登录凭据、本机完整性校验密钥</text>
-<text x="32" y="1189" class="note">不随研究备份迁移；恢复不会自动重发请求。</text>
-<text x="32" y="1218" class="note">本图解释数据关系，实际验证范围另见使用说明。</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="1272" viewBox="0 0 680 1272" role="img" aria-labelledby="title desc">
+  <title id="title">公开阅读、每日播客与个人研究资料流向</title>
+  <desc id="desc">音频研究门户快照与 1.5.0 每日音频播客只读进入 Mac 与 Android 工作台；工作台分别连接用户自配模型、两端独立授权的 Zotero、一键双向同步 WebDAV（含笔记冲突无损合并）以及完整研究空间快照备份（虚线表示用户确认后恢复，不迁移凭据或本机校验密钥）。</desc>
+  <defs>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", sans-serif; fill: #182120; }
+      .title { font-size: 24px; font-weight: 700; }
+      .head { font-size: 19px; font-weight: 700; }
+      .head-inv { font-size: 19px; font-weight: 700; fill: #f7f5f0; }
+      .body { font-size: 16px; fill: #2d3a38; }
+      .note { font-size: 14.5px; fill: #556360; }
+      .bus { fill: none; stroke: #4a5755; stroke-width: 2.2; }
+      .line { fill: none; stroke: #0f5c58; stroke-width: 2.2; marker-end: url(#arrow); }
+      .bi { fill: none; stroke: #1f8a82; stroke-width: 2.4; marker-start: url(#arrow-rev); marker-end: url(#arrow); }
+      .copper { fill: none; stroke: #b85a34; stroke-width: 2.2; marker-end: url(#arrow-copper); }
+      .return { fill: none; stroke: #b85a34; stroke-width: 2.2; stroke-dasharray: 8 5; marker-end: url(#arrow-copper); }
+    </style>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto"><path d="M0,1 L8,4.5 L0,8 Z" fill="#0f5c58"/></marker>
+    <marker id="arrow-rev" markerWidth="9" markerHeight="9" refX="1.5" refY="4.5" orient="auto"><path d="M8,1 L0,4.5 L8,8 Z" fill="#1f8a82"/></marker>
+    <marker id="arrow-copper" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto"><path d="M0,1 L8,4.5 L0,8 Z" fill="#b85a34"/></marker>
+  </defs>
+
+  <rect width="680" height="1272" rx="18" fill="#f7f5f0" stroke="#d6cfc3" stroke-width="1.5"/>
+  <text x="36" y="48" class="title">公开阅读、每日播客与个人研究资料</text>
+  <text x="36" y="76" class="note">实线：只读获取或主动写入　双向实线：一键同步　虚线：确认后快照恢复</text>
+
+  <!-- Top public row: Portal + Podcast side-by-side -->
+  <rect x="36" y="102" width="328" height="120" rx="14" fill="#eef6f4" stroke="#9ec9c3" stroke-width="1.5"/>
+  <text x="56" y="136" class="head" fill="#0f5c58">音频研究门户（公开快照）</text>
+  <text x="56" y="168" class="body">目录、精读、汇总、引用与原 PDF</text>
+  <text x="56" y="196" class="note">只读打开，不触发生产重算</text>
+
+  <rect x="380" y="102" width="264" height="120" rx="14" fill="#fdf6f1" stroke="#e4bfa8" stroke-width="1.5"/>
+  <text x="400" y="136" class="head" fill="#a64d2a">每日音频播客（1.5.0）</text>
+  <text x="400" y="168" class="body">受控 Release SHA 校验</text>
+  <text x="400" y="196" class="note">150 MiB / 5 期缓存不进备份</text>
+
+  <path d="M200 226 V272" class="line"/>
+  <text x="216" y="255" class="note">只读获取</text>
+  <path d="M512 226 V272" class="copper"/>
+  <text x="528" y="255" class="note">校验缓存</text>
+
+  <!-- Center Workbench -->
+  <rect x="36" y="280" width="608" height="132" rx="14" fill="#ffffff" stroke="#b9cfc9" stroke-width="1.8"/>
+  <rect x="36" y="280" width="608" height="44" rx="14" fill="#182120"/>
+  <rect x="36" y="310" width="608" height="14" fill="#182120"/>
+  <text x="56" y="309" class="head-inv">Mac 与 Android 音频研究工作台（v1.5.0）</text>
+  <text x="56" y="356" class="body">图文精读、PDF 对照、收藏、笔记、每日播客与个人研究</text>
+  <text x="56" y="388" class="note">个人资料、模型设置与网站生产系统完全隔离</text>
+
+  <!-- Right vertical distribution bus -->
+  <path d="M340 416 V438 H644 V1092" class="bus"/>
+
+  <!-- Target 1: Personal LLM -->
+  <rect x="64" y="460" width="524" height="114" rx="14" fill="#ffffff" stroke="#d6cfc3" stroke-width="1.5"/>
+  <text x="86" y="494" class="head">用户配置的个人模型服务</text>
+  <text x="86" y="524" class="body">仅主动提问或测试连接时调用</text>
+  <text x="86" y="552" class="note">只发送经确认的提取文字，不发原始 PDF 或图片</text>
+  <path d="M644 517 H592" class="line"/>
+
+  <!-- Target 2: Mac & Android Zotero -->
+  <rect x="64" y="596" width="524" height="114" rx="14" fill="#ffffff" stroke="#d6cfc3" stroke-width="1.5"/>
+  <text x="86" y="630" class="head">Mac：本机 Zotero 接口</text>
+  <text x="86" y="660" class="body">使用本机单独授予的本地 API 许可</text>
+  <text x="86" y="688" class="note">书目、原 PDF、自包含导读与笔记逐项回读核验</text>
+  <path d="M644 653 H592" class="line"/>
+
+  <rect x="64" y="732" width="524" height="114" rx="14" fill="#ffffff" stroke="#d6cfc3" stroke-width="1.5"/>
+  <text x="86" y="766" class="head">Android：官方 Zotero Web API</text>
+  <text x="86" y="796" class="body">单独配置官方授权，不继承 Mac 本地许可</text>
+  <text x="86" y="824" class="note">附件可选 Zotero Storage 或独立坚果云附件目录</text>
+  <path d="M644 789 H592" class="line"/>
+
+  <!-- Target 3: One-Click WebDAV Sync -->
+  <rect x="64" y="868" width="524" height="126" rx="14" fill="#eef6f4" stroke="#1f8a82" stroke-width="1.6"/>
+  <text x="86" y="902" class="head" fill="#0f5c58">双端：一键双向同步 WebDAV</text>
+  <text x="86" y="932" class="body">双向同步收藏、待读、笔记、PDF 与离线导读</text>
+  <text x="86" y="960" class="note">同一论文笔记并发冲突时提供卡片无损合并并归档原件</text>
+  <path d="M640 931 H594" class="bi"/>
+
+  <!-- Target 4: Full-Space Backup -->
+  <rect x="64" y="1016" width="524" height="136" rx="14" fill="#fdf6f1" stroke="#b85a34" stroke-width="1.6"/>
+  <text x="86" y="1050" class="head" fill="#a64d2a">双端：完整研究空间快照备份</text>
+  <text x="86" y="1080" class="body">独立目录按 UUID 分版本保存，互不覆盖</text>
+  <text x="86" y="1108" class="body">恢复前由用户明确确认并保留恢复前副本</text>
+  <text x="86" y="1134" class="note">与 Zotero 附件目录及播客 LRU 缓存彼此隔离</text>
+  <path d="M644 1092 H592" class="copper"/>
+  <path d="M64 1092 H20 V346 H32" class="return"/>
+
+  <!-- Footer -->
+  <rect x="36" y="1174" width="608" height="72" rx="10" fill="#ece8de"/>
+  <text x="54" y="1202" class="note">模型密钥、登录凭据与本机完整性校验密钥均不随备份或同步迁移；</text>
+  <text x="54" y="1228" class="note">恢复不会自动重发已派发请求。实际验证范围另见两端使用说明。</text>
 </svg>

@@ -116,6 +116,12 @@ class EvaluationSectionTest(unittest.TestCase):
         self.assertEqual(find_evaluation_headings('摘要句中提到论文评价，但这不是栏目。', rendered=True), [])
         self.assertIsNotNone(evaluation_heading_issue('💡 **论文评价**\n\n💬 **毒舌点评**\n', rendered=True))
 
+    def test_unicode_line_separators_and_bare_double_hash_match_js(self):
+        # \u2028 must not split a line into a fake heading; bare '##' / '##   ' must not end the section
+        text = '## 论文评价\n第一句\u2028## 核心摘要\n##\n##   \n第二句。\n## 核心摘要\n正文摘要。'
+        self.assertEqual(analysis_heading_titles(text), ['论文评价', '核心摘要'])
+        self.assertEqual(extract_evaluation_section(text), '第一句\u2028## 核心摘要\n##\n##   \n第二句。')
+
 
 if __name__ == '__main__':
     unittest.main()

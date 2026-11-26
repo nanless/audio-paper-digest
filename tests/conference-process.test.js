@@ -2797,3 +2797,89 @@ test('deepExecutionConfigIdentity 按 primaryModel 规范化 Responses reasoning
     });
     assert.equal(deepseek.audit.responses.reasoningEffort, 'max');
 });
+
+test('lockStatus 返回真实 consistent、跳过远端主机 PID 探测并将 EPERM 视为存活', t => {
+    const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-lock-status-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const target = path.join(dir, '.operation');
+    const lockPath = `${target}.lock`;
+
+    // 1. 真实本机有效锁：consistent=true, ownerAlive=true
+    fs.mkdirSync(lockPath, { mode: 0o700 });
+    fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+        pid: process.pid,
+        hostname: os.hostname(),
+        token: crypto.randomUUID(),
+        acquiredAt: new Date().toISOString()
+    }), { mode: 0o600 });
+    assert.deepEqual(cli.lockStatus(engine, target), {
+        consistent: true,
+        ownerAlive: true,
+        ownerPid: process.pid,
+        ownerHost: os.hostname()
+    });
+
+    // 2. 损坏的 owner.json：consistent=false, ownerAlive=null
+    fs.writeFileSync(path.join(lockPath, 'owner.json'), '{broken', { mode: 0o600 });
+    assert.deepEqual(cli.lockStatus(engine, target), {
+        consistent: false,
+        ownerAlive: null,
+        ownerPid: null,
+        ownerHost: null
+    });
+
+    // 3. 远端主机锁：绝不拿远端 PID 探测本机进程，ownerAlive=null
+    fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+        pid: process.pid,
+        hostname: 'remote-worker.invalid',
+        token: crypto.randomUUID(),
+        acquiredAt: new Date().toISOString()
+    }), { mode: 0o600 });
+    const killCalls = [];
+    const killMock = t.mock.method(process, 'kill', (pid, sig) => {
+        killCalls.push([pid, sig]);
+        throw Object.assign(new Error('should not probe remote PID'), { code: 'EPERM' });
+    });
+    assert.deepEqual(cli.lockStatus(engine, target), {
+        consistent: true,
+        ownerAlive: null,
+        ownerPid: process.pid,
+        ownerHost: 'remote-worker.invalid'
+    });
+    assert.deepEqual(killCalls, []);
+
+    // 4. 本机 EPERM 视为存活，ESRCH 视为已退出；无 consistent 字段的 stub 也正确推导
+    killMock.mock.mockImplementation(() => {
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+    });
+    const localStub = {
+        inspectFileLockState: () => ({
+            exists: true,
+            reason: 'live_local_owner',
+            owner: { pid: 424242, hostname: os.hostname() }
+        })
+    };
+    assert.deepEqual(cli.lockStatus(localStub, target), {
+        consistent: true,
+        ownerAlive: true,
+        ownerPid: 424242,
+        ownerHost: os.hostname()
+    });
+    killMock.mock.mockImplementation(() => {
+        throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+    });
+    assert.deepEqual(cli.lockStatus(localStub, target), {
+        consistent: true,
+        ownerAlive: false,
+        ownerPid: 424242,
+        ownerHost: os.hostname()
+    });
+    const malformedStub = {
+        inspectFileLockState: () => ({
+            exists: true,
+            reason: 'malformed-owner',
+            owner: { pid: 424242, hostname: 'remote.invalid' }
+        })
+    };
+    assert.equal(cli.lockStatus(malformedStub, target).consistent, false);
+});

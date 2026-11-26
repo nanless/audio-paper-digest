@@ -399,3 +399,114 @@ test('上一日存在官方 PDF 404 跳过记录时，次日补更边界校验�
     fs.rmSync(path.join(plan.runDir, skip.FILENAME));
     assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot }), /拒绝缩短/);
 });
+
+test('CRLF 元数据独立页在 readCommittedPublishedPaperIds 中正常识别，不误跳为旧页面', t => {
+    const f = createPublishedBlogRepo(t);
+    f.put('content/posts/2026-10-03-crlf.md', [
+        '---',
+        'date: 2026-10-03',
+        'paper_digest_pipeline_owned: true',
+        'paper_digest_page_type: paper',
+        'draft: false',
+        'paper_digest_arxiv_id: "2610.00099"',
+        '---',
+        'CRLF body'
+    ].join('\r\n'));
+    f.git('add', '.');
+    f.git('commit', '-m', 'add crlf paper');
+    f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    const ids = readCommittedPublishedPaperIds(f.root);
+    assert.deepEqual([...ids].sort(), ['2610.00026', '2610.00099']);
+});
+
+test('--allow-empty-daily 零论文发布页可被 readPublishedDigest 与次日 resolveDailyFetchBoundary 正常核验或回溯', t => {
+    const f = createPublishedBlogRepo(t);
+    const { readPublishedDigest } = require('../scripts/lib/daily-fetch-boundary.js');
+    const emptyIndex = `---
+date: 2026-10-04
+draft: false
+paper_digest_pipeline_owned: true
+paper_digest_page_type: index
+description: "今日没有新论文"
+---
+# 音频研究日报 2026-10-04
+
+共分析 **0** 篇论文
+
+今日没有新论文。
+`;
+    f.put('content/posts/2026-10-04.md', emptyIndex);
+    f.git('add', '.');
+    f.git('commit', '-m', 'empty daily');
+    f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+
+    // 1. readPublishedDigest 接受合法的零论文空日汇总页
+    const emptyDigest = readPublishedDigest(f.root, '2026-10-04');
+    assert.equal(emptyDigest.date, '2026-10-04');
+    assert.deepEqual(emptyDigest.papers, []);
+
+    // 2. 缺少 v7 抓取证明时，回溯到更早的非空已发布日更（2026-10-03）推导保守起始月
+    const noArchiveRoot = path.join(f.root, 'no-archive-data');
+    const fallbackBoundary = resolveDailyFetchBoundary(f.root, { until, dataRoot: noArchiveRoot });
+    assert.equal(fallbackBoundary.lastDigestDate, '2026-10-04');
+    assert.equal(fallbackBoundary.since, '2026-10-01T00:00:00.000Z');
+    assert.equal(fallbackBoundary.provenance.boundaryBasis, 'month-derived-lower-bound');
+    assert.deepEqual(fallbackBoundary.provenance.papers, []);
+    assert.equal(validateDailyFetchBoundary(fallbackBoundary), true);
+
+    // 3. 有完整 v7 空批次抓取证明时，verifiedPreviousWindow 校验通过，且 requirePreviouslyFetched 也能连续衔接
+    const dataRoot = path.join(f.root, 'empty-v7-data');
+    const pipeline = require('../scripts/full-fetch.js');
+    const stable = pipeline.stableContentSha256;
+    const prevBoundaryBody = {
+        contract: 'daily-fetch-boundary-v1',
+        lastDigestDate: '2026-10-03',
+        since: '2026-10-01T00:00:00.000Z',
+        until: '2026-10-04T02:00:00.000Z'
+    };
+    const prevBoundary = { ...prevBoundaryBody, identitySha256: stable(prevBoundaryBody) };
+    const provider = { boundaryIdentity: prevBoundary.identitySha256, window: { since: prevBoundary.since, until: prevBoundary.until, covered: true } };
+    const emptyEntry = { status: 'complete', papers: [], papersCount: 0, papersSha256: stable([]), health: { ok: true, provider } };
+    const cp = {
+        batchDate: '2026-10-04',
+        batchStartedAt: prevBoundary.until,
+        ...pipeline.buildCandidateFingerprints(new Set(), new Set(), prevBoundary),
+        historicalDedupIds: [],
+        arxiv: Object.fromEntries(['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM'].map(id => [id, emptyEntry])),
+        huggingface: { ...emptyEntry, health: { ok: true, provider: { ...provider, cutoffDate: prevBoundary.lastDigestDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } } }
+    };
+    cp.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(cp);
+    const raw = { ...pipeline.buildCandidateFingerprints(new Set(), new Set(), prevBoundary), batchDate: '2026-10-04', fetchBoundary: prevBoundary, papers: [], rawPapersSha256: stable([]), fetchSourcesSha256: cp.fetchSourcesSha256 };
+    const filtered = { ...raw, status: 'complete' };
+    const deep = { batchDate: '2026-10-04', timestamp: '2026-10-04T10:05:00+08:00', papers: [] };
+    const putData = (rel, value) => { const file = path.join(dataRoot, rel); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
+    putData('archive/2026-10-04/fetch-checkpoint.json', cp);
+    putData('archive/2026-10-04/raw-candidates.json', raw);
+    putData('archive/2026-10-04/filtered-papers.json', filtered);
+    putData('archive/2026-10-04/deep-analysis-result.json', deep);
+    const deepSha = crypto.createHash('sha256').update(JSON.stringify(deep)).digest('hex');
+    putData('current/blog-generation-manifest-2026-10-04.json', {
+        schemaVersion: 3, date: '2026-10-04', inputSourceReference: { sha256: deepSha },
+        files: [{ path: emptyDigest.indexPath, sha256: emptyDigest.indexSha256 }]
+    });
+    const nextFromV7 = resolveDailyFetchBoundary(f.root, { until, dataRoot });
+    assert.equal(nextFromV7.since, prevBoundary.until);
+    assert.equal(nextFromV7.provenance.boundaryBasis, 'verified-previous-fetch-until');
+    const nextWithContinuity = resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true });
+    assert.equal(nextWithContinuity.lastDigestDate, '2026-10-04');
+    assert.equal(nextWithContinuity.since, prevBoundary.until);
+    assert.equal(nextWithContinuity.continuity.originalSince, prevBoundary.until);
+    assert.equal(validateDailyFetchBoundary(nextWithContinuity), true);
+
+    // 4. 缺少空日正文标记（仅有 共分析 **0** 篇论文）仍拒绝
+    f.put('content/posts/2026-10-04.md', '---\ndate: 2026-10-04\ndraft: false\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n---\n共分析 **0** 篇论文\n');
+    f.git('add', '.'); f.git('commit', '-m', 'corrupt zero'); f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot: noArchiveRoot }), /数量不符/);
+    assert.throws(() => readPublishedDigest(f.root, '2026-10-04'), /不一致/);
+
+    // 5. 全仓库只有合法空日汇总且无更早非空日更、无 v7 证明时，明确 fail closed
+    f.put('content/posts/2026-10-04.md', emptyIndex);
+    f.git('rm', 'content/posts/2026-10-03.md', 'content/posts/2026-10-03-paper.md');
+    f.git('add', '.'); f.git('commit', '-m', 'only empty'); f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot: noArchiveRoot }), /零论文空批次.*未找到更早的非空/);
+});

@@ -287,3 +287,82 @@ test('播客分组、thinking mode、温度上限与历史审查并发与运行�
         assert.ok(failedNames.includes(name), `${name} should fail validation`);
     }
 });
+
+test('严格 0/1 布尔开关、5 项超时上限、PAPER_DIGEST_IMAGE_HOST 废弃与 thinking mode 严格小写一致', () => {
+    const base = {
+        PAPER_ANALYZER_API_KEY: 'fixture',
+        PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor',
+        PAPER_ANALYZER_ENDPOINT: 'https://example.com/v1',
+        HTTPS_PROXY: 'http://127.0.0.1:7897'
+    };
+    const strictBools = [
+        'PD_LLM_USAGE_SHARD_BY_DATE', 'PD_CHECKPOINT_TIMING', 'PD_DISABLE_NODE_REPLAY_WORKER',
+        'PD_PYTHON_RUNTIME_DISABLE_VENV', 'PAPER_DIGEST_ENABLE_FILE_LOGS', 'PD_ENABLE_FILE_LOGS',
+        'PAPER_DIGEST_DISABLE_FILE_LOGS', 'PD_DISABLE_FILE_LOGS'
+    ];
+    for (const name of strictBools) {
+        assert.strictEqual(schema.validateEntries({ ...base, [name]: '1' }).items.find(i => i.name === name).ok, 'ok', name);
+        assert.strictEqual(schema.validateEntries({ ...base, [name]: '0' }).items.find(i => i.name === name).ok, 'ok', name);
+        assert.strictEqual(schema.validateEntries({ ...base, [name]: 'true' }).items.find(i => i.name === name).ok, 'fail', `${name}=true 应拒绝`);
+    }
+    const timeoutBounds = [
+        ['PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS', '300', '301'],
+        ['PD_HUGO_GATE_TIMEOUT_SECONDS', '30', '29'],
+        ['PD_GIT_LOCAL_TIMEOUT_SECONDS', '300', '301'],
+        ['PD_GIT_COMMIT_TIMEOUT_SECONDS', '900', '901'],
+        ['PD_GIT_NETWORK_TIMEOUT_SECONDS', '900', '901']
+    ];
+    for (const [name, valid, invalid] of timeoutBounds) {
+        assert.strictEqual(schema.validateEntries({ ...base, [name]: valid }).items.find(i => i.name === name).ok, 'ok', `${name}=${valid}`);
+        assert.strictEqual(schema.validateEntries({ ...base, [name]: invalid }).items.find(i => i.name === name).ok, 'fail', `${name}=${invalid}`);
+    }
+    assert.strictEqual(schema.SCHEMA_BY_NAME.get('PAPER_DIGEST_IMAGE_HOST').deprecated, true);
+    assert.doesNotMatch(schema.SCHEMA_BY_NAME.get('PAPER_ANALYZER_API_KEY').hint, /等权/);
+
+    for (const name of [
+        'PD_API_READER_THINKING_MODE',
+        'PD_ANALYSIS_PRIMARY_THINKING_MODE',
+        'PD_ANALYSIS_AUXILIARY_THINKING_MODE',
+        'PD_ANALYSIS_REPAIR_THINKING_MODE'
+    ]) {
+        assert.strictEqual(schema.validateEntries({ ...base, [name]: ' enabled ' }).items.find(i => i.name === name).ok, 'ok', `${name}=enabled`);
+        assert.strictEqual(schema.validateEntries({ ...base, [name]: 'DISABLED' }).items.find(i => i.name === name).ok, 'fail', `${name}=DISABLED 应拒绝`);
+    }
+
+    const { spawnSync } = require('node:child_process');
+    const probe = spawnSync(process.execPath, [
+        '-e',
+        [
+            "const envLoader = require('./scripts/env-loader.js');",
+            'envLoader.loadProjectEnv = () => ({});',
+            "process.env.PD_API_READER_THINKING_MODE = ' enabled ';",
+            "process.env.PD_ANALYSIS_PRIMARY_THINKING_MODE = 'disabled';",
+            "process.env.PD_ANALYSIS_AUXILIARY_THINKING_MODE = 'enabled';",
+            "process.env.PD_ANALYSIS_REPAIR_THINKING_MODE = ' disabled ';",
+            "const { ANALYSIS_CONFIG } = require('./scripts/config.js');",
+            'console.log(JSON.stringify({',
+            '  reader: ANALYSIS_CONFIG.apiReaderThinkingMode,',
+            '  primary: ANALYSIS_CONFIG.primaryThinkingMode,',
+            '  auxiliary: ANALYSIS_CONFIG.auxiliaryThinkingMode,',
+            '  repair: ANALYSIS_CONFIG.repairThinkingMode',
+            '}));'
+        ].join('\n')
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.strictEqual(probe.status, 0, probe.stderr);
+    assert.deepStrictEqual(JSON.parse(probe.stdout.trim()), {
+        reader: 'enabled',
+        primary: 'disabled',
+        auxiliary: 'enabled',
+        repair: 'disabled'
+    });
+    const upperReject = spawnSync(process.execPath, [
+        '-e',
+        [
+            "const envLoader = require('./scripts/env-loader.js');",
+            'envLoader.loadProjectEnv = () => ({});',
+            "process.env.PD_API_READER_THINKING_MODE = 'DISABLED';",
+            "require('./scripts/config.js');"
+        ].join('\n')
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert.notStrictEqual(upperReject.status, 0);
+});

@@ -8,6 +8,10 @@ Mac 和 Android 的当前公开发行版本统一为 **1.5.0（构建号 24）**
 
 公开 APK 为 `paperdigest-android-1.5.0-24-universal.apk`，versionName 1.5.0、versionCode 24，minSdk 28、targetSdk 37，包含四种 ABI 且原生库符合 16 KiB ELF 对齐，应用标识为 `com.nanless.paperdigest`，零新增权限、依赖或组件。公开的 `android-build-info.json` 与 `apksigner verify` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（APK Signature Scheme v3，`signingOrigin: provided-signed-apk`），与 1.4.4–1.4.7 相同，因此已安装 1.4.4–1.4.7 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，仍需先导出完整备份、卸载旧版再安装。1.5.0 没有重新执行 84/86 项人工验收，也没有新增实体机或完整 TalkBack 遍历；改动由双端全量自动测试、服务端回归、打包回读、匿名下载签名复核与线上门户核验覆盖。签名、十二件附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
 
+## 1.4.7 公开发行
+
+公开 APK 为 `paperdigest-android-1.4.7-23-universal.apk`，versionName 1.4.7、versionCode 23，minSdk 28、targetSdk 37，包含四种 ABI 且原生库符合 16 KiB ELF 对齐，应用标识为 `com.nanless.paperdigest`。公开的 `android-build-info.json` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（APK Signature Scheme v2 + v3，`signingOrigin: provided-signed-apk`），与 1.4.4–1.4.6 相同，因此已安装 1.4.4、1.4.5 或 1.4.6 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，仍需先导出完整备份、卸载旧版再安装。1.4.7 没有重新执行 84/86 项人工验收，也没有新增实体机或完整 TalkBack 遍历；改动由双端全量自动测试、打包回读与全站 9276 页导读片段 / 8551 篇去重论文真实导出语料重放覆盖。签名、十二件附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
+
 ## 1.4.6 公开发行
 
 公开 APK 为 `paperdigest-android-1.4.6-22-universal.apk`，versionName 1.4.6、versionCode 22，minSdk 28、targetSdk 37，包含四种 ABI 且原生库符合 16 KiB ELF 对齐，应用标识为 `com.nanless.paperdigest`。公开的 `android-build-info.json` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（APK Signature Scheme v2 + v3），与 1.4.4、1.4.5 相同，因此已安装 1.4.4 或 1.4.5 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，仍需先导出完整备份、卸载旧版再安装。1.4.6 没有重新执行 84/86 项人工验收，也没有新增实体机或完整 TalkBack 遍历；改动由双端自动测试、打包回读与全站 9225 页导读片段 / 8863 篇论文真实导出语料重放覆盖。签名、十二件附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
@@ -93,7 +97,7 @@ API 28、API 35 是 Android 系统接口级别，不是应用版本号。模拟�
 ## 已知使用限制
 
 - 后台任务由 Android 按网络、电量、存储与系统配额安排，非精确定时；强制停止后不保证继续运行。
-- 备份采用独立版本和显式恢复，不实时合并多设备笔记；资料包没有额外端到端加密。
+- 完整研究空间快照备份采用独立版本和显式时点恢复，不会静默覆盖其他设备版本；日常跨端双向同步收藏、待读、笔记、批注、阅读进度与离线文件，以及同一笔记并发冲突的无损合并由“一键同步 WebDAV”单独提供（详见[同步与冲突处理](workbench-full-webdav-sync.md)）。1.5.0 新增的每日音频播客本地 LRU 缓存（150 MiB / 5 期）不进入同步或备份。所有 WebDAV 资料包均经 HTTPS 传输，没有额外端到端加密。
 - 历史模型记录可保留阅读，实际复用仍需受支持合同与完整证明。已派发且结果未知的请求不自动重发，未知金额不记为零。
 - 当前不提供 OCR、未经输入图像的模型视觉理解、PDF 原件写回或 Zotero 标注双向编辑。
 - 旧离线导读可能缺少当前 MathML 合同。界面保留来源提示，并可查看原 PDF；新包继续执行现行公式和资源校验。

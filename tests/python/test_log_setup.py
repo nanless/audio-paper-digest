@@ -104,6 +104,7 @@ class LogSetupTest(unittest.TestCase):
             'PAPER_DIGEST_ENABLE_FILE_LOGS',
             'PD_DISABLE_FILE_LOGS',
             'PAPER_DIGEST_DISABLE_FILE_LOGS',
+            'VERIFY_PROJECT_DISABLE_FILE_LOGS',
             'PAPER_DIGEST_LOG_SETUP_DONE',
         ]:
             env.pop(key, None)
@@ -196,6 +197,50 @@ class LogSetupTest(unittest.TestCase):
 
         for name in created:
             os.remove(os.path.join(LOGS_DIR, name))
+
+    def test_verify_disable_file_logs_and_proxy_password_redaction(self):
+        base_name = f'test-py-log-verify-disable-{os.getpid()}'
+        before = list_log_files()
+        env = os.environ.copy()
+        for key in [
+            'PD_ENABLE_FILE_LOGS',
+            'PAPER_DIGEST_ENABLE_FILE_LOGS',
+            'PD_DISABLE_FILE_LOGS',
+            'PAPER_DIGEST_DISABLE_FILE_LOGS',
+            'VERIFY_PROJECT_DISABLE_FILE_LOGS',
+            'PAPER_DIGEST_LOG_SETUP_DONE',
+        ]:
+            env.pop(key, None)
+        env['VERIFY_PROJECT_DISABLE_FILE_LOGS'] = '1'
+        with ProjectEnvPatch('HTTPS_PROXY=http://proxyuser:p%40ssSecret99@127.0.0.1:7897') as env_path:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    '-c',
+                    (
+                        "import sys; from pathlib import Path; "
+                        "sys.path.insert(0, 'scripts'); "
+                        "import project_env; "
+                        "project_env.DEFAULT_ENV_FILE = Path(sys.argv[1]); "
+                        "from log_setup import setup_script_logging; "
+                        f"setup_script_logging('scripts/{base_name}.py'); "
+                        "print('raw proxy pwd p%40ssSecret99 and decoded p@ssSecret99');"
+                    ),
+                    env_path,
+                ],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('p%40ssSecret99', result.stdout)
+        self.assertNotIn('p@ssSecret99', result.stdout)
+        self.assertIn('[REDACTED]', result.stdout)
+        after = list_log_files()
+        created = [name for name in after if name not in before and name.startswith(f'{base_name}-')]
+        self.assertEqual(created, [])
 
 
 if __name__ == '__main__':

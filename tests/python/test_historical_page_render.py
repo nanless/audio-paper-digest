@@ -178,6 +178,8 @@ else:
         self.assertIn('paper_digest_direct_paper_id:', result['markdown'])
         self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags"', result['markdown'])
         self.assertIn('paper_digest_primary_method: "Transformer"', result['markdown'])
+        self.assertIn('音频研究日报', result['markdown'])
+        self.assertNotIn('语音/音乐/音频论文速递', result['markdown'])
         self.assertIn('conference:icassp:2026:icassp-arnumber:100', result['markdown'])
         self.assertIn('**研究分类**', result['markdown'])
         self.assertIn('/papers/?concept=task.asr', result['markdown'])
@@ -402,6 +404,30 @@ else:
         }
         with self.assertRaisesRegex(ValueError, '未使用 arXiv 标识的历史页面输入'):
             renderer.inject_direct_publication_source(paper, {'contract': 'wrong'})
+
+    def test_direct_conference_page_escapes_reader_title_markdown(self):
+        paper = llm_api_publication_fixture()
+        paper.pop('arxivId', None)
+        paper['directPaperId'] = 'conference:icassp:2026:icassp-arnumber:101'
+        paper['apiReaderPlan']['readerTitle'] = '成本 $5 的 *低延迟* 模型'
+        plan_sha = hashlib.sha256(
+            json.dumps(paper['apiReaderPlan'], ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+        ).hexdigest()
+        paper['apiReaderPlanSha256'] = plan_sha
+        paper['analysisManifest']['stages']['apiReaderArticle']['planSha256'] = plan_sha
+        paper['analysis'] += (
+            '\n\n## 标签\n#语音识别 #Transformer #低资源\n'
+            '主任务标签: #语音识别\n主方法标签: #Transformer\n补充标签: #低资源'
+        )
+        paper['analysisManifest']['stages']['scoringAudit']['outputAnalysisSha256'] = (
+            hashlib.sha256(paper['analysis'].encode()).hexdigest()
+        )
+        result = renderer.render_packet({
+            'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-04',
+        })
+        publisher = renderer.load_publish_to_blog()
+        self.assertIn(f'# 📄 {publisher.markdown_title_for_publish(paper["apiReaderPlan"]["readerTitle"])}',
+                      result['markdown'])
 
 
 if __name__ == '__main__':

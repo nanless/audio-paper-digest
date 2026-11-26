@@ -54,6 +54,10 @@ from blog_record_format import source_bound_generation, strict_receipt, matches_
 from manual_agent_policy import (CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY,
     bound_analysis_model_policy, analysis_identity_error)
 from project_env import build_child_process_env, get_required_fetch_proxy
+from public_network_policy import (
+    is_valid_http_connect_proxy_url,
+    resolve_http_connect_proxy_url,
+)
 from llm_account_pool import (
     LlmAccountPoolExhaustedError,
     LlmAccountAuthError,
@@ -66,6 +70,7 @@ from llm_account_pool import (
     normalize_opencode_go_service,
     record_account_usage,
     resolve_api_key_pool,
+    resolve_live_sync_timeout_ms,
     resolve_primary_api_key_pool,
     select_api_key,
     sync_opencode_go_pool_usage,
@@ -7555,12 +7560,32 @@ def _open_publish_json_with_account_pool(
         and getattr(opener, '_pd_live_usage_sync_allowed', False)
         and getattr(urllib.request.build_opener, '__module__', '') == 'urllib.request'
     ):
-        live_proxy = getattr(opener, '_pd_live_usage_proxy', None) or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+        raw_live_proxy = getattr(opener, '_pd_live_usage_proxy', None)
+        if raw_live_proxy:
+            live_proxy = raw_live_proxy if is_valid_http_connect_proxy_url(raw_live_proxy) else None
+        else:
+            live_proxy = resolve_http_connect_proxy_url(os.environ)
         if live_proxy:
             try:
-                sync_opencode_go_pool_usage(api_keys, endpoint, state_file, proxy_url=live_proxy)
+                _resolve_sync_timeout = globals().get('resolve_live_sync_timeout_ms')
+                configured_sync_timeout_ms = (
+                    _resolve_sync_timeout() if callable(_resolve_sync_timeout) else 10000
+                )
+                sync_timeout_ms = min(configured_sync_timeout_ms, max(1000, int(float(timeout) * 500)))
+                sync_opencode_go_pool_usage(
+                    api_keys, endpoint, state_file,
+                    proxy_url=live_proxy, timeout_ms=sync_timeout_ms,
+                )
             except Exception as sync_exc:
-                print(f'  [llm-account-pool] 实时同步额度失败（回退至本地状态）: {sync_exc}')
+                redacted_secrets = list(api_keys)
+                try:
+                    proxy_password = urllib.parse.urlparse(live_proxy).password
+                    if proxy_password:
+                        redacted_secrets.append(proxy_password)
+                except ValueError:
+                    pass
+                safe_err = _sanitize_publish_llm_error(sync_exc, redacted_secrets)
+                print(f'  [llm-account-pool] 实时同步额度失败（回退至本地状态）: {safe_err}')
     for _account_attempt in range(max_account_attempts):
         elapsed = time.monotonic() - started
         remaining = max(0.001, float(timeout) - elapsed)
@@ -7925,7 +7950,7 @@ def call_publish_llm_api(
                     _PublishLLMNoRedirectHandler(),
                 )
                 opener._pd_live_usage_sync_allowed = True
-                opener._pd_live_usage_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+                opener._pd_live_usage_proxy = resolve_http_connect_proxy_url(os.environ)
             with with_llm_usage_context({**(usage_context or {}), 'transportAttempt': attempt + 1}):
                 status, data = _open_publish_json_with_account_pool(
                     api_url=api_url,
@@ -8846,20 +8871,44 @@ def escape_html_like_tags(text):
         marker_prefix += 'X'
     protected_fences = []
     text = _protect_markdown_fences(text, marker_prefix, protected_fences)
+    # 先保护完整的行内代码段（包含多行代码 span、多反引号与单行反引号），再执行含空白尖括号
+    # 与原始 HTML 式标签的转义。否则像 ``在 `if (a < b && c > d)` 中`` 这样的合法代码段会被
+    # `<[^>\n]*\s[^>\n]*>` 破坏为实体；像 `` `turn off <EOT>` `` 也会被误拆。
+    # 同时保留对模型误套的“双反引号收尾”未配对控制记号（如 `` `turn off `<EOT>``）的显式修复：
+    # 当紧跟单反引号代码段后的 `<Tag>`` ` 未被后续任何代码段配对时，将其并入并实体化为字面记号。
+    protected_code = []
+    inline_spans = markdown_inline_code_ranges(text)
+    if inline_spans:
+        malformed_tail_re = re.compile(r'<([A-Za-z][A-Za-z0-9_†-]{0,40})>``(?!`)')
+        rebuilt = []
+        cursor = 0
+        for idx, (span_start, span_end) in enumerate(inline_spans):
+            if span_start < cursor:
+                continue
+            rebuilt.append(text[cursor:span_start])
+            span_text = text[span_start:span_end]
+            next_span_start = inline_spans[idx + 1][0] if idx + 1 < len(inline_spans) else len(text)
+            if (
+                len(span_text) >= 2
+                and span_text.startswith('`')
+                and not span_text.startswith('``')
+                and span_text.endswith('`')
+                and not span_text.endswith('``')
+                and '\n' not in span_text
+            ):
+                tail_match = malformed_tail_re.match(text, span_end)
+                if tail_match and tail_match.end() <= next_span_start:
+                    span_text = f'`{span_text[1:-1]}&lt;{tail_match.group(1)}&gt;`'
+                    span_end = tail_match.end()
+            protected_code.append(span_text)
+            rebuilt.append(f'{marker_prefix}CODE_{len(protected_code) - 1}_END')
+            cursor = span_end
+        rebuilt.append(text[cursor:])
+        text = ''.join(rebuilt)
     # 幂等：只把自己上次产出的、且会被下方规则重新转义的实体还原成字面尖括号
-    # （含空白的迷你记号、形如 <EOT> 的控制记号）。比较用的 &lt;1 这类实体保持原样，
-    # 否则二次调用会把它变成裸 <，与保存稿比较时判成渲染结果不一致。
-    # 行内代码段里的实体不还原：那里本来就按字面显示，还原后会被代码段保护起来、
-    # 不再转义，二次调用就会丢实体。
-    def _decode_outside_code(segment):
-        # 只还原「含空白的迷你记号」（<1 2>、<a b c>）；&lt;details&gt;、&lt;EOT&gt;
-        # 这类词形记号保持实体，否则会把用户写的转义文本提升成真实 HTML 标签。
-        return re.sub(r'&lt;([^>\n]*\s[^>\n]*)&gt;', r'<\1>', segment)
-
-    text = ''.join(
-        part if part.startswith('`') and part.endswith('`') else _decode_outside_code(part)
-        for part in re.split(r'(`[^`\n]*`)', text)
-    )
+    # （含空白的迷你记号）。比较用的 &lt;1 或 &lt;details&gt;、&lt;EOT&gt; 保持原样；
+    # 行内代码段已于上方保护，因此代码段内的实体绝不会被还原或改写。
+    text = re.sub(r'&lt;([^>\n]*\s[^>\n]*)&gt;', r'<\1>', text)
     # 读者正文里常引用 ``<1 2>``、``<a b c>`` 这类迷你语言记号。它们不是标签，
     # 但 CommonMark 仍会交给 HTML 解析器；不匹配的记号或带属性的记号会破坏
     # 渲染出来的嵌套结构。只转义含空白的尖括号片段，普通 URL 和显式标签
@@ -8869,35 +8918,6 @@ def escape_html_like_tags(text):
         lambda match: f'&lt;{match.group(1)}&gt;',
         text,
     )
-    # 模型可能把行内控制记号误套进代码段，例如 `` `turn off `<EOT>``。中间
-    # 那个反引号提前关闭了代码段，而 ``<EOT>`` 前面紧跟反引号，通用标签处理
-    # 会漏掉它。只修复这种明确的“双反引号收尾”形态；实体化后记号保持字面，
-    # 在渲染出的代码段里仍显示为 ``<EOT>``。
-    text = re.sub(
-        r'`([^`\n]*)`<([A-Za-z][A-Za-z0-9_†-]{0,40})>``',
-        lambda match: f'`{match.group(1)}&lt;{match.group(2)}&gt;`',
-        text,
-    )
-    protected_code = []
-
-    def protect_inline_code(match):
-        protected_code.append(match.group(0))
-        return f'{marker_prefix}CODE_{len(protected_code) - 1}_END'
-
-    # 先保护完整的行内代码段（包含多行代码 span 与单行反引号），再去找原始 HTML 式标签。
-    # 否则像 `` `turn off <EOT>` `` 这样的合法代码段会被当成正文，标签处理再插一对
-    # 反引号，得到非法的 `` `turn off `<EOT>`` 形态。
-    inline_spans = markdown_inline_code_ranges(text)
-    if inline_spans:
-        rebuilt = []
-        cursor = 0
-        for span_start, span_end in inline_spans:
-            rebuilt.append(text[cursor:span_start])
-            protected_code.append(text[span_start:span_end])
-            rebuilt.append(f'{marker_prefix}CODE_{len(protected_code) - 1}_END')
-            cursor = span_end
-        rebuilt.append(text[cursor:])
-        text = ''.join(rebuilt)
     # ``publish-to-blog.py`` 为可折叠的评分区刻意输出这两个不含属性的容器
     # 标签。要在下面通用的论文记号转义之前保护它们；否则后面的通用转义会把
     # 我们自己的 UI 标记（``<details>``）变成行内代码，评分区不再折叠。

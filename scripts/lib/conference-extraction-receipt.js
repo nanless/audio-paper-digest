@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { buildChildProcessEnv } = require('../env-loader.js');
 const paperIdentity = require('./paper-identity.js');
 const codec = require('./protocol-codec');
 const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
@@ -520,6 +521,15 @@ function normalizeVerification(value) {
     return clone(value);
 }
 
+const EXTRACTOR_ALLOWED_ENV_KEYS = Object.freeze([
+    'CODEX_SANDBOX',
+    'PD_PYTHON_RUNTIME_VERIFIED_BIN',
+    'PD_PYTHON_RUNTIME_DISABLE_VENV',
+    'AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE',
+    'AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE',
+    'PD_WORKSPACE_ALLOW_CROSS_ROLE'
+]);
+
 function verifyWithPinnedPython(sourceRoot, requestName) {
     const runtime = path.resolve(__dirname, '..', 'python-runtime.sh');
     const script = path.resolve(__dirname, '..', 'conference-extract.py');
@@ -527,7 +537,7 @@ function verifyWithPinnedPython(sourceRoot, requestName) {
     try {
         stdout = execFileSync('bash', [runtime, script, '--verify', '--manifest', requestName, '--source-root', sourceRoot], {
             cwd: path.resolve(__dirname, '..', '..'), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
-            timeout: 2 * 60 * 1000, env: process.env, stdio: ['ignore', 'pipe', 'pipe']
+            timeout: 2 * 60 * 1000, env: buildChildProcessEnv({}, EXTRACTOR_ALLOWED_ENV_KEYS), stdio: ['ignore', 'pipe', 'pipe']
         });
     } catch (error) {
         const stderr = String(error?.stderr || '').trim().split(/\r?\n/).at(-1) || error.message;

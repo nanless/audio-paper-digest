@@ -78,17 +78,17 @@ import kotlinx.coroutines.launch
  Text("独立存档记录",style=MaterialTheme.typography.titleLarge)
  z.rows("journals").forEach{j->
  val hasMigrationChild=z.rows("journals").any{it.optString("migrationParentID")==j.optString("id")}
- key(j.optString("id")){OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
-  Text("附件后端：${if(j.optString("attachmentBackend","storage")=="webdav")"WebDAV" else "Zotero Storage"}")
-  if(j.optString("migrationParentID").isNotBlank())Text("由原 Storage 存档继续；原记录和原材料仍单独保留。",style=MaterialTheme.typography.bodySmall)
-  if(hasMigrationChild)Text("已另建 WebDAV 继续记录；此处仍保留原 Storage 的结果。",style=MaterialTheme.typography.bodySmall)
-  Text(j.optString("paperID"));Text("${jobStatus(j.optString("status"))} · ${j.optString("createdAt")}")
-  Text("原目标：${if(j.optString("libraryType")=="groups")"群组" else "个人文库"} ${j.optString("libraryID")} · ${if(j.optString("collection").isEmpty())"不指定分类" else "所选原分类"}",style=MaterialTheme.typography.labelSmall)
+ key(j.optString("id")){EditorialCard{
+  Text("附件后端：${if(j.optString("attachmentBackend","storage")=="webdav")"WebDAV" else "Zotero Storage"}",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary)
+  if(j.optString("migrationParentID").isNotBlank())Text("由原 Storage 存档继续；原记录和原材料仍单独保留。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+  if(hasMigrationChild)Text("已另建 WebDAV 继续记录；此处仍保留原 Storage 的结果。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+  Text(j.optString("paperID"),style=MaterialTheme.typography.titleSmall);Text("${jobStatus(j.optString("status"))} · ${j.optString("createdAt")}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+  Text("原目标：${if(j.optString("libraryType")=="groups")"群组" else "个人文库"} ${j.optString("libraryID")} · ${if(j.optString("collection").isEmpty())"不指定分类" else "所选原分类"}",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
   j.ids("notices").forEach{Text(it,color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.bodySmall)}
   j.optString("error").takeIf{it.isNotBlank()}?.let{Text(it,color=MaterialTheme.colorScheme.error)}
   OutlinedButton({action("zotero.resume",obj("journalID" to j.optString("id")))},enabled=!busy&&!dirty&&!hasMigrationChild){Text(if(j.optString("status")=="completed")"重新逐项回读" else "沿原断点继续")}
   ZoteroMigrationEntry(j,state,controller,action,enabled=!busy&&!dirty)
- }}}}
+ }}}
  val syncedHistory = z.rows("syncedArchiveHistory")
  if (syncedHistory.isNotEmpty()) {
   Text("同步的归档历史", style=MaterialTheme.typography.titleLarge)
@@ -102,7 +102,7 @@ import kotlinx.coroutines.launch
   if(oldRecords.isNotEmpty()||history.optInt("unreadableCount")>0){
    Text("来自 Mac 的存档记录",style=MaterialTheme.typography.titleLarge)
    Text("这是备份保留的原 Mac 本地归档记录，只读展示。原来的核验结果不代表安卓刚刚回读了远端；如需核验或续传，请回到原 Mac。",style=MaterialTheme.typography.bodySmall)
-   oldRecords.forEach{record->OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+   oldRecords.forEach{record->EditorialCard{
     Text(record.optString("title"),style=MaterialTheme.typography.titleMedium)
     Text("Mac 本地归档 · 只读历史",color=MaterialTheme.colorScheme.tertiary,style=MaterialTheme.typography.labelMedium)
     Text(record.optString("identity"),style=MaterialTheme.typography.bodySmall)
@@ -114,7 +114,7 @@ import kotlinx.coroutines.launch
      Text("$label · ${step.optString("originalKey").takeUnless{it=="null"||it.isBlank()}?:"尚无条目 key"} · ${if(step.optBoolean("reportedVerified"))"原记录已核验" else "原记录未完成"}",style=MaterialTheme.typography.bodySmall)
     }
     if(record.optBoolean("summaryUnavailable"))Text("原汇总信息不匹配或不可读，未采用其时间或状态；原检查点已保留。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
-   }}}
+   }}
    if(history.optInt("unreadableCount")>0)Text("${history.optInt("unreadableCount")} 份原 Mac 检查点暂不可读，原文件完整保留，未将它们显示为已完成。",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
   }
  }

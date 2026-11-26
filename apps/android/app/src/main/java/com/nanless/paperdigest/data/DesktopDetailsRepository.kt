@@ -315,7 +315,7 @@ class DesktopDetailsRepository(
                 val pageType = row.getString("pageType")
                 val publicationStatus = row.getString("publicationStatus")
                 val articleRevisionId = row.getString("articleRevisionId")
-                require(pageType in setOf("paper", "daily", "conference")) { "目录记录 pageType 非法：$pageType" }
+                require(pageType in setOf("paper", "daily", "conference", "page")) { "目录记录 pageType 非法：$pageType" }
                 require(publicationStatus in setOf("active", "retracted")) { "目录记录 publicationStatus 非法：$publicationStatus" }
                 require(SHA256_PATTERN.matches(articleRevisionId)) { "目录记录 articleRevisionId 非法" }
 
@@ -684,6 +684,7 @@ class DesktopDetailsRepository(
         previousEpoch: String,
         previousIsDesktop: Boolean,
         progress: (Int, Int, String) -> Unit,
+        supplementalPageLoader: suspend (Set<String>) -> List<JSONObject> = { emptyList() },
     ): SyncedSnapshot {
         val ctx = currentCoroutineContext()
         val manifest = parseManifest(manifestBytes, CatalogRepository.SITE)
@@ -844,7 +845,7 @@ class DesktopDetailsRepository(
                     val pageType = row.getString("pageType")
                     val publicationStatus = row.getString("publicationStatus")
                     val articleRevisionId = row.getString("articleRevisionId")
-                    require(pageType in setOf("paper", "daily", "conference")) { "目录记录 pageType 非法：$pageType" }
+                    require(pageType in setOf("paper", "daily", "conference", "page")) { "目录记录 pageType 非法：$pageType" }
                     require(publicationStatus in setOf("active", "retracted")) { "目录记录 publicationStatus 非法：$publicationStatus" }
                     require(SHA256_PATTERN.matches(articleRevisionId)) { "目录记录 articleRevisionId 非法" }
 
@@ -1093,13 +1094,18 @@ class DesktopDetailsRepository(
                 .put("websiteTaxonomyStatus", "ready")
 
             ctx.ensureActive()
+            val existingAggregateUrls = activeAppearances.values
+                .filter { it.getString("pageType") != "paper" }
+                .mapTo(HashSet()) { CatalogRepository.sameSite(it.getString("pageUrl")) }
+            val supplementalPages = supplementalPageLoader(existingAggregateUrls)
+            ctx.ensureActive()
             val nextStateFile = stateFile(manifest.snapshotId, epoch)
             val nextTombstoneFile = tombstoneStateFile(manifest.snapshotId, epoch)
 
             val prepareAction: () -> Unit = {
                 try {
                     promoteStagedDirectory(stageDir, root)
-                    PublishedAggregateStore(libraryDirectory).stage(snapshotRaw, epoch)
+                    PublishedAggregateStore(libraryDirectory).stage(snapshotRaw, epoch, supplementalPages)
                     JsonFiles.write(nextTombstoneFile, canonical(updatedTombstoneHistory).toByteArray(Charsets.UTF_8))
                     JsonFiles.write(nextStateFile, canonical(activeState.json()).toByteArray(Charsets.UTF_8))
                 } finally {

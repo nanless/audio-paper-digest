@@ -64,16 +64,38 @@ test('checkRegistration 递归扫子目录并要求中英文两份索引同时�
     fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('checkAgentsSize 与 checkEnvExampleSync 拦截超限 AGENTS.md 与未登记示例变量', () => {
+test('checkAgentsSize 与 checkEnvExampleSync 拦截超限 AGENTS.md、未登记与漏展示示例变量', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-gates-'));
+    const miniSchema = [
+        { name: 'PD_ANALYSIS_CONCURRENCY', type: 'int' },
+        { name: 'PD_ALLOW_EMPTY_DAILY', type: 'bool' },
+        { name: 'PAPER_DIGEST_IMAGE_HOST', type: 'string', deprecated: true }
+    ];
     fs.writeFileSync(path.join(root, 'AGENTS.md'), 'x'.repeat(docs.MAX_AGENTS_BYTES + 1));
     fs.writeFileSync(path.join(root, 'env.example'), '# PD_TOTALLY_UNREGISTERED_KEY=1\n');
     assert.equal(docs.checkAgentsSize(root).length, 1);
-    assert.equal(docs.checkEnvExampleSync(root).length, 1);
+    const both = docs.checkEnvExampleSync(root, { schema: miniSchema });
+    assert.equal(both.length, 2);
+    assert.ok(both.some(item => item.message.includes('PD_TOTALLY_UNREGISTERED_KEY')));
+    assert.ok(both.some(item => item.message.includes('PD_ANALYSIS_CONCURRENCY')));
     fs.writeFileSync(path.join(root, 'AGENTS.md'), '# Compact\n');
     fs.writeFileSync(path.join(root, 'env.example'), '# PD_ANALYSIS_CONCURRENCY=3\n');
     assert.deepStrictEqual(docs.checkAgentsSize(root), []);
-    assert.deepStrictEqual(docs.checkEnvExampleSync(root), []);
+    assert.deepStrictEqual(docs.checkEnvExampleSync(root, { schema: miniSchema }), []);
+    fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('collectEnvNames 排除 env-schema.js 与 apps/*/Tests/，并纳入 run-daily-digest.sh', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-env-collect-'));
+    fs.mkdirSync(path.join(root, 'scripts', 'lib'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'apps', 'macos', 'Tests'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'scripts', 'lib', 'env-schema.js'), "const X = 'PD_ONLY_IN_SCHEMA';\n");
+    fs.writeFileSync(path.join(root, 'apps', 'macos', 'Tests', 'Dummy.swift'), 'let x = "PD_ONLY_IN_CLIENT_TEST"\n');
+    fs.writeFileSync(path.join(root, 'run-daily-digest.sh'), 'echo "${PD_ONLY_IN_SHELL_ENTRY}"\n');
+    const found = docs.collectEnvNames(root);
+    assert.equal(found.has('PD_ONLY_IN_SCHEMA'), false);
+    assert.equal(found.has('PD_ONLY_IN_CLIENT_TEST'), false);
+    assert.equal(found.has('PD_ONLY_IN_SHELL_ENTRY'), true);
     fs.rmSync(root, { recursive: true, force: true });
 });
 

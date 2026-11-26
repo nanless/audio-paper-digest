@@ -342,9 +342,22 @@ describe('digest-live-status 阶段推断', () => {
         assert.strictEqual(logStageHint(staleLog), null);
         assert.strictEqual(logStageHint({ file: 'validate-data-files-1-0.log', message: '筛选 未完成', ageSeconds: 5 }), null);
 
-        // complete→fetch 特例必须限定同日期日志。
+        // complete→fetch 特例必须限定同日期日志，且 inferStage 透传 latestLog 给 applyLogStageHint。
         assert.strictEqual(applyLogStageHint('complete', 'fetch', { dateMatched: true }), 'fetch');
         assert.strictEqual(applyLogStageHint('complete', 'fetch', { dateMatched: false }), 'complete');
+        const generation = { date: DATE, files: [{ path: 'content/posts/a.md' }], visualSummaryRequired: true, digestCoverRequired: true };
+        const pushed = { date: DATE, strictReview: true, files: [{ path: 'content/posts/a.md' }], publicationCommit: 'abc123', remoteVerifiedOid: 'abc123' };
+        const visualManifest = { batchDate: DATE, overallStatus: 'complete', counts: { completeCards: 1, totalCards: 1, pendingCards: 0 } };
+        const coverManifest = { batchDate: DATE, overallStatus: 'complete' };
+        const completeEvidence = stageEvidence({ deep: completedDeep(), generation, review: pushed, visualManifest, coverManifest });
+        assert.strictEqual(inferStage({
+            ...completeEvidence,
+            latestLog: { file: 'full-fetch-20260102-120000-1-0.log', message: 'start', ageSeconds: 10, dateMatched: true }
+        }).stage, 'fetch');
+        assert.strictEqual(inferStage({
+            ...completeEvidence,
+            latestLog: { file: 'full-fetch-20260101-120000-1-0.log', message: 'start', ageSeconds: 10, dateMatched: false }
+        }).stage, 'complete');
     });
 });
 
@@ -530,10 +543,36 @@ describe('digest-live-status 单屏合成', () => {
         assert.match(text, /超过 300 秒，可能卡在模型请求或网络等待/);
     });
 
-    it('目标日期尚未开跑时不报无进度或 stalled', t => {
+    it('目标日期尚未开跑时不报无进度或 stalled，且不混入前一日的计数、当前论文或失败列表', t => {
         const { paths } = temporaryRoot(t);
-        // 旧日期产物还在 current，但 mtime 很旧；不能拿来当作新日期的进度。
-        writeJson(paths.deepAnalysisResult, { batchDate: '2026-01-01', papers: [] }, NOW_MS - 86400000);
+        // 旧日期全套产物仍在 current（含失败论文与候选数）；查询新日期时必须全部隔离。
+        writeJson(paths.rawCandidates, { batchDate: '2026-01-01', papers: [{ arxivId: '2601.00001' }, { arxivId: '2601.00002' }] }, NOW_MS - 86400000);
+        writeJson(paths.filterDecisions, { batchDate: '2026-01-01', stats: { related: 2 } }, NOW_MS - 86400000);
+        writeJson(paths.filteredPapers, { batchDate: '2026-01-01', status: 'complete', papers: [{ arxivId: '2601.00001' }] }, NOW_MS - 86400000);
+        writeJson(paths.deepAnalysisResult, {
+            batchDate: '2026-01-01',
+            papers: [{
+                arxivId: '2601.00001',
+                title: 'Yesterday failed paper',
+                analysis: '',
+                error: 'timeout',
+                analysisManifest: { stages: { primaryAnalysis: { status: 'transient_failure', error: 'timeout' } } }
+            }]
+        }, NOW_MS - 86400000);
+        // 带 64 位 accountId 的当日用量事件：检查 buildLiveStatus JSON / 文本绝不泄露原始凭据指纹。
+        const rawAccountHex = 'c'.repeat(64);
+        writeJson(path.join(paths.llmUsageDir, `${crypto.randomUUID()}.json`), {
+            version: 'llm-usage-v1',
+            kind: 'request',
+            eventId: crypto.randomUUID(),
+            at: `${DATE}T11:58:00+08:00`,
+            runtime: 'node',
+            stage: 'dailyFilter',
+            model: 'muse-spark-1.3-contributor',
+            accountId: rawAccountHex,
+            outcome: 'completed'
+        }, NOW_MS - 60000);
+
         const status = buildLiveStatus({
             date: DATE,
             nowMs: NOW_MS,
@@ -544,7 +583,18 @@ describe('digest-live-status 单屏合成', () => {
         assert.strictEqual(status.batchStarted, false);
         assert.strictEqual(status.secondsSinceProgress, null);
         assert.strictEqual(status.stalled, false);
+        assert.strictEqual(status.counts.candidates, null);
+        assert.strictEqual(status.counts.selected, null);
+        assert.strictEqual(status.counts.analysisTotal, 0);
+        assert.strictEqual(status.counts.analysisFailed, 0);
+        assert.strictEqual(status.totalPapers, 0);
+        assert.strictEqual(status.currentPaper, null);
+        assert.deepStrictEqual(status.failedPapers, []);
+        assert.strictEqual(status.failedCount, 0);
+        assert.deepStrictEqual(Object.keys(status.usage.byAccount), ['acct#1']);
+        assert.ok(!/[a-f0-9]{64}/i.test(JSON.stringify(status.usage)));
         const text = formatLiveStatus(status);
+        assert.ok(!text.includes(rawAccountHex));
         assert.match(text, /目标日期尚未开始/);
         assert.doesNotMatch(text, /⚠/);
     });

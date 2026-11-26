@@ -197,4 +197,22 @@ describe('env-loader', () => {
             assert.strictEqual(childEnv.SSH_AUTH_SOCK, undefined);
         });
     });
+
+    it('loadProjectEnv 保留受控进程输入 PD_PUBLISH_RASTER_RECOVERY_FILE 与 PD_PYTHON_RUNTIME_VERIFIED_BIN', () => {
+        withSavedEnv(() => {
+            process.env.PD_PUBLISH_RASTER_RECOVERY_FILE = '/private/runtime/recovery.json';
+            process.env.PD_PYTHON_RUNTIME_VERIFIED_BIN = '/usr/local/bin/python3.11';
+            process.env.PD_ANALYSIS_CONCURRENCY = '99';
+            withTempEnv([
+                'PAPER_ANALYZER_MODEL=inner-model',
+                'PD_PUBLISH_RASTER_RECOVERY_FILE=/env/other.json'
+            ], envPath => {
+                loadProjectEnv(envPath);
+            });
+            assert.strictEqual(process.env.PD_PUBLISH_RASTER_RECOVERY_FILE, '/private/runtime/recovery.json');
+            assert.strictEqual(process.env.PD_PYTHON_RUNTIME_VERIFIED_BIN, '/usr/local/bin/python3.11');
+            assert.strictEqual(process.env.PD_ANALYSIS_CONCURRENCY, undefined);
+            assert.strictEqual(process.env.PAPER_ANALYZER_MODEL, 'inner-model');
+        });
+    });
 });

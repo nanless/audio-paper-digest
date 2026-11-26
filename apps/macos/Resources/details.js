@@ -3,9 +3,10 @@ import {mountStorage} from './storage-ui.js';
 import {mountHelp,mountExport} from './detail-content.js';
 import {mountZotero} from './zotero-ui.js';
 const $=id=>document.getElementById(id);
-let presentationID=null,active=true,busy=false,operationBusy=0,closing=false,storage,content,zotero,kind='storage';
+let presentationID=null,active=true,busy=false,operationBusy=0,closing=false,storage,content,zotero,kind='storage',toastTimer=null;
 const nativeCall=(command,payload={})=>window.webkit.messageHandlers.desktop.postMessage({command,payload});
-function toast(text){if(!active)return;$('toast').textContent=String(text);$('toast').hidden=false;}
+function clearToast(){clearTimeout(toastTimer);toastTimer=null;const el=$('toast');if(el)el.hidden=true;}
+function toast(text){if(!active)return;clearTimeout(toastTimer);$('toast').textContent=String(text);$('toast').hidden=false;toastTimer=setTimeout(()=>{toastTimer=null;const el=$('toast');if(el)el.hidden=true;},5000);}
 function error(e){toast(e?.message||String(e));}
 async function call(command,payload={}){
  if(!active||!presentationID)throw new Error('详情窗口已关闭或尚未准备完成');
@@ -20,7 +21,7 @@ async function call(command,payload={}){
 }
 async function close(){
  if(!active||closing||operationBusy>0)return;closing=true;controls();
- try{if(!presentationID){const initial=await nativeCall('details.bootstrap');presentationID=initial.presentationID;}const r=await nativeCall('details.close',{presentationID});if(r.closed){active=false;content?.dispose();}}
+ try{if(!presentationID){const initial=await nativeCall('details.bootstrap');presentationID=initial.presentationID;}const r=await nativeCall('details.close',{presentationID});if(r.closed){active=false;clearToast();content?.dispose();}}
  catch(e){error(e);}finally{closing=false;controls();}
 }
 async function openOffline(id){
@@ -32,7 +33,7 @@ function controls(){$('details-close').disabled=!active||operationBusy>0||closin
 async function refresh(){if(!active||busy||!storage)return;busy=true;controls();try{await storage.show();}catch(e){error(e);}finally{busy=false;controls();}}
 $('details-close').onclick=close;$('details-refresh').onclick=refresh;
 document.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();close();}});
-window.addEventListener('details.closed',()=>{active=false;content?.dispose();controls();});
+window.addEventListener('details.closed',()=>{active=false;clearToast();content?.dispose();controls();});
 window.addEventListener('job.progress',event=>{if(active&&event.detail.progress?.role)zotero?.handleProgress(event.detail.progress);});
 window.paperDigestFlushDetails=async()=>({saved:true});
 function mountArchive(paper){

@@ -345,3 +345,26 @@ test('会议出版补证沿真实daily包装环境运行，旧入口及未知hel
         }
     } finally { fs.rmSync(fixtureRoot, { recursive: true, force: true }); }
 });
+
+test('工作区角色登记表覆盖新入口且 digest:waive-* 受 daily 包装，超长标记被拒绝', () => {
+    const scripts = require('../package.json').scripts;
+    assert.equal(envLoader.requiredWorkspaceRoleForCommand('activate-fresh-publication.js'), 'history');
+    for (const dailyCmd of [
+        'prepare-daily-fetch-witness-recovery.js',
+        'waive-analysis-failures.js',
+        'waive-post-publish-visuals.js'
+    ]) {
+        assert.equal(envLoader.requiredWorkspaceRoleForCommand(dailyCmd), 'daily', dailyCmd);
+    }
+    assert.match(scripts['digest:waive-analysis'], /^node scripts\/workspace-role\.js exec daily -- /);
+    assert.match(scripts['digest:waive-visuals'], /^node scripts\/workspace-role\.js exec daily -- /);
+
+    const dir = root();
+    try {
+        const marker = path.join(dir, '.paper-digest-workspace-role.json');
+        fs.writeFileSync(marker, `${' '.repeat(4097)}\n`, { mode: 0o600 });
+        assert.throws(() => role.readWorkspaceRole(dir), /超过 4096 字节/);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});

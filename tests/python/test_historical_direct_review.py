@@ -328,6 +328,54 @@ class HistoricalDirectReviewTests(unittest.TestCase):
             self.assertEqual(reverted.calls, 0)
             self.assertEqual(reused_original['results'][0]['sha256'], record['sha256'])
 
+    def test_protocol_budgets_and_cli_concurrency_support_updated_bounds(self):
+        settings = MODULE.declared_schema(MODULE.PROTOCOL_CONTRACT, MODULE.PROTOCOL_CONTRACT)
+        base_body = {
+            **MODULE.current_header(MODULE.PROTOCOL_CONTRACT),
+            'model': 'mock-model', 'secondaryModel': '', 'endpointSha256': 'a' * 64,
+            'implementationSha256': 'b' * 64, 'promptSha256': 'c' * 64,
+            'textReview': settings['textReview'], 'imageReview': settings['imageReview'],
+            'budgets': {'chunkChars': 20000, 'maxTokens': 32000, 'timeoutSeconds': 300,
+                        'maxRetries': 5, 'temperature': 0.1,
+                        'imageMaxBytes': 8 * 1024 * 1024, 'pageConcurrency': 16},
+        }
+        valid = {**base_body, 'protocolSha256': MODULE.stable(base_body)}
+        self.assertEqual(MODULE.validate_semantic_protocol(valid)['budgets']['maxTokens'], 32000)
+
+        for field, bad_value in (('maxTokens', 32001), ('timeoutSeconds', 29),
+                                 ('timeoutSeconds', 601), ('chunkChars', True),
+                                 ('pageConcurrency', 17)):
+            bad_body = json.loads(json.dumps(base_body))
+            bad_body['budgets'][field] = bad_value
+            bad = {**bad_body, 'protocolSha256': MODULE.stable(bad_body)}
+            with self.assertRaises(ValueError):
+                MODULE.validate_semantic_protocol(bad)
+
+        observed_limits = []
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            content = '---\ntitle: demo\n---\nbody text\n'
+            (root / 'demo.md').write_text(content, encoding='utf-8')
+            page = {'path': 'demo.md', 'sha256': MODULE.hashlib.sha256(content.encode()).hexdigest()}
+            publisher = FakePublisher()
+            publisher.split_review_content = lambda text, limit: (observed_limits.append(limit) or [text])
+            res = MODULE.review_page(publisher, page, root, root / 'cp', valid)
+            self.assertTrue(res['passed'])
+            self.assertEqual(observed_limits, [20000])
+
+        with mock.patch.object(MODULE, 'require_external_runtime'), \
+                mock.patch.object(MODULE, 'run', return_value={
+                    'passed': True, 'semanticReviewSha256': 'a' * 64, 'results': []
+                }) as runner:
+            rc = MODULE.main(['--request', '/tmp/r.json', '--output', '/tmp/o.json',
+                              '--checkpoint-dir', '/tmp/cp', '--concurrency', '16'])
+            self.assertEqual(rc, 0)
+            runner.assert_called_once_with('/tmp/r.json', '/tmp/o.json', '/tmp/cp', 16)
+        with mock.patch.object(MODULE, 'require_external_runtime'):
+            with self.assertRaises(SystemExit):
+                MODULE.main(['--request', '/tmp/r.json', '--output', '/tmp/o.json',
+                             '--checkpoint-dir', '/tmp/cp', '--concurrency', '17'])
+
 
 if __name__ == '__main__':
     unittest.main()

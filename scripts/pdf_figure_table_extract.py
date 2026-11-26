@@ -1537,7 +1537,7 @@ def extract_pdf_figures_and_tables(pdf_bytes: bytes, arxiv_id: str = "") -> dict
                     page_num = page.number + 1
                     norm_bbox = _canonical_bbox(crop_bbox)
                     crop_sha = _canonical_crop_sha256(pdf_sha, page_num, norm_bbox, DEFAULT_DPI)
-                    url_id = clean_id or pdf_sha[:12]
+                    url_id = clean_id if re.fullmatch(r"\d{4}\.\d{4,5}", clean_id) else pdf_sha[:12]
                     canonical_url = f"https://arxiv.org/pdf/{url_id}.pdf#pd-pdf-figure-{ordinal}-{crop_sha[:16]}"
                     fig_dom_sha = _sha256_text(json.dumps({
                         "kind": "pdf_crop",

@@ -233,3 +233,27 @@ test('writeLlmUsageEvent 与 preserveResponse 写/重命名失败后清理 .tmp 
         fs.renameSync = origRename;
     }
 });
+
+test('batchDate 仅保留合法日历日期；macOS /var 或 /tmp 别名路径正常写入且 preserveResponse 容忍 undefined event', t => {
+    const valid = withLlmUsageContext({ batchDate: '2026-11-25' }, () => buildLlmUsageEvent({
+        protocol: 'openai_responses', model: 'test', request: {}, statusCode: 200
+    }));
+    assert.equal(valid.batchDate, '2026-11-25');
+    for (const bad of ['2026-02-30', '2026-13-01', 'not-a-date', '', 20261125, null]) {
+        const ev = buildLlmUsageEvent({ protocol: 'openai_responses', model: 'test', request: {}, statusCode: 200, context: { batchDate: bad } });
+        assert.equal(Object.hasOwn(ev, 'batchDate'), false, `invalid batchDate should be omitted: ${String(bad)}`);
+    }
+
+    // Use raw os.tmpdir() (which is /var/folders/... on macOS) WITHOUT fs.realpathSync
+    const rawRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-macos-alias-'));
+    t.after(() => fs.rmSync(rawRoot, { recursive: true, force: true }));
+    const ledgerDir = path.join(rawRoot, 'ledger');
+    assert.equal(writeLlmUsageEvent({ ...valid }, { directory: ledgerDir }), true);
+    assert.equal(fs.readdirSync(ledgerDir).filter(name => name.endsWith('.json')).length, 1);
+
+    const { preserveResponse } = require('../scripts/lib/llm-response-recovery.js');
+    const saved = preserveResponse(undefined, { statusCode: 200, body: { ok: true } }, { recoveryDirectory: path.join(rawRoot, 'recovery') });
+    const parsed = JSON.parse(fs.readFileSync(saved.filename, 'utf8'));
+    assert.equal(parsed.event, null);
+    assert.equal(saved.eventId, null);
+});

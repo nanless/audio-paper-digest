@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { detectHttpConnectProxyUrl, createProxyDispatcher } = require('../utils.js');
+const { sharedArxivOriginGate } = require('./arxiv-origin-gate.js');
 const posterApi = require('./historical-icml-poster-authority.js');
 const pdfLayout = require('./pdf-layout.js');
 
@@ -229,9 +230,21 @@ function validPdfContentType(value) {
     return /^(?:application\/pdf|application\/octet-stream)(?:\s*;[^\r\n]*)?$/iu.test(String(value || '').trim());
 }
 
+function isArxivHostUrl(rawUrl) {
+    try {
+        const host = new URL(rawUrl).hostname.toLowerCase();
+        return host === 'arxiv.org' || host.endsWith('.arxiv.org');
+    } catch {
+        return false;
+    }
+}
+
 async function readResponseBytes(response, maxBytes) {
     const declared = Number(response.headers?.get?.('content-length'));
-    if (Number.isFinite(declared) && declared > maxBytes) fail('备用 PDF 超出字节上限');
+    if (Number.isFinite(declared) && declared > maxBytes) {
+        await response.body?.cancel?.().catch(() => {});
+        fail('备用 PDF 超出字节上限');
+    }
     if (!response.body || typeof response.body.getReader !== 'function') {
         const bytes = Buffer.from(await response.arrayBuffer());
         if (bytes.length > maxBytes) fail('备用 PDF 超出字节上限');
@@ -263,24 +276,39 @@ async function defaultFetchPdf({ profile, maxBytes = MAX_PDF_BYTES, maxRedirects
     const dispatcher = (dependencies.createDispatcher || createProxyDispatcher)(proxyUrl);
     const fetchImpl = dependencies.fetchImpl || globalThis.fetch;
     if (typeof fetchImpl !== 'function') fail('fetch 不可用');
+    const arxivOriginGate = dependencies.arxivOriginGate || sharedArxivOriginGate;
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref?.();
     const requestedUrl = validateProfileUrl(normalizedProfile.requestedUrl, normalizedProfile);
     const redirects = []; let current = requestedUrl;
     try {
         for (let count = 0; count <= maxRedirects; count += 1) {
-            const response = await fetchImpl(current, { method: 'GET', redirect: 'manual', dispatcher,
+            const arxivTarget = isArxivHostUrl(current);
+            const requestOptions = { method: 'GET', redirect: 'manual', dispatcher,
                 signal: controller.signal, headers: { Accept: 'application/pdf',
-                    'User-Agent': 'audio-paper-digest-history/1.0' } });
+                    'User-Agent': 'audio-paper-digest-history/1.0' } };
+            const response = arxivTarget
+                ? await arxivOriginGate.run(() => fetchImpl(current, requestOptions), { label: 'historical-icml-alternate-pdf' })
+                : await fetchImpl(current, requestOptions);
+            if (arxivTarget && (response.status === 429 || response.status === 403)) {
+                arxivOriginGate.recordRateLimitResponse?.(response.headers);
+            }
             if ([301, 302, 303, 307, 308].includes(response.status)) {
+                await response.body?.cancel?.().catch(() => {});
                 if (count >= maxRedirects) fail('备用 PDF 超出重定向次数上限');
                 const location = response.headers?.get?.('location');
                 if (!location) fail('备用 PDF 重定向缺少 Location');
                 const next = validateProfileUrl(new URL(location, current).toString(), normalizedProfile);
                 redirects.push({ from: current, to: next, status: response.status }); current = next; continue;
             }
-            if (response.status !== 200) fail(`alternate PDF returned HTTP ${response.status}`);
+            if (response.status !== 200) {
+                await response.body?.cancel?.().catch(() => {});
+                fail(`alternate PDF returned HTTP ${response.status}`);
+            }
             const contentType = String(response.headers?.get?.('content-type') || '');
-            if (!validPdfContentType(contentType)) fail('备用 PDF 响应的 Content-Type 非法');
+            if (!validPdfContentType(contentType)) {
+                await response.body?.cancel?.().catch(() => {});
+                fail('备用 PDF 响应的 Content-Type 非法');
+            }
             const bytes = await readResponseBytes(response, maxBytes);
             return { bytes, requestedUrl, finalUrl: current, redirects, contentType, responseStatus: response.status };
         }

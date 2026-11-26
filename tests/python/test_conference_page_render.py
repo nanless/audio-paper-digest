@@ -799,6 +799,20 @@ class ConferencePageRenderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '资源的原始网址'):
             MODULE.render_packet(packet)
 
+    def test_reader_and_english_titles_escape_markdown_special_characters(self):
+        packet = self.packet()
+        paper = packet['paper']
+        paper['title'] = 'Speech $5 *Best* Model'
+        paper['apiReaderPlan']['readerTitle'] = '仅需 $5 的 *最强* 语音模型'
+        paper['apiReaderPlanSha256'] = stable_sha(paper['apiReaderPlan'])
+        paper['analysisManifest']['stages']['apiReaderArticle']['planSha256'] = paper['apiReaderPlanSha256']
+        md = MODULE.render_packet(packet)['markdown']
+        publisher = MODULE.load_publish_to_blog()
+        expected_h1 = f'# 📄 {publisher.markdown_title_for_publish(paper["apiReaderPlan"]["readerTitle"])}'
+        expected_en = f'> 英文题目：*{publisher.markdown_title_for_publish(publisher.plain_title_for_publish(paper["title"]))}*'
+        self.assertIn(expected_h1, md)
+        self.assertIn(expected_en, md)
+
 
 if __name__ == '__main__':
     unittest.main()

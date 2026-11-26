@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
@@ -7,7 +8,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -63,9 +64,9 @@ import org.json.JSONObject
                     Text(when(filter){"daily"->"每日音频研究";"conference"->"会议论文集";else->"网站页面"},style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold,modifier=Modifier.weight(1f))
                     IconButton({action("ui.resources",JSONObject())}){Icon(Icons.Outlined.Language,"网站全部成果")}
                 } }
-                item("scope"){Text("与网站同步浏览日更、会议论文集和说明。会议先列总览，再列各研究方向。",style=MaterialTheme.typography.bodySmall)}
+                item("scope"){Text("与网站同步浏览日更、会议论文集和说明。会议先列总览，再列各研究方向。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
                 item("filters") { FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) { for((key,label)in listOf("daily" to "日更","conference" to "会议论文集","page" to "关于与资源","all" to "全部")){val count=if(key=="all")records.size else records.count{workbenchAggregateInSection(it,key)};FilterChip(filter==key,{filter=key;action("ui.aggregates.section",obj("section" to key))},label={Text("$label $count")})} } }
-                item("search"){OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),label={Text("搜索汇总标题、日期与标签")},singleLine=true)}
+                item("search"){OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),shape=MaterialTheme.shapes.medium,label={Text("搜索汇总标题、日期与标签")},leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(query.isNotEmpty())IconButton({query=""}){Icon(Icons.Outlined.Close,"清除搜索")}},singleLine=true)}
                 item("status") {
                     Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
                         if(aggregate.loading){LinearProgressIndicator(Modifier.fillMaxWidth());Text("正在读取汇总目录…")}
@@ -73,20 +74,21 @@ import org.json.JSONObject
                         if(aggregate.catalogStale)Text("目录有更新，请重新读取后打开页面。",color=MaterialTheme.colorScheme.tertiary)
                         FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
                             if(aggregate.offlineMode && aggregate.catalog!=null) {
-                                OutlinedButton({action("aggregate.list",JSONObject())},enabled=!aggregate.loading){Text("重读本机目录")}
+                                OutlinedButton({action("aggregate.list",JSONObject())},enabled=!aggregate.loading,shape=MaterialTheme.shapes.small){Text("重读本机目录")}
                             }
                             if(!aggregate.offlineMode) {
-                                OutlinedButton({action("library.sync",JSONObject())},enabled=!aggregate.loading&&!state.busy){
+                                OutlinedButton({action("library.sync",JSONObject())},enabled=!aggregate.loading&&!state.busy,shape=MaterialTheme.shapes.small){
+                                    Icon(Icons.Outlined.Sync,null,Modifier.size(16.dp));Spacer(Modifier.width(6.dp))
                                     Text(if(aggregate.catalog==null)"同步已发布内容" else "刷新日更与网站目录")
                                 }
                             }
                         }
-                        if(aggregate.offlineMode)Text(if(aggregate.catalog==null)"尚无保存的网站目录。关闭离线模式后可同步内容。"else"离线模式 · 阅读已经保存的页面。",style=MaterialTheme.typography.bodySmall)
-                        if(state.busy)Text("资料任务正在进行，可到任务页查看进度。",style=MaterialTheme.typography.bodySmall)
+                        if(aggregate.offlineMode)Text(if(aggregate.catalog==null)"尚无保存的网站目录。关闭离线模式后可同步内容。"else"离线模式 · 阅读已经保存的页面。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                        if(state.busy)Text("资料任务正在进行，可到任务页查看进度。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                         if (!aggregate.offlineMode) state.catalogCheckedAt?.let {
-                            Text("最近检查 · " + aggregateLocalMoment(it), style = MaterialTheme.typography.bodySmall)
+                            Text("最近检查 · " + aggregateLocalMoment(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Text("${displayed.size} 个页面匹配",style=MaterialTheme.typography.labelLarge)
+                        Text("${displayed.size} 个页面匹配",style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 if(filter=="daily"&&state.podcast.available&&state.podcast.episodes.isNotEmpty())item("daily-podcast"){
@@ -96,15 +98,59 @@ import org.json.JSONObject
                         action = action,
                     )
                 }
-                if(displayed.isEmpty()&&!aggregate.loading)item("empty"){Text(if(aggregate.catalog==null)"同步来源后，即可查看已发布的汇总和网站页面。"else"当前筛选没有匹配的页面。")}
-                items(displayed,key={it.id}){record->OutlinedCard(onClick={action("aggregate.select",obj("id" to record.id))},enabled=!aggregate.loading&&!aggregate.catalogStale,modifier=Modifier.fillMaxWidth()){
-                    Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
-                        Text(aggregateRecordLabel(record)+" · "+(record.displayDate?:"未标注发布日期"),style=MaterialTheme.typography.labelMedium)
-                        Text(record.titleZh.ifBlank{record.title},style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis)
-                        if(record.summary.isNotBlank())Text(record.summary,style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        val tags=(record.categories+record.tags).distinct();if(tags.isNotEmpty())Text(tags.joinToString(" · "),style=MaterialTheme.typography.labelSmall,maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                if(displayed.isEmpty()&&!aggregate.loading)item("empty"){
+                    StatePanel(
+                        title=if(aggregate.catalog==null)"尚无汇总目录" else "没有匹配的页面",
+                        text=if(aggregate.catalog==null)"同步来源后，即可查看已发布的汇总和网站页面。" else "当前筛选没有匹配的页面。",
+                        icon=if(filter=="conference")Icons.Outlined.Groups else Icons.Outlined.Today,
+                    )
+                }
+                itemsIndexed(displayed,key={_,it->it.id}){index,record->
+                    val isLatestDaily=filter=="daily"&&index==0&&query.isBlank()&&record.kind=="daily"
+                    val isConfDir=workbenchConferenceDirectory(record)
+                    val isConfTask=record.kind=="conference"&&workbenchConferenceTask(record)
+                    val dateParts=record.displayDate?.takeIf{it.length>=10&&it[4]=='-'&&it[7]=='-'}?.let{it.substring(0,7) to it.substring(8,10)}
+                    EditorialCard(
+                        onClick={action("aggregate.select",obj("id" to record.id))},
+                        enabled=!aggregate.loading&&!aggregate.catalogStale,
+                        selected=isLatestDaily,
+                    ){
+                        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.Top){
+                            if(record.kind=="daily"&&dateParts!=null){
+                                Surface(
+                                    shape=MaterialTheme.shapes.small,
+                                    color=if(isLatestDaily)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+                                    border=BorderStroke(1.dp,if(isLatestDaily)MaterialTheme.colorScheme.primary.copy(alpha=0.32f)else MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.65f)),
+                                    modifier=Modifier.widthIn(min=56.dp),
+                                ){
+                                    Column(Modifier.padding(horizontal=10.dp,vertical=8.dp),horizontalAlignment=Alignment.CenterHorizontally){
+                                        Text(dateParts.second,style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold,color=if(isLatestDaily)MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
+                                        Text(dateParts.first,style=MaterialTheme.typography.labelSmall,color=if(isLatestDaily)MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha=0.85f)else MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)){
+                                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                                    val (pillBg,pillFg,pillBorder)=when {
+                                        isConfDir->Triple(MaterialTheme.colorScheme.tertiaryContainer,MaterialTheme.colorScheme.onTertiaryContainer,MaterialTheme.colorScheme.tertiary.copy(alpha=0.35f))
+                                        isLatestDaily->Triple(MaterialTheme.colorScheme.primaryContainer,MaterialTheme.colorScheme.onPrimaryContainer,MaterialTheme.colorScheme.primary.copy(alpha=0.3f))
+                                        record.kind=="conference"&&!isConfTask->Triple(MaterialTheme.colorScheme.primaryContainer.copy(alpha=0.75f),MaterialTheme.colorScheme.onPrimaryContainer,MaterialTheme.colorScheme.primary.copy(alpha=0.25f))
+                                        isConfTask->Triple(MaterialTheme.colorScheme.secondaryContainer,MaterialTheme.colorScheme.onSecondaryContainer,MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.7f))
+                                        else->Triple(MaterialTheme.colorScheme.surfaceContainerHigh,MaterialTheme.colorScheme.onSurfaceVariant,MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.6f))
+                                    }
+                                    MonographPill(aggregateRecordLabel(record),pillBg,pillFg,borderColor=pillBorder)
+                                    if(isLatestDaily)MonographPill("最新一期",MaterialTheme.colorScheme.tertiaryContainer,MaterialTheme.colorScheme.onTertiaryContainer,borderColor=MaterialTheme.colorScheme.tertiary.copy(alpha=0.35f))
+                                    record.displayDate?.takeIf{record.kind!="daily"||dateParts==null}?.let{d->
+                                        Text(d,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                Text(record.titleZh.ifBlank{record.title},style=MaterialTheme.typography.titleMedium,fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis)
+                                if(record.summary.isNotBlank())Text(record.summary,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=TextOverflow.Ellipsis)
+                                val tags=(record.categories+record.tags).distinct();if(tags.isNotEmpty())Text(tags.joinToString(" · "),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary,maxLines=1,overflow=TextOverflow.Ellipsis)
+                            }
+                        }
                     }
-                }}
+                }
             }
         } else {
             val noticeScroll=rememberScrollState()

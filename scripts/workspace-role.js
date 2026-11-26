@@ -78,7 +78,21 @@ function readWorkspaceRole(root = path.resolve(__dirname, '..')) {
         if (process.platform !== 'win32' && (opened.mode & 0o077) !== 0) {
             throw new Error('工作区角色标记权限必须为 0600');
         }
-        raw = fs.readFileSync(fd, 'utf8');
+        const MAX_MARKER_BYTES = 4096;
+        if (opened.size > MAX_MARKER_BYTES) {
+            throw new Error('工作区角色标记超过 4096 字节，或读取长度与打开时记录的长度不同。');
+        }
+        const buf = Buffer.alloc(MAX_MARKER_BYTES + 1);
+        let total = 0;
+        while (total < buf.length) {
+            const n = fs.readSync(fd, buf, total, buf.length - total, null);
+            if (n <= 0) break;
+            total += n;
+        }
+        if (total > MAX_MARKER_BYTES || total !== opened.size) {
+            throw new Error('工作区角色标记超过 4096 字节，或读取长度与打开时记录的长度不同。');
+        }
+        raw = buf.subarray(0, total).toString('utf8');
     } finally {
         if (fd !== undefined) fs.closeSync(fd);
     }
@@ -112,10 +126,11 @@ function writeWorkspaceRole(role, options = {}) {
     let fd;
     try {
         fd = fs.openSync(temp, 'wx', 0o600);
+        if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
         fs.writeFileSync(fd, `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
         fs.fsyncSync(fd);
         fs.closeSync(fd); fd = undefined;
-        fs.chmodSync(temp, 0o600);
+        if (process.platform === 'win32') fs.chmodSync(temp, 0o600);
         fs.renameSync(temp, target);
         const dirFd = fs.openSync(root, 'r');
         try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
@@ -131,26 +146,32 @@ function writeWorkspaceRole(role, options = {}) {
 // 值必须是 1；其他值（包括 0）都按关闭处理。进程环境优先于工作区 .env，
 // 因为 npm 入口由本文件直接检查，此时还没有任何脚本读过 .env。
 function envFileValue(file, key) {
+    const MAX_ENV_BYTES = 2 * 1024 * 1024;
     let raw;
     let fd;
     try {
         const before = fs.lstatSync(file);
-        if (before.isSymbolicLink() || !before.isFile() || (process.platform !== 'win32' && before.nlink !== 1) || before.size > 2 * 1024 * 1024) {
+        if (before.isSymbolicLink() || !before.isFile() || (process.platform !== 'win32' && before.nlink !== 1) || before.size > MAX_ENV_BYTES) {
             return '';
         }
         fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
         const opened = fs.fstatSync(fd);
-        if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > 2 * 1024 * 1024) {
+        if (!opened.isFile() || (process.platform !== 'win32' && opened.nlink !== 1)
+            || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > MAX_ENV_BYTES) {
             return '';
         }
-        const buf = Buffer.alloc(opened.size);
-        let offset = 0;
-        while (offset < opened.size) {
-            const n = fs.readSync(fd, buf, offset, opened.size - offset, null);
+        const chunks = [];
+        let total = 0;
+        const buf = Buffer.alloc(65536);
+        while (total <= MAX_ENV_BYTES) {
+            const toRead = Math.min(buf.length, MAX_ENV_BYTES + 1 - total);
+            const n = fs.readSync(fd, buf, 0, toRead, null);
             if (n <= 0) break;
-            offset += n;
+            chunks.push(Buffer.from(buf.subarray(0, n)));
+            total += n;
         }
-        raw = buf.subarray(0, offset).toString('utf8');
+        if (total > MAX_ENV_BYTES) return '';
+        raw = Buffer.concat(chunks, total).toString('utf8');
     } catch {
         // 读不到 .env 就当开关关着，保持原来的拒绝行为。
         return '';
@@ -164,8 +185,8 @@ function envFileValue(file, key) {
         const eq = trimmed.indexOf('=');
         if (eq <= 0 || trimmed.slice(0, eq).trim() !== key) continue;
         value = trimmed.slice(eq + 1).trim();
-        if ((value.startsWith('"') && value.endsWith('"'))
-            || (value.startsWith("'") && value.endsWith("'"))) {
+        if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"'))
+            || (value.startsWith("'") && value.endsWith("'")))) {
             value = value.slice(1, -1);
         }
     }

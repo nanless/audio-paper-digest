@@ -35,9 +35,11 @@ PROJECT_ENV_KEYS = {
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
 }
 
-# This is an explicit publication input, not inherited model/proxy settings.
-# Its file, original receipt and sealed sources are validated by the publisher.
-PROCESS_INPUT_KEYS = ("PD_PUBLISH_RASTER_RECOVERY_FILE",)
+# 仅保留受严格核验的进程级输入/已核验 Python 解释器标记，不改变模型或代理配置。
+PROCESS_INPUT_KEYS = (
+    "PD_PUBLISH_RASTER_RECOVERY_FILE",
+    "PD_PYTHON_RUNTIME_VERIFIED_BIN",
+)
 
 CHILD_ENV_PASSTHROUGH_KEYS = (
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP",

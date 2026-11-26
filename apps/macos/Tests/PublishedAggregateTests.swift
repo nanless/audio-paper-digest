@@ -120,6 +120,52 @@ import Darwin
         )
         let legacyConferencesPlan = try LibraryService.aggregateImagePlan(legacyConferencesDoc, rawHTML: legacyConferencesHTML)
         try check(legacyConferencesDoc.plainText.contains("旧路径会议总目录") && legacyConferencesPlan.slots.count == 1 && legacyConferencesPlan.slots[0].caption == "图注", "legacy /audio-paper-digest-blog/conferences/ selects #conference-directory on both extractAggregateHTML and aggregateImagePlan")
+        // Track-1 Item 4: desktop-details sync against official portal supplements canonical /about/, /conferences/, /links/ pages
+        // and falls back from empty tagConceptIds to flatTags/tags, while non-portal test fixtures stay untouched.
+        let desktopDir = FileManager.default.temporaryDirectory.appendingPathComponent("DesktopCanonicalPages-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: desktopDir.appendingPathComponent("desktop-details/catalog", isDirectory: true), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: desktopDir) }
+        let desktopRows: [[String: Any]] = [
+            ["pageType": "paper", "appearanceId": "posts/2026-11-26-sample-paper/", "pageUrl": "posts/2026-11-26-sample-paper/", "paperId": "arxiv:2611.00001", "identityStatus": "verified", "title": "Sample Paper"],
+            ["pageType": "daily", "appearanceId": "posts/2026-11-26-daily/", "pageUrl": "posts/2026-11-26-daily/", "identityStatus": "aggregate-page", "title": "2026-11-26 Audio Daily", "titleZh": "2026-11-26 音频日更", "summary": "日更汇总", "blogPublishedAt": "2026-11-26", "tagConceptIds": [] as [String], "flatTags": ["语音合成", "音频编解码"]]
+        ]
+        let desktopShardBytes = try JSONSerialization.data(withJSONObject: desktopRows, options: [.sortedKeys])
+        let desktopShardSHA = PublishedAggregateReader.sha(desktopShardBytes)
+        let desktopShardURL = "client/details/catalog/\(desktopShardSHA).json"
+        try desktopShardBytes.write(to: desktopDir.appendingPathComponent("desktop-details/catalog/\(desktopShardSHA).json"))
+        let desktopManifestObj = try ClientProtocols.record("paper-desktop-snapshot", fields: [
+            "recordCount": 2,
+            "paperCount": 1,
+            "appearanceCount": 2,
+            "catalogShards": [["url": desktopShardURL, "sha256": desktopShardSHA, "bytes": desktopShardBytes.count, "recordCount": 2]]
+        ])
+        let desktopManifestBytes = try JSONSerialization.data(withJSONObject: desktopManifestObj, options: [.sortedKeys])
+        let desktopEpoch = UUID().uuidString
+        let portalStore = PublishedAggregateStore(directory: desktopDir, siteBase: PublishedAggregateReader.site)
+        let stagedPortal = try portalStore.stage(manifest: desktopManifestBytes, validationEpoch: desktopEpoch)
+        let loadedPortal = try portalStore.load(activeSnapshotSHA256: stagedPortal.snapshotSHA256, validationEpoch: desktopEpoch)
+        try check(stagedPortal == loadedPortal && stagedPortal.sourceRecordCount == 2 && stagedPortal.aggregateCount == 4, "official portal desktop snapshot stages & cold-loads 1 daily + 3 canonical pages")
+        let pageURLs = Set(stagedPortal.records.filter { $0.kind == .page }.map(\.sourceURL))
+        try check(pageURLs == Set(["https://nanless.github.io/audio-research-portal/about/", "https://nanless.github.io/audio-research-portal/conferences/", "https://nanless.github.io/audio-research-portal/links/"]), "canonical portal pages include /about/, /conferences/, /links/")
+        let dailyRecord = stagedPortal.records.first { $0.kind == .daily }
+        try check(dailyRecord?.tags == ["语音合成", "音频编解码"], "desktop aggregate row falls back to flatTags when tagConceptIds is empty")
+        let confPage = stagedPortal.records.first { $0.sourceURL.hasSuffix("/conferences/") }!
+        let aboutPage = stagedPortal.records.first { $0.sourceURL.hasSuffix("/about/") }!
+        _ = try portalStore.originalRow(for: confPage)
+        let confHTML = Data("<html><link rel='canonical' href='https://nanless.github.io/audio-research-portal/conferences/'/><body><div id='conference-directory' class='conference-directory'><h2>会议总目录</h2><p>ICASSP / Interspeech / NeurIPS</p></div></body></html>".utf8)
+        let cachedConf = try portalStore.cacheDocument(confHTML, descriptor: confPage, responseURL: URL(string: confPage.sourceURL)!, fetchedAt: "2026-11-26T00:00:00Z")
+        let replayedConf = try portalStore.cachedDocument(descriptor: confPage, rawHTMLSHA256: cachedConf.rawHTMLSHA256)
+        try check(replayedConf == cachedConf && replayedConf.plainText.contains("会议总目录"), "canonical /conferences/ page passes originalRow, cacheDocument, and cold cachedDocument replay")
+        let aboutHTML = Data("<html><link rel='canonical' href='https://nanless.github.io/audio-research-portal/about/'/><body><div class='reader-guide-content post-content'><h2>关于与使用方法</h2><p>使用指南正文</p></div></body></html>".utf8)
+        let cachedAbout = try portalStore.cacheDocument(aboutHTML, descriptor: aboutPage, responseURL: URL(string: aboutPage.sourceURL)!, fetchedAt: "2026-11-26T00:00:00Z")
+        try check((try portalStore.cachedDocument(descriptor: aboutPage, rawHTMLSHA256: cachedAbout.rawHTMLSHA256)).plainText.contains("使用指南正文"), "canonical /about/ page passes cacheDocument and cold replay")
+        let nonPortalDir = FileManager.default.temporaryDirectory.appendingPathComponent("NonPortalDesktop-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: nonPortalDir.appendingPathComponent("desktop-details/catalog", isDirectory: true), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: nonPortalDir) }
+        try desktopShardBytes.write(to: nonPortalDir.appendingPathComponent("desktop-details/catalog/\(desktopShardSHA).json"))
+        let fixtureStore = PublishedAggregateStore(directory: nonPortalDir, siteBase: URL(string: "https://fixture.example/blog/")!)
+        let stagedFixture = try fixtureStore.stage(manifest: desktopManifestBytes, validationEpoch: desktopEpoch)
+        try check(stagedFixture.aggregateCount == 1 && stagedFixture.records.allSatisfy { $0.kind != .page }, "non-portal fixture siteBase does not inject canonical portal pages")
         print("RESULT passed=\(passed) failed=0")
     }
 }

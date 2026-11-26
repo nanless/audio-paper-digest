@@ -94,13 +94,20 @@ function findGluedDuplicate(text) {
     return (errorMatch || matches[0]).text;
 }
 
+function countPrecedingBackslashes(text, index) {
+    let count = 0;
+    for (let cursor = index - 1; cursor >= 0 && text[cursor] === '\\'; cursor -= 1) {
+        count += 1;
+    }
+    return count;
+}
+
 function hasUnescapedPipe(line) {
     let inCode = false;
     for (let index = 0; index < line.length; index += 1) {
         const char = line[index];
-        if (char === '\\' && line[index + 1] === '|') { index += 1; continue; }
         if (char === '`') { inCode = !inCode; continue; }
-        if (char === '|' && !inCode) return true;
+        if (char === '|' && !inCode && countPrecedingBackslashes(line, index) % 2 === 0) return true;
     }
     return false;
 }
@@ -108,15 +115,31 @@ function hasUnescapedPipe(line) {
 function splitRowCells(row) {
     let value = row.trim();
     if (value.startsWith('|')) value = value.slice(1);
-    if (value.endsWith('|') && !value.endsWith('\\|')) value = value.slice(0, -1);
+    if (value.endsWith('|') && countPrecedingBackslashes(value, value.length - 1) % 2 === 0) {
+        value = value.slice(0, -1);
+    }
     const cells = [];
     let current = '';
     let inCode = false;
     for (let index = 0; index < value.length; index += 1) {
         const char = value[index];
-        if (char === '\\' && value[index + 1] === '|') { current += '|'; index += 1; continue; }
-        if (char === '`') inCode = !inCode;
-        if (char === '|' && !inCode) { cells.push(current.trim()); current = ''; continue; }
+        if (char === '`') {
+            inCode = !inCode;
+            current += char;
+            continue;
+        }
+        if (char === '|') {
+            const backslashes = countPrecedingBackslashes(value, index);
+            if (backslashes % 2 === 1) {
+                current = `${current.slice(0, -1)}|`;
+                continue;
+            }
+            if (!inCode) {
+                cells.push(current.trim());
+                current = '';
+                continue;
+            }
+        }
         current += char;
     }
     cells.push(current.trim());

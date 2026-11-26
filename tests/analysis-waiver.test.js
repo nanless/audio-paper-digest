@@ -166,6 +166,8 @@ describe('分析豁免记录的保存与核验', () => {
             assert.throws(() => create(f, { reason: '太短' }), /至少要 10 个字符/);
             assert.throws(() => create(f, { paperIds: ['2609.99999'] }),
                 /当前分析结果或论文库中找不到这篇论文/);
+            assert.throws(() => create(f, { date: '2026-09-05' }),
+                /batchDate.*不一致/);
 
             const missingSource = fixture();
             try {
@@ -343,6 +345,11 @@ describe('digest:waive-analysis 入口', () => {
         // --paper-id 缺值有自己的报错，说清是哪一个参数缺了值。
         assert.throws(() => cli.parseArgs(['--date', DATE, '--paper-id']),
             /--paper-id 后面要跟一个论文 ID/);
+        // 以 -- 开头的值不得被误吞为参数值。
+        assert.throws(() => cli.parseArgs(['--date', DATE, '--paper-id', '--reason', REASON]),
+            /--paper-id 后面要跟一个论文 ID/);
+        assert.throws(() => cli.parseArgs(['--date', '--paper-id', PAPER, '--reason', REASON]), usage);
+        assert.throws(() => cli.parseArgs(['--date', DATE, '--paper-id', PAPER, '--reason', '--date']), usage);
     });
 
     it('main 把记录写到 Config.FILES 指向的目录并返回 payload', () => {

@@ -25,7 +25,7 @@ function secret(name) {
 
 // type: string | url | proxy | int | float | bool | csv | path | model
 const SCHEMA = Object.freeze([
-    { name: 'PAPER_ANALYZER_API_KEY', required: true, type: 'string', secret: true, hint: '在 .env 填写主账号 key；同池所有 key 等权' },
+    { name: 'PAPER_ANALYZER_API_KEY', required: true, type: 'string', secret: true, hint: '在 .env 填写主账号 key；与备用账号合并为共享账号池（默认按月到期优先调度）' },
     { name: 'PAPER_ANALYZER_MODEL', required: true, type: 'model', hint: `可选：${SUPPORTED_MODELS.join(' / ')}` },
     { name: 'PAPER_ANALYZER_ENDPOINT', required: true, type: 'url', hint: 'Muse 端点，例如 https://opencode.ai/zen/go/v1' },
     { name: 'PAPER_ANALYZER_FALLBACK_API_KEYS', required: false, type: 'csv', secret: true, hint: '同池更多 key，逗号分隔，顺序不代表优先级' },
@@ -57,7 +57,7 @@ const SCHEMA = Object.freeze([
     { name: 'PAPER_DIGEST_IMAGE_REPO', required: false, type: 'path', hint: '会议图片仓库本地路径（可选）' },
     { name: 'PAPER_DIGEST_GITHUB_REMOTE', required: false, type: 'string' },
     { name: 'PAPER_DIGEST_IMAGE_BASE_URL', required: false, type: 'string' },
-    { name: 'PAPER_DIGEST_IMAGE_HOST', required: false, type: 'string' },
+    { name: 'PAPER_DIGEST_IMAGE_HOST', required: false, type: 'string', deprecated: true, hint: '已废弃：运行时不再读取' },
     // 已退役/废弃配置：保留登记以兼容本机既有 .env 与静默脱敏，不在新配置中使用。
     { name: 'PAPER_DIGEST_REPO_URL', required: false, type: 'string', deprecated: true, hint: '已废弃：运行时不再读取' },
     { name: 'PAPER_DIGEST_AUTHOR', required: false, type: 'string', deprecated: true, hint: '已废弃：运行时不再读取' },
@@ -146,12 +146,12 @@ const SCHEMA = Object.freeze([
         hint: '筛选单次响应预算；推理 token 与可见输出共用它，推理档高时需要抬高' },
     { name: 'PD_BLOG_REVIEW_TIMEOUT', required: false, type: 'int', min: 30, max: 600,
         hint: '单页审查读超时（秒），默认 120；不进审查协议指纹' },
-    { name: 'PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS', required: false, type: 'int', min: 10, max: 1800 },
-    { name: 'PD_HUGO_GATE_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 1800 },
-    { name: 'PD_GIT_LOCAL_TIMEOUT_SECONDS', required: false, type: 'int', min: 5, max: 600 },
+    { name: 'PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS', required: false, type: 'int', min: 10, max: 300 },
+    { name: 'PD_HUGO_GATE_TIMEOUT_SECONDS', required: false, type: 'int', min: 30, max: 1800 },
+    { name: 'PD_GIT_LOCAL_TIMEOUT_SECONDS', required: false, type: 'int', min: 5, max: 300 },
     { name: 'PD_GIT_ARCHIVE_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 900 },
-    { name: 'PD_GIT_COMMIT_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 1800 },
-    { name: 'PD_GIT_NETWORK_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 1800 },
+    { name: 'PD_GIT_COMMIT_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 900 },
+    { name: 'PD_GIT_NETWORK_TIMEOUT_SECONDS', required: false, type: 'int', min: 10, max: 900 },
     { name: 'PD_IMAGE_DOWNLOAD_TIMEOUT_MS', required: false, type: 'int', min: 1,
         hint: '单张图片下载超时（毫秒），默认 60000；大图走代理常需更高' },
     { name: 'PD_OPENAI_RESPONSES_STREAM', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
@@ -160,10 +160,10 @@ const SCHEMA = Object.freeze([
     { name: 'PD_TIERED_REASONING_EFFORT', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'],
         hint: '默认开启（1）按阶段分级推理强度（主分析与解读长文保持配置上限，审校/局部修复为 high，轻量机械阶段下调）；设为 0 恢复全阶段统一档位' },
     { name: 'PD_OPENCODE_SESSION_ID', required: false, type: 'string' },
-    { name: 'PD_API_READER_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'] },
-    { name: 'PD_ANALYSIS_REPAIR_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'] },
-    { name: 'PD_ANALYSIS_PRIMARY_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'] },
-    { name: 'PD_ANALYSIS_AUXILIARY_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'] },
+    { name: 'PD_API_READER_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'], caseSensitive: true },
+    { name: 'PD_ANALYSIS_REPAIR_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'], caseSensitive: true },
+    { name: 'PD_ANALYSIS_PRIMARY_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'], caseSensitive: true },
+    { name: 'PD_ANALYSIS_AUXILIARY_THINKING_MODE', required: false, type: 'string', allowed: ['enabled', 'disabled'], caseSensitive: true },
     // Responses 推理强度；max/highest/maximum 视作 xhigh（网关支持的最高档）。
     // 取值按模型分表：muse-spark-* 最高 xhigh，deepseek-v4.1-flash 只有 low/high/max。
     // 这里登记并集；max/highest/maximum 是「最高档」的别名，运行时由 normalizeReasoningEffort
@@ -172,17 +172,17 @@ const SCHEMA = Object.freeze([
         allowed: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'highest', 'maximum'] },
     { name: 'PD_WORKSPACE_ALLOW_CROSS_ROLE', required: false, type: 'bool' },
     { name: 'PD_STORAGE_RETENTION_DAYS', required: false, type: 'int', min: 1, max: 3650 },
-    { name: 'PD_LLM_USAGE_SHARD_BY_DATE', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'],
+    { name: 'PD_LLM_USAGE_SHARD_BY_DATE', required: false, type: 'bool',
         hint: '设为 1 按北京时间 YYYY-MM-DD/ 子目录分片写入新用量事件（默认 0 保持平铺兼容全量历史回放）' },
     { name: 'PD_LOG_RETENTION_DAYS', required: false, type: 'int', min: 1, max: 3650 },
     { name: 'PD_LOG_MAX_TOTAL_BYTES', required: false, type: 'int', min: 1048576 },
-    { name: 'PAPER_DIGEST_ENABLE_FILE_LOGS', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
-    { name: 'PD_ENABLE_FILE_LOGS', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
-    { name: 'PAPER_DIGEST_DISABLE_FILE_LOGS', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
-    { name: 'PD_DISABLE_FILE_LOGS', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
-    { name: 'PD_CHECKPOINT_TIMING', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
-    { name: 'PD_DISABLE_NODE_REPLAY_WORKER', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
-    { name: 'PD_PYTHON_RUNTIME_DISABLE_VENV', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
+    { name: 'PAPER_DIGEST_ENABLE_FILE_LOGS', required: false, type: 'bool' },
+    { name: 'PD_ENABLE_FILE_LOGS', required: false, type: 'bool' },
+    { name: 'PAPER_DIGEST_DISABLE_FILE_LOGS', required: false, type: 'bool' },
+    { name: 'PD_DISABLE_FILE_LOGS', required: false, type: 'bool' },
+    { name: 'PD_CHECKPOINT_TIMING', required: false, type: 'bool' },
+    { name: 'PD_DISABLE_NODE_REPLAY_WORKER', required: false, type: 'bool' },
+    { name: 'PD_PYTHON_RUNTIME_DISABLE_VENV', required: false, type: 'bool' },
     { name: 'PD_PUBLISH_RASTER_RECOVERY_FILE', required: false, type: 'path' }
 ]);
 
@@ -325,7 +325,8 @@ function validateValue(item, rawValue) {
     default:
         if (Array.isArray(item.allowed)) {
             // 字符串型白名单：写错的值不会报错而是被静默忽略，所以在配置检查里直接拦住。
-            const seen = String(value).trim().toLowerCase();
+            const trimmed = String(value).trim();
+            const seen = item.caseSensitive ? trimmed : trimmed.toLowerCase();
             if (!item.allowed.includes(seen)) {
                 return { ok: 'fail', detail: `不在允许值内：${value}`,
                     hint: `允许值：${item.allowed.join('/')}` };

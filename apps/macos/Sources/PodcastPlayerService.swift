@@ -222,6 +222,12 @@ actor PodcastPlayerService {
     private var onStateChange: (@Sendable ([String: Any]) -> Void)?
     private var remoteCommandsInstalled = false
     private var remoteRegistry: PodcastRemoteCommandRegistry?
+    private var isShutDown = false
+    private static let dnsQueue = DispatchQueue(
+        label: "com.nanless.PaperDigest.dns.podcast",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
 
     init(
         cacheDirectory: URL,
@@ -821,6 +827,9 @@ actor PodcastPlayerService {
     // MARK: - Playback Controls
 
     func play(episodeId: String?, startSeconds: Double? = nil) async throws -> [String: Any] {
+        guard !isShutDown else {
+            throw CancellationError()
+        }
         if let startSeconds {
             guard startSeconds.isFinite, startSeconds >= 0 else {
                 throw PodcastError.invalid("播客起始播放时间无效。")
@@ -855,7 +864,7 @@ actor PodcastPlayerService {
             return stateSnapshot()
         }
         let localFile = try await downloadEpisode(id: targetId)
-        guard myGen == playbackGeneration, !Task.isCancelled else {
+        guard !isShutDown, myGen == playbackGeneration, !Task.isCancelled else {
             throw CancellationError()
         }
         stopPlaybackInternal()
@@ -885,6 +894,11 @@ actor PodcastPlayerService {
         self.isPlaying = true
         self.lastError = nil
         await installRemoteCommandsIfNeeded()
+        guard !isShutDown, myGen == playbackGeneration else {
+            stopPlaybackInternal()
+            await clearNowPlaying()
+            throw CancellationError()
+        }
         startProgressLoop()
         await updateNowPlaying(episode: episode)
         notifyState()
@@ -953,6 +967,7 @@ actor PodcastPlayerService {
     }
 
     func shutdown() async {
+        isShutDown = true
         playbackGeneration &+= 1
         activeDownloadTask?.cancel()
         activeDownloadTask = nil
@@ -995,6 +1010,7 @@ actor PodcastPlayerService {
     private func pollProgressTick() async {
         guard let p = player else {
             isPlaying = false
+            activeEpisodeId = nil
             progressTask?.cancel()
             progressTask = nil
             notifyState()
@@ -1003,26 +1019,26 @@ actor PodcastPlayerService {
         currentTime = p.currentTime
         if p.duration > 0 { duration = p.duration }
         if !p.isPlaying && isPlaying {
-            isPlaying = false
-            if duration > 0 && currentTime >= duration - 0.5 {
-                currentTime = duration
-            }
-            progressTask?.cancel()
-            progressTask = nil
-            if let id = activeEpisodeId, let ep = feed?.episodes.first(where: { $0.id == id }) {
-                await updateNowPlaying(episode: ep)
-            }
+            stopPlaybackInternal()
+            await clearNowPlaying()
         }
         notifyState()
     }
 
     private func installRemoteCommandsIfNeeded() async {
-        guard enableMediaCenter, !remoteCommandsInstalled else { return }
+        guard enableMediaCenter, !remoteCommandsInstalled, !isShutDown else { return }
         remoteCommandsInstalled = true
         let registry = await MainActor.run { () -> PodcastRemoteCommandRegistry in
             let reg = PodcastRemoteCommandRegistry()
             reg.install(service: self)
             return reg
+        }
+        if isShutDown {
+            remoteCommandsInstalled = false
+            await MainActor.run {
+                registry.removeAllAndClearNowPlaying()
+            }
+            return
         }
         self.remoteRegistry = registry
     }
@@ -1206,7 +1222,7 @@ actor PodcastPlayerService {
         if let proxy = httpProxy {
             args += ["--proxy", proxy.absoluteString, "--noproxy", ""]
         } else {
-            let ip = try Self.resolvePublicOrTunIP(host: host)
+            let ip = try await Self.resolvePublicOrTunIP(host: host)
             let formatted = ip.contains(":") ? "[\(ip)]" : ip
             args += ["--connect-to", "\(host):443:\(formatted):443", "--proxy", "", "--noproxy", "*"]
         }
@@ -1245,7 +1261,22 @@ actor PodcastPlayerService {
         try Task.checkCancellation()
     }
 
-    private static func resolvePublicOrTunIP(host: String) throws -> String {
+    private static func resolvePublicOrTunIP(host: String) async throws -> String {
+        try Task.checkCancellation()
+        let ip: String = try await withCheckedThrowingContinuation { continuation in
+            dnsQueue.async {
+                do {
+                    continuation.resume(returning: try resolvePublicOrTunIPSync(host: host))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+        try Task.checkCancellation()
+        return ip
+    }
+
+    private static func resolvePublicOrTunIPSync(host: String) throws -> String {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
         hints.ai_socktype = SOCK_STREAM

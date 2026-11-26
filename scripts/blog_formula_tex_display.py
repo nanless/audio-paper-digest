@@ -865,7 +865,21 @@ def _api_reader_display_formula_blocks(article):
                     pos += (run + 1) if (run % 2 == 1 and pos + run < seg_len) else run
                     continue
                 if run == 1:
-                    math_end = seg.find(r'\]', pos + 2)
+                    math_end = -1
+                    search = pos + 2
+                    while search < seg_len:
+                        candidate = seg.find(r'\]', search)
+                        if candidate < 0:
+                            break
+                        bs_count = 0
+                        cursor = candidate
+                        while cursor >= pos + 2 and seg[cursor] == '\\':
+                            bs_count += 1
+                            cursor -= 1
+                        if bs_count % 2 == 1:
+                            math_end = candidate
+                            break
+                        search = candidate + 2
                     if math_end >= 0:
                         blocks.append(original[seg_start + pos:seg_start + math_end + 2])
                         pos = math_end + 2
@@ -1496,8 +1510,12 @@ def project_artifact_table_cell_tex_display(article, plan, *, hooks: Mapping | N
             if row < 0 or column < 0 or column >= len(table['header']) or row > len(table['rows']):
                 raise err_cls('来源单元格 TeX 显示投影的单元格坐标超出表格范围。')
             line_index = table['start_line'] + row + (1 if row else 0)
+            if line_index < 0 or line_index >= len(lines):
+                raise err_cls('来源单元格 TeX 显示投影的行号超出文章范围。')
             line = lines[line_index]
             pipes = list(re.finditer(r'(?<!\\)\|', line))
+            if column + 1 >= len(pipes):
+                raise err_cls('来源单元格 TeX 显示投影的表格行管道符数量不足，无法定位目标单元格。')
             start, end = pipes[column].end(), pipes[column + 1].start()
             original = line[start:end]
             current_text = original.strip()

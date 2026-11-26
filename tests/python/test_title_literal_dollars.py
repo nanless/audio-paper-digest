@@ -183,6 +183,18 @@ class TitleLiteralDollarTests(unittest.TestCase):
         )
         page = gate.Page(ssr_html)
         self.assertTrue(page.has_math_rendering())
+        # KaTeX SSR 缺少 katex 样式表时必须判定无有效数学渲染
+        no_css_html = ssr_html.replace('<link rel="stylesheet" href="/katex.min.css">', '')
+        self.assertFalse(gate.Page(no_css_html).has_math_rendering())
+        # 纯 MathML <math>（不含 class="katex"）不依赖 KaTeX 样式表
+        pure_mathml_html = (
+            '<html><head><title>Paper</title>'
+            '<link rel="canonical" href="https://example.com/paper/"></head>'
+            '<body><article><div class="post-content">'
+            '<math><mi>x</mi><mo>=</mo><mn>1</mn></math>'
+            '</div></article></body></html>'
+        )
+        self.assertTrue(gate.Page(pure_mathml_html).has_math_rendering())
         with self.assertRaises(ValueError):
             gate.Page(ssr_html.replace('class="katex"', 'class="katex-error"'))
 

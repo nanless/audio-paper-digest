@@ -460,11 +460,15 @@ async function fetchDailyAtomCategory(categoryId, boundary, existingIds, options
         if (declared === categoryId) prefix.dateQueryFailure = actual;
         else prefix.routeSwitch = { categoryId: declared, dateQueryFailure: actual };
     };
+    const isHttp429Error = err => Array.isArray(err?.sourceHealth?.failures)
+        && err.sourceHealth.failures.some(item => item?.error === 'HTTP 429');
+    let attemptedWindowFetch = false;
     if (!state.categoryPrefix) {
+        attemptedWindowFetch = true;
         try { return await windowFetch(categoryId, boundary, existingIds, options); }
         catch (error) {
             if (require('./daily-xml-file-stdin').isDailyXmlOperationalError(error)) throw error;
-            if (!error.sourceHealth?.failures?.some(item => item.error === 'HTTP 429')) throw error;
+            if (!isHttp429Error(error)) throw error;
             failure = { message: error.message, health: error.sourceHealth };
         }
     }
@@ -482,6 +486,27 @@ async function fetchDailyAtomCategory(categoryId, boundary, existingIds, options
         state.categoryPrefixFailure = failure;
         return result;
     } catch (error) {
+        const hasOwnDateQueryFailure = Boolean(
+            failure && (failure.health?.categoryId ?? failure.health?.id) === categoryId
+        );
+        if (!attemptedWindowFetch && options.officialOaiRecovery === true
+            && !hasOwnDateQueryFailure && isHttp429Error(error)) {
+            try {
+                return await windowFetch(categoryId, boundary, existingIds, options);
+            } catch (windowError) {
+                if (require('./daily-xml-file-stdin').isDailyXmlOperationalError(windowError)) throw windowError;
+                if (isHttp429Error(windowError)) {
+                    const ownFailure = { message: windowError.message, health: windowError.sourceHealth };
+                    if (error.sourceHealth) {
+                        try { recordRouteTrigger(error.sourceHealth, ownFailure); }
+                        catch (recordError) { throw Object.assign(recordError, { cause: error }); }
+                    }
+                    throw error;
+                }
+                if (!windowError.cause) windowError.cause = error;
+                throw windowError;
+            }
+        }
         if (failure && error.sourceHealth) {
             // Fail closed before writing, but keep the actual fetch failure as
             // the cause so a refused record still reports what really broke.

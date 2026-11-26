@@ -37,6 +37,70 @@ test('收尾清单提示状态、网页核验与不生图恢复，不引导默�
 
 test('缺日期返回 2', () => {
     assert.strictEqual(finish.main([]), 2);
+    assert.strictEqual(finish.main(['--date']), 2);
+    assert.strictEqual(finish.main(['--date', '--other']), 2);
+    assert.strictEqual(finish.main(['--date', '../2099-01-01']), 2);
+    assert.strictEqual(finish.main(['--date', '2026-02-30']), 2);
+});
+
+test('publicationOid 大小写不敏感匹配 web-verification 记录', () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const crypto = require('node:crypto');
+    const protocols = require('../scripts/lib/protocol-codec');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-finish-'));
+    try {
+        const date = '2099-01-03';
+        const lowerOid = 'a'.repeat(39) + 'f';
+        const upperOid = lowerOid.toUpperCase();
+        const policy = protocols.record('daily-publication-policy', {
+            generatedImages: false,
+            sourceFigures: 'retained-and-source-verified'
+        });
+        const manifestFile = path.join(dir, `blog-generation-manifest-${date}.json`);
+        fs.writeFileSync(manifestFile, JSON.stringify({ date, postPublicationPolicy: policy }));
+        const manifestSha = crypto.createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex');
+        const receiptFile = path.join(dir, `blog-review-receipt-${date}.json`);
+        fs.writeFileSync(receiptFile, JSON.stringify({
+            publicationCommit: lowerOid,
+            remoteVerifiedOid: lowerOid,
+            postPublishVisuals: 'not_requested'
+        }));
+        const receiptSha = crypto.createHash('sha256').update(fs.readFileSync(receiptFile)).digest('hex');
+        fs.mkdirSync(path.join(dir, 'post-publish-visual-waivers'), { recursive: true });
+        fs.writeFileSync(
+            path.join(dir, 'post-publish-visual-waivers', `${date}.json`),
+            JSON.stringify(protocols.record('post-publish-visual-waiver', {
+                batchDate: date, status: 'waived', requestedBy: 'user', reason: '用户持续要求日更不再生成图片',
+                waivedAt: `${date}T12:00:00+08:00`, publicationCommit: lowerOid, remoteVerifiedOid: lowerOid,
+                generationManifestSha256: manifestSha, reviewReceiptSha256: receiptSha,
+                generatedImages: false, sourceFigures: 'retained-and-source-verified'
+            }))
+        );
+        fs.writeFileSync(
+            path.join(dir, `web-verification-${date}.json`),
+            JSON.stringify({
+                ...protocols.recordHeader('web-verification', 'web-verification'),
+                date,
+                publicationOid: upperOid,
+                generationManifestSha256: manifestSha,
+                partial: false,
+                deploy: { status: 'completed', conclusion: 'success' }
+            })
+        );
+        const lines = [];
+        const original = console.log;
+        console.log = line => lines.push(String(line));
+        try {
+            assert.strictEqual(finish.main(['--date', date], { currentDir: dir }), 0);
+        } finally {
+            console.log = original;
+        }
+        assert.doesNotMatch(lines.join('\n'), /web-verification artifact 缺失/);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
 });
 
 // 新记录绑定真实审查凭证，不以已退役的图片任务充当发布证据。

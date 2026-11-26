@@ -148,16 +148,18 @@ function parseArgs(argv = process.argv.slice(2)) {
         if (flags.size !== 1 || Object.keys(values).length !== 0 || reportName) throw usageError();
         return { command: 'archive-snapshot' };
     }
-    if (flags.has('--mark-stale') || flags.has('--classify')) {
-        if (flags.size !== 1 || Object.keys(values).some(key => !['--report', '--old', '--new'].includes(key))) {
+    if (flags.has('--mark-stale')) {
+        if (flags.size !== 1 || Object.keys(values).some(key => key !== '--report')) {
             throw usageError();
         }
-    }
-    if (flags.has('--mark-stale')) {
         return { command: 'mark-stale', reportName };
     }
     if (flags.has('--classify')) {
-        if (!values['--old'] || !values['--new'] || reportName) throw usageError();
+        if (flags.size !== 1
+            || Object.keys(values).some(key => !['--old', '--new'].includes(key))
+            || !values['--old'] || !values['--new'] || reportName) {
+            throw usageError();
+        }
         return { command: 'classify', oldPath: values['--old'], newPath: values['--new'] };
     }
     if (!values['--from'] || !UUID_RE.test(values['--from'])) throw usageError();

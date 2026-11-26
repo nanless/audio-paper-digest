@@ -369,4 +369,57 @@ class PublicationFigureViewTests(unittest.TestCase):
         self.assertEqual([r['readerFigureCluster'] for r in regions(text,parse(text))],
                          [r['readerFigureCluster'] for r in regions(rendered,parse(rendered))])
 
+    def test_repo_rename_path_relocation_and_replay_preserves_declaration(self):
+        base = Path(self.root) / 'audio-research-workbench'
+        old_base = Path(self.root) / 'audio-paper-digest'
+        sub = 'data/runtime/conference-publications/demo/file.png'
+        self.assertEqual(view.relocate_path_within_root(str(old_base / sub), base), base / sub)
+        self.assertTrue(view.matches_relocated_repo_path(str(old_base / sub), str(base / sub)))
+        self.assertIsNone(view.relocate_path_within_root(str(Path(self.root) / 'other-repo' / sub), base))
+        self.assertIsNone(view.relocate_path_within_root(str(old_base / 'data/../etc/passwd'), base))
+        self.assertFalse(view.matches_relocated_repo_path(str(Path(self.root) / 'other-repo' / sub), str(base / sub)))
+
+        # 在含 audio-research-workbench 目录名的根下验证预改名 declaration 冷重放
+        renamed_root = Path(self.root) / 'audio-research-workbench'
+        src_dir = renamed_root / 'data/runtime/src'
+        src_dir.mkdir(parents=True)
+        raw_page = src_dir / 'page.md'; raw_page.write_text(self.raw, encoding='utf-8')
+        raw_img = src_dir / 'orig.png'; raw_img.write_bytes(b'\x89PNG\r\n\x1a\nold')
+        derived_img = src_dir / 'derived.png'; derived_img.write_bytes(b'\x89PNG\r\n\x1a\nnew')
+        manifest_file = src_dir / 'manifest.json'; manifest_file.write_text('{}', encoding='utf-8')
+        page_rec = {'kind': 'paper', 'paperId': self.paperid, 'path': self.page['path'],
+                    'sourcePath': str(raw_page), 'sourceSha256': view.sha(raw_page.read_bytes()), 'size': raw_page.stat().st_size}
+        img_rec = {'kind': 'asset', 'paperId': self.paperid, 'path': self.image['path'],
+                   'sourcePath': str(raw_img), 'sourceSha256': view.sha(raw_img.read_bytes()), 'size': raw_img.stat().st_size}
+        bundle = {'completion': {'receiptSha256': 'a' * 64}, 'files': [page_rec], 'imageFiles': [img_rec]}
+        item = {**self.item, 'derivedSourcePath': str(derived_img), 'sha256': view.sha(derived_img.read_bytes()),
+                'size': derived_img.stat().st_size, 'proofPath': str(src_dir / 'proof.json')}
+        outcome = self.outcome_for([item])
+        created = view.materialize_view(bundle, outcome, root=renamed_root, conference_id=CONFERENCE,
+                                        process_id=PROCESS, manifest_path=manifest_file,
+                                        parse_images=parse, read_bytes=pub.read_bytes, write_exact=pub.write_exact)
+        to_old = lambda s: s.replace('/audio-research-workbench/', '/audio-paper-digest/')
+        old_decl = copy.deepcopy(created['figurePublicationView'])
+        old_decl['manifestPath'] = to_old(old_decl['manifestPath'])
+        for rec in old_decl['rawFiles'] + old_decl['rawImageFiles']:
+            rec['sourcePath'] = to_old(rec['sourcePath'])
+        old_decl['rawBundleSha256'] = view.stable({
+            'completionReceiptSha256': bundle['completion']['receiptSha256'],
+            'files': old_decl['rawFiles'], 'imageFiles': old_decl['rawImageFiles'],
+        })
+        old_node = copy.deepcopy(old_decl['nodeDerivation'])
+        old_node['derivations'][0]['derivedSourcePath'] = to_old(old_node['derivations'][0]['derivedSourcePath'])
+        old_node['derivations'][0]['proofPath'] = to_old(old_node['derivations'][0]['proofPath'])
+        old_node.pop('derivationSha256')
+        old_node['derivationSha256'] = view.stable(old_node)
+        old_decl['nodeDerivation'] = old_node
+        old_decl.pop('viewSha256')
+        old_decl['viewSha256'] = view.stable(old_decl)
+
+        replayed = view.materialize_view(bundle, outcome, root=renamed_root, conference_id=CONFERENCE,
+                                         process_id=PROCESS, manifest_path=manifest_file,
+                                         parse_images=parse, read_bytes=pub.read_bytes, write_exact=pub.write_exact,
+                                         expected_declaration=old_decl, replay=True)
+        self.assertEqual(replayed['figurePublicationView'], old_decl)
+
 if __name__=='__main__':unittest.main(verbosity=2)

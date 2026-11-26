@@ -13,20 +13,41 @@ This repository maintains three default LLM/API content workflows: daily digests
 | Historical updates | `historical-direct-rewrite-inputs.js`, `historical-direct-rewrite-plan.js`, `historical-direct-rewrite-run.js`, `history-resume.js` | Same engine with isolated historical scope and provenance adapters |
 | Page rendering | `generate-blog.py`, `conference-page-render.py`, `historical-page-render.py`, `lib/historical-direct-aggregate.js` | `publish-to-blog.py`, `paper_reader_presentation.py`, `tag_presentation.py` |
 | Review & push | `review-blog.py`, `push-blog.py`, `publish-conference.py`, `lib/historical-direct-publication.js`, `verify-web.js` | `publish_common.py`, `blog_reader_binding_verifier.py`, `markdown_hugo_gate.py` |
-| Infrastructure | `env-loader.js`, `project_env.py`, `workspace-role.js`, `runtime_guard.py`, `utils.js`, `llm-account-pool.js` | `config/workspace-roles.json`, `lib/env-schema.js`, `lib/arxiv-origin-gate.js`, `publish_node_replay_client.py` |
+| Infrastructure | `env-loader.js`, `project_env.py`, `workspace-role.js`, `runtime_guard.py`, `utils.js`, `llm-account-pool.js`, `llm_account_pool.py` | `config/workspace-roles.json`, `lib/env-schema.js`, `lib/arxiv-origin-gate.js`, `publish_node_replay_client.py` |
 
 ## Operational & Optional CLIs
 
-- **Health & config**: `npm run doctor -- --offline`, `npm run config:check`, `npm run llm:accounts`, `npm run source:probe -- --date YYYY-MM-DD`, `node scripts/test-api-key.js`.
-- **Progress & telemetry**: `npm run digest:status -- --date YYYY-MM-DD`, `npm run digest:scorecard -- --date YYYY-MM-DD`, `npm run locks`.
-- **Recovery & diagnostics**: `npm run recover -- --date YYYY-MM-DD`, `npm run manifest:new -- --spec SPEC.json`, `npm run table:check -- --draft FILE`, `npm run review:overrides -- --date DATE --file F.json`.
-- **Storage hygiene**: `npm run papers:compact`, `npm run storage:pdf-dedupe`, `npm run storage:report`, `npm run storage:prune`.
-- **Opt-in CLIs**: `npm run digest:calibrate` (post-batch Bradley-Terry relative score calibration), `npm run podcast:generate` (daily audio briefing synthesis via IndexTTS2 and optional GitHub Release publishing).
-- **Opt-in extraction helpers**: `conference_extractor_v2.py` (layout-aware conference extractor; `conference_extractor.py` remains byte-frozen for legacy receipts) and `lib/arxiv-tex-source.js` / `arxiv_tex_extract.py` (arXiv TeX source AST extraction).
+| Command | Script | Purpose |
+|---|---|---|
+| `npm run doctor -- --offline` | `doctor.js` | Read-only preflight check (runtimes, proxy, pool, disk, blog repo); add `--network` to probe arXiv |
+| `npm run config:check` | `config-check.js` | Validate `.env` required keys, ranges, reasoning tiers, and spelling against `lib/env-schema.js` |
+| `npm run source:probe -- --date YYYY-MM-DD` | `source-probe.js` | Read-only probe of arXiv Atom, official OAI, and RSS announcement freshness |
+| `npm run llm:accounts` / `llm:accounts:quota` | `llm-accounts-report.js` / `llm-accounts-quota.js` | Inspect shared pool schedule/cooldowns; sync or manage OpenCode Go `/zen/go/v1/usage` quotas and monthly reset dates |
+| `npm run digest:status` / `digest:scorecard` | `digest-run-report.js` / `digest-scorecard.js` | Cold-verify full batch status and inspect per-stage latency, cache hits, and reasoning share |
+| `npm run locks` | `locks.js` | Bounded read-only view of local and shared-blog locks plus stale-lock preview |
+| `npm run recover` / `manifest:new` | `recover.js` / `manifest-new.js` | Summarize failure causes & next actions; prepare source-bound manual correction manifests |
+| `npm run table:check` / `review:overrides` | `table-check.js` / `review-overrides-cli.js` | Offline table precheck; validate strict-schema review false-positive override notes |
+| `npm run papers:compact` | `compact-papers-ledger.js` | Atomically compact `data/current/papers.json` while preserving complete records |
+| `npm run storage:pdf-dedupe` / `storage:report` / `storage:prune` | `runtime-storage.js` / `storage-report.js` | Byte-verify & CoW-dedupe duplicate PDFs, print retention advice, and preview reference-aware pruning |
+| `npm run digest:calibrate` | `calibrate-batch-scores.js` | Opt-in CLI: post-batch Swiss Bradley-Terry relative score calibration (companion output) |
+| `npm run podcast:generate` | `publish-daily-podcast.js` | Opt-in CLI: synthesize daily audio briefing via IndexTTS2 and optionally publish to GitHub Release |
+| `npm run impact -- --git` | `impact.js` | Static reverse-dependency analysis listing impacted commands and exact JS/Python test suites |
+| `npm run docs:check` | `docs-consistency.js` | Verify commands, versions, links/anchors, bilingual indexes, env vars, `env.example` sync, and `AGENTS.md` size |
+| `node scripts/test-api-key.js` | `test-api-key.js` | Explicit routing diagnostic (sends minimal real requests to check primary/secondary models & proxy) |
+
+### Opt-in / Standalone Evolution Modules
+
+- `conference_extractor_v2.py`: PyMuPDF4LLM / layout-aware conference PDF extractor (opt-in; `conference_extractor.py` remains byte-frozen for historical receipts).
+- `lib/arxiv-tex-source.js`, `arxiv_tex_extract.py`: on-demand arXiv `/src/<id>` LaTeX source AST sidecar fetcher and safe parser.
+- `generate-scripts-index.js`: regenerate or `--check` [scripts/INDEX.md](INDEX.md).
 
 ## Legacy Compatibility Boundary
 
 `manual/scripts` holds only legacy read-only contract verification and single-page independent manual review (`gpt-6.1-sol/high`). Batch Manual authoring and WeChat/Feishu/Xiaohongshu publishers are retired. Historical prompts are verified read-only from original Git blobs via `lib/git-prompt-evidence-index.json`.
+
+## Specialized Maintenance Commands
+
+Conference ledger verification (`conference:validate-ledger`, `conference:verify-ledger`, `conference:validate-run`), taxonomy migration (`tags:validate`, `tags:preview`, `tags:serve`, `tags:update-records`, `tags:check-inventory`), historical identity arbitration (`history:arxiv-source`, `history:openreview-pdf-source`, `history:resolve-conflict`), keyword recall regression (`keyword:recall`), and operator waivers (`digest:waive-analysis`) are documented in their respective workflow guides and root `package.json`.
 
 ## Verification
 

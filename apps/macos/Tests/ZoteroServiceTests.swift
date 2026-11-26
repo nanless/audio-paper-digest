@@ -269,7 +269,10 @@ private final class MockZotero: @unchecked Sendable {
             try require(resumed.status=="complete" && backend.requests.filter{$0.0=="POST"}.count==writes,"idempotent resume")
             let second = try await service.archive(input)
             try require(second.parentKey==first.parentKey && backend.objects.count==6,"global exact identity and child dedup")
-            passed += 3
+            let paddedInput = ZoteroService.ArchiveRequest(identity:"arxiv:2610.27491v1",bibliography:b,collectionKey:nil,collectionName:"  论文速递｜应用验收  ",pdfPath:pdf.path,guideHTMLPath:html.path,analysisHTML:"<p>明确测试解析，非论文事实。</p>",noteHTML:"<p>验收笔记正文</p>")
+            let third = try await service.archive(paddedInput)
+            try require(third.parentKey==first.parentKey && backend.collections.count==1,"whitespace-padded collectionName matches existing trimmed collection without creating duplicate")
+            passed += 4
         }
         do {
             let (service,backend,_)=try fixture();backend.failJSONUploadOnce=true

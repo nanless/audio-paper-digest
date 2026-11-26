@@ -5,6 +5,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
 const runApi = require('./conference-run.js');
@@ -555,23 +556,104 @@ function readExecution({ executionRoot, executionId, planHandle } = {}) {
     return execution;
 }
 
+function isLocalPidDead(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+        process.kill(pid, 0);
+        return false;
+    } catch (error) {
+        return error && error.code === 'ESRCH';
+    }
+}
+
+function tryReclaimDeadOperationLock(filename) {
+    let named;
+    try { named = fs.lstatSync(filename); } catch { return false; }
+    if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1
+        || (named.mode & 0o777) !== 0o600 || named.size < 2 || named.size > 64 * 1024) {
+        return false;
+    }
+    let fd;
+    let parsed;
+    try {
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== named.dev || opened.ino !== named.ino
+            || opened.size !== named.size) return false;
+        const text = fs.readFileSync(fd, 'utf8');
+        const after = fs.fstatSync(fd);
+        if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) {
+            return false;
+        }
+        parsed = JSON.parse(text);
+    } catch {
+        return false;
+    } finally {
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+    }
+    if (!isPlainObject(parsed)
+        || !Number.isInteger(parsed.pid) || parsed.pid <= 0
+        || typeof parsed.hostname !== 'string' || parsed.hostname !== os.hostname()
+        || typeof parsed.startedAt !== 'string' || Number.isNaN(Date.parse(parsed.startedAt))
+        || typeof parsed.owner !== 'string' || !OWNER_RE.test(parsed.owner)
+        || !isLocalPidDead(parsed.pid)) {
+        return false;
+    }
+    try {
+        const current = fs.lstatSync(filename);
+        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1
+            || current.dev !== named.dev || current.ino !== named.ino
+            || current.size !== named.size || current.mtimeMs !== named.mtimeMs
+            || current.ctimeMs !== named.ctimeMs) {
+            return false;
+        }
+        fs.unlinkSync(filename);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 function acquireOperationLock(directory, owner, now) {
     assertOwner(owner);
     const filename = path.join(directory, 'operation.lock');
-    const record = { owner, acquiredAt: nowIso(now) };
-    let fd;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, `${JSON.stringify(record)}\n`); fs.fsyncSync(fd);
-    } catch (error) {
-        if (error.code === 'EEXIST') throw new Error('Conference execution is locked by another operation');
-        throw error;
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
-    return filename;
+    const startedAt = nowIso(now);
+    const record = {
+        pid: process.pid,
+        hostname: os.hostname(),
+        startedAt,
+        acquiredAt: startedAt,
+        owner,
+        token: crypto.randomUUID()
+    };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        let fd;
+        try {
+            fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
+            fs.writeFileSync(fd, `${JSON.stringify(record)}\n`);
+            fs.fsyncSync(fd);
+            const stat = fs.fstatSync(fd);
+            return { filename, dev: stat.dev, ino: stat.ino };
+        } catch (error) {
+            if (error.code === 'EEXIST') {
+                if (attempt === 0 && tryReclaimDeadOperationLock(filename)) continue;
+                throw new Error('Conference execution is locked by another operation');
+            }
+            throw error;
+        } finally {
+            if (fd !== undefined) fs.closeSync(fd);
+        }
+    }
+    throw new Error('Conference execution is locked by another operation');
 }
-function releaseOperationLock(filename) {
+function releaseOperationLock(lock) {
+    const filename = typeof lock === 'string' ? lock : lock?.filename;
     const stat = fs.lstatSync(filename);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('操作锁在持有期间发生变化');
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+        || (typeof lock === 'object' && lock !== null
+            && (stat.dev !== lock.dev || stat.ino !== lock.ino))) {
+        fail('操作锁在持有期间发生变化');
+    }
     fs.unlinkSync(filename);
 }
 function normalizePatch(value) {

@@ -1,8 +1,10 @@
 package com.nanless.paperdigest.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -74,42 +76,54 @@ internal fun PodcastPlayerBar(
     val curChapter = episode.chapters.getOrNull(chapterIdx)
 
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.78f)),
         tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Column(Modifier.fillMaxWidth()) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
             if (isDownloading) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(2.5.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                )
             } else if (isActive && duration > 0.0) {
                 LinearProgressIndicator(
                     progress = { (position / duration).toFloat().coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth().height(2.dp),
+                    modifier = Modifier.fillMaxWidth().height(2.5.dp),
+                    color = MaterialTheme.colorScheme.tertiary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
                 )
             }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { expanded = true }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                IconButton(
+                FilledTonalIconButton(
                     onClick = {
                         if (isActive && podcast.isPlaying) action("podcast.pause", obj())
                         else action("podcast.play", obj("episodeId" to episode.id))
                     },
                     enabled = !isDownloading && (!offlineMode || isCached || isActive),
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                    ),
                 ) {
                     Icon(
-                        imageVector = if (isActive && podcast.isPlaying) Icons.Outlined.PauseCircle else Icons.Outlined.PlayCircle,
+                        imageVector = if (isActive && podcast.isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
                         contentDescription = if (isActive && podcast.isPlaying) "暂停播客" else "播放播客",
-                        tint = MaterialTheme.colorScheme.primary,
                     )
                 }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         text = episode.title,
                         style = MaterialTheme.typography.labelLarge,
@@ -142,11 +156,18 @@ internal fun PodcastPlayerBar(
                         )
                     }
                 }
-                TextButton(
-                    onClick = { action("podcast.rate", obj("rate" to nextPodcastRate(podcast.rate).toDouble())) },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                Surface(
+                    shape = MaterialTheme.shapes.extraSmall,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
                 ) {
-                    Text("${podcast.rate}x", style = MaterialTheme.typography.labelMedium)
+                    TextButton(
+                        onClick = { action("podcast.rate", obj("rate" to nextPodcastRate(podcast.rate).toDouble())) },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.heightIn(min = 32.dp),
+                    ) {
+                        Text("${podcast.rate}x", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    }
                 }
                 IconButton(onClick = { expanded = true }) {
                     Icon(Icons.Outlined.ExpandLess, "展开播客播放器")
@@ -202,8 +223,24 @@ private fun PodcastExpandedSheet(
             .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("每日音频播客", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-        Text(episode.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.tertiaryContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.28f)),
+            ) {
+                Icon(
+                    Icons.Outlined.GraphicEq,
+                    null,
+                    Modifier.padding(12.dp).size(24.dp),
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("每日音频播客 · ${episode.date}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary, fontWeight = FontWeight.SemiBold)
+                Text(episode.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            }
+        }
         if (episode.summary.isNotBlank()) {
             Text(episode.summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -270,9 +307,14 @@ private fun PodcastExpandedSheet(
             Text("节目章节", style = MaterialTheme.typography.titleSmall)
             episode.chapters.forEachIndexed { idx, chapter ->
                 Surface(
-                    color = if (idx == chapterIdx) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                    color = if (idx == chapterIdx) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
                     else MaterialTheme.colorScheme.surfaceContainerLow,
                     shape = MaterialTheme.shapes.small,
+                    border = BorderStroke(
+                        1.dp,
+                        if (idx == chapterIdx) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f),
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Row(
@@ -315,22 +357,21 @@ private fun PodcastExpandedSheet(
             podcast.episodes.take(10).forEach { ep ->
                 val epCached = ep.id in podcast.cachedEpisodeIds
                 val epDownloading = podcast.downloadingEpisodeId == ep.id
-                OutlinedCard(
+                EditorialCard(
                     onClick = { if (!epDownloading) action("podcast.play", obj("episodeId" to ep.id)) },
                     enabled = !epDownloading && (!offlineMode || epCached || ep.id == podcast.activeEpisodeId),
-                    modifier = Modifier.fillMaxWidth(),
+                    selected = ep.id == podcast.activeEpisodeId,
                 ) {
                     Row(
-                        Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Column(Modifier.weight(1f)) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(ep.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text("${ep.date} · ${formatPodcastClock(ep.durationSeconds)}" + if (epCached) " · 已缓存" else "", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         if (ep.id == podcast.activeEpisodeId) {
-                            Icon(Icons.Outlined.GraphicEq, "当前节目", tint = MaterialTheme.colorScheme.primary)
+                            Icon(Icons.Outlined.GraphicEq, "当前节目", tint = MaterialTheme.colorScheme.tertiary)
                         }
                     }
                 }
@@ -368,16 +409,27 @@ internal fun DailyPodcastCard(
     val isDownloading = podcast.downloadingEpisodeId == episode.id
     val isCached = episode.id in podcast.cachedEpisodeIds
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)),
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.34f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Outlined.Podcasts, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                Text("每日音频播客 · ${episode.date}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
-                Text(formatPodcastClock(episode.durationSeconds), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.25f)),
+                ) {
+                    Icon(Icons.Outlined.Podcasts, null, tint = MaterialTheme.colorScheme.onTertiaryContainer, modifier = Modifier.padding(8.dp).size(18.dp))
+                }
+                Text("每日音频播客 · ${episode.date}", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.tertiary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                MonographPill(
+                    text = formatPodcastClock(episode.durationSeconds),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Text(episode.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (episode.summary.isNotBlank()) {
@@ -390,6 +442,10 @@ internal fun DailyPodcastCard(
                         else action("podcast.play", obj("episodeId" to episode.id))
                     },
                     enabled = !isDownloading && (!offlineMode || isCached || isActive),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                    ),
                 ) {
                     Icon(if (isActive && podcast.isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
@@ -403,7 +459,12 @@ internal fun DailyPodcastCard(
                         Text("离线缓存")
                     }
                 } else if (isCached) {
-                    Text("已离线缓存", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    MonographPill(
+                        text = "已离线缓存",
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        icon = Icons.Outlined.CheckCircleOutline,
+                    )
                 }
             }
         }

@@ -208,7 +208,8 @@ async function main(options = {}) {
         || operatorManifestPath !== undefined || signedManifestPath !== undefined || explicitManifest
         || options.analyzeFn || options.analyzeBatch))
         throw new Error('Reader事实局部模式只接受显式严格Reader反馈，不能混用人工或新轮清单');
-    const data = (feedbacks.size || explicitManifest) ? prepare(readJsonFileStrict(RESULT_FILE))
+    const data = (feedbacks.size || explicitManifest || operatorManifestPath !== undefined || signedManifestPath !== undefined)
+        ? prepare(readJsonFileStrict(RESULT_FILE))
         : updateJsonFileLocked(RESULT_FILE, prepare);
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
@@ -275,6 +276,23 @@ async function main(options = {}) {
             }
             explicitRounds.set(grant.paperId, grant);
         }
+    }
+
+    if (operatorManifestPath !== undefined) {
+        if (explicitManifest) {
+            throw new Error('人工修正不能混用收费重试授权');
+        }
+        await require('./lib/reader-proof-read-scope').withReaderProofReadScope(() =>
+            require('./lib/reader-pdf-extraction-scope').withPdfExtractionScope(() =>
+                dailyFreshSources.withDailyFreshAnalysisContext(
+                    dailySourcePlan,
+                    () => require('./lib/daily-reader-operator-correction').withCorrections(
+                        operatorManifestPath, dailySourcePlan, papers, () => {}, { factFeedbacks: feedbacks }
+                    ),
+                    { refreshReaderDiagnostics }
+                )
+            )
+        );
     }
 
     await reconcileCompletedFailureMarkers(RESULT_FILE, dailySourcePlan, feedbacks);

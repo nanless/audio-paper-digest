@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { READER_LIMITS, limitsForDraftFormat } = require('./reader-contract.js');
 const { MAX_READER_PATCH_NODES, MIN_READER_PATCH_NODES } = require('./reader-patch-limits');
+const { isAuthorizedReaderPatchPath } = require('./reader-patch-paths.js');
 const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS } = require('./reader-draft-order.js');
 
 const candidateFormat = require('./reader-candidate-format');
@@ -375,15 +376,45 @@ function isSafeExistingReaderPatchContext(draft, context, sourceBindingNeedsFull
         || new Set(context.targets.map(target => target.path)).size !== context.targets.length) return false;
     const blocking = Array.isArray(currentIssues)
         ? currentIssues.filter(issue => issue?.diagnosticOnly !== true) : [];
-    if (blocking.length === 0 || blocking.some(issue => !issue || typeof issue.path !== 'string'
-        || !context.targets.some(target => issue.path === target.path
-            || issue.path.startsWith(target.path + '/')))) return false;
+    const issueCoveredByTargets = issue => {
+        if (!issue) return false;
+        if (issue.code === 'reader_cloned_section_prefix'
+            && Array.isArray(issue.sectionIndexes) && issue.sectionIndexes.length > 0) {
+            return issue.sectionIndexes.every(index => (
+                Number.isInteger(index) && index >= 0
+                && context.targets.some(target => target.path === `/sections/${index}`)
+            ));
+        }
+        return typeof issue.path === 'string'
+            && context.targets.some(target => issue.path === target.path
+                || issue.path.startsWith(target.path + '/'));
+    };
+    if (blocking.length === 0 || blocking.some(issue => !issueCoveredByTargets(issue))) return false;
     const paths = context.targets.map(target => target.path);
     if (paths.some((pointer, index) => paths.some((other, otherIndex) => index !== otherIndex
         && (pointer.startsWith(other + '/') || other.startsWith(pointer + '/'))))) return false;
+    const wholeSectionAuthorizedByBlocking = sectionIndex => blocking.some(issue => {
+        if (!issue || typeof issue.code !== 'string') return false;
+        const sectionPath = `/sections/${sectionIndex}`;
+        if (issue.code === 'reader_cloned_section_prefix') {
+            return Array.isArray(issue.sectionIndexes) && issue.sectionIndexes.includes(sectionIndex);
+        }
+        if (issue.code === 'reader_heading_bare_english') {
+            return issue.path === sectionPath || issue.sectionIndex === sectionIndex;
+        }
+        if (issue.code === 'table_extrema_contradiction' || issue.code === 'metric_polarity_inverted') {
+            return issue.path === sectionPath || (issue.inSectionHeading === true && issue.sectionIndex === sectionIndex);
+        }
+        if (LANGUAGE_ISSUE_CODES.has(issue.code)) {
+            return issue.path === sectionPath;
+        }
+        return false;
+    });
     return context.targets.every(target => {
         if (!target || typeof target.path !== 'string'
-            || !/^\/(?:readerTitle|oneSentenceThesis|implementationSpecs|sections\/(?:0|[1-9]\d*)\/body|conceptBridges\/(?:0|[1-9]\d*)\/explanation|figurePlacements\/(?:0|[1-9]\d*)\/(?:explanationQuote|leadQuote)|(?:tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/explanation)?)$/u.test(target.path)) return false;
+            || !isAuthorizedReaderPatchPath(target.path, { allowFigureQuotes: true })) return false;
+        const wholeSectionMatch = /^\/sections\/(0|[1-9]\d*)$/.exec(target.path);
+        if (wholeSectionMatch && !wholeSectionAuthorizedByBlocking(Number(wholeSectionMatch[1]))) return false;
         try {
             const actual = nodeAt(draft, target.path);
             return target.oldSha256 === hashDraft(actual) && hashDraft(target.value) === hashDraft(actual);
@@ -3374,15 +3405,24 @@ function buildRepairTargets(draft, issues, options = {}) {
             || issue.code === 'reader_repetitive_template_echo'
             || issue.code === 'table_extrema_contradiction'
             || issue.code === 'metric_polarity_inverted') {
+            const isExtremaIssue = issue.code === 'table_extrema_contradiction'
+                || issue.code === 'metric_polarity_inverted';
             if (Number.isInteger(issue.sectionIndex)) {
-                add(`/sections/${issue.sectionIndex}/body`);
-            } else if (typeof issue.path === 'string' && /^\/sections\/\d+\/body$/.test(issue.path)) {
+                const targetWholeSection = isExtremaIssue
+                    && (issue.inSectionHeading === true || issue.path === `/sections/${issue.sectionIndex}`);
+                add(targetWholeSection ? `/sections/${issue.sectionIndex}` : `/sections/${issue.sectionIndex}/body`);
+            } else if (typeof issue.path === 'string' && (
+                /^\/sections\/\d+\/body$/.test(issue.path)
+                || (isExtremaIssue && /^\/sections\/\d+$/.test(issue.path))
+            )) {
                 add(issue.path);
-            } else if ((issue.code === 'table_extrema_contradiction' || issue.code === 'metric_polarity_inverted')
+            } else if (isExtremaIssue
                 && Number.isInteger(issue.tableIndex) && issue.tableIndex >= 1) {
                 const located = locateReaderDraftTables(draft);
                 const hit = located[issue.tableIndex - 1];
-                if (hit && Number.isInteger(hit.sectionIndex)) add(`/sections/${hit.sectionIndex}/body`);
+                if (hit && Number.isInteger(hit.sectionIndex)) {
+                    add(issue.inSectionHeading === true ? `/sections/${hit.sectionIndex}` : `/sections/${hit.sectionIndex}/body`);
+                }
             }
             continue;
         }

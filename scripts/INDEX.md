@@ -200,7 +200,7 @@
 | `tag_paths.py` | 集中定义标签词表和私有预览的路径。 |
 | `tag_presentation.py` | 只将实际命中的受控标签投影为分类路径，不为论文追加上位标签。 |
 | `tag_stage_record.py` | 识别标签阶段的保存格式，返回原记录及其哈希绑定字段。 |
-| `utils.py` | Paper Digest 公共工具模块 (Python) |
+| `utils.py` | Audio Research Workbench 公共工具模块 (Python) |
 
 ## 内部支撑库（`scripts/lib/`）（287）
 

@@ -20,7 +20,7 @@
 
 文档与论文讲解按[写作约定](writing-guide.md)组织；参数、协议名和强制条件以实现及权威文档为准。没有新证据或新改动时，不重复运行刚通过的相同子集。
 
-新增 `scripts/` 下的模块时，同时更新 [脚本职责索引](../scripts/README.md)，并运行原有的 `tests/scripts-index.test.js`。新增 Python 模块还须运行 `tests/python/test_runtime_guard.py`：内部库也可能被直接执行，正常导入通过不能代替直接入口的沙箱拒绝检查。这些检查纳入本次定向验证，完整验收仍按上面的流程执行。
+新增或删改 `scripts/` 下的模块时，先运行 `node scripts/generate-scripts-index.js` 重新生成完整机器索引 [scripts/INDEX.md](../scripts/INDEX.md)，再同步更新面向维护者的入口指南 [scripts/README.md](../scripts/README.md) 与 [scripts/README.en.md](../scripts/README.en.md)，并运行 `tests/scripts-index.test.js`。新增 Python 模块还须运行 `tests/python/test_runtime_guard.py`：内部库也可能被直接执行，正常导入通过不能代替直接入口的沙箱拒绝检查。这些检查纳入本次定向验证，完整验收仍按上面的流程执行。
 
 ## 改代码时该同步哪里
 
@@ -191,7 +191,8 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 抓取前探测与配置检查
 
 - `npm run source:probe -- --date YYYY-MM-DD`：只读探测 arXiv Atom/官方 OAI/RSS 三入口，并判断 RSS 公告是否目标日；失败时给出等待/换入口/官方 OAI 的建议，不抓取、不写数据。
-- `npm run llm:accounts`：只读查看账号池每个账号的状态、冷却与最早恢复；账号只显示本次运行的序号，不显示任何密钥或稳定指纹。
+- `npm run llm:accounts`：只读查看共享账号池的当前调度策略（默认按月到期优先 `expiry_priority`）、各账号三窗口可用状态、冷却与最早恢复；账号只显示本次运行的序号，不显示任何密钥或稳定指纹。
+- `npm run llm:accounts:quota -- sync|status|set|import|init-from-history`：手动同步 OpenCode Go 官方 `/zen/go/v1/usage` 三窗口实时额度与重置日（运行时默认按 5 分钟 TTL 自动同步），或查看与管理各账号的月到期日和剩余额度。
 - `npm run config:check`：按 `scripts/lib/env-schema.js` 检查 `.env` 必填、类型、范围与未登记变量；不写文件、不回显密钥，参数只有 `--json`、`--env PATH` 和 `--help`，不联网，也没有 `--offline` 开关（传了会按未知参数退出 2；`--offline` 是 `doctor` 的参数）。大小写 HTTP 代理变量均逐项校验，`ALL_PROXY` 仍允许 curl 使用 SOCKS；整数须在 JavaScript 安全整数范围内。检查失败标明具体配置项，不代表每条运行路由都会选择该项，也不改变运行时的代理选择或整数解析规则。`PD_GIT_ARCHIVE_TIMEOUT_SECONDS`、`PD_CHECKPOINT_TIMING` 等正式运行参数均已纳入 `scripts/lib/env-schema.js` 校验；仅未在 schema 中登记的实验或临时变量不由 `config:check` 与 `doctor` 做类型或范围检查。
 - `npm run doctor` 与这三条命令都只读；抓取失败时 full-fetch 会追加 `[下一步]` 的限流/5xx/RSS 建议。doctor 比较主副配置的唯一密钥值集合，重复列出同一个值不会误报为部分重叠；集合相同只描述配置关系，不能证明端点属于同一服务或账号可用。
 
@@ -243,7 +244,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 锁视图与文档一致性
 
 - `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或观察入口错误退出 2；运行守卫拒绝仍退出 1，并在结构化问题及 stderr 保留明确的外部运行说明，不回显环境标记原值。这是对原扫描结果总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
-- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`SKILL.md`、`scripts/README.md`、`scripts/README.en.md`、`scripts/INDEX.md`、`manual/README.md`、`manual/README.en.md`、`docs/` 与 `skills/` 下全部 Markdown：核对 `npm run <script>` 是否存在于 `package.json`、相对链接目标文件及 `#锚点` 是否有效、`docs/` 下每篇文档是否在 `docs/README.md` 与 `docs/README.en.md` **两份**索引中均已登记、是否出现带 `-vN` 后缀的协议名或废弃工作区路径、`PD_*` 环境变量是否被非测试生产代码实际读取、`env.example` 中的每个配置键是否均已在 `scripts/lib/env-schema.js` 登记、`AGENTS.md` 字节大小是否控制在 `20 KiB` 以内，以及中英文“当前/current”客户端版本（构建号）声明和版本列表是否与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 一致。任一不符返回非零。按最近 `package.json` 解析的 npm 命令、全仓相对链接和 skill 安装副本的链接边界仍由 `tests/documentation.test.js` 覆盖；配置值类型与范围由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令、文档或升级客户端时，同步对应文档、两份索引、版本段和版本列表。
+- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`SKILL.md`、`scripts/README.md`、`scripts/README.en.md`、`scripts/INDEX.md`、`manual/README.md`、`manual/README.en.md`、`docs/` 与 `skills/` 下全部 Markdown：核对 `npm run <script>` 是否存在于 `package.json`、相对链接目标文件及 `#锚点` 是否有效、`docs/` 下每篇文档是否在 `docs/README.md` 与 `docs/README.en.md` **两份**索引中均已登记、是否出现带 `-vN` 后缀的协议名或废弃工作区路径、`PD_*` 环境变量是否被非测试生产代码实际读取、`env.example` 与 `scripts/lib/env-schema.js` 是否双向同步（`env.example` 展示的每个配置键均已在 schema 登记，且 schema 中未废弃、非白名单豁免的正式配置项均已在 `env.example` 展示）、`AGENTS.md` 字节大小是否控制在 `20 KiB` 以内，以及中英文“当前/current”客户端版本（构建号）声明和版本列表是否与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 一致。任一不符返回非零。按最近 `package.json` 解析的 npm 命令、全仓相对链接和 skill 安装副本的链接边界仍由 `tests/documentation.test.js` 覆盖；配置值类型与范围由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令、文档或升级客户端时，同步对应文档、两份索引、版本段和版本列表。
 
 ## 可选运维与按需 CLI
 

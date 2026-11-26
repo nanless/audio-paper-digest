@@ -253,5 +253,31 @@ actor MathMLFixtureTransport {
    web.stopLoading()
   }}}
  }
- @MainActor static func main()async throws {setbuf(stdout,nil);try normal();try safety();try await integration();try await wk();try await displayOverflow();print("LibraryMathML PASS \(checks) checks; real published-source four formulas, actual isolated WK and cache, no network/user GUI/model/Keychain")}
+ static func track1ExtractorAndSanitize()throws {
+  let inlineFragment = "<p>修订对比：<del>旧基线 3.1 dB</del> <ins>新指标 4.8 dB</ins> <small>注释</small> <kbd>Cmd+K</kbd> <abbr title='Signal-to-Noise Ratio'>SNR</abbr> <cite>Smith et al.</cite></p><ol start='5' onclick='evil()'><li value='7' onmouseover='x()'>第五项起始</li></ol><ol start='javascript:1'><li value='abc'>非法编号被剥离</li></ol>"
+  let sanitizedArticle = try extract(inlineFragment)
+  try expect(sanitizedArticle.html.contains("<del>旧基线 3.1 dB</del>") && sanitizedArticle.html.contains("<ins>新指标 4.8 dB</ins>") && sanitizedArticle.html.contains("<small>注释</small>") && sanitizedArticle.html.contains("<kbd>Cmd+K</kbd>") && sanitizedArticle.html.contains("<abbr title=\"Signal-to-Noise Ratio\">SNR</abbr>") && sanitizedArticle.html.contains("<cite>Smith et al.</cite>"), "sanitize retains del/ins/small/kbd/abbr/cite text and safe attributes")
+  try expect(sanitizedArticle.html.contains("<ol start=\"5\">") && sanitizedArticle.html.contains("<li value=\"7\">"), "sanitize retains numeric ol start and li value")
+  try expect(!sanitizedArticle.html.contains("onclick") && !sanitizedArticle.html.contains("onmouseover") && !sanitizedArticle.html.contains("javascript:") && !sanitizedArticle.html.contains("value=\"abc\""), "sanitize strips non-numeric start/value and event handlers")
+  let figs36 = (1...36).map { "<figure><img src='https://arxiv.org/html/2501.00001v1/fig\($0).png' alt='f\($0)'/><figcaption>图\($0)</figcaption></figure>" }.joined()
+  let art36 = try extract("<p>多图论文</p>" + figs36)
+  try expect(art36.resources.count == 36, "single-paper extractor accepts 36 images (above old 32 limit)")
+  let figs64 = (1...64).map { "<img src='https://arxiv.org/html/2501.00001v1/fig\($0).png' alt='f\($0)'/>" }.joined()
+  try expect((try extract("<p>64图边界</p>" + figs64)).resources.count == 64, "single-paper extractor accepts 64 images")
+  let figs65 = figs64 + "<img src='https://arxiv.org/html/2501.00001v1/fig65.png' alt='f65'/>"
+  let rejected65: Bool = { do { _ = try extract("<p>超限</p>" + figs65); return false } catch { return true } }()
+  try expect(rejected65, "single-paper extractor rejects 65 images")
+  let shaZero = String(repeating: "a", count: 64)
+  let aggDesc = PublishedAggregate(id: "page:/audio-research-portal/posts/daily-2026-10-11/", kind: .daily, conferenceScope: nil, title: "Daily 2026-10-11", titleZh: "2026-10-11 日更", summary: "", rawDate: "2026-10-11", displayDate: "2026-10-11", categories: [], tags: [], sourceURL: "https://nanless.github.io/audio-research-portal/posts/daily-2026-10-11/", source: .init(manifestSHA256: shaZero, shardSHA256: shaZero, shardBytes: 10, shardURL: "client/details/catalog/\(shaZero).json", rowIndex: 0, normalizedRowSHA256: shaZero, normalizedRowAlgorithm: ClientProtocols.contract("foundation-sorted-keys-json")))
+  let aggImgs227 = (1...227).map { "<img src='https://arxiv.org/html/2501.00001v1/a\($0).png' alt='a\($0)'/>" }.joined()
+  let aggHTML227 = Data("<html><body><div id='article-body' class='post-content'><p>227图日更</p>\(aggImgs227)</div></body></html>".utf8)
+  let aggDoc227 = try LibraryService.extractAggregateHTML(aggHTML227, descriptor: aggDesc, responseURL: URL(string: aggDesc.sourceURL)!, fetchedAt: "2026-10-11T00:00:00Z")
+  let aggPlan227 = try LibraryService.aggregateImagePlan(aggDoc227, rawHTML: aggHTML227)
+  try expect(aggDoc227.resources.count == 227 && aggPlan227.slots.count == 227, "aggregate extractor and image plan accept 227 images (2026-10-11 live daily)")
+  let aggImgs513 = (1...513).map { "<img src='https://arxiv.org/html/2501.00001v1/b\($0).png' alt='b\($0)'/>" }.joined()
+  let aggHTML513 = Data("<html><body><div id='article-body' class='post-content'><p>513图超限</p>\(aggImgs513)</div></body></html>".utf8)
+  let rejected513: Bool = { do { _ = try LibraryService.extractAggregateHTML(aggHTML513, descriptor: aggDesc, responseURL: URL(string: aggDesc.sourceURL)!, fetchedAt: "2026-10-11T00:00:00Z"); return false } catch { return true } }()
+  try expect(rejected513, "aggregate extractor rejects 513 images (above 512 limit)")
+ }
+ @MainActor static func main()async throws {setbuf(stdout,nil);try normal();try safety();try track1ExtractorAndSanitize();try await integration();try await wk();try await displayOverflow();print("LibraryMathML PASS \(checks) checks; real published-source four formulas, actual isolated WK and cache, no network/user GUI/model/Keychain")}
 }

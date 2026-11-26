@@ -18,9 +18,11 @@ The browser demo, its standalone web server, and its PDF.js dependency have been
 
 `sample.json` is not the website synchronization interface. It contains no model configuration, credentials, costs, or internal requests. Passing fixed-sample tests does not establish that full-site synchronization, real model requests, or Zotero writes work.
 
-## Prepare the local sample
+## Regenerating or re-verifying the committed sample assets
 
-Obtain the specified PDF using the [original-file guide](assets/README.en.md). Use the same public original: a matching filename does not establish matching contents. The preparation script first checks the complete PDF checksum and page count, then crops figures using fixed pages, point coordinates, and a scale of three. It verifies each output checksum before copying any prepared asset.
+The public MiCLA PDF and its three figure crops are **already committed under `assets/`**, so local builds, application tests, and CI work out of the box without manual download.
+
+Only run `prepare_assets.py` if you want to regenerate or independently re-verify those fixtures from a separately obtained copy of the same public arXiv PDF (`2610.27491v1`, see [original-file guide](assets/README.en.md); a matching filename alone does not establish matching contents). The script checks the complete PDF checksum and page count, crops figures using fixed pages, point coordinates, and a scale of three, and verifies each output checksum before updating local files.
 
 Run in this directory:
 

@@ -982,7 +982,7 @@ function runIcmcMetadataExtractor(combinedPdfFile, provider, recordedPageMap = n
     const result = spawnSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'), script, 'metadata', combinedPdfFile,
         '--index-url', provider.indexUrl, '--pdf-url', provider.combinedPdfUrl], {
         cwd: path.join(__dirname, '..', '..'), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-        stdio: ['ignore', 'pipe', 'pipe']
+        timeout: 300_000, stdio: ['ignore', 'pipe', 'pipe']
     });
     if (result.error || result.status !== 0) {
         const reason = String(result.stderr || result.error?.message || 'metadata extractor failed')
@@ -1138,7 +1138,10 @@ function replayCatalog(providerId, outputRoot) {
 
 async function readResponseBytes(response, maxBytes, label) {
     const declared = Number(response.headers?.get?.('content-length'));
-    if (Number.isFinite(declared) && declared > maxBytes) fail(`${label} exceeds the byte limit`);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+        await response.body?.cancel?.().catch(() => {});
+        fail(`${label} exceeds the byte limit`);
+    }
     if (!response.body || typeof response.body.getReader !== 'function') {
         const bytes = Buffer.from(await response.arrayBuffer());
         if (!bytes.length || bytes.length > maxBytes) fail(`${label} 为空或超过字节上限`);
@@ -1171,17 +1174,21 @@ async function fetchOfficial({ provider, url, kind, maxBytes, timeoutMs = REQUES
                 signal: controller.signal, headers: { Accept: kind === 'pdf' ? 'application/pdf' : 'text/html,application/xhtml+xml',
                     'User-Agent': 'audio-paper-digest-official-conference/1.0' } });
             if ([301, 302, 303, 307, 308].includes(response.status)) {
+                await response.body?.cancel?.().catch(() => {});
                 if (count >= MAX_REDIRECTS) fail('官方响应超过重定向上限');
                 const location = response.headers?.get?.('location'); if (!location) fail('官方重定向没有 Location');
                 const next = validateRedirectTarget(provider, current, new URL(location, current).toString(), kind);
                 redirects.push({ from: current, to: next, status: response.status }); current = next;
-                try { await response.body?.cancel?.(); } catch { /* 忽略重定向响应体 */ }
                 continue;
             }
-            if (response.status !== 200) fail(`official ${kind} returned HTTP ${response.status}`);
+            if (response.status !== 200) {
+                await response.body?.cancel?.().catch(() => {});
+                fail(`official ${kind} returned HTTP ${response.status}`);
+            }
             const contentType = String(response.headers?.get?.('content-type') || '').trim();
             if (kind === 'pdf' ? !/^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(contentType)
                 : !/^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/iu.test(contentType)) {
+                await response.body?.cancel?.().catch(() => {});
                 fail(`官方 ${kind} 响应的 Content-Type 无效`);
             }
             const bytes = await readResponseBytes(response, maxBytes, `official ${kind} response`);
@@ -1431,7 +1438,7 @@ function splitIcmcPapers(catalog, papers) {
         const result = spawnSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'), script, 'split',
             catalog.paths.combinedPdfFile, catalog.paths.pageMapFile, temporaryRoot], {
             cwd: path.join(__dirname, '..', '..'), encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
-            stdio: ['ignore', 'pipe', 'pipe']
+            timeout: 300_000, stdio: ['ignore', 'pipe', 'pipe']
         });
         if (result.error || result.status !== 0) {
             const reason = String(result.stderr || result.error?.message || 'ICMC PDF splitter failed')

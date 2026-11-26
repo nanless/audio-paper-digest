@@ -567,15 +567,25 @@ def prepare_raster_for_review(
     try:
         from PIL import Image, ImageOps
         with Image.open(io.BytesIO(raw)) as source:
-            width, height = source.size
+            exif_orientation = None
+            try:
+                exif = source.getexif()
+                if exif:
+                    exif_orientation = exif.get(274)
+            except Exception:
+                exif_orientation = None
+            needs_exif_transpose = exif_orientation not in (None, 1)
+            image = ImageOps.exif_transpose(source) if needs_exif_transpose else source
+            width, height = image.size
             if width <= 0 or height <= 0:
                 raise err_cls('图片像素尺寸非法')
             if max(width, height) <= max_edge and width * height <= max_pixels:
-                rgba = source.convert('RGBA')
-                if rgba.getchannel('A').getextrema()[0] == 255:
+                rgba = image.convert('RGBA')
+                if not needs_exif_transpose and rgba.getchannel('A').getextrema()[0] == 255:
                     return media_type, raw
                 # 用和读者页面相同的白色底来审查。否则一张带黑字的
                 # 透明 PNG，在模型把透明通道解码成黑色时会看起来是一片空白。
+                # 若图片携带非 1 的 EXIF 方向标签，也必须输出转正后的像素。
                 background = Image.new('RGB', rgba.size, 'white')
                 background.paste(rgba, mask=rgba.getchannel('A'))
                 output = io.BytesIO()
@@ -593,7 +603,7 @@ def prepare_raster_for_review(
                 max(1, int(width * scale)),
                 max(1, int(height * scale)),
             )
-            image = ImageOps.exif_transpose(source).convert('RGBA')
+            image = image.convert('RGBA')
             image.thumbnail(target, Image.Resampling.LANCZOS)
             background = Image.new('RGB', image.size, 'white')
             background.paste(image, mask=image.getchannel('A'))
@@ -641,7 +651,6 @@ def rasterize_svg_for_review(raw: bytes, *, hooks: Mapping | None = None) -> byt
         raise err_cls('SVG 不是 UTF-8') from exc
     if re.search(r'<!DOCTYPE|<!ENTITY|<\s*(?:[A-Za-z_][\w.-]*:)?(?:script|iframe|object|embed)\b',
                  text, flags=re.IGNORECASE) \
-            or re.search(r'\bon[a-z]+\s*=', text, flags=re.IGNORECASE) \
             or re.search(r'(?:href|src)\s*=\s*["\']\s*(?:https?:|file:|//)',
                          text, flags=re.IGNORECASE) \
             or re.search(r'url\(\s*["\']?\s*(?:https?:|file:|//)',
@@ -656,6 +665,10 @@ def rasterize_svg_for_review(raw: bytes, *, hooks: Mapping | None = None) -> byt
         local_name = elem.tag.split('}')[-1].lower() if isinstance(elem.tag, str) else ''
         if local_name in {'script', 'iframe', 'object', 'embed'}:
             raise err_cls('SVG 含脚本、实体、嵌入对象或外部资源')
+        for attr in elem.attrib:
+            attr_local = attr.rsplit('}', 1)[-1].lower() if isinstance(attr, str) else ''
+            if attr_local.startswith('on'):
+                raise err_cls('SVG 含脚本、实体、嵌入对象或外部资源')
         if local_name == 'foreignobject':
             has_foreign_object = True
     if has_foreign_object:

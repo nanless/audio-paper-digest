@@ -365,6 +365,22 @@ class PdfFigureTableExtractTests(unittest.TestCase):
             ["Features", "F1 200ms", "F1 500ms", "F1 1000ms", "AUC 200ms", "AUC 500ms", "AUC 1000ms"],
         )
 
+    def test_non_modern_arxiv_and_conference_ids_emit_self_validating_pdf_crop_urls(self):
+        pdf_bytes = _make_synthetic_academic_pdf()
+        pdf_sha = hashlib.sha256(pdf_bytes).hexdigest()
+        for non_modern_id in ("cs/0601001", "math.GT/0309136v2", "conference:icml:2026:paper-1"):
+            with self.subTest(paper_id=non_modern_id):
+                result = ext.extract_pdf_figures_and_tables(pdf_bytes, arxiv_id=non_modern_id)
+                self.assertEqual(len(result["figures"]), 1)
+                img = result["figures"][0]["images"][0]
+                self.assertTrue(
+                    img["url"].startswith(f"https://arxiv.org/pdf/{pdf_sha[:12]}.pdf#pd-pdf-figure-1-"),
+                    img["url"],
+                )
+                desc = ext.pdf_crop_source_descriptor(img, non_modern_id)
+                self.assertEqual(desc["url"], img["url"])
+                self.assertEqual(desc["pdfCropSourceSha256"], img["cropSha256"])
+
 
 if __name__ == "__main__":
     unittest.main()

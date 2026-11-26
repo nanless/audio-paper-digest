@@ -432,12 +432,20 @@ def main():
     setup_script_logging(__file__)
     module = load_publish_to_blog()
     date_str = None
+    include_id = None
+    scoped_failure_path = None
     started = time.monotonic()
     write_stage_summary('审查', 'start', '按生成清单严格审查博客页面', date=_date_from_argv(sys.argv))
     try:
         date_str, include_id = parse_options(module)
         scope_context = getattr(module, 'publication_scope', lambda _value: nullcontext())
         with scope_context(include_id):
+            resolver = getattr(module, 'review_failure_path', None)
+            if callable(resolver):
+                try:
+                    scoped_failure_path = Path(resolver(date_str))
+                except Exception:
+                    scoped_failure_path = None
             with module.blog_publication_lock(date_str), \
                     getattr(module, '_daily_publication_replay_scope', nullcontext)():
                 receipt = _run_review(module, date_str)
@@ -447,21 +455,27 @@ def main():
                             elapsed_ms=(time.monotonic() - started) * 1000, date=date_str)
         if date_str:
             try:
-                from pathlib import Path
-                current = Path(__file__).resolve().parent.parent / 'data' / 'current'
-                failure_path = None
-                resolver = getattr(module, 'review_failure_path', None)
-                if callable(resolver):
-                    try:
-                        failure_path = Path(resolver(date_str))
-                    except Exception:
-                        failure_path = None
-                if failure_path is None or not failure_path.exists():
-                    candidates = sorted(current.glob(f'blog-review-failure-{date_str}*.json'),
-                                        key=lambda item: item.stat().st_mtime, reverse=True)
-                    failure_path = candidates[0] if candidates else current / f'blog-review-failure-{date_str}.json'
-                help_name = failure_path.name.replace('blog-review-failure-', 'blog-review-help-')
-                write_review_help(failure_path, current / help_name)
+                scope_context = getattr(module, 'publication_scope', lambda _value: nullcontext())
+                with scope_context(include_id):
+                    current = Path(getattr(
+                        module, 'CURRENT_DIR',
+                        Path(__file__).resolve().parent.parent / 'data' / 'current',
+                    ))
+                    failure_path = scoped_failure_path
+                    if failure_path is None:
+                        resolver = getattr(module, 'review_failure_path', None)
+                        if callable(resolver):
+                            try:
+                                failure_path = Path(resolver(date_str))
+                            except Exception:
+                                failure_path = None
+                    if (failure_path is None or not failure_path.exists()) and not include_id:
+                        candidates = sorted(current.glob(f'blog-review-failure-{date_str}*.json'),
+                                            key=lambda item: item.stat().st_mtime, reverse=True)
+                        failure_path = candidates[0] if candidates else current / f'blog-review-failure-{date_str}.json'
+                    if failure_path is not None and failure_path.exists():
+                        help_name = failure_path.name.replace('blog-review-failure-', 'blog-review-help-')
+                        write_review_help(failure_path, failure_path.parent / help_name)
             except Exception:
                 pass
         print_error_guidance(exc, 'blog-review')

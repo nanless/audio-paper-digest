@@ -250,3 +250,61 @@ test('证据运行公开入口在建目录、加锁或读取路径前拒绝非�
         }
     }
 });
+
+test('离线 PDF 抽取子进程剥离 API 密钥与代理凭据，仅放行必需运行时变量', t => {
+    const Module = require('node:module');
+    const filename = require.resolve('../scripts/lib/conference-filter-evidence.js');
+    const capturedEnvs = [];
+    const isolated = new Module(filename, module);
+    const originalRequire = isolated.require.bind(isolated);
+    isolated.filename = filename;
+    isolated.paths = Module._nodeModulePaths(path.dirname(filename));
+    isolated.require = name => name === 'node:child_process' ? {
+        spawnSync: (_cmd, _args, opts) => {
+            capturedEnvs.push(opts.env);
+            return { status: 1, stderr: 'sentinel-stop', stdout: '' };
+        }
+    } : originalRequire(name);
+    isolated._compile(fs.readFileSync(filename, 'utf8'), filename);
+
+    const site = workspace();
+    t.after(() => fs.rmSync(site.root, { recursive: true, force: true }));
+    const watched = [
+        'PAPER_ANALYZER_API_KEY', 'HTTPS_PROXY', 'KIMI_API_KEY',
+        'PD_PYTHON_RUNTIME_VERIFIED_BIN', 'PD_PYTHON_RUNTIME_DISABLE_VENV',
+        'AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE', 'AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE',
+        'PD_WORKSPACE_ALLOW_CROSS_ROLE'
+    ];
+    const saved = Object.fromEntries(watched.map(key => [key, process.env[key]]));
+    process.env.PAPER_ANALYZER_API_KEY = 'sk-must-not-leak';
+    process.env.HTTPS_PROXY = 'http://user:secret@127.0.0.1:7897';
+    process.env.KIMI_API_KEY = 'sk-kimi-secret';
+    process.env.PD_PYTHON_RUNTIME_VERIFIED_BIN = '/tmp/fake-python';
+    process.env.PD_PYTHON_RUNTIME_DISABLE_VENV = '1';
+    process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE = 'daily';
+    process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE = '1';
+    process.env.PD_WORKSPACE_ALLOW_CROSS_ROLE = '1';
+    t.after(() => {
+        for (const key of watched) {
+            if (saved[key] === undefined) delete process.env[key];
+            else process.env[key] = saved[key];
+        }
+    });
+
+    assert.throws(() => isolated.exports.prepareEvidence({
+        evidenceRunsRoot: site.runs,
+        runId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        discoveryHandle: site.handle,
+        apply: true
+    }), /sentinel-stop/);
+    assert.equal(capturedEnvs.length, 1);
+    const childEnv = capturedEnvs[0];
+    assert.equal(childEnv.PAPER_ANALYZER_API_KEY, undefined);
+    assert.equal(childEnv.HTTPS_PROXY, undefined);
+    assert.equal(childEnv.KIMI_API_KEY, undefined);
+    assert.equal(childEnv.PD_PYTHON_RUNTIME_VERIFIED_BIN, '/tmp/fake-python');
+    assert.equal(childEnv.PD_PYTHON_RUNTIME_DISABLE_VENV, '1');
+    assert.equal(childEnv.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE, 'daily');
+    assert.equal(childEnv.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE, '1');
+    assert.equal(childEnv.PD_WORKSPACE_ALLOW_CROSS_ROLE, '1');
+});

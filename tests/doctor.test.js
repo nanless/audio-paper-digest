@@ -227,13 +227,41 @@ test('主模型配置：缺项 fail、模型不符 fail、正常 ok', () => {
     assert.equal(invalidEndpoint.ok, 'warn');
 });
 
-test('副模型配置：缺失单模型 warn、不完整 warn、不符 fail、完整 ok', () => {
+test('副模型配置：缺失单模型 warn、缺型号不完整 warn、继承主端点/主池 ok、模型不符/跨服务缺 key fail、完整 ok', () => {
     assert.equal(doctor.evaluateSecondaryModel({}).ok, 'warn');
-    const partial = doctor.evaluateSecondaryModel(envWith({ PAPER_ANALYZER_SECONDARY_ENDPOINT: '' }));
-    assert.equal(partial.ok, 'warn');
-    assert.match(partial.detail, /不完整/);
+    const missingModel = doctor.evaluateSecondaryModel(envWith({ PAPER_ANALYZER_SECONDARY_MODEL: '' }));
+    assert.equal(missingModel.ok, 'warn');
+    assert.match(missingModel.detail, /不完整/);
+
+    // 省略副模型 endpoint/key 时按主端点与同服务主账号池继承。
+    const inheritedEndpoint = doctor.evaluateSecondaryModel(envWith({ PAPER_ANALYZER_SECONDARY_ENDPOINT: '' }));
+    assert.equal(inheritedEndpoint.ok, 'ok');
+    assert.match(inheritedEndpoint.detail, /复用主端点/);
+    const inheritedBoth = doctor.evaluateSecondaryModel(envWith({
+        PAPER_ANALYZER_SECONDARY_ENDPOINT: '',
+        PAPER_ANALYZER_SECONDARY_API_KEY: ''
+    }));
+    assert.equal(inheritedBoth.ok, 'ok');
+    assert.match(inheritedBoth.detail, /复用主端点/);
+    assert.match(inheritedBoth.detail, /复用同服务主账号池/);
+
+    // 只要设置了 PAPER_ANALYZER_SECONDARY_MODEL，即使未填 endpoint/key 也必须校验受支持模型清单。
     const mismatch = doctor.evaluateSecondaryModel(envWith({ PAPER_ANALYZER_SECONDARY_MODEL: 'other-model' }));
     assert.equal(mismatch.ok, 'fail');
+    const mismatchMinimal = doctor.evaluateSecondaryModel(envWith({
+        PAPER_ANALYZER_SECONDARY_MODEL: 'other-model',
+        PAPER_ANALYZER_SECONDARY_ENDPOINT: '',
+        PAPER_ANALYZER_SECONDARY_API_KEY: ''
+    }));
+    assert.equal(mismatchMinimal.ok, 'fail');
+
+    // 跨服务副模型缺少显式 key 时必须 fail。
+    const crossServiceNoKey = doctor.evaluateSecondaryModel(envWith({
+        PAPER_ANALYZER_SECONDARY_ENDPOINT: 'https://other-provider.example.com/v1',
+        PAPER_ANALYZER_SECONDARY_API_KEY: ''
+    }));
+    assert.equal(crossServiceNoKey.ok, 'fail');
+
     assert.equal(doctor.evaluateSecondaryModel(envWith()).ok, 'ok');
 });
 

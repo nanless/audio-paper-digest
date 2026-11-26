@@ -71,6 +71,9 @@ class PodcastRepositoryTest {
             "https://github.com/nanless/audio-paper-digest/releases/download/v1/ep.mp3?token=1",
             "https://github.com/nanless/audio-paper-digest/releases/download/v1/ep.mp3#frag",
             "https://github.com/nanless/audio-paper-digest/releases/download/v1/%2e%2e/ep.mp3",
+            "https://github.com/nanless/audio-paper-digest/releases/download/./ep.mp3",
+            "https://github.com/nanless/audio-paper-digest/releases/download/../ep.mp3",
+            "https://github.com/nanless/audio-paper-digest/releases/download/v1/..mp3",
             "https://objects.githubusercontent.com/nanless/ep.mp3",
         )
         badInitials.forEach { assertFalse("must reject $it", PodcastRepository.isValidInitialAudioUrl(it)) }

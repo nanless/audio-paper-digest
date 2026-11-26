@@ -216,4 +216,81 @@ class CloudContractsTest {
             service.check(); assertEquals(1, credentialReads); assertEquals(1, dav.requests.size); assertEquals(currentTarget, service.targetID)
         }
     }
+    @Test fun stuckFullSyncPendingBlocksRetargetUntilArchivedAndSupportsArchivingBoth() = runTest {
+        tempAsync { dir ->
+            val root = File(dir, "Research").apply { mkdir() }; BackupCodec.atomicJSON(File(root, "personal.json"), personal())
+            val control = File(dir, "Control")
+            val service = CloudService(root, control, MemorySecrets(), object : CloudWorkspace { override suspend fun capture(output: File) = BackupCodec.capture(root, output); override suspend fun restore(staged: BackupCodec.Staged) { error("not requested") } }, FakeDAV())
+            service.save("fixture@example.invalid", "PaperDigest", false, 24)
+            val id = service.targetID
+            val fullSyncDir = File(control, "full-sync-$id").apply { mkdir() }
+            val snapBytes = encoded()
+            File(fullSyncDir, "pending.paperdigest").writeBytes(snapBytes)
+            File(fullSyncDir, "capture.json").writeText(JSONObject().put("workspaceEpoch", "epoch-1").toString())
+
+            val stateBefore = service.state()
+            assertTrue(stateBefore.isNull("pending"))
+            assertEquals(snapBytes.size.toLong(), stateBefore.getJSONObject("fullSyncPending").getLong("encodedBytes"))
+            try { service.save("new@example.invalid", "Other", false, 24); fail("fullSync pending must block target change") } catch (_: IllegalArgumentException) { }
+            assertEquals(id, service.targetID)
+
+            val archived = service.archivePending()
+            val retainedDir = File(control, archived.getString("transferID"))
+            assertArrayEquals(snapBytes, File(retainedDir, "snapshot.paperdigest").readBytes())
+            assertTrue(File(retainedDir, "capture.json").isFile)
+            assertTrue(File(retainedDir, "connection.json").isFile)
+            assertTrue(service.state().isNull("fullSyncPending"))
+            assertTrue(service.state().getBoolean("automaticPaused"))
+
+            service.save("new@example.invalid", "Other", false, 24)
+            assertNotEquals(id, service.targetID)
+
+            // Both manual AND fullSync pending archived cleanly in one call
+            val id2 = service.targetID
+            File(control, id2).apply { mkdir() }.also { File(it, "snapshot.paperdigest").writeBytes(byteArrayOf(7, 8, 9)) }
+            File(control, "full-sync-$id2").apply { mkdir() }.also { File(it, "pending.paperdigest").writeBytes(byteArrayOf(4, 5, 6)) }
+            val both = service.archivePending()
+            assertEquals(2, both.getJSONArray("archivedTransferIDs").length())
+            assertTrue(service.state().isNull("pending"))
+            assertTrue(service.state().isNull("fullSyncPending"))
+            service.save("final@example.invalid", "PaperDigest2", false, 24)
+            assertNotEquals(id2, service.targetID)
+        }
+    }
+    @Test fun failedFullSyncDownloadDoesNotLeakEmptyArchivedDirectory() = runTest {
+        tempAsync { dir ->
+            val peerRoot = File(dir, "Peer").apply { mkdir() }; BackupCodec.atomicJSON(File(peerRoot, "personal.json"), personal())
+            val localRoot = File(dir, "Local").apply { mkdir() }; BackupCodec.atomicJSON(File(localRoot, "personal.json"), personal())
+            val dav = FakeDAV()
+            val secrets = MemorySecrets()
+            val peerControl = File(dir, "PeerControl")
+            val peer = CloudService(peerRoot, peerControl, secrets, object : CloudWorkspace { override suspend fun capture(output: File) = BackupCodec.capture(peerRoot, output); override suspend fun restore(staged: BackupCodec.Staged) {} }, dav, now = { 1767225600000L }, sleep = {})
+            peer.save("fixture@example.invalid", "PaperDigest", false, 24)
+            secrets.save(peer.credentialScope, "fixture-password")
+            peer.syncFull("peer-epoch", { BackupCodec.capture(peerRoot, it) }, { 0 })
+            val peerChunkPath = dav.files.keys.first { it.endsWith("chunk-000000.bin") }
+
+            val localControl = File(dir, "LocalControl")
+            val failingTransport = object : CloudTransport {
+                override suspend fun execute(request: Request, limit: Int): CloudHTTP {
+                    if (request.method == "GET" && request.url.encodedPath == peerChunkPath) {
+                        throw java.io.IOException("simulated peer download failure")
+                    }
+                    return dav.execute(request, limit)
+                }
+            }
+            val local = CloudService(localRoot, localControl, secrets, object : CloudWorkspace { override suspend fun capture(output: File) = BackupCodec.capture(localRoot, output); override suspend fun restore(staged: BackupCodec.Staged) {} }, failingTransport, now = { 1767225600000L }, sleep = {})
+            local.save("fixture@example.invalid", "PaperDigest", false, 24)
+            secrets.save(local.credentialScope, "fixture-password")
+            try {
+                local.syncFull("local-epoch", { BackupCodec.capture(localRoot, it) }, { 0 })
+                fail("Expected peer download failure")
+            } catch (e: CloudFailure) {
+                assertEquals("transport", e.code)
+            }
+            val leaked = localControl.listFiles().orEmpty().filter { it.name.startsWith("archived-") }
+            assertTrue("Failed syncFull download must not leak empty archived-* dirs: $leaked", leaked.isEmpty())
+            assertEquals(0, local.retainedList().length())
+        }
+    }
 }

@@ -212,10 +212,11 @@ function read(filename, json = true) {
     } finally { fs.closeSync(fd); }
 }
 function inside(file, root) {
-    const relative = path.relative(path.resolve(root), path.resolve(file));
-    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) fail('文件离开受控根目录');
-    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(path.resolve(file)));
-    return file;
+    const { relocatePathWithinRoot } = require('./repo-rename-path');
+    const resolved = relocatePathWithinRoot(file, root);
+    if (!resolved) fail('文件离开受控根目录');
+    require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(resolved));
+    return resolved;
 }
 function tree(directory) {
     const entries = []; let total = 0;
@@ -282,23 +283,24 @@ function verifyOriginals(batch, row) {
     }
     for (const fee of row.fees) if (read(fee.file).sha256 !== fee.sha256) fail('原费用事件变化');
     if (row.record.coreCorrection) {
-        const c = row.record.coreCorrection; inside(c.proposalFile, batch.correctionRoot);
-        if (read(c.proposalFile).sha256 !== c.proposalFileSha256) fail('核心原提案变化');
+        const c = row.record.coreCorrection; const proposalFile = inside(c.proposalFile, batch.correctionRoot);
+        if (read(proposalFile).sha256 !== c.proposalFileSha256) fail('核心原提案变化');
     }
     if (row.record.reasonCorrection) {
         const r = row.record.reasonCorrection;
-        inside(r.proposalFile, batch.correctionRoot);
-        if (read(r.proposalFile).sha256 !== r.proposalFileSha256) fail('单理由的原批准提案变化');
+        const proposalFile = inside(r.proposalFile, batch.correctionRoot);
+        if (read(proposalFile).sha256 !== r.proposalFileSha256) fail('单理由的原批准提案变化');
     }
     return loaded;
 }
 function loadBatch({ processId, manifestPath }, savedState = null) {
-    const resolved = path.resolve(manifestPath || '');
+    const { relocatePathWithinRoot } = require('./repo-rename-path');
+    const { resolveUsageLedgerFile } = require('./llm-usage-ledger');
     const base = POLICIES.map(policy => roots(processId, policy)).find(candidate =>
-        resolved.startsWith(candidate.correctionRoot + path.sep));
+        Boolean(relocatePathWithinRoot(manifestPath || '', candidate.correctionRoot)));
     if (!base) fail('清单不在任一明确source scope的私有根目录');
-    inside(manifestPath, base.correctionRoot);
-    const manifest = read(manifestPath), m = manifest.value;
+    const resolvedManifestPath = inside(manifestPath, base.correctionRoot);
+    const manifest = read(resolvedManifestPath), m = manifest.value;
     const formats = correctionFormat.sourceFormatsForBatch(m, base.policy.contract);
     const state = savedState || read(path.join(base.processDirectory, 'state.json'));
     const processApi = require('./conference-process'); processApi.assertState(state.value);
@@ -317,8 +319,8 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
         || !isDeepStrictEqual(m.sourceCohortPaperIds?.slice().sort(), ids)) fail('完整来源纠正集合不一致');
     const rows = new Map(), children = new Set();
     for (const entry of m.records) {
-        inside(entry.file, base.correctionRoot);
-        const file = read(entry.file), r = file.value;
+        const resolvedEntryFile = inside(entry.file, base.correctionRoot);
+        const file = read(resolvedEntryFile), r = file.value;
         const item = state.value.items[r.paperId];
         if (entry.paperId !== r.paperId || file.sha256 !== entry.sha256 || rows.has(r.paperId)
             || !codec.hasValidHeader(r, base.policy.contract)
@@ -331,8 +333,8 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
         if (base.policy.kind === 'source_core_correction') {
             if (!r.coreCorrection || typeof r.coreCorrection !== 'object' || Array.isArray(r.coreCorrection)
                 || r.reasonCorrection !== undefined) fail('核心scope必须唯一core提案且不能借资源单理由权限');
-            inside(r.coreCorrection.proposalFile, base.correctionRoot);
-            if (read(r.coreCorrection.proposalFile).sha256 !== r.coreCorrection.proposalFileSha256) fail('核心提案原字节不同');
+            const resolvedProposal = inside(r.coreCorrection.proposalFile, base.correctionRoot);
+            if (read(resolvedProposal).sha256 !== r.coreCorrection.proposalFileSha256) fail('核心提案原字节不同');
         } else if (r.coreCorrection !== undefined) fail('资源scope不能新增核心编辑');
         children.add(r.childExecutionId);
         if (r.latestFailedExecutionId === null
@@ -406,9 +408,12 @@ function loadBatch({ processId, manifestPath }, savedState = null) {
             fail('原完成父稿和观察子稿不是同一认证来源');
         }
         if (!Array.isArray(r.feePins) || r.feePins.length > 4096) fail('费用精确索引缺失或超界');
+        const usageDir = require('../config').FILES.llmUsageDir;
         const fees = r.feePins.map(fee => {
-            inside(fee.file, require('../config').FILES.llmUsageDir);
-            const actual = read(fee.file);
+            const resolvedFee = resolveUsageLedgerFile(usageDir, fee?.file);
+            if (!resolvedFee) fail('原费用索引路径离开受控用量目录或文件缺失');
+            require('./fresh-rewrite-run').assertSafeDirectory(path.dirname(resolvedFee));
+            const actual = read(resolvedFee);
             if (actual.sha256 !== fee.sha256 || actual.value.paperId !== r.paperId) fail('原费用索引未绑定本篇原事件');
             return { file: actual.file, sha256: actual.sha256 };
         });
@@ -480,8 +485,8 @@ function replayReaderPatch(parentPaper, record) {
 function readReasonApproval(member, evidence) {
     const declared = member.row.record.reasonCorrection;
     if (declared === undefined) return undefined;
-    inside(declared.proposalFile, member.batch.correctionRoot);
-    const p = read(declared.proposalFile), v = p.value;
+    const resolvedProposal = inside(declared.proposalFile, member.batch.correctionRoot);
+    const p = read(resolvedProposal), v = p.value;
     const provider = require('./conference-source-context').readerPdfSourceForContext(member.pdf);
     const parent = load(member.row.record.selectedMainExecutionId, member.batch.analysisRoot).analysis.papers[0];
     const old = parent.analysisManifest.stages.scoringAudit.audit.dimensions.technicalRigor;
@@ -598,10 +603,16 @@ function prepareFinalizerInput(paper) {
     }
     if (!require('./reader-content-mode').is(readerParent.analysisManifest.stages.apiReaderArticle, 'source-only')) fail('旧Reader不是可独立当前source重验的source-only稿');
     const reader = replayReaderPatch(readerParent, r);
+    const { matchesRelocatedRepoPath } = require('./repo-rename-path');
+    const savedProvenance = active.cold ? active.receipt?.provenance : null;
+    const manifestFile = savedProvenance && matchesRelocatedRepoPath(savedProvenance.manifestFile, active.batch.manifest.file)
+        ? savedProvenance.manifestFile : active.batch.manifest.file;
+    const correctionFile = savedProvenance && matchesRelocatedRepoPath(savedProvenance.correctionFile, active.row.file.file)
+        ? savedProvenance.correctionFile : active.row.file.file;
     const provenance = { ...active.batch.formats.provenanceFormat, scopeKind: active.batch.policy.kind, executionKind: 'operator', newApiRequests: 0,
         processId: active.batch.manifest.value.processId, batchId: active.batch.manifest.value.batchId,
-        manifestFile: active.batch.manifest.file, manifestSha256: active.batch.manifest.sha256,
-        correctionFile: active.row.file.file, correctionSha256: active.row.file.sha256,
+        manifestFile, manifestSha256: active.batch.manifest.sha256,
+        correctionFile, correctionSha256: active.row.file.sha256,
         paperId: r.paperId, executionId: r.childExecutionId, readerParentExecutionId: r.readerParentExecutionId,
         observedStateExecutionId: r.observedStateExecutionId, selectedMainExecutionId: r.selectedMainExecutionId,
         latestFailedExecutionId: r.latestFailedExecutionId, originalRoleCAS: clone(roleRefs(r)), sourceSha256: r.sourceSha256,
@@ -667,7 +678,7 @@ function deriveCoreAudit(parent, active) {
         summaryHeader: parentSummaryHeader
     });
     if (!originalIssue || c.originalSemanticIssueSha256 !== sha(originalIssue)) fail('原真实核心问题没有精确绑定');
-    const proposal = read(c.proposalFile), v = proposal.value;
+    const proposal = read(inside(c.proposalFile, active.batch.correctionRoot)), v = proposal.value;
     const summary = deep.extractSectionByTitle(parent.analysis, '核心摘要');
     const provider = assertContext(active, parent);
     const quote = v.sourceEvidence;
@@ -800,12 +811,14 @@ function verifiedSignedFigureAssets(input, injectedFigures, materialize) {
         !keys.includes(key) && key !== 'rawBytes'));
     const old = input.readerParent.apiReaderFigures;
     equal(injectedFigures.map(strip), old.map(strip), '新Reader改变原图科学说明或顺序');
+    const { matchesRelocatedRepoPath } = require('./repo-rename-path');
     const directory = path.join(active.batch.analysisRoot, active.row.record.readerParentExecutionId, 'reader-assets');
     return injectedFigures.map((figure, index) => {
         const prior = old[index], filename = `figure-${prior.ordinal}-${prior.assetSha256?.slice(0, 16)}.png`;
+        const priorPath = path.join(directory, filename);
         if (!SHA.test(prior.assetSha256 || '') || prior.assetFilename !== filename
-            || prior.cachePath !== path.join(directory, filename) || prior.assetMediaType !== 'image/png') fail('原签会议图路径/SHA不规范');
-        const raw = read(prior.cachePath, false);
+            || !matchesRelocatedRepoPath(prior.cachePath, priorPath) || prior.assetMediaType !== 'image/png') fail('原签会议图路径/SHA不规范');
+        const raw = read(priorPath, false);
         if (raw.sha256 !== prior.assetSha256 || raw.bytes.length !== prior.assetBytes) fail('原签图像素改变');
         const childPath = path.join(active.loaded.directory, 'reader-assets', filename);
         if (!active.cold && materialize) {
@@ -819,7 +832,9 @@ function verifiedSignedFigureAssets(input, injectedFigures, materialize) {
         const child = read(childPath, false);
         if (child.sha256 !== prior.assetSha256 || child.bytes.length !== prior.assetBytes
             || !child.bytes.equals(raw.bytes)) fail('子稿原图与原签父稿字节不同');
-        return { ...figure, ...Object.fromEntries(keys.map(key => [key, prior[key]])), cachePath: childPath };
+        const preservedCachePath = active.cold && matchesRelocatedRepoPath(figure.cachePath, childPath)
+            ? figure.cachePath : childPath;
+        return { ...figure, ...Object.fromEntries(keys.map(key => [key, prior[key]])), cachePath: preservedCachePath };
     });
 }
 function readVerifiedSignedFigures(input, injectedFigures) {
@@ -1091,7 +1106,7 @@ function archiveOriginals(active) {
     immutable(path.join(base, 'manifest-before.json'), active.batch.manifest.bytes);
     immutable(path.join(base, 'correction-before.json'), active.row.file.bytes);
     for (const key of ['coreCorrection', 'reasonCorrection']) if (active.row.record[key]) {
-        immutable(path.join(base, key + '-proposal-before.json'), read(active.row.record[key].proposalFile).bytes);
+        immutable(path.join(base, key + '-proposal-before.json'), read(inside(active.row.record[key].proposalFile, active.batch.correctionRoot)).bytes);
     }
     return index;
 }
@@ -1285,7 +1300,10 @@ function readRegisteredTransaction(paper, projectionToken = null) {
     const originalState = read(path.join(directory, 'state-before.json'));
     const manifestBefore = read(path.join(directory, 'manifest-before.json'));
     if (originalState.sha256 !== body.stateFileSha256 || manifestBefore.sha256 !== locator.manifestSha256) fail('完整原状态/清单字节不同');
+    const { matchesRelocatedRepoPath } = require('./repo-rename-path');
+    const { resolveUsageLedgerFile } = require('./llm-usage-ledger');
     const batch = loadBatch({ processId: locator.processId, manifestPath: body.provenance.manifestFile }, originalState);
+    if (!matchesRelocatedRepoPath(body.provenance.manifestFile, batch.manifest.file)) fail('冷回执清单路径与原清单不一致');
     const row = batch.rows.get(paper.id);
     if (batch.policy !== policy
         || !isDeepStrictEqual(codec.recordHeader(body.contract, policy.receipt, body.schemaFingerprint), batch.formats.receiptFormat)
@@ -1298,14 +1316,21 @@ function readRegisteredTransaction(paper, projectionToken = null) {
             !== row.record[key].proposalFileSha256) fail('独立提案原字节归档缺失或变化');
     }
     equal(body.originalTrees, row.trees, '原Reader父/process指针/latest/main材料索引变化');
-    equal(body.feePins, row.fees, '原费用索引变化');
+    const usageDir = require('../config').FILES.llmUsageDir;
+    if (!Array.isArray(body.feePins) || body.feePins.length !== row.fees.length
+        || body.feePins.some((savedFee, idx) => !savedFee || typeof savedFee !== 'object'
+            || Object.keys(savedFee).sort().join(',') !== 'file,sha256'
+            || savedFee.sha256 !== row.fees[idx].sha256
+            || resolveUsageLedgerFile(usageDir, savedFee.file) !== row.fees[idx].file)) {
+        fail('原费用索引变化');
+    }
     for (const entry of body.beforeFiles) {
         const ref = roleRefs(row.record)[entry.role];
         if (!ref || entry.path.split('/').some(part => !/^[A-Za-z0-9._-]+$/u.test(part)
             || ['.', '..'].includes(part))) fail('before索引路径非法');
         const expected = row.trees[entry.role].find(item => item.path === entry.path);
         const originalFile = path.join(batch.analysisRoot, ref.executionId, entry.path);
-        if (entry.original !== originalFile || !expected || expected.sha256 !== entry.sha256
+        if (!matchesRelocatedRepoPath(entry.original, originalFile) || !expected || expected.sha256 !== entry.sha256
             || read(path.join(directory, 'before', entry.role, entry.path), false).sha256 !== entry.sha256
             || read(originalFile, false).sha256 !== entry.sha256) fail('before原件不能重放');
     }
@@ -1481,8 +1506,9 @@ function readPreviousItemProjection(item) {
     require('./conference-process').assertState(actual.value);
     equal(actual.value.items[item.paperId], item, '出版回投不是当前实际process成员');
     const previous = record.batch.state.value.items[item.paperId], a = item.sourceResourceCorrectionAdoption;
+    const { matchesRelocatedRepoPath } = require('./repo-rename-path');
     if (a.previousItemSha256 !== stable(previous) || a.previousStateSha256 !== record.batch.state.value.stateSha256
-        || a.manifestFile !== record.batch.manifest.file || a.manifestSha256 !== record.batch.manifest.sha256
+        || !matchesRelocatedRepoPath(a.manifestFile, record.batch.manifest.file) || a.manifestSha256 !== record.batch.manifest.sha256
         || a.selectedMainExecutionId !== record.row.record.selectedMainExecutionId
         || a.readerParentExecutionId !== record.row.record.readerParentExecutionId
         || !isDeepStrictEqual(item.sourceProof, previous.sourceProof)) fail('出版原成员/次数/来源没有精确保留');

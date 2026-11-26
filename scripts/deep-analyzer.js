@@ -4728,6 +4728,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         : [{ type: 'text', text: `以下是论文 PDF 的临时渲染页 ${image.ordinal}。它只在本次请求中可见，`
             + '不能在文章中生成图片链接；可用它辅助理解，但正文涉及坐标、曲线或布局时仍须有可重放的文本/表格证据。' },
             buildImageContent(image.label, image.base64, image.mime)];
+    const signedDraftForSpecs = start.signedRecoveryDraft || options.signedRecoveryDraft;
+    const requireImplementationSpecs = require('./lib/reader-record-format').isStructuredV5(editorialProfile)
+        && !readerCapabilityPolicy
+        && !recovered?.resolvedReaderCandidateReplayProof
+        && !(signedDraftForSpecs && !Object.hasOwn(signedDraftForSpecs, 'implementationSpecs'));
     const parseCandidate = (raw, parseExtraOptions = {}) => {
         const parsed = parseApiReaderArticleResult(raw, {
         arxivId: getPaperArxivId(paper),
@@ -4740,6 +4745,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         requiredProfile: require('./lib/reader-record-format').INTEGRATED,
         compileCurrent: true,
         requireSourceBindings: true,
+        requireImplementationSpecs,
         allowDeterministicQuoteRepair: true,
         allowDeterministicUnsupportedClaimPruning: true,
         readerCapabilityPolicy,
@@ -5487,10 +5493,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             }
             normalizeCandidate();
             if (candidate) raw = JSON.stringify(candidate);
-            const parsed = parseCandidate(raw, {
-                requireImplementationSpecs: require('./lib/reader-record-format').isStructuredV5(editorialProfile)
-                    && !readerCapabilityPolicy
-            });
+            const parsed = parseCandidate(raw);
             // 本次被接受的若是一次非序号补丁（原子操作/元数据/局部修订），它改写了
             // 草稿基线：之前付费的序号链不再派生这份正文。保留成被接替历史，结果
             // 不再携带 ordinalPatchCompilations，finalize 也就不会去挂一个无法
@@ -9760,7 +9763,6 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
     const sleepFn = typeof cfg.sleepFn === 'function'
         ? cfg.sleepFn
         : (ms => new Promise(resolve => setTimeout(resolve, ms)));
-    const budget = createActiveTimeBudget(overallTimeoutMs);
     let apiType;
     let modelUrl;
     let url;
@@ -9785,6 +9787,7 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
 
     let lastError = null;
     let reportedSuspendedMs = 0;
+    const budget = createActiveTimeBudget(overallTimeoutMs);
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -14809,6 +14812,9 @@ async function repairCoreSummarySection(
     // 真被截断时下面会临时升档重试（不写进身份，也不改指纹）。
     let coreRepairBudget = TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens;
     let truncationEscalated = false;
+    let previousCandidateSummarySha256 = null;
+    let previousIssue = null;
+    let consecutiveStagnantAttempts = 0;
     // 推理型模型对严格格式的收敛更慢，多给两次修复机会（每次仍带同一校验反馈）。
     for (let attempt = 1; attempt <= CORE_SUMMARY_REPAIR_MAX_ATTEMPTS; attempt++) {
         const retryTargets = [];
@@ -14976,6 +14982,9 @@ async function repairCoreSummarySection(
         const match = raw.match(/^##\s*核心摘要[：:\s]*\n([\s\S]+)$/);
         if (!match || /^#{1,6}\s/m.test(match[1])) {
             feedback = '输出必须且只能包含一节 ## 核心摘要，不得包含其他标题。';
+            previousCandidateSummarySha256 = null;
+            previousIssue = null;
+            consecutiveStagnantAttempts = 0;
             diagnosticApi.saveCoreSummaryDisposition(diagnostic, { status: 'rejected', error: feedback, outputTextSha256: crypto.createHash('sha256').update(rawResponse).digest('hex') });
             continue;
         }
@@ -14999,6 +15008,17 @@ async function repairCoreSummarySection(
         if (!issue) return updated;
         console.warn(`    [deep] ⚠️  本次核心摘要局部修复仍未通过校验（${attempt}/${CORE_SUMMARY_REPAIR_MAX_ATTEMPTS}）：${issue}`);
         feedback = [issue, externalFeedback].filter(Boolean).join('\n');
+        if (candidateSummarySha256 === previousCandidateSummarySha256 && issue === previousIssue) {
+            consecutiveStagnantAttempts += 1;
+            if (consecutiveStagnantAttempts >= 2) {
+                console.warn(`    [deep] ⚠️  核心摘要局部修复连续 ${consecutiveStagnantAttempts} 次产出完全相同的摘要与校验错误，提前终止剩余重试`);
+                break;
+            }
+        } else {
+            previousCandidateSummarySha256 = candidateSummarySha256;
+            previousIssue = issue;
+            consecutiveStagnantAttempts = 0;
+        }
     }
     const exhausted = contractRejectedError(`核心摘要局部修复失败：${feedback}`);
     // 本阶段已经完成全部核心摘要内容修复机会，整篇自动重试不能再从相同原稿重新付费。

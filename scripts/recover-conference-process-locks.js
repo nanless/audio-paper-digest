@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const Config = require('./config.js');
 const engine = require('./analysis-engine.js');
@@ -23,30 +24,30 @@ function processDirectories(root) {
 }
 
 function pidIsDead(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
     try { process.kill(pid, 0); return false; }
     catch (error) { if (error.code === 'ESRCH') return true; return false; }
 }
 
-function recoverLocks(root = Config.FILES.conferenceProcessDir) {
+function recoverLocks(root = Config.FILES.conferenceProcessDir, options = {}) {
+    const lockEngine = options.engine || engine;
+    const currentHost = options.hostname || os.hostname();
+    const isDead = options.pidIsDead || pidIsDead;
+    const recoveryPolicy = lockEngine.OPERATOR_CONFIRMED_DEAD_OPERATION_LOCK_RECOVERY;
     const recovered = []; const skipped = [];
     for (const directory of processDirectories(root)) {
         const lock = path.join(directory, '.operation');
-        const snapshot = engine.inspectFileLockState(lock);
+        const snapshot = lockEngine.inspectFileLockState(lock, { recoveryPolicy });
         if (!snapshot.exists) continue;
-        const ownerFile = path.join(`${lock}.lock`, 'owner.json');
-        let owner = null;
-        try {
-            const stat = fs.lstatSync(ownerFile);
-            if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) throw new Error('unsafe owner file');
-            owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
-        } catch (_error) { /* 下面会按不安全或无法恢复的锁上报 */ }
-        if (!snapshot.reclaimable || snapshot.active || !owner || !pidIsDead(owner.pid)) {
-            skipped.push({ processId: path.basename(directory), reason: '锁文件不完整，或持有进程仍活着、无法确认已退出' });
+        const owner = snapshot.owner;
+        if (!snapshot.reclaimable || snapshot.active || !owner || typeof owner !== 'object'
+            || owner.hostname !== currentHost
+            || !Number.isInteger(owner.pid) || owner.pid <= 0
+            || !isDead(owner.pid)) {
+            skipped.push({ processId: path.basename(directory), reason: '锁文件不完整，或持有进程仍活着、位于其他主机或无法确认已退出' });
             continue;
         }
-        engine.withFileLockSync(lock, () => {}, {
-            recoveryPolicy: engine.OPERATOR_CONFIRMED_DEAD_OPERATION_LOCK_RECOVERY
-        });
+        lockEngine.withFileLockSync(lock, () => {}, { recoveryPolicy });
         recovered.push({ processId: path.basename(directory), pid: owner.pid, host: owner.hostname });
     }
     return { recovered, skipped };

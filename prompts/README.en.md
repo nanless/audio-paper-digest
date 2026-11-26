@@ -1,6 +1,6 @@
 # Prompts for paper processing
 
-[中文](README.md) · [Project documentation](../docs/README.md) · [Reader writing guide](../docs/reader-writing.md)
+[中文](README.md) · [Project documentation](../docs/README.en.md) · [Reader writing guide](../docs/reader-writing.md)
 
 `current/` contains the 16 prompt templates currently used by the program. Each template specifies the available material, the task, the output structure, and the limits that still apply when evidence is missing or a repair fails. These are not steps to run in sequence: the program chooses stages according to the workflow, saved progress, and actual errors.
 

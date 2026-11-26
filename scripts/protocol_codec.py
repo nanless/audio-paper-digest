@@ -177,8 +177,8 @@ class Codec:
         return all(key not in value or key in header for key in ('contract', 'schemaFingerprint', 'version', 'schemaVersion', 'policyVersion'))
 
     def is_current_header(self, value, name, tag_field='contract'):
-        return self.has_valid_header(value, name, tag_field) and value[tag_field] == name \
-            and value['schemaFingerprint'] == self.schema_fingerprint(name)
+        return self.has_valid_header(value, name, tag_field) and value.get(tag_field) == name \
+            and value.get('schemaFingerprint') == self.schema_fingerprint(name)
 
     def registered_headers(self, name):
         # Metadata only; never supplies an authenticated source or saved run.

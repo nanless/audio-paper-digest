@@ -25,6 +25,29 @@ const label = value => typeof value === 'string' && /^[A-Za-z0-9_.:/-]{1,200}$/.
 const digest = value => /^[a-f0-9]{64}$/.test(String(value || '')) ? value : null;
 const accountDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : null;
 
+function validBatchDate(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+    const ms = Date.parse(`${value}T00:00:00Z`);
+    if (!Number.isFinite(ms)) return null;
+    return new Date(ms).toISOString().slice(0, 10) === value ? value : null;
+}
+
+function normalizePlatformRootSymlink(resolvedPath) {
+    if (process.platform !== 'darwin') return resolvedPath;
+    for (const [alias, real] of [['/var', '/private/var'], ['/tmp', '/private/tmp']]) {
+        if (resolvedPath === alias || resolvedPath.startsWith(`${alias}/`)) {
+            try {
+                if (fs.lstatSync(alias).isSymbolicLink() && fs.realpathSync(alias) === real) {
+                    return `${real}${resolvedPath.slice(alias.length)}`;
+                }
+            } catch (_) {
+                // ignore if alias does not exist
+            }
+        }
+    }
+    return resolvedPath;
+}
+
 function normalizeUsagePaperId(value) {
     if (typeof value !== 'string') return null;
     const arxiv = value.replace(/^arxiv:/, '');
@@ -68,11 +91,13 @@ function withLlmUsageContext(context, callback) {
 
 function usageContext(context = {}) {
     const value = { ...(scope.getStore() || {}), ...context };
+    const batchDate = validBatchDate(value.batchDate);
     return {
         runId: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(String(value.runId || '')) ? value.runId : null,
         paperId: normalizeUsagePaperId(value.paperId),
         stage: label(value.stage) || 'unknown', unitId: digest(value.unitId),
-        contentAttempt: count(value.contentAttempt), transportAttempt: count(value.transportAttempt)
+        contentAttempt: count(value.contentAttempt), transportAttempt: count(value.transportAttempt),
+        ...(batchDate ? { batchDate } : {})
     };
 }
 
@@ -139,7 +164,7 @@ function writeLlmUsageEvent(event, options = {}) {
     // 生产用量记录。
     if (process.env.NODE_TEST_CONTEXT && !options.directory) return false;
     const configured = options.directory || require('../config.js').FILES.llmUsageDir;
-    const directory = path.resolve(configured);
+    const directory = normalizePlatformRootSymlink(path.resolve(configured));
     // 逐层拒绝已存在的符号链接；新记录文件仅当前用户可读写。以独占方式创建文件，
     // 保存后不再修改，也不向已有文件追加。
     let current = path.parse(directory).root;

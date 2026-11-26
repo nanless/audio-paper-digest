@@ -68,7 +68,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 发布/验收相关变量：`PAPER_DIGEST_BLOG_REPO` 指定 Hugo 仓库；`PAPER_DIGEST_BLOG_URL` 指定站点 posts 根地址（verify:web 用它拼页面 URL）；`PAPER_DIGEST_BLOG_REPO_RUN` 可选，指定 Pages 部署 workflow 所属仓库（默认 `nanless/audio-research-portal`）；`PAPER_DIGEST_BLOG_BASE_PATH` 为站点子路径。
 
-`PAPER_ANALYZER_FALLBACK_API_KEYS` 可填写逗号分隔的更多账号。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 与这份列表合并进同一等权账号池（顺序不代表优先级），也可填写第三、第四等账号。需要独立副模型账号池时，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`。只有主副端点属于同一规范 OpenCode Go 服务、且副模型没有独立密钥时，副模型才继承主账号池；跨服务必须显式提供副模型密钥。
+`PAPER_ANALYZER_FALLBACK_API_KEYS` 可填写逗号分隔的更多账号。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 与这份列表合并进同一共享账号池（顺序不代表优先级，默认按到期优先调度），也可填写第三、第四等账号。需要独立副模型账号池时，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS` 与 `PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY`。只有主副端点属于同一规范 OpenCode Go 服务、且副模型没有独立密钥时，副模型才继承主账号池；跨服务必须显式提供副模型密钥。
 
 账号池文件不保存原始密钥，但账号的稳定指纹仍属于敏感操作记录，权限须为 `0600`，不得上传或归档。发送认证信息前，程序还会核对实际请求地址是否与端点和模型确定的 API 路由一致。
 
@@ -140,8 +140,33 @@ npm run validate:data -- --allow-empty
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 字符 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 字符 |
 | `PD_API_READER_CONCURRENCY` | 默认 5 个进程内解读生成任务，可显式设置 1–60 |
+| `PD_FILTER_BATCH_SIZE` | 默认 5 篇/批（≥1） |
+| `PD_FILTER_SCOPE_CONCURRENCY` | 默认 6，范围 1–8；筛选阶段官方原文取证并发度 |
+| `PD_FILTER_MAX_TOKENS` | 默认 1000（会议 1200），范围 1000–64000；推理 token 与可见输出共用，高推理档可按需抬高（如 `16000`） |
+| `PD_TIERED_REASONING_EFFORT` | 默认 `1`（开启按阶段分级推理强度）；设为 `0` 恢复全阶段统一档位 |
+| `PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY` | 默认 `1`（按阶段注入稳定前缀缓存键）；设为 `0` 关闭 |
+| `PD_ARXIV_MAX_CONCURRENCY` | 默认 3，范围 1–6；arXiv 源站并发闸门上限，共享 `Retry-After` 退避 |
+| `PD_DAILY_SOURCE_SKIP_MAX` | 默认 2，范围 0–5；封存阶段官方 PDF 全地址 404 时本批最多跳过篇数 |
+| `PD_DAILY_CORRECTION_LIMIT` | 默认 `min(15, max(10, floor(N/10)))`，范围 1–15；仅允许抬高、不能降低默认值 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 日更独立页面审查默认 16，范围 1–32；会议页面审查最多 5 路，汇总优先派发 |
+| `PD_HISTORY_REVIEW_CONCURRENCY` | 历史独立页面审查默认 5，范围 1–16 |
+| `PD_BLOG_REVIEW_CHUNK_CHARS` | 单页审查分块字符数，默认 20000，范围 4000–24000 |
+| `PD_BLOG_REVIEW_MAX_TOKENS` | 单页审查单次输出上限，默认 4000，范围 1000–32000 |
 | `PD_BLOG_REVIEW_TIMEOUT` | 单页审查读超时（秒），默认 120，范围 30–600；不进审查协议指纹 |
+| `PD_LLM_USAGE_SHARD_BY_DATE` | 默认 `0`（平铺）；设为 `1` 按北京时间 `YYYY-MM-DD/` 目录分片写入新用量事件 |
+
+### 可选每日音频播客变量（`npm run podcast:generate`）
+
+播客生成默认按需手动运行，不接入日更自动主链；支持本地 IndexTTS2 合成或远端 HTTP 语音合成端点，相关配置项均已在 `env.example` 与 `scripts/lib/env-schema.js` 登记：
+
+| 变量 | 用途与默认值 |
+|---|---|
+| `PD_PODCAST_GITHUB_REPO` | GitHub Release 宿主仓库 `owner/repo`（默认 `nanless/audio-research-portal`） |
+| `PD_PODCAST_RELEASE_TAG_PREFIX` / `PD_PODCAST_RELEASE_TAG_GROUPING` | Release tag 前缀（默认 `podcast`）与分组方式（`monthly` 或 `daily`） |
+| `PD_INDEXTTS_MODEL_DIR` / `PD_INDEXTTS_CFG_PATH` | 本地 IndexTTS2 模型目录与 `config.yaml` 路径（本地合成模式） |
+| `PD_INDEXTTS_VOICE_PROMPT` / `PD_INDEXTTS_COHOST_VOICE_PROMPT` | 主讲人与可选对谈搭档的参考音频 WAV 路径 |
+| `PD_INDEXTTS_ENDPOINT` / `PD_INDEXTTS_API_KEY` / `PD_INDEXTTS_MODEL` | HTTP 语音合成端点地址、可选密钥与模型名（HTTP 模式） |
+| `PD_INDEXTTS_ALLOW_LOCAL_ENDPOINT` | 默认 `0`；设为 `1` 允许访问本机 loopback 合成端点 |
 
 这些环境变量写入项目 `.env`。Reader 刷新另可用 `--rounds N` 覆写本次总轮数，范围 1–10；会议和历史分析使用公共配置，没有新增同名参数。总轮数、同时处理的论文数和单阶段/Reader预算各自独立；改变批次轮数不重开已耗尽的候选额度。会议还受原单篇3次尝试窗口约束，历史保持首次选定范围；人工建议不会发请求或将失败改成通过，见 [三流程批次规则](three-workflows.md#全批轮次与失败集合)。
 
@@ -161,7 +186,7 @@ npm run validate:data -- --allow-empty
 
 筛选批次大小由 `PD_FILTER_BATCH_SIZE` 控制，整篇分析并发由 `PD_ANALYSIS_CONCURRENCY` 控制。账号池只在选择账号和更新状态时短暂持锁，发送网络请求时不持锁。
 
-当前 Muse 使用 OpenAI Responses。`PD_OPENAI_RESPONSES_STREAM=1` 启用 SSE，`PD_OPENAI_RESPONSES_REASONING_EFFORT` 控制 Responses 推理强度，取值 `minimal`、`low`、`medium`、`high`、`xhigh`，写 `max`/`highest`/`maximum` 视作 `xhigh`；不设置时不发送 `reasoning` 字段，写错的值不会生效（`npm run config:check` 会直接报错）。当前本机配置为 `xhigh`。两项配置不作用于 Chat Completions 请求。
+当前 Muse 使用 OpenAI Responses。`PD_OPENAI_RESPONSES_STREAM=1` 启用 SSE，`PD_OPENAI_RESPONSES_REASONING_EFFORT` 控制 Responses 推理上限，取值 `minimal`、`low`、`medium`、`high`、`xhigh`，写 `max`/`highest`/`maximum` 视作 `xhigh`；不设置时不发送 `reasoning` 字段，写错的值不会生效（`npm run config:check` 会直接报错）。当前本机配置为 `xhigh`。同时默认开启按阶段分级推理（`PD_TIERED_REASONING_EFFORT=1`，设为 `0` 恢复全阶段统一档位：主分析与 Reader 长文保持配置上限，审校与局部修复用 `high`，插图/结构修补用 `medium`，筛选与发布文本审查用 `low`，机械结构化阶段用 `minimal`）与阶段稳定前缀缓存键（`PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=1`，设为 `0` 关闭）。以上 Responses 选项均不作用于 Chat Completions 请求。
 
 推理 token 与可见输出共用 `max_output_tokens`，所以 `xhigh` 下留给可见输出的额度会比低档位少一些。各阶段上限本身还会进入阶段指纹与已付费诊断身份（例如筛选的 `maxTokens` 参与 `FILTER_CONFIG_BINDING`），改动会让原记录无法重放，因此维持原值；真的被截断时走既有重试路径（筛选升到 4096；Reader 局部补丁的基础值取正文预算与配置补丁预算的较小值，默认 96000，截断后的续跑上限按正文预算重算，默认同样为 96000）。改这些预算会改变阶段指纹，下一轮分析会重新执行对应阶段。
 
@@ -173,7 +198,7 @@ Reader 的一次逻辑请求最多进行2次传输尝试；筛选默认最多5�
 
 ## 可选副模型
 
-API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前使用的 `muse-spark-1.3-contributor` 与此前的 `deepseek-v4.1-flash` 都通过 Responses 接收图片（`input_image.image_url` 传 data URI 字符串），兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
+当前 API Reader（现行契约 `structured-pipeline-v5`）会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前使用的 `muse-spark-1.3-contributor` 与此前的 `deepseek-v4.1-flash` 都通过 Responses 接收图片（`input_image.image_url` 传 data URI 字符串），兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
 
 `PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数（未传参数时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`，默认 5；可显式设为 1–60，例如 `--concurrency 10`）。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
 

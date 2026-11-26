@@ -156,12 +156,14 @@ describe('llm-usage-summary 日期过滤与聚合（真实事件 schema）', () 
 });
 
 describe('llm-usage-summary 费用与账号字段兼容', () => {
-    it('兼容 estimatedCost / cost / usage.cost 并统一金额精度', t => {
+    it('兼容 estimatedCost / cost / usage.cost 并匿名化账号分布（绝不暴露 64 位凭据指纹）', t => {
         const directory = temporaryDirectory(t);
         const accountA = 'a'.repeat(64);
         const accountB = 'b'.repeat(64);
         writeEvent(directory, usageEvent({ eventId: 'cost-1', accountId: accountA, estimatedCost: 0.25 }),
             at('2026-01-05T09:00:00+08:00'));
+        writeEvent(directory, usageEvent({ eventId: 'cost-1b', accountId: accountA.toUpperCase(), estimatedCost: 0.25 }),
+            at('2026-01-05T09:30:00+08:00'));
         writeEvent(directory, usageEvent({ eventId: 'cost-2', accountId: accountB, cost: { usd: 1.5 } }),
             at('2026-01-05T10:00:00+08:00'));
         writeEvent(directory, usageEvent({
@@ -169,17 +171,37 @@ describe('llm-usage-summary 费用与账号字段兼容', () => {
         }), at('2026-01-05T11:00:00+08:00'));
 
         const summary = buildDailyUsageSummary({ directory, date: DATE_A });
-        assert.strictEqual(summary.cost, 1.8);
-        assert.strictEqual(summary.costEvents, 3);
-        assert.strictEqual(summary.byAccount[accountA].total, 1);
-        assert.strictEqual(summary.byAccount[accountB].total, 1);
-        const fingerprinted = Object.keys(summary.byAccount).filter(key => key.startsWith('sha256:'));
-        assert.strictEqual(fingerprinted.length, 1);
-        assert.match(fingerprinted[0], /^sha256:[a-f0-9]{16}$/);
+        assert.strictEqual(summary.cost, 2.05);
+        assert.strictEqual(summary.costEvents, 4);
+        // 账号键按当次调用量降序匿名化为 acct#1..N，绝不泄露 64 位 hex 或 sha256: 短指纹。
+        assert.deepStrictEqual(Object.keys(summary.byAccount), ['acct#1', 'acct#2', 'acct#3']);
+        assert.strictEqual(summary.byAccount['acct#1'].total, 2);
+        assert.strictEqual(summary.byAccount['acct#1'].cost, 0.5);
+        assert.strictEqual(summary.byAccount['acct#2'].total, 1);
+        assert.strictEqual(summary.byAccount['acct#3'].total, 1);
         assert.ok(!Object.prototype.hasOwnProperty.call(summary.byAccount, 'unknown'));
         const text = formatText(summary);
+        const byAccountJson = JSON.stringify(summary.byAccount);
+        const { schemaFingerprint: _ignoredHeaderFp, ...summaryWithoutHeaderFp } = summary;
+        const payloadJson = JSON.stringify(summaryWithoutHeaderFp);
+        for (const rendered of [text, byAccountJson, payloadJson]) {
+            assert.ok(!rendered.includes(accountA), '输出不得包含原始 64 位 accountId A');
+            assert.ok(!rendered.includes(accountB), '输出不得包含原始 64 位 accountId B');
+            assert.ok(!rendered.includes('acct-c'), '输出不得包含原始账号标识');
+            assert.ok(!rendered.includes('sha256:'), '输出不得包含稳定短指纹');
+            assert.ok(!/[a-f0-9]{64}/i.test(rendered), 'JSON 与文本输出均不得泄露任何 64 位十六进制指纹');
+        }
         assert.match(text, /按账号:/);
-        assert.match(text, /费用=\$1\.80/);
+        assert.match(text, /acct#1 调用=2/);
+        assert.match(text, /费用=\$2\.05/);
+
+        // 防御性校验：即使外部手工构造带 64 位 hex 键的 summary，formatText 也不能泄露。
+        const syntheticText = formatText({
+            ...summary,
+            byAccount: { [accountA]: { total: 3, success: 3, failed: 0, cost: 0, costEvents: 0 } }
+        });
+        assert.ok(!/[a-f0-9]{64}/i.test(syntheticText));
+        assert.match(syntheticText, /acct#1 调用=3/);
     });
 
     it('bucket cost 统一到 8 位小数，避免浮点尾差', t => {

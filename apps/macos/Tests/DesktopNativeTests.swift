@@ -153,6 +153,34 @@ private struct NoNativeCredentials: ZoteroCredentialStore {
             let value=try source("chapter",["chapter":0]);try assertIdentity(value,[1,2,3,4])
             try require((value["text"] as? String ?? "").contains(document.page(at:3)!.string!),"outline keeps actual real page text")
         }
+        check("chapter outline skips orphaned NSNotFound destinations and bounds depth and entry count") {
+            let old=document.outlineRoot;defer{document.outlineRoot=old}
+            let foreignPage=PDFPage()
+            let outline=PDFOutline()
+            let badNode=PDFOutline();badNode.label="Orphan page";badNode.destination=PDFDestination(page:foreignPage,at:.zero)
+            let goodNode=PDFOutline();goodNode.label="Valid page";goodNode.destination=PDFDestination(page:document.page(at:1)!,at:.zero)
+            outline.insertChild(badNode,at:0);outline.insertChild(goodNode,at:1)
+            // Build deep chain > 16 levels
+            var cursor=goodNode
+            for level in 1...25 {
+                let child=PDFOutline();child.label="Depth \(level)";child.destination=PDFDestination(page:document.page(at:1)!,at:.zero)
+                cursor.insertChild(child,at:0);cursor=child
+            }
+            document.outlineRoot=outline
+            let chapters=app.pdfChapters()
+            try require(!chapters.contains{($0["title"] as? String)=="Orphan page"},"orphaned foreign page destination must be skipped without NSNotFound+1 overflow")
+            try require(chapters.allSatisfy{($0["depth"] as? Int ?? 99)<=16},"outline recursion depth capped at 16")
+            try require(chapters.contains{($0["title"] as? String)=="Valid page" && ($0["page"] as? Int)==2},"valid outline entry retained")
+            // Build wide outline > 1000 entries
+            let wide=PDFOutline()
+            for i in 0..<1150 {
+                let n=PDFOutline();n.label="Entry \(i)";n.destination=PDFDestination(page:document.page(at:0)!,at:.zero)
+                wide.insertChild(n,at:i)
+            }
+            document.outlineRoot=wide
+            let wideChapters=app.pdfChapters()
+            try require(wideChapters.count==1000,"outline total entry count capped at 1000, got \(wideChapters.count)")
+        }
         check("mixed text/blank PDF reports missing physical page instead of complete coverage") {
             guard let staged=PDFDocument(data:original) else{throw NativeTestFailure(message:"Could not clone MiCLA PDF")}
             while staged.pageCount>1 {staged.removePage(at:staged.pageCount-1)}

@@ -12,7 +12,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const HUGO_VERSION = '0.160.1';
 const EXCLUDED_DIRECTORIES = new Set([
     'node_modules', '.venv', 'data', 'logs', '.git', '__pycache__', '.pytest_cache',
-    '.agents', '.codex', 'tmp', '_understanding', 'output'
+    '.agents', '.codex', '.claude', '.dsh-meow', 'tmp', '_understanding', 'output'
 ]);
 // Fixed client build/acceptance outputs contain copied projects and bundled
 // runtimes. Only these exact roots are generated; an arbitrary directory named

@@ -132,7 +132,10 @@ function validPdfContentType(value) {
 
 async function readResponseBytes(response, maxBytes) {
     const declared = Number(response.headers?.get?.('content-length'));
-    if (Number.isFinite(declared) && declared > maxBytes) fail('OpenReview PDF 超出字节上限');
+    if (Number.isFinite(declared) && declared > maxBytes) {
+        await response.body?.cancel?.().catch(() => {});
+        fail('OpenReview PDF 超出字节上限');
+    }
     if (!response.body || typeof response.body.getReader !== 'function') {
         const bytes = Buffer.from(await response.arrayBuffer());
         if (bytes.length > maxBytes) fail('OpenReview PDF 超出字节上限');
@@ -165,14 +168,21 @@ async function defaultFetchPdf({ url, forumId, maxBytes = MAX_PDF_BYTES, maxRedi
                 signal: controller.signal, headers: { Accept: 'application/pdf',
                     'User-Agent': 'audio-paper-digest-history/1.0' } });
             if ([301, 302, 303, 307, 308].includes(response.status)) {
+                await response.body?.cancel?.().catch(() => {});
                 if (count >= maxRedirects) fail('OpenReview PDF 超出重定向次数上限');
                 const location = response.headers?.get?.('location'); if (!location) fail('OpenReview 重定向缺少 Location');
                 const next = validateDownloadUrl(new URL(location, current).toString(), forumId);
                 redirects.push({ from: current, to: next, status: response.status }); current = next; continue;
             }
-            if (response.status !== 200) fail(`OpenReview PDF returned HTTP ${response.status}`);
+            if (response.status !== 200) {
+                await response.body?.cancel?.().catch(() => {});
+                fail(`OpenReview PDF returned HTTP ${response.status}`);
+            }
             const contentType = String(response.headers?.get?.('content-type') || '');
-            if (!validPdfContentType(contentType)) fail('OpenReview PDF 响应的 Content-Type 非法');
+            if (!validPdfContentType(contentType)) {
+                await response.body?.cancel?.().catch(() => {});
+                fail('OpenReview PDF 响应的 Content-Type 非法');
+            }
             const bytes = await readResponseBytes(response, maxBytes);
             return { bytes, requestedUrl: url, finalUrl: current, redirects,
                 contentType, responseStatus: response.status };

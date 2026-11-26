@@ -1,101 +1,94 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="450" viewBox="0 0 960 450" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="432" viewBox="0 0 960 432" role="img" aria-labelledby="title desc">
   <title id="title">Audio Research Workbench Three-Layer Architecture</title>
-  <desc id="desc">Three-layer diagram: on the left, the content production engine runs daily, conference, and historical workflows and pushes reviewed pages to the Hugo portal in the middle; on the right, the Mac and Android apps read published content only and keep personal study, Zotero, and WebDAV backups separate.</desc>
+  <desc id="desc">Studio Monograph three-layer architecture: the content engine runs the daily pipeline (with conference and historical pipelines preserved) and pushes reviewed diffs to the Studio Monograph 2.0 Hugo portal; Mac and Android v1.5.0 apps sync snapshots and podcasts read-only while isolating personal LLM, Zotero, and WebDAV sync.</desc>
   <defs>
     <style>
-      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #0f172a; }
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #182120; }
       .t-main { font-size: 20px; font-weight: 700; }
-      .t-sub { font-size: 13px; fill: #475569; }
-      .t-badge { font-size: 10.5px; font-weight: 700; letter-spacing: 0.25px; }
-      .t-card { font-size: 14.5px; font-weight: 700; }
-      .t-item { font-size: 12.2px; fill: #334155; }
-      .t-small { font-size: 11.2px; fill: #475569; }
-      .t-edge { font-size: 11.2px; font-weight: 700; }
-      .line-solid { fill: none; stroke: #2563eb; stroke-width: 2.2; marker-end: url(#arr-blue); }
-      .line-teal { fill: none; stroke: #0d9488; stroke-width: 2.2; marker-end: url(#arr-teal); }
+      .t-sub { font-size: 13px; fill: #4a5755; }
+      .t-badge { font-size: 12px; font-weight: 700; letter-spacing: 0.2px; }
+      .t-card { font-size: 15px; font-weight: 700; fill: #f7f5f0; }
+      .t-item { font-size: 12.6px; fill: #263230; }
+      .t-small { font-size: 12px; fill: #556360; }
+      .t-edge { font-size: 12px; font-weight: 700; }
+      .line-teal { fill: none; stroke: #0f5c58; stroke-width: 2.2; marker-end: url(#arr-teal); }
+      .line-copper { fill: none; stroke: #b85a34; stroke-width: 2.2; marker-end: url(#arr-copper); }
     </style>
-    <marker id="arr-blue" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto">
-      <path d="M0,1 L8,4.5 L0,8 Z" fill="#2563eb"/>
-    </marker>
     <marker id="arr-teal" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto">
-      <path d="M0,1 L8,4.5 L0,8 Z" fill="#0d9488"/>
+      <path d="M0,1 L8,4.5 L0,8 Z" fill="#0f5c58"/>
+    </marker>
+    <marker id="arr-copper" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto">
+      <path d="M0,1 L8,4.5 L0,8 Z" fill="#b85a34"/>
     </marker>
   </defs>
 
-  <rect width="960" height="450" rx="16" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  <rect width="960" height="432" rx="16" fill="#f7f5f0" stroke="#d6cfc3" stroke-width="1.5"/>
 
   <text x="32" y="42" class="t-main">Audio Research Workbench · Three-Layer Architecture</text>
-  <text x="32" y="64" class="t-sub">Production, public portal, and personal reading stay isolated: opening papers never re-runs analysis or shares credentials</text>
+  <text x="32" y="64" class="t-sub">Production, public portal, and native clients stay isolated: opening papers never re-runs analysis or shares secrets</text>
 
-  <!-- Column 1: x=32..288 (w=256) -->
-  <rect x="32" y="88" width="256" height="296" rx="14" fill="#ffffff" stroke="#93c5fd" stroke-width="1.8"/>
-  <rect x="32" y="88" width="256" height="44" rx="14" fill="#eff6ff"/>
-  <rect x="32" y="118" width="256" height="14" fill="#eff6ff"/>
-  <text x="46" y="115" class="t-card" fill="#1d4ed8">1. Content Engine (Repo)</text>
+  <!-- Column 1 -->
+  <rect x="32" y="88" width="256" height="282" rx="14" fill="#ffffff" stroke="#b9cfc9" stroke-width="1.6"/>
+  <rect x="32" y="88" width="256" height="44" rx="14" fill="#182120"/>
+  <rect x="32" y="118" width="256" height="14" fill="#182120"/>
+  <text x="48" y="115" class="t-card">1. Content Engine (Repo)</text>
 
-  <rect x="46" y="148" width="228" height="64" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-  <text x="56" y="168" class="t-badge" fill="#1e40af">THREE WORKFLOWS</text>
-  <text x="56" y="188" class="t-item">Daily · Conference · Historical</text>
-  <text x="56" y="204" class="t-small">Separate provenance &amp; dedup</text>
+  <rect x="46" y="146" width="228" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
+  <text x="58" y="168" class="t-badge" fill="#0f5c58">Three Isolated Pipelines</text>
+  <text x="58" y="191" class="t-item">Daily active · conf / hist paused</text>
 
-  <rect x="46" y="224" width="228" height="68" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-  <text x="56" y="244" class="t-badge" fill="#1e40af">SHARED LLM/API CORE</text>
-  <text x="56" y="264" class="t-item">Analysis · 8-Dim Score · Tags</text>
-  <text x="56" y="281" class="t-small">Reader guide + figure/table check</text>
+  <rect x="46" y="218" width="228" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
+  <text x="58" y="240" class="t-badge" fill="#0f5c58">Shared LLM/API Core</text>
+  <text x="58" y="263" class="t-item">4-file seal · tiered effort · Reader</text>
 
-  <rect x="46" y="304" width="228" height="64" rx="9" fill="#f0fdf4" stroke="#86efac" stroke-width="1.2"/>
-  <text x="56" y="324" class="t-badge" fill="#15803d">3-LAYER REVIEW GATE</text>
-  <text x="56" y="344" class="t-item">Rules + Text/Image + Hugo</text>
-  <text x="56" y="359" class="t-small">SHA-cached reuse, exact push</text>
+  <rect x="46" y="290" width="228" height="64" rx="9" fill="#eef6f4" stroke="#9ec9c3" stroke-width="1.2"/>
+  <text x="58" y="312" class="t-badge" fill="#0f5c58">3-Layer Review Gate</text>
+  <text x="58" y="336" class="t-item">Rules + Text/Figure + Hugo build</text>
 
-  <!-- Gap 1: x=288..356 (68px) -->
-  <path d="M294 236 H348" class="line-solid"/>
-  <text x="322" y="222" text-anchor="middle" class="t-edge" fill="#1d4ed8">Push</text>
+  <!-- Gap 1 -->
+  <path d="M294 228 H348" class="line-teal"/>
+  <text x="321" y="214" text-anchor="middle" class="t-edge" fill="#0f5c58">Push</text>
 
-  <!-- Column 2: x=356..604 (w=248) -->
-  <rect x="356" y="88" width="248" height="296" rx="14" fill="#ffffff" stroke="#5eead4" stroke-width="1.8"/>
-  <rect x="356" y="88" width="248" height="44" rx="14" fill="#f0fdfa"/>
-  <rect x="356" y="118" width="248" height="14" fill="#f0fdfa"/>
-  <text x="370" y="115" class="t-card" fill="#0f766e">2. Audio Research Portal</text>
+  <!-- Column 2 -->
+  <rect x="356" y="88" width="248" height="282" rx="14" fill="#ffffff" stroke="#9ec9c3" stroke-width="1.6"/>
+  <rect x="356" y="88" width="248" height="44" rx="14" fill="#0f5c58"/>
+  <rect x="356" y="118" width="248" height="14" fill="#0f5c58"/>
+  <text x="372" y="115" class="t-card">2. Audio Research Portal</text>
 
-  <rect x="370" y="148" width="220" height="68" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-  <text x="380" y="168" class="t-badge" fill="#0f766e">CHINESE AUDIO ARCHIVE</text>
-  <text x="380" y="188" class="t-item">Guides, daily &amp; venue digests</text>
-  <text x="380" y="204" class="t-small">Web reader + BibTeX / RIS</text>
+  <rect x="370" y="146" width="220" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
+  <text x="382" y="168" class="t-badge" fill="#0f5c58">Studio Monograph 2.0</text>
+  <text x="382" y="191" class="t-item">9,300+ guides (8,650+ papers)</text>
 
-  <rect x="370" y="228" width="220" height="68" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-  <text x="380" y="248" class="t-badge" fill="#0f766e">400-CONCEPT TAXONOMY</text>
-  <text x="380" y="268" class="t-item">Speech · Music · Sound · Spatial</text>
-  <text x="380" y="284" class="t-small">9 facets + primary task/method</text>
+  <rect x="370" y="218" width="220" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
+  <text x="382" y="240" class="t-badge" fill="#0f5c58">400-Concept Taxonomy</text>
+  <text x="382" y="263" class="t-item">8 SOTA hubs · ⌘K search</text>
 
-  <rect x="370" y="308" width="220" height="60" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-  <text x="380" y="328" class="t-badge" fill="#0f766e">STATIC CLIENT SNAPSHOTS</text>
-  <text x="380" y="348" class="t-item">client/details/* · SHA-addressed</text>
+  <rect x="370" y="290" width="220" height="64" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
+  <text x="382" y="312" class="t-badge" fill="#0f5c58">Static Snapshots &amp; Feeds</text>
+  <text x="382" y="336" class="t-item">client/details/* · podcast feed</text>
 
-  <!-- Gap 2: x=604..672 (68px) -->
-  <path d="M610 236 H664" class="line-teal"/>
-  <text x="638" y="222" text-anchor="middle" class="t-edge" fill="#0f766e">Read-only</text>
+  <!-- Gap 2 -->
+  <path d="M610 228 H664" class="line-copper"/>
+  <text x="637" y="214" text-anchor="middle" class="t-edge" fill="#b85a34">Read-only</text>
 
-  <!-- Column 3: x=672..928 (w=256) -->
-  <rect x="672" y="88" width="256" height="296" rx="14" fill="#ffffff" stroke="#c4b5fd" stroke-width="1.8"/>
-  <rect x="672" y="88" width="256" height="44" rx="14" fill="#f5f3ff"/>
-  <rect x="672" y="118" width="256" height="14" fill="#f5f3ff"/>
-  <text x="686" y="115" class="t-card" fill="#5b21b6">3. Reading Apps (v1.5.0)</text>
+  <!-- Column 3 -->
+  <rect x="672" y="88" width="256" height="282" rx="14" fill="#ffffff" stroke="#e4bfa8" stroke-width="1.6"/>
+  <rect x="672" y="88" width="256" height="44" rx="14" fill="#b85a34"/>
+  <rect x="672" y="118" width="256" height="14" fill="#b85a34"/>
+  <text x="688" y="115" class="t-card">3. Native Apps (v1.5.0)</text>
 
-  <rect x="686" y="148" width="228" height="68" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-  <text x="696" y="168" class="t-badge" fill="#5b21b6">ZERO-CONFIG READING</text>
-  <text x="696" y="188" class="t-item">Offline search · PDF · Notes</text>
-  <text x="696" y="204" class="t-small">Native podcast + chapters</text>
+  <rect x="686" y="146" width="228" height="62" rx="9" fill="#fdf8f4" stroke="#ead6c9" stroke-width="1.2"/>
+  <text x="698" y="168" class="t-badge" fill="#a64d2a">Zero-Config Reading</text>
+  <text x="698" y="191" class="t-item">Offline search · PDF · Notes</text>
 
-  <rect x="686" y="228" width="228" height="68" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-  <text x="696" y="248" class="t-badge" fill="#5b21b6">PERSONAL STUDY (OPT-IN)</text>
-  <text x="696" y="268" class="t-item">User-configured LLM, text only</text>
-  <text x="696" y="284" class="t-small">Isolated usage, logs &amp; billing</text>
+  <rect x="686" y="218" width="228" height="62" rx="9" fill="#fdf8f4" stroke="#ead6c9" stroke-width="1.2"/>
+  <text x="698" y="240" class="t-badge" fill="#a64d2a">Daily Audio Podcast</text>
+  <text x="698" y="263" class="t-item">Chapters · SHA-verified cache</text>
 
-  <rect x="686" y="308" width="228" height="60" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
-  <text x="696" y="328" class="t-badge" fill="#5b21b6">LIBRARY &amp; BACKUPS</text>
-  <text x="696" y="348" class="t-item">Zotero · WebDAV snapshots</text>
+  <rect x="686" y="290" width="228" height="64" rx="9" fill="#fdf8f4" stroke="#ead6c9" stroke-width="1.2"/>
+  <text x="698" y="312" class="t-badge" fill="#a64d2a">Isolated User Channels</text>
+  <text x="698" y="336" class="t-item">Own LLM · Zotero · WebDAV sync</text>
 
-  <rect x="32" y="400" width="896" height="34" rx="8" fill="#f1f5f9"/>
-  <text x="48" y="421" class="t-small">Note: Reading the site or using the Mac/Android apps never requires a production .env. Arrows show data flow, not shared credentials.</text>
+  <rect x="32" y="384" width="896" height="32" rx="8" fill="#ece8de"/>
+  <text x="48" y="405" class="t-small">Note: Browsing the portal or using the Mac/Android apps never requires a production .env. Arrows show data flow, not shared credentials.</text>
 </svg>

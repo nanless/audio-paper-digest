@@ -12,7 +12,7 @@ const USAGE = [
     'plan --dry-run|--apply --publication-id UUID --plan-file ABS --registry-file ABS --projection-file ABS --visual-disposition ABS [--paper-ids ID,ID,...] [--blog-repo ABS]',
     'generate --dry-run|--apply --publication-id UUID --plan-file ABS --registry-file ABS --projection-file ABS --visual-disposition ABS [--paper-ids ID,ID,...] [--blog-repo ABS]',
     'review|activate|publish --dry-run|--apply --publication-id UUID [--message TEXT] [--blog-repo ABS]',
-    'status --publication-id UUID [--live-remote true]'
+    'status --publication-id UUID [--live-remote true] [--blog-repo ABS]'
 ].join(' | ');
 
 function parsePairs(argv, allowed) {
@@ -34,11 +34,13 @@ function absolute(value) { return typeof value === 'string' && path.isAbsolute(v
 function parseArgs(argv) {
     const [action, mode, ...rest] = argv;
     if (action === 'status') {
-        const values = parsePairs([mode, ...rest].filter(value => value !== undefined), ['--publication-id', '--live-remote']);
-        if (!api.UUID_RE.test(values['--publication-id'] || '') || values['--live-remote'] !== undefined
-            && !['true', 'false'].includes(values['--live-remote'])) throw new Error(`命令写法不对，用法：${USAGE}`);
+        const values = parsePairs([mode, ...rest].filter(value => value !== undefined), ['--publication-id', '--live-remote', '--blog-repo']);
+        if (!api.UUID_RE.test(values['--publication-id'] || '')
+            || (values['--live-remote'] !== undefined && !['true', 'false'].includes(values['--live-remote']))
+            || (values['--blog-repo'] !== undefined && !absolute(values['--blog-repo']))) throw new Error(`命令写法不对，用法：${USAGE}`);
         return { action, publicationId: values['--publication-id'],
-            liveRemote: values['--live-remote'] === undefined ? true : values['--live-remote'] === 'true' };
+            liveRemote: values['--live-remote'] === undefined ? true : values['--live-remote'] === 'true',
+            ...(values['--blog-repo'] !== undefined ? { blogRepo: values['--blog-repo'] } : {}) };
     }
     if (action === 'visual-disposition') {
         if (mode !== '--apply') throw new Error(`命令写法不对，用法：${USAGE}`);

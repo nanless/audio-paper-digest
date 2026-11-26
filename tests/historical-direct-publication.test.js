@@ -594,3 +594,131 @@ test('页面审查接受新旧单一标签字段族，先核原页面 SHA 再拒
     assert.throws(() => api.deterministicReview({ path: 'content/posts/one.md', sha256: sha(mixed) }, mixed), /新旧标签字段/);
     assert.throws(() => api.deterministicReview({ path: 'content/posts/one.md', sha256: hash('a') }, mixed), /待审查文件的内容已变化/);
 });
+
+test('正式发布允许规范 arXiv 工作区侧车路径并支持 status --blog-repo', () => {
+    for (const slug of ['2605-30365', '2605-30365v2', '2403-14817v10']) {
+        const prefix = `static/client/papers/2026-11-03/${slug}/`;
+        for (const basename of ['citation.bib', 'citation.json', 'citation.ris', 'rethink-context.json']) {
+            assert.equal(api.safeRelative(prefix + basename), prefix + basename);
+        }
+    }
+    for (const invalid of [
+        'static/client/papers/2026-11-03/2605-30365v0/citation.json',
+        'static/client/papers/2026-11-03/arxiv-2605-30365/citation.json',
+        'static/client/papers/2026-11-03/2605-30365/other.json'
+    ]) {
+        assert.throws(() => api.safeRelative(invalid), /路径不安全/);
+    }
+    const parsed = cli.parseArgs(['status', '--publication-id', publicationId, '--blog-repo', '/tmp/blog']);
+    assert.deepEqual(parsed, { action: 'status', publicationId, liveRemote: true, blogRepo: '/tmp/blog' });
+    assert.throws(() => cli.parseArgs(['status', '--publication-id', publicationId, '--blog-repo', 'relative/blog']), /命令写法不对/);
+});
+
+test('历史语义审查协议默认分块 20000、上限 32000 tokens 并遵循 PD_BLOG_REVIEW_TIMEOUT', t => {
+    const saved = {
+        PD_BLOG_REVIEW_CHUNK_CHARS: process.env.PD_BLOG_REVIEW_CHUNK_CHARS,
+        PD_BLOG_REVIEW_MAX_TOKENS: process.env.PD_BLOG_REVIEW_MAX_TOKENS,
+        PD_BLOG_REVIEW_TIMEOUT: process.env.PD_BLOG_REVIEW_TIMEOUT
+    };
+    t.after(() => {
+        for (const [k, v] of Object.entries(saved)) {
+            if (v === undefined) delete process.env[k];
+            else process.env[k] = v;
+        }
+    });
+    delete process.env.PD_BLOG_REVIEW_CHUNK_CHARS;
+    delete process.env.PD_BLOG_REVIEW_MAX_TOKENS;
+    delete process.env.PD_BLOG_REVIEW_TIMEOUT;
+    const defaults = api.semanticReviewProtocol();
+    assert.equal(defaults.budgets.chunkChars, 20000);
+    assert.equal(defaults.budgets.maxTokens, 4000);
+    assert.equal(defaults.budgets.timeoutSeconds, 120);
+
+    process.env.PD_BLOG_REVIEW_MAX_TOKENS = '32000';
+    process.env.PD_BLOG_REVIEW_TIMEOUT = '240';
+    const tuned = api.semanticReviewProtocol();
+    assert.equal(tuned.budgets.maxTokens, 32000);
+    assert.equal(tuned.budgets.timeoutSeconds, 240);
+
+    process.env.PD_BLOG_REVIEW_MAX_TOKENS = '99999';
+    process.env.PD_BLOG_REVIEW_TIMEOUT = '999';
+    const clamped = api.semanticReviewProtocol();
+    assert.equal(clamped.budgets.maxTokens, 32000);
+    assert.equal(clamped.budgets.timeoutSeconds, 600);
+});
+
+test('新建博客文件默认 0644，且已推送后缺 publication.json 时可按 commit.json 恢复', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-publication-recover-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const outputRoot = path.join(root, 'publications');
+    const blogRepo = path.join(root, 'blog');
+    fs.mkdirSync(blogRepo, { recursive: true });
+    const addedPath = 'content/posts/2026-09-01-new-paper.md';
+    const next = Buffer.from(
+        '---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\n'
+        + `paper_digest_tags_contract: "paper-tag-flat-tags-v2"\npaper_digest_tags_registry_sha256: "${hash('b')}"\n`
+        + 'paper_digest_tags_registry_version: "paper-tag-catalog-v2"\ndraft: false\n---\n\n# Body\n'
+    );
+    const authority = fakeAuthority(next, Buffer.from('old'));
+    authority.artifacts[0].path = addedPath;
+    authority.artifacts[0].baselineSha256 = null;
+    const deps = {
+        loadAuthority: () => authority,
+        blogState,
+        gitBlob: () => null,
+        sourceBytes: () => next,
+        validatePublishedTagCatalog: () => ({ valid: true }),
+        hugoVersion: 'hugo v0.fixture',
+        hugoGate: () => ({ status: 'passed', engine: 'hugo', version: 'hugo v0.fixture' }),
+        semanticReview: ({ loadedPlan, generation, protocol }) => {
+            const results = generation.manifest.files.filter(f => f.path.endsWith('.md')).map(f => {
+                const item = { path: f.path, sha256: f.sha256, textChunks: 1, imageCount: 0,
+                    imageReviewMode: 'not-required', passed: true, issues: [] };
+                return { ...item, resultSha256: api.stableHash(item) };
+            });
+            const body = { ...require('../scripts/lib/protocol-codec').recordHeader('historical-direct-semantic-review', 'historical-direct-semantic-review'),
+                publicationId: loadedPlan.plan.publicationId, generationSha256: generation.manifest.generationSha256,
+                reviewProtocolFingerprint: protocol,
+                semanticProtocol: api.semanticReviewProtocol(), results, resultSetSha256: api.stableHash(results), passed: true };
+            return { receipt: { ...body, semanticReviewSha256: api.stableHash(body) }, fileSha256: hash('7') };
+        },
+        validateActivatedWorktree: () => {},
+        now: () => now
+    };
+    const plan = api.buildPlan({ publicationId, authorityOptions: {}, blogRepo, createdAt: now }, deps);
+    api.writePlan({ outputRoot, plan });
+    api.generate({ outputRoot, publicationId, authorityOptions: {}, blogRepo, apply: true }, deps);
+    api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps);
+    api.activate({ outputRoot, publicationId, blogRepo, apply: true }, deps);
+
+    const installed = path.join(blogRepo, addedPath);
+    assert.equal(fs.statSync(installed).mode & 0o777, 0o644);
+
+    // 模拟已提交并已推送到远端，但在写入 publication.json 前进程中止
+    const pushedCommit = oid('e');
+    const committed = {
+        ...deps,
+        prePublishRemote: () => ({ remoteIdentitySha256: hash('d'), remoteOid: oid('a'), localHead: oid('a'), branch: 'main' }),
+        publishGit: () => pushedCommit,
+        pushAndVerify: () => { throw new Error('simulated crash after push'); }
+    };
+    assert.throws(() => api.publish({ outputRoot, publicationId, blogRepo, apply: true }, committed), /simulated crash after push/);
+    const loaded = api.loadPlan({ outputRoot, publicationId });
+    assert.equal(fs.existsSync(path.join(loaded.directory, 'commit.json')), true);
+    assert.equal(fs.existsSync(path.join(loaded.directory, 'publication.json')), false);
+
+    let verifyDeltaCalled = 0;
+    const recovered = api.publish({ outputRoot, publicationId, blogRepo, apply: true }, {
+        ...deps,
+        prePublishRemote: () => ({ remoteIdentitySha256: hash('d'), remoteOid: pushedCommit, localHead: pushedCommit, branch: 'main' }),
+        verifyCommittedDelta: ({ commit }) => { assert.equal(commit, pushedCommit); verifyDeltaCalled += 1; },
+        publishGit: () => { throw new Error('must not re-commit'); },
+        pushAndVerify: () => { throw new Error('must not re-push'); },
+        liveRemote: () => ({ remoteIdentitySha256: hash('d'), remoteOid: pushedCommit })
+    });
+    assert.equal(recovered.status, 'published');
+    assert.equal(verifyDeltaCalled, 1);
+    assert.equal(recovered.receipt.publicationCommit, pushedCommit);
+    assert.equal(recovered.receipt.remoteVerifiedOid, pushedCommit);
+    assert.equal(fs.existsSync(path.join(loaded.directory, 'publication.json')), true);
+});

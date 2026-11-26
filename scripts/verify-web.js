@@ -8,13 +8,28 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const dns = require('node:dns').promises;
+const https = require('node:https');
+const net = require('node:net');
 const { spawnSync: defaultSpawnSync } = require('node:child_process');
 const doctor = require('./doctor.js');
+const { buildChildProcessEnv, TRANSPORT_ENV_KEYS } = require('./env-loader.js');
+const publicNetworkPolicy = require('./lib/public-network-policy.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const CURRENT = path.join(ROOT, 'data', 'current');
 const SITE_TITLE_MARKER = '音频研究门户';
 const LEGACY_SITE_TITLE_MARKERS = ['语音/音乐/音频论文速递'];
+const SAFE_REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const GH_ALLOWED_ENV_KEYS = Object.freeze([
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'GH_HOST',
+    'GH_CONFIG_DIR',
+    'XDG_CONFIG_HOME',
+    'SSH_AUTH_SOCK',
+    ...TRANSPORT_ENV_KEYS
+]);
 const formats = require('./lib/protocol-codec');
 const ARTIFACT_FORMAT = 'web-verification';
 
@@ -22,11 +37,39 @@ function hasVerificationArtifactFormat(value) {
     return formats.hasValidHeader(value, ARTIFACT_FORMAT, Object.hasOwn(value || {}, 'schemaVersion') ? 'schemaVersion' : 'contract');
 }
 
-function readEnv() {
-    const file = path.join(ROOT, '.env');
-    if (!fs.existsSync(file)) return {};
-    try { require('./env-loader').loadProjectEnv(); } catch (_error) { /* 只读命令允许降级为直接解析 */ }
-    return require('./lib/env-schema').parseEnvText(fs.readFileSync(file, 'utf8'));
+function readEnv(file = path.join(ROOT, '.env')) {
+    const info = doctor.readEnvFileReadOnly(file);
+    if (info.error) {
+        throw new Error(info.error);
+    }
+    if (info.readError) {
+        throw new Error(info.readError);
+    }
+    return info.exists ? (info.entries || {}) : {};
+}
+
+function buildGhChildEnv(sourceEnv = null) {
+    const extra = {};
+    if (sourceEnv && typeof sourceEnv === 'object') {
+        for (const key of GH_ALLOWED_ENV_KEYS) {
+            if (Object.prototype.hasOwnProperty.call(sourceEnv, key) && sourceEnv[key] !== undefined) {
+                extra[key] = String(sourceEnv[key]);
+            }
+        }
+    }
+    return buildChildProcessEnv(extra, GH_ALLOWED_ENV_KEYS);
+}
+
+function assertValidRepository(repository) {
+    const value = String(repository || '').trim();
+    if (!SAFE_REPOSITORY_RE.test(value) || value.startsWith('-') || value.includes('..')) {
+        throw new Error(`非法 GitHub 仓库标识：${repository}`);
+    }
+    const [owner, repo] = value.split('/');
+    if (owner === '.' || repo === '.') {
+        throw new Error(`非法 GitHub 仓库标识：${repository}`);
+    }
+    return value;
 }
 
 function defaultBaseUrl(env = {}) {
@@ -110,6 +153,19 @@ function titleMatches(title, marker = SITE_TITLE_MARKER) {
     return false;
 }
 
+function stripSiteTitleMarker(title, marker = SITE_TITLE_MARKER) {
+    let text = String(title || '');
+    const markers = marker === SITE_TITLE_MARKER
+        ? [marker, ...LEGACY_SITE_TITLE_MARKERS]
+        : [marker];
+    for (const candidate of markers) {
+        if (candidate && text.includes(candidate)) {
+            text = text.split(candidate).join('');
+        }
+    }
+    return text.replace(/[|\-–—]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function titleHasCorruptionArtifacts(title) {
     if (!title) return false;
     return CORRUPTED_TITLE_RE.test(String(title));
@@ -151,6 +207,168 @@ async function readBoundedResponseText(response, maxBytes = MAX_PAGE_BYTES) {
     return html;
 }
 
+function nodeHeadersView(headers) {
+    return {
+        get(name) {
+            const value = headers && headers[String(name).toLowerCase()];
+            if (Array.isArray(value)) return value.join(', ');
+            return value === undefined ? null : String(value);
+        }
+    };
+}
+
+async function resolvePinnedVerifyTarget(parsedUrl, options = {}) {
+    const hostname = parsedUrl.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    const proxyEnv = options.env || process.env;
+    const proxyUrl = publicNetworkPolicy.resolveHttpConnectProxyUrl(proxyEnv);
+    const proxyEnabled = Boolean(proxyUrl);
+    if (net.isIP(hostname) || publicNetworkPolicy.isIpLiteral(hostname)) {
+        if (!publicNetworkPolicy.isGloballyRoutableIp(hostname)) {
+            throw new Error(`网页核验拒绝私网或保留主机地址：${hostname}`);
+        }
+        const address = publicNetworkPolicy.canonicalizeIp(hostname);
+        return { hostname, address, family: net.isIPv6(address) ? 6 : 4, proxyUrl };
+    }
+    const lookupImpl = options.lookupImpl || dns.lookup;
+    const records = await lookupImpl(hostname, { all: true, verbatim: false });
+    const addresses = Array.isArray(records)
+        ? records.map(item => (typeof item === 'string' ? item : item?.address))
+        : [];
+    const selected = publicNetworkPolicy.selectValidatedPublicIp(addresses, { proxyEnabled });
+    const address = selected.address;
+    return { hostname, address, family: net.isIPv6(address) ? 6 : 4, proxyUrl };
+}
+
+function requestPinnedHttpsPage(parsedUrl, target, options = {}) {
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 20000;
+    const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : MAX_PAGE_BYTES;
+    const signal = options.signal;
+    const requestImpl = options.httpsRequestImpl || https.request;
+    const port = Number.parseInt(parsedUrl.port, 10) || 443;
+
+    if (signal && signal.aborted) {
+        return Promise.reject(signal.reason || new Error('网页核验请求已中止'));
+    }
+
+    let proxyAgent = null;
+    if (target.proxyUrl && (!options.httpsRequestImpl || options.createProxyAgentImpl)) {
+        const createAgent = options.createProxyAgentImpl || require('./utils.js').createProxyAgent;
+        proxyAgent = createAgent(target.proxyUrl, target.address, port, target.hostname);
+    }
+
+    const reqOptions = {
+        hostname: target.hostname,
+        port,
+        path: `${parsedUrl.pathname}${parsedUrl.search}`,
+        method: 'GET',
+        headers: {
+            Host: parsedUrl.host,
+            'Accept-Encoding': 'identity',
+            'User-Agent': 'audio-research-workbench-verify-web/1.0'
+        },
+        servername: target.hostname,
+        agent: proxyAgent || false
+    };
+    if (!proxyAgent) {
+        reqOptions.lookup = (_host, lookupOpts, cb) => {
+            const callback = typeof lookupOpts === 'function' ? lookupOpts : cb;
+            if (lookupOpts && typeof lookupOpts === 'object' && lookupOpts.all) {
+                callback(null, [{ address: target.address, family: target.family }]);
+            } else {
+                callback(null, target.address, target.family);
+            }
+        };
+    }
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let req = null;
+        let timer = null;
+        const onAbort = () => {
+            const error = signal?.reason || new Error('网页核验请求已中止');
+            if (req && !req.destroyed) req.destroy(error);
+            finish(reject, error);
+        };
+        const finish = (handler, value) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            if (signal) signal.removeEventListener('abort', onAbort);
+            if (proxyAgent && typeof proxyAgent.destroy === 'function') {
+                try { proxyAgent.destroy(); } catch { /* ignore */ }
+            }
+            handler(value);
+        };
+        if (signal) signal.addEventListener('abort', onAbort, { once: true });
+        timer = setTimeout(() => {
+            const error = new Error(`网页核验请求超时 (${timeoutMs}ms): ${parsedUrl.toString()}`);
+            if (req && !req.destroyed) req.destroy(error);
+            finish(reject, error);
+        }, timeoutMs);
+
+        try {
+            req = requestImpl(reqOptions, res => {
+                const status = Number(res.statusCode || 0);
+                const headers = nodeHeadersView(res.headers || {});
+                const contentLength = Number.parseInt(String(headers.get('content-length') || ''), 10);
+                if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+                    const error = new Error(`网页响应体超过大小上限 (${maxBytes} bytes): ${contentLength}`);
+                    res.destroy(error);
+                    if (req && !req.destroyed) req.destroy(error);
+                    finish(reject, error);
+                    return;
+                }
+                const location = headers.get('location');
+                if (status >= 300 && status < 400 && location) {
+                    res.resume();
+                    finish(resolve, {
+                        status,
+                        headers,
+                        body: null,
+                        text: async () => ''
+                    });
+                    return;
+                }
+                const chunks = [];
+                let total = 0;
+                let ended = false;
+                res.on('data', chunk => {
+                    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                    total += buf.length;
+                    if (total > maxBytes) {
+                        const error = new Error(`网页响应体超过大小上限 (${maxBytes} bytes)`);
+                        res.destroy(error);
+                        if (req && !req.destroyed) req.destroy(error);
+                        finish(reject, error);
+                        return;
+                    }
+                    chunks.push(buf);
+                });
+                res.on('end', () => {
+                    ended = true;
+                    const text = Buffer.concat(chunks, total).toString('utf8');
+                    finish(resolve, {
+                        status,
+                        headers,
+                        body: null,
+                        text: async () => text
+                    });
+                });
+                res.on('error', error => finish(reject, error));
+                res.on('close', () => {
+                    if (!ended && !settled) {
+                        finish(reject, new Error('网页核验连接在完整读取前关闭'));
+                    }
+                });
+            });
+            req.on('error', error => finish(reject, error));
+            req.end();
+        } catch (error) {
+            finish(reject, error);
+        }
+    });
+}
+
 async function fetchPage(url, options = {}) {
     const fetchImpl = options.fetchImpl || globalThis.fetch;
     const isDefaultFetch = !options.fetchImpl || options.fetchImpl === globalThis.fetch;
@@ -163,7 +381,27 @@ async function fetchPage(url, options = {}) {
     let currentUrl = assertSafeVerifyUrl(url, options).toString();
     let response;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-        response = await fetchImpl(currentUrl, { redirect: isDefaultFetch ? 'manual' : 'follow', signal });
+        if (isDefaultFetch) {
+            const parsed = assertSafeVerifyUrl(currentUrl, options);
+            const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+            const isTestLoopback = Boolean(options.allowLoopbackHttp)
+                && parsed.protocol === 'http:'
+                && (host === '127.0.0.1' || host === '::1');
+            if (isTestLoopback) {
+                response = await globalThis.fetch(currentUrl, { redirect: 'manual', signal });
+            } else {
+                const target = await resolvePinnedVerifyTarget(parsed, options);
+                response = await requestPinnedHttpsPage(parsed, target, {
+                    timeoutMs,
+                    maxBytes,
+                    signal,
+                    httpsRequestImpl: options.httpsRequestImpl,
+                    createProxyAgentImpl: options.createProxyAgentImpl
+                });
+            }
+        } else {
+            response = await fetchImpl(currentUrl, { redirect: 'follow', signal });
+        }
         const status = Number(response?.status || 0);
         const location = response?.headers && typeof response.headers.get === 'function'
             ? response.headers.get('location')
@@ -253,7 +491,7 @@ async function verify(date, options = {}) {
             if (idx >= pages.length) return;
             const page = pages[idx];
             try {
-                const fetched = await fetchPage(page.url, options);
+                const fetched = await fetchPage(page.url, { ...options, env });
                 const normalize = value => String(value || '').replace(/[?#].*$/, '').replace(/\/+$/, '');
                 const redirectOk = !fetched.finalUrl || normalize(fetched.finalUrl) === normalize(page.url);
                 const slug = path.basename(page.url.replace(/\/$/, ''));
@@ -265,7 +503,7 @@ async function verify(date, options = {}) {
                     && !corruptedTitle
                     && (isSummary
                         ? (dateInTitle || topicSummaryTitle)
-                        : String(fetched.title || '').replace(marker, '').trim().length > 4);
+                        : stripSiteTitleMarker(fetched.title, marker).length > 4);
                 results[idx] = { ...page, ...fetched, titleOk, redirectOk, ok: titleOk && redirectOk };
             } catch (error) {
                 results[idx] = { ...page, status: null, title: null, titleOk: false, ok: false, error: error.message };
@@ -599,13 +837,30 @@ function validateWorkflowJobs(jobs, oid, profile = WORKFLOW_PROFILE) {
     return { ok: true, jobs: normalized };
 }
 
+function isPermanentGhError(result) {
+    if (!result) return false;
+    if (result.error && result.error.code === 'ENOENT') return true;
+    const text = `${result.error?.message || ''}\n${result.stderr || ''}\n${result.stdout || ''}`.toLowerCase();
+    return (
+        text.includes('command not found')
+        || text.includes('gh: not found')
+        || text.includes('enoent')
+        || text.includes('not logged into')
+        || text.includes('gh auth login')
+        || text.includes('authentication required')
+        || text.includes('bad credentials')
+        || text.includes('http 401')
+        || text.includes('http 403')
+    );
+}
+
 // 组合核验：run 选择 → run 详情 → workflow 源文件 → build/deploy（及 unit）job 与 step。
 // gh 不可用、输出无法解析或任一身份不匹配都显式失败，不伪造通过。
 function verifyWorkflowSource(oid, options = {}) {
-    const repository = options.repository || deployRepository(options.env || {});
+    const repository = assertValidRepository(options.repository || deployRepository(options.env || {}));
     const profile = { ...WORKFLOW_PROFILE, ...(options.profile || {}) };
     const runGh = options.spawnSync || defaultSpawnSync;
-    const spawnOptions = { encoding: 'utf8', timeout: 30000 };
+    const spawnOptions = { encoding: 'utf8', timeout: 30000, env: buildGhChildEnv(options.env) };
 
     if (options.run && (options.run.ambiguous || options.run.code === 'run_ambiguous')) {
         return workflowFailure(
@@ -700,15 +955,18 @@ function verifyWorkflowSource(oid, options = {}) {
 
 function deployStatus(oid, options = {}) {
     const runGh = options.spawnSync || defaultSpawnSync;
-    const repository = options.repository || deployRepository(options.env || {});
+    const repository = assertValidRepository(options.repository || deployRepository(options.env || {}));
+    const spawnOptions = { encoding: 'utf8', timeout: 30000, env: buildGhChildEnv(options.env) };
     const result = runGh('gh', [
         'run', 'list', '-R', repository, '-L', '20',
         '--json', 'headSha,status,conclusion,url,workflowName,event,databaseId'
-    ], { encoding: 'utf8', timeout: 30000 });
+    ], spawnOptions);
     if (!result || result.error || result.status !== 0) {
+        const permanentUnavailable = isPermanentGhError(result);
         return {
             available: false,
             degraded: true,
+            permanentUnavailable,
             oid,
             message: 'gh CLI 不可用或未登录；请到 GitHub Actions 手动确认部署。'
         };
@@ -722,7 +980,7 @@ function deployStatus(oid, options = {}) {
             if (!parsed.runId) return unverifiedJobs('部署 run 缺少 runId，无法核验 jobs。');
             let jobsResult;
             try {
-                jobsResult = runGh('gh', ['run', 'view', String(parsed.runId), '-R', repository, '--json', 'jobs'], { encoding: 'utf8', timeout: 30000 });
+                jobsResult = runGh('gh', ['run', 'view', String(parsed.runId), '-R', repository, '--json', 'jobs'], spawnOptions);
             } catch (_error) {
                 return unverifiedJobs('读取部署 jobs 失败，不能证明部署完成。');
             }
@@ -779,9 +1037,14 @@ async function waitForDeploy(oid, options = {}) {
     const intervalMs = Number.isFinite(options.pollIntervalMs) ? options.pollIntervalMs : 10000;
     const waitMs = Number.isFinite(options.waitSeconds) ? options.waitSeconds * 1000 : DEFAULT_WAIT_SECONDS * 1000;
     const deadline = Date.now() + waitMs;
+    const shouldKeepPolling = current => {
+        if (!current || current.ambiguous) return false;
+        if (!current.available) return current.permanentUnavailable !== true;
+        return current.status !== 'completed';
+    };
     let deploy = deployStatus(oid, options);
     const snapshots = [deploy];
-    while (Date.now() < deadline && deploy && deploy.available && !deploy.ambiguous && deploy.status !== 'completed') {
+    while (Date.now() < deadline && shouldKeepPolling(deploy)) {
         await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
         deploy = deployStatus(oid, options);
         snapshots.push(deploy);
@@ -823,7 +1086,7 @@ function parseVerifyArgs(argv = []) {
         const value = argv[index];
         if (value === '--date') options.date = argv[++index] || null;
         else if (value === '--limit') options.limit = Number(argv[++index]);
-        else if (value === '--deploy') { const oid = argv[++index] || ''; if (!/^[0-9a-f]{40}$/i.test(oid)) throw new Error('--deploy 必须是 40 位十六进制 OID'); options.deploy = oid; }
+        else if (value === '--deploy') { const oid = argv[++index] || ''; if (!/^[0-9a-f]{40}$/i.test(oid)) throw new Error('--deploy 必须是 40 位十六进制 OID'); options.deploy = oid.toLowerCase(); }
         else if (value === '--workflow-source') options.workflowSource = true;
         else if (value === '--json') options.json = true;
         else if (value === '--timeout-ms') options.timeoutMs = Number(argv[++index]) || 20000;
@@ -890,6 +1153,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
                 const waited = await waitForDeploy(options.deploy, {
                     spawnSync: spawnSyncImpl,
                     repository: options.repository || deployRepository(env),
+                    env,
                     sleep,
                     pollIntervalMs: options.pollIntervalMs,
                     waitSeconds: options.waitSeconds
@@ -910,7 +1174,8 @@ async function runVerifyWebCli(argv = [], deps = {}) {
             } else {
                 deploy = deployStatus(options.deploy, {
                     spawnSync: spawnSyncImpl,
-                    repository: options.repository || deployRepository(env)
+                    repository: options.repository || deployRepository(env),
+                    env
                 });
             }
         }
@@ -920,6 +1185,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
             workflow = verifyWorkflowSource(options.deploy, {
                 spawnSync: spawnSyncImpl,
                 repository: options.repository || deployRepository(env),
+                env,
                 run: deploy,
                 profile: deps.workflowProfile
             });
@@ -1035,7 +1301,11 @@ module.exports = {
     ARTIFACT_FORMAT,
     hasVerificationArtifactFormat,
     SITE_TITLE_MARKER,
+    readEnv,
+    buildGhChildEnv,
+    assertValidRepository,
     assertSafeVerifyUrl,
+    stripSiteTitleMarker,
     titleHasCorruptionArtifacts,
     pageUrls,
     titleOf,

@@ -7,6 +7,7 @@ const codec = require('./protocol-codec');
 const sourceCorrectionFormat = require('./conference-source-correction-format');
 const path = require('node:path');
 const { isDeepStrictEqual: same } = require('node:util');
+const { relocatePathWithinRoot, matchesRelocatedRepoPath } = require('./repo-rename-path');
 const evidence = require('./conference-reader-review-maintenance-evidence');
 const { sha, stable } = evidence;
 const maintenanceFamily = kind => 'conference-reader-review-maintenance-' + kind;
@@ -981,10 +982,12 @@ function replayMaintenancePublicationView(batch,generation) {
     publicationHistoryHandles.set(historyHandle,{batch,generation:structuredClone(generation),
         generationFileSha256:batch.m.generationFileSha256,assertUnchanged:assertBase});
     try {
+        const runtimeRoot=path.dirname(batch.analysisRoot);
+        const resolvedViewManifestPath=relocatePathWithinRoot(view.manifestPath,runtimeRoot)||view.manifestPath;
         const history=require('./conference-publication-figure-crop')[isRegisteringSourceRevalidation(batch.p.manifest,batch.processDirectory,batch.analysisRoot)
             ?'revalidatePublicationFigureCropsForMaintenance':'replayPublicationFigureCropsForMaintenance']({
-            runtimeRoot:path.dirname(batch.analysisRoot),processId:batch.m.processId,conferenceId:generation.conferenceId,
-            manifestPath:view.manifestPath,expectedGenerationSha256:view.baseGenerationSha256,
+            runtimeRoot,processId:batch.m.processId,conferenceId:generation.conferenceId,
+            manifestPath:resolvedViewManifestPath,expectedGenerationSha256:view.baseGenerationSha256,
             expectedDerivation:view.nodeDerivation},historyHandle);
         check(history&&typeof history.assertUnchanged==='function','actual source-replayed historical crop capability required');
         let outcome;
@@ -1024,14 +1027,14 @@ function replayMaintenancePublicationView(batch,generation) {
         check(rawFiles.filter(record=>record.kind==='aggregate').length===1,'one actual raw aggregate required');
         const rawBytes=new Map(),stageByPaper=new Map();
         for(const record of [...rawFiles,...rawImages]) {
-            const allowed=[files.conferencePageStagingDir,files.conferenceAggregateDir].some(root=>
-                path.resolve(record.sourcePath).startsWith(path.resolve(root)+path.sep));
-            check(allowed,'historical raw publication source outside authenticated staging');
-            const bytes=pin(record.sourcePath);check(sha(bytes)===record.sourceSha256&&bytes.length===record.size,'raw publication bytes changed');
+            const relocatedSource=[files.conferencePageStagingDir,files.conferenceAggregateDir]
+                .map(root=>relocatePathWithinRoot(record.sourcePath,root)).find(Boolean);
+            check(relocatedSource,'historical raw publication source outside authenticated staging');
+            const bytes=pin(relocatedSource);check(sha(bytes)===record.sourceSha256&&bytes.length===record.size,'raw publication bytes changed');
             if(['paper','aggregate'].includes(record.kind))rawBytes.set(record.path,bytes);
             if(record.kind==='paper') {
                 const item=batch.baseline.value.items[record.paperId];check(item,'raw publication paper outside baseline');
-                const stageFile=path.join(path.dirname(record.sourcePath),'manifest.json'),stage=JSON.parse(pin(stageFile));self(stage,'manifestSha256');
+                const stageFile=path.join(path.dirname(relocatedSource),'manifest.json'),stage=JSON.parse(pin(stageFile));self(stage,'manifestSha256');
                 check(stage.manifestSha256===record.manifestSha256&&item.pageProof.manifestSha256===record.manifestSha256
                     &&stage.paperId===record.paperId&&stage.analysisExecutionId===item.analysisRunId
                     &&stage.analysisSha256===item.analysisProof.analysisSha256
@@ -1039,11 +1042,11 @@ function replayMaintenancePublicationView(batch,generation) {
                     &&stage.completionReceiptSha256===item.analysisProof.completionReceiptSha256&&stage.contentSha256===record.sourceSha256
                     &&item.pageProof.contentSha256===record.sourceSha256&&item.pageProof.pagePath===record.path,
                     'historical raw stage does not bind actual baseline parent/page');
-                stageByPaper.set(record.paperId,{stage,directory:path.dirname(record.sourcePath)});
+                stageByPaper.set(record.paperId,{stage,directory:path.dirname(relocatedSource)});
             }
             if(record.kind==='aggregate') {
                 const proof=batch.baseline.value.aggregate;
-                const stage=JSON.parse(pin(path.join(path.dirname(record.sourcePath),'manifest.json')));self(stage,'manifestSha256');
+                const stage=JSON.parse(pin(path.join(path.dirname(relocatedSource),'manifest.json')));self(stage,'manifestSha256');
                 check(proof&&proof.manifestSha256===record.manifestSha256&&stage.manifestSha256===record.manifestSha256
                     &&stage.aggregateId===proof.aggregateId&&stage.conferenceId===generation.conferenceId
                     &&stage.pagePath===record.path&&proof.pagePath===record.path
@@ -1058,7 +1061,7 @@ function replayMaintenancePublicationView(batch,generation) {
             const matches=owner.stage.assets.filter(asset=>asset.path===assetPath);
             check(matches.length===1&&record.manifestSha256===owner.stage.manifestSha256
                 &&matches[0].sha256===record.sourceSha256&&matches[0].size===record.size
-                &&record.sourcePath===path.join(owner.directory,'assets',assetPath),
+                &&matchesRelocatedRepoPath(record.sourcePath,path.join(owner.directory,'assets',assetPath)),
                 'historical raw asset ownership/path/manifest differs from original stage');
             const represented=representedAssets.get(record.paperId)||[];represented.push(assetPath);representedAssets.set(record.paperId,represented);
         }
@@ -1080,19 +1083,22 @@ function replayMaintenancePublicationView(batch,generation) {
             check(sha(projected)!==record.sourceSha256,'changed view must change actual publication bytes');
             const expectedPath=path.join(files.conferencePublicationDir,generation.conferenceId,batch.m.processId,
                 'figure-publication-views',outcome.derivationSha256,sha(projected)+'.md');
-            const expected={...record,sourcePath:expectedPath,sourceSha256:sha(projected),size:projected.length};
-            check(same(expected,actual)&&same(pin(actual.sourcePath),projected),'canonical historical view differs from shared exact transform');
+            const relocatedActualSource=relocatePathWithinRoot(actual.sourcePath,files.conferencePublicationDir)||actual.sourcePath;
+            const expected={...record,sourcePath:matchesRelocatedRepoPath(actual.sourcePath,expectedPath)?actual.sourcePath:expectedPath,
+                sourceSha256:sha(projected),size:projected.length};
+            check(same(expected,actual)&&same(pin(relocatedActualSource),projected),'canonical historical view differs from shared exact transform');
             expectedFiles.push(expected);changed.push({path:record.path,paperId:record.paperId??null,
                 rawPageSha256:record.sourceSha256,publicationViewSha256:sha(projected)});
         }
         check(same(ordered(expectedFiles),ordered(generation.files))&&same(changed,view.changedPages),'historical full view page mapping differs');
         const assertUnchanged=coldEvidenceAssertion(()=>{assertBase();assertHistory();
             for(const material of materialPins){privateFile(material.filename,material.requirePrivateMode);check(sha(fs.readFileSync(material.filename))===material.sha256,'historical view material changed');}});
+        const relocateMaterial=filename=>path.resolve(relocatePathWithinRoot(filename,runtimeRoot)||filename);
         const materialPaths=Object.freeze([...new Set([...materialPins.map(pin=>path.resolve(pin.filename)),
-            ...outcome.derivations.flatMap(item=>[item.derivedSourcePath,item.proofPath]),
-            ...(history.currentOutcome?history.currentOutcome.derivations.map(item=>item.proofPath):[]),
-            ...(history.currentRevalidationReceiptPath?[history.currentRevalidationReceiptPath]:[]),
-            ...(history.issuanceStateSnapshotPath?[history.issuanceStateSnapshotPath]:[])].map(filename=>path.resolve(filename))) ]);
+            ...outcome.derivations.flatMap(item=>[item.derivedSourcePath,item.proofPath]).map(relocateMaterial),
+            ...(history.currentOutcome?history.currentOutcome.derivations.map(item=>item.proofPath).map(relocateMaterial):[]),
+            ...(history.currentRevalidationReceiptPath?[relocateMaterial(history.currentRevalidationReceiptPath)]:[]),
+            ...(history.issuanceStateSnapshotPath?[relocateMaterial(history.issuanceStateSnapshotPath)]:[])])]);
         assertUnchanged();return Object.freeze({rawFiles:structuredClone(rawFiles),materialPaths,assertUnchanged,
             ...(history.currentRevalidationReceipt?{currentRevalidationReceipt:history.currentRevalidationReceipt,
                 currentRevalidationReceiptPath:history.currentRevalidationReceiptPath}:{} )});
@@ -1197,11 +1203,13 @@ function loadBatch({manifestPath,processDirectory,analysisRoot}) {
         if(family==='conference-reader-review-classification'&&!['asset-only','deferred-review'].includes(file.value.kind))for(const image of file.value.imageEvidence||[]) {
             const asset=generation.value.imageFiles.find(row=>row.path===image.path&&row.sourceSha256===image.sha256);
             check(asset,'real image generation member');
-            const expectedRoot=path.join(path.dirname(analysisRoot),'conference-page-staging')+path.sep;
-            check(path.resolve(asset.sourcePath).startsWith(expectedRoot)||generation.value.figurePublicationView,
-                'semantic image source outside current staging and no canonical view');
-            const info=fs.lstatSync(asset.sourcePath);check(info.isFile()&&!info.isSymbolicLink()&&info.nlink===1,'semantic image regular bytes');
-            check(sha(fs.readFileSync(asset.sourcePath))===image.sha256,'semantic image pixels changed');
+            const stagingRoot=path.join(path.dirname(analysisRoot),'conference-page-staging');
+            const publicationRootDir=path.join(path.dirname(analysisRoot),'conference-publications');
+            const relocatedAssetPath=relocatePathWithinRoot(asset.sourcePath,stagingRoot)
+                ||(generation.value.figurePublicationView&&relocatePathWithinRoot(asset.sourcePath,publicationRootDir));
+            check(relocatedAssetPath,'semantic image source outside current staging and no canonical view');
+            const info=fs.lstatSync(relocatedAssetPath);check(info.isFile()&&!info.isSymbolicLink()&&info.nlink===1,'semantic image regular bytes');
+            check(sha(fs.readFileSync(relocatedAssetPath))===image.sha256,'semantic image pixels changed');
         }
     }
     for(const member of m.members) {
@@ -1220,10 +1228,11 @@ function loadBatch({manifestPath,processDirectory,analysisRoot}) {
     if((m.aggregatePaperFeedback||[]).length) {
         const aggregate=generation.value.files.find(record=>record.kind==='aggregate');
         const root=require('../config').FILES.conferenceAggregateDir;
-        check(aggregate&&path.resolve(aggregate.sourcePath).startsWith(path.resolve(root)+path.sep),'canonical aggregate source required');
-        aggregateMappingRecord={filename:aggregate.sourcePath,sha256:aggregate.sourceSha256};
-        check(fs.statSync(privateFile(aggregate.sourcePath,false)).size===aggregate.size&&aggregate.size<=128*1024*1024,'actual aggregate source byte budget');
-        aggregateMarkdown=fs.readFileSync(aggregate.sourcePath,'utf8');
+        const relocatedAggregate=aggregate&&relocatePathWithinRoot(aggregate.sourcePath,root);
+        check(relocatedAggregate,'canonical aggregate source required');
+        aggregateMappingRecord={filename:relocatedAggregate,sha256:aggregate.sourceSha256};
+        check(fs.statSync(privateFile(relocatedAggregate,false)).size===aggregate.size&&aggregate.size<=128*1024*1024,'actual aggregate source byte budget');
+        aggregateMarkdown=fs.readFileSync(relocatedAggregate,'utf8');
         check(sha(aggregateMarkdown)===aggregate.sourceSha256,'actual aggregate source bytes changed');
         for(const mapping of m.aggregatePaperFeedback) {
             const member=m.members.find(member=>member.paperId===mapping.paperId);

@@ -1278,8 +1278,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
     // 绝不要用读者能看到的诊断文字替代无支撑的表格单元。下面那些精确的单元/引文闸门会
     // 抛错，交给现有的 Reader 修复循环。
     let renderedTables = extractMarkdownTables(boundArticle);
-    const renderedFormulaBlocks = [...boundArticle.matchAll(/\\\[[\s\S]*?\\\]/g)]
-        .map(match => match[0]);
+    const renderedFormulaBlocks = require('../analysis-engine.js').extractVisibleDisplayFormulaBlocks(boundArticle);
     if (renderedFormulaBlocks.length !== formulaBindings.length
         || formulaBindings.some(binding => (
             renderedFormulaBlocks.filter(block => (

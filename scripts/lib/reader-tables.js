@@ -1003,8 +1003,8 @@ function compileReaderTableSelections(sections, bindings, artifacts, options = {
             if (intersection === 0) continue;
             const minSize = Math.min(coordsSet.size, prev.coords.size);
             // Reject any subset (covers completeTable + selection in either order, or narrower column slice)
-            // OR >50% data-cell overlap on the same sourceTableOrdinal.
-            if (intersection === minSize || (intersection / minSize) > 0.5) {
+            // OR >=50% data-cell overlap on the same sourceTableOrdinal.
+            if (intersection === minSize || (intersection / minSize) >= 0.5) {
                 return prev.tableIndex;
             }
         }

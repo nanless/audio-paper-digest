@@ -113,6 +113,7 @@ from publish_common import (
     fix_latex_delimiters, escape_html_like_tags, fix_image_markdown,
     truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
     fix_empty_markdown_links, dedupe_image_alts, fix_yaml_unbalanced_quotes,
+    _split_starting_frontmatter,
     sanitize_markdown_for_publish, strip_internal_scoring_anchors,
     call_publish_llm_api, PublishLLMUnavailable, run_bounded_llm_tasks,
     PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
@@ -2280,6 +2281,8 @@ def multimodal_review_images(
     # 避免一个过期的可选 analysis-secondary 路由把
     # 发布审查悄悄挪到别的服务商或配额上。
     if not os.environ.get('PAPER_ANALYZER_MODEL', '').strip():
+        if required:
+            raise PublishLLMUnavailable('缺少 PAPER_ANALYZER_MODEL，无法执行必需的多模态图片审查')
         return True, []
 
     img_summary = []
@@ -7247,7 +7250,7 @@ title: "{conference_title}"
 date: {date_str}
 draft: false
 tags: []
-categories: [{category}]
+categories: [{_yaml_flow_scalar(category)}]
 description: "今日没有新论文"
 layout: "posts"
 paper_digest_pipeline_owned: true
@@ -8301,13 +8304,13 @@ def _api_reader_concept_term_display(value):
     def numeric_display(prose):
         # Same bounded count/number boundaries as the Node helper. Code bytes,
         # English word gaps, absent terms and different quantities stay literal.
-        prose = re.sub(r'(?<![零〇一二两三四五六七八九十百千万亿\d])([一二两三四五六七八九十])'
+        prose = re.sub(r'(?<![零〇一二两三四五六七八九十百千万亿0-9])([一二两三四五六七八九十])'
                        r'(?=阶|路|次|维|步|层|个|段|类|组|轮|种|样本|倍|帧|模态|自由度|折|基准|对)',
                        lambda match: numerals[match[0]], prose)
-        prose = re.sub(r'(对)([一二两三四五六七八九十])(?![零〇一二两三四五六七八九十百千万亿\d])',
+        prose = re.sub(r'(对)([一二两三四五六七八九十])(?![零〇一二两三四五六七八九十百千万亿0-9])',
                        lambda match: match[1] + numerals[match[2]], prose)
-        prose = re.sub(r'(?<=[\u3400-\u9fff]) +(?=\d)', '', prose)
-        return re.sub(r'(?<=\d) +(?=[\u3400-\u9fff])', '', prose)
+        prose = re.sub(r'(?<=[\u3400-\u9fff]) +(?=[0-9])', '', prose)
+        return re.sub(r'(?<=[0-9]) +(?=[\u3400-\u9fff])', '', prose)
 
     parts, cursor = [], 0
     for left, right in _api_reader_inline_code_ranges(text):
@@ -8325,8 +8328,8 @@ def _api_reader_concept_term_present(explanation, term):
         while start >= 0:
             before = haystack[start - 1] if start else ''
             after = haystack[start + len(needle):start + len(needle) + 1]
-            if (not re.match(r'[\d一二两三四五六七八九十]', needle) or not re.search(r'[\d.+\-零〇一二两三四五六七八九十百千万亿]', before)) \
-                    and (not re.search(r'\d$', needle) or not re.search(r'[\d.]', after)):
+            if (not re.match(r'[0-9一二两三四五六七八九十]', needle) or not re.search(r'[0-9.+\-零〇一二两三四五六七八九十百千万亿]', before)) \
+                    and (not re.search(r'[0-9]$', needle) or not re.search(r'[0-9.]', after)):
                 return True
             start = haystack.find(needle, start + 1)
     return False
@@ -10445,26 +10448,33 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
         content = re.sub(r'\ufffd', '', content)
         issues.append(f"发现并修复 {garbled_count} 个 UTF-8 乱码字符")
 
-    # 1. 检查未转义的 HTML-like 标签（可能导致删除线等样式问题）
+    # 1. 先检查并剥离裸的行内 HTML 样式标签（与 sanitize_markdown_for_publish 顺序一致：
+    # 仅 b/i/u，跳过代码块与行内代码；必须在 escape_html_like_tags 之前执行，否则 `<b>` 会先被反引号包裹）
+    raw_html_pattern = re.compile(r'<(b|i|u)(?:\s+[^>\n]*)?>([^\n]*?)</\1>', re.IGNORECASE)
+    scannable_for_raw_html, _ = _strip_code_for_review_scan(content)
+    raw_matches = raw_html_pattern.findall(scannable_for_raw_html)
+    if raw_matches:
+        issues.append(f"发现 {len(raw_matches)} 个裸 HTML 标签，已转为纯文本")
+        content = strip_raw_inline_html(content)
+
+    # 2. 检查未转义的 HTML-like 标签（可能导致删除线等样式问题）
     # 匹配不在反引号、不在 code block 中的 <S>、<E>、<task>、<perception> 等标签
     html_tag_pattern = re.compile(
         r'(?<![a-zA-Z0-9`])<(/?)([SE]|task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate)(?![a-zA-Z0-9`])>',
         re.IGNORECASE
     )
-    matches = html_tag_pattern.findall(content)
+    scannable_for_html, _ = _strip_code_for_review_scan(content)
+    matches = html_tag_pattern.findall(scannable_for_html)
     if matches:
         issues.append(f"发现 {len(matches)} 个未转义的 HTML-like 标签: {set(matches)}")
         content = escape_html_like_tags(content)
 
-    # 2. 检查未正确转换的 LaTeX 行内公式（$...$ 形式，可能被 Hugo 解析为 markdown）
-    # 排除已在 \( ... \) 中的，以及 code block 中的
-    frontmatter_match = re.match(r'^---\n.*?\n---\n', content, flags=re.DOTALL)
-    latex_prefix = frontmatter_match.group(0) if frontmatter_match else ''
-    latex_body = content[len(latex_prefix):]
-    latex_pattern = re.compile(r'(?<!\\)\$([^\s$][^$]*?)\$(?!\d)')
-    latex_matches = latex_pattern.findall(latex_body)
-    if latex_matches:
-        issues.append(f"发现 {len(latex_matches)} 个未转换的 LaTeX 行内公式")
+    # 3. 检查未正确转换的 LaTeX 行内公式（$...$ / $$...$$ 形式，可能被 Hugo 解析为 markdown）
+    # 复用 has_unconverted_dollar_math：排除代码块、行内代码、URL 与货币金额，遵守单行边界。
+    if has_unconverted_dollar_math(content):
+        opening, frontmatter, sep, closing, latex_body = _split_starting_frontmatter(content)
+        latex_prefix = opening + frontmatter + sep + closing
+        issues.append("发现未转换的 LaTeX 行内公式")
         content = latex_prefix + fix_latex_delimiters(latex_body)
 
     # Hugo 数学分隔符本身已经负责渲染；外围反引号会把公式重新变成代码。
@@ -10475,13 +10485,6 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
     if backticked_math_count:
         content = backticked_math.sub(r'\1', content)
         issues.append(f"发现并修复 {backticked_math_count} 个被反引号包裹的 LaTeX 公式")
-
-    # 3. 检查是否有裸的 HTML 标签（如 <s>、<e> 等小写形式）
-    raw_html_pattern = re.compile(r'<(s|e|b|i|u)(\s+[^>]*)?>([^<]*)</\1>', re.IGNORECASE)
-    raw_matches = raw_html_pattern.findall(content)
-    if raw_matches:
-        issues.append(f"发现 {len(raw_matches)} 个裸 HTML 标签，已转为纯文本")
-        content = strip_raw_inline_html(content)
 
     # 4. 检查并修复非标准图片引用格式
     if re.search(r'外部\s*URL:', content):
@@ -10495,9 +10498,10 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
         issues.append(f"发现 {len(long_base64)} 个过长的 base64 data URI，已阻断；请转存为受控图片资产")
 
     # 6. 修复 YAML frontmatter 双逗号
-    if ',,' in content.split('---\n')[1] if len(content.split('---\n')) >= 3 else False:
+    fixed_yaml_commas = fix_yaml_double_commas(content)
+    if fixed_yaml_commas != content:
         issues.append("发现 YAML frontmatter 双逗号，已修复")
-        content = fix_yaml_double_commas(content)
+        content = fixed_yaml_commas
 
     # 7. 检查并修复未闭合的 LaTeX $ 公式（$ \mathcal{L}_D \( 形式）
     broken_latex_pattern = re.compile(r'\$ \\mathcal\{([^}]+)\}[^\\]*\\\(')
@@ -10666,12 +10670,12 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
     content = fix_yaml_unbalanced_quotes(content)
     if content != content_before_yaml_quote_fix:
         issues.append("发现 YAML frontmatter 未闭合引号，已修复")
-    yaml_lines = content.split('---\n')
-    if len(yaml_lines) >= 3:
-        yaml_block = yaml_lines[1]
-        for line in yaml_block.split('\n'):
+    opening, yaml_block, _sep, _closing, _body = _split_starting_frontmatter(content)
+    if opening:
+        unescaped_quote_re = re.compile(r'(?<!\\)(?:\\\\)*"')
+        for line in yaml_block.splitlines():
             if ':' in line and '"' in line:
-                quote_count = line.count('"')
+                quote_count = len(unescaped_quote_re.findall(line))
                 if quote_count % 2 != 0:
                     issues.append(f"YAML 行可能存在未闭合引号: {line[:60]}")
                     break
@@ -12236,8 +12240,29 @@ def review_all_posts(
             if return_details:
                 return total_fixed, total_blocking_issues, file_results
             return total_fixed, total_blocking_issues
-        with review_unit_cache(date_str, index_file, required=require_llm, paper_id=f'index:{date_str}', run_id=index_run_id):
-            llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页", required=require_llm)
+        try:
+            with review_unit_cache(date_str, index_file, required=require_llm, paper_id=f'index:{date_str}', run_id=index_run_id):
+                llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页", required=require_llm)
+        except PublishLLMUnavailable as exc:
+            print(f"    ⚠️ 汇总页文本审查不可用（{type(exc).__name__}），保留为可重试失败: {exc}")
+            total_blocking_issues += 1
+            result = {
+                'passed': False,
+                'blockingCount': 1,
+                'completed': True,
+                'failureKind': 'transient',
+                'reviewedSha256': index_artifact['sha256'],
+                'issues': [{'severity': 'error', 'type': 'infrastructure',
+                            'description': f'汇总页文本审查不可用 ({type(exc).__name__}): {exc}'}],
+            }
+            file_results[index_key] = result
+            if result_callback:
+                result_callback(index_key, result)
+            if getattr(exc, 'scope', None) == 'run':
+                raise
+            if return_details:
+                return total_fixed, total_blocking_issues, file_results
+            return total_fixed, total_blocking_issues
         if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
             llm_issues = list(llm_issues or []) + [{
                 'severity': 'error',
@@ -12261,18 +12286,42 @@ def review_all_posts(
 
         # 汇总页同样可能包含论文图片，必须经过与独立论文页一致的多模态审查；
         # 已在同批独立论文页以 0-warning 纯净通过且像素一致的预览图可复用免重审。
-        with review_unit_cache(date_str, index_file, required=require_llm, paper_id=f'index:{date_str}', run_id=index_run_id):
-            index_img_kwargs = {
-                'required': require_llm,
-                # 汇总页的图片单元仍沿用 1–5 的上限：论文页已按
-                # PD_BLOG_REVIEW_CONCURRENCY 并行，再叠加一层大并发会直接撞限流。
-                'image_concurrency': min(5, get_blog_review_concurrency()),
+        try:
+            with review_unit_cache(date_str, index_file, required=require_llm, paper_id=f'index:{date_str}', run_id=index_run_id):
+                index_img_kwargs = {
+                    'required': require_llm,
+                    # 汇总页的图片单元仍沿用 1–5 的上限：论文页已按
+                    # PD_BLOG_REVIEW_CONCURRENCY 并行，再叠加一层大并发会直接撞限流。
+                    'image_concurrency': min(5, get_blog_review_concurrency()),
+                }
+                if zero_warning_paper_images and 'verified_paper_images' in inspect.signature(multimodal_review_images).parameters:
+                    index_img_kwargs['verified_paper_images'] = zero_warning_paper_images
+                _img_passed, img_issues = multimodal_review_images(
+                    content, '汇总页', **index_img_kwargs,
+                )
+        except PublishLLMUnavailable as exc:
+            print(f"    ⚠️ 汇总页图片审查不可用（{type(exc).__name__}），保留为可重试失败: {exc}")
+            total_blocking_issues += 1
+            combined_issues = list(llm_issues or []) + [{
+                'severity': 'error', 'type': 'infrastructure',
+                'description': f'汇总页图片审查不可用 ({type(exc).__name__}): {exc}',
+            }]
+            result = {
+                'passed': False,
+                'blockingCount': count_blocking_review_issues(combined_issues) or 1,
+                'completed': True,
+                'failureKind': 'transient',
+                'reviewedSha256': index_artifact['sha256'],
+                'issues': combined_issues,
             }
-            if zero_warning_paper_images and 'verified_paper_images' in inspect.signature(multimodal_review_images).parameters:
-                index_img_kwargs['verified_paper_images'] = zero_warning_paper_images
-            _img_passed, img_issues = multimodal_review_images(
-                content, '汇总页面', **index_img_kwargs,
-            )
+            file_results[index_key] = result
+            if result_callback:
+                result_callback(index_key, result)
+            if getattr(exc, 'scope', None) == 'run':
+                raise
+            if return_details:
+                return total_fixed, total_blocking_issues, file_results
+            return total_fixed, total_blocking_issues
         if _img_passed is False and count_blocking_review_issues(img_issues) == 0:
             img_issues = list(img_issues or []) + [{
                 'severity': 'error',

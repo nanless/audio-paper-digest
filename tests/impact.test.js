@@ -622,3 +622,46 @@ test('真实子进程验证 --help --json、--json --run-tests 纯净 JSON stdou
     assert.strictEqual(sandboxRun.status, 1);
     assert.match(sandboxRun.stderr, /必须在沙箱外运行/);
 });
+
+test('impact 发现并执行 tests/reader_pdf_*_test.py 且跳过 .claude 与 .dsh-meow 目录', t => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'impact-reader-pdf-'));
+    t.after(() => {
+        impact.clearCaches();
+        fs.rmSync(repoDir, { recursive: true, force: true });
+    });
+    fs.mkdirSync(path.join(repoDir, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, 'tests'), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(repoDir, '.dsh-meow'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'scripts', 'reader_pdf_cell_evidence.py'), 'VALUE = 1\n');
+    fs.writeFileSync(path.join(repoDir, 'tests', 'reader_pdf_cell_evidence_test.py'), [
+        'import unittest',
+        'import reader_pdf_cell_evidence',
+        'class Dummy(unittest.TestCase):',
+        '    def test_ok(self):',
+        '        self.assertEqual(reader_pdf_cell_evidence.VALUE, 1)',
+        ''
+    ].join('\n'));
+    fs.writeFileSync(path.join(repoDir, '.claude', 'scratch.js'), 'require("../scripts/reader_pdf_cell_evidence.py");\n');
+    fs.writeFileSync(path.join(repoDir, '.dsh-meow', 'scratch.js'), 'require("../scripts/reader_pdf_cell_evidence.py");\n');
+
+    const res = impact.impactOf('scripts/reader_pdf_cell_evidence.py', { root: repoDir, fresh: true });
+    assert.ok(res.exactTests.python.includes('tests/reader_pdf_cell_evidence_test.py'));
+    assert.strictEqual(impact.impactOf('.claude/scratch.js', { root: repoDir, fresh: true }).matched, false);
+    assert.strictEqual(impact.impactOf('.dsh-meow/scratch.js', { root: repoDir, fresh: true }).matched, false);
+
+    const invoked = [];
+    const runRes = impact.runAffectedTests(res, {
+        root: repoDir,
+        fresh: true,
+        json: true,
+        quiet: true,
+        spawnSync: (cmd, args, opts) => {
+            invoked.push({ cmd, args, pyPath: opts.env.PYTHONPATH });
+            return { status: 0, stdout: '', stderr: '' };
+        }
+    });
+    assert.strictEqual(runRes.ok, true);
+    assert.strictEqual(invoked.length, 1);
+    assert.ok(invoked[0].args.includes('reader_pdf_cell_evidence_test'));
+});

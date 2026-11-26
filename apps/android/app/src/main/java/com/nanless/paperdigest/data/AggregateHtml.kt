@@ -70,13 +70,13 @@ object AggregateHtml {
         val images=body.select("img")
         // Capture each original src before clean() drops it, in one pass shared by resources, slots and the plan.
         val originalSources=java.util.IdentityHashMap<Element,String>();images.forEach{originalSources[it]=it.attr("src")}
-        val resources=images.map{image->val rawSource=image.attr("src");val valid=safeURL(rawSource,source);JSONObject().put("sourceURL",valid?:rawSource).put("kind","image").put("missingReason",if(valid==null)"原图片地址不受本入口支持，未下载或隐藏缺项"else"尚未保存该图片；没有声称完整离线")};require(resources.size<=128)
+        val resources=images.map{image->val rawSource=image.attr("src");val valid=safeURL(rawSource,source);JSONObject().put("sourceURL",valid?:rawSource).put("kind","image").put("missingReason",if(valid==null)"原图片地址不受本入口支持，未下载或隐藏缺项"else"尚未保存该图片；没有声称完整离线")};require(resources.size<=AggregateImages.MAX_SLOTS)
         clean(body,source);val plain=plainText(body);require(plain.isNotBlank()){"汇总缺少连续正文"};val derived=body.html()
         val slots=body.select("img").mapIndexed{i,image->
             val address=originalSources[image].orEmpty();val caption=image.parents().firstOrNull{it.normalName()=="figure"}?.select("figcaption")?.joinToString("\n"){plainText(it)}?.trim().orEmpty()
             AggregateImageSlot(i,safeURL(address,source),image.attr("alt"),caption)
         }
-        require(slots.size<=128)
+        require(slots.size<=AggregateImages.MAX_SLOTS)
         val format=savedFormat?.let{AggregateDocumentFormat.replay(it,AggregateDocumentFormat.Platform.ANDROID)} ?: AggregateDocumentFormat.current(AggregateDocumentFormat.Platform.ANDROID)
         val document=format.put("descriptor",descriptor.json()).put("responseURL",responseURL).put("fetchedAt",fetchedAt).put("rawHTMLSHA256",PublishedAggregateReader.sha(raw)).put("rawHTMLBytes",raw.size).put("sanitizedBodySHA256",PublishedAggregateReader.sha(derived.toByteArray())).put("bodyHTML",derived).put("plainText",plain).put("resources",JSONArray(resources)).put("completeOffline",false).put("notices",JSONArray(listOf("网站汇总只读正文；不具有单篇论文、PDF、模型或Zotero资格。","原HTML与派生正文分别保存；目录当前性不代表旧网页已重新核验。")))
         return Parsed(document,slots,derived)

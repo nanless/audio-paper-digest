@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import io
 import tarfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
@@ -23,6 +24,8 @@ from urllib.parse import urlsplit
 
 from blog_repository_lock import shared_blog_repository_lock
 from blog_entry_loader import load_publish_to_blog
+from conference_publication_figure_view import (matches_relocated_repo_path,
+                                                relocate_path_within_root)
 from publish_common import (run_bounded_llm_tasks, classify_review_failure,
                             unchanged_content_rejection_blocks_retry,
                             interpret_readonly_text_unit)
@@ -48,6 +51,86 @@ SHA_RE = re.compile(r'^[0-9a-f]{64}$')
 
 class ConferencePublicationError(RuntimeError):
     pass
+
+
+PORTAL_REPO_RENAME_PAIR = (
+    'nanless/audio-paper-digest-blog',
+    'nanless/audio-research-portal',
+)
+
+
+def _portal_rename_remote_url_aliases(remote_url):
+    """仅接受 nanless/audio-paper-digest-blog <-> nanless/audio-research-portal 同协议同主机的精确别名。"""
+    if not isinstance(remote_url, str) or not remote_url:
+        return ()
+    aliases = {remote_url}
+    scp_match = re.fullmatch(r'((?:[^@/\s]+@)?[^:/\s]+:)([^/\s]+/[^/\s]+?)(\.git)?', remote_url)
+    if scp_match:
+        prefix, repo_slug, git_suffix = scp_match.groups()
+        suffix = git_suffix or ''
+        if repo_slug in PORTAL_REPO_RENAME_PAIR:
+            other = (PORTAL_REPO_RENAME_PAIR[1] if repo_slug == PORTAL_REPO_RENAME_PAIR[0]
+                     else PORTAL_REPO_RENAME_PAIR[0])
+            aliases.add(f'{prefix}{other}{suffix}')
+        return tuple(aliases)
+    parsed = urlsplit(remote_url)
+    if parsed.scheme in {'https', 'http', 'ssh'} and parsed.netloc and not parsed.query and not parsed.fragment:
+        path = parsed.path
+        url_match = re.fullmatch(r'/([^/\s]+/[^/\s]+?)(\.git)?', path)
+        if url_match:
+            repo_slug, git_suffix = url_match.groups()
+            suffix = git_suffix or ''
+            if repo_slug in PORTAL_REPO_RENAME_PAIR:
+                other = (PORTAL_REPO_RENAME_PAIR[1] if repo_slug == PORTAL_REPO_RENAME_PAIR[0]
+                         else PORTAL_REPO_RENAME_PAIR[0])
+                aliases.add(remote_url[:-len(path)] + f'/{other}{suffix}')
+    return tuple(aliases)
+
+
+def remote_identity_matches(snapshot, expected_identity):
+    if not isinstance(snapshot, dict) or not isinstance(expected_identity, str):
+        return False
+    if snapshot.get('remoteIdentitySha256') == expected_identity:
+        return True
+    remote_url = snapshot.get('remoteUrl')
+    for alias_url in _portal_rename_remote_url_aliases(remote_url):
+        if sha_bytes(alias_url.encode('utf-8')) == expected_identity:
+            return True
+    return False
+
+
+def resolve_runtime_source_path(recorded_path):
+    relocated = relocate_path_within_root(recorded_path, RUNTIME)
+    return relocated if relocated is not None else Path(recorded_path)
+
+
+def records_match_relocated(saved_records, live_records):
+    if saved_records == live_records:
+        return True
+    if not isinstance(saved_records, list) or not isinstance(live_records, list) \
+            or len(saved_records) != len(live_records):
+        return False
+    for saved, live in zip(saved_records, live_records):
+        if not isinstance(saved, dict) or not isinstance(live, dict) or set(saved) != set(live):
+            return False
+        for key in saved:
+            if key == 'sourcePath':
+                if not matches_relocated_repo_path(saved[key], live[key]):
+                    return False
+            elif saved[key] != live[key]:
+                return False
+    return True
+
+
+@contextmanager
+def shared_publication_repository_locks(repo, images, *, blog_owner, image_owner):
+    """按固定顺序 (repo, images) 加锁，两路径指向同一仓库时避免自死锁。"""
+    with shared_blog_repository_lock(repo, owner=blog_owner):
+        if Path(images).resolve() == Path(repo).resolve():
+            yield
+        else:
+            with shared_blog_repository_lock(images, owner=image_owner):
+                yield
 
 
 def record_header(value, name, tag_field='contract'):
@@ -450,7 +533,7 @@ def _validate_aggregate_tag_format(manifest):
         if (old_key if current else new_key) in manifest:
             raise ConferencePublicationError(
                 f'会议汇总的标签字段与保存格式不一致。{saved_format} 时只允许 '
-                f'{old_key if current else new_key}。')
+                f'{new_key if current else old_key}。')
         if current and new_key not in manifest:
             raise ConferencePublicationError(
                 f'新版会议汇总缺少标签记录或层级字段。缺少 {new_key}。')
@@ -484,7 +567,7 @@ def _validate_aggregate_tag_format(manifest):
         if (old_key if current else new_key) in member:
             raise ConferencePublicationError(
                 f'会议汇总成员的标签字段与保存格式不一致。{saved_format} 时只允许 '
-                f'{old_key if current else new_key}。')
+                f'{new_key if current else old_key}。')
         if current and new_key not in member:
             raise ConferencePublicationError(
                 f'新版会议汇总成员缺少标签分配哈希字段。缺少 {new_key}。')
@@ -509,7 +592,7 @@ def _validate_paper_tag_format(manifest):
         if (old_key if current else new_key) in manifest:
             raise ConferencePublicationError(
                 f'会议论文页面的标签字段与保存格式不一致。{saved_format} 时只允许 '
-                f'{old_key if current else new_key}。')
+                f'{new_key if current else old_key}。')
     if not current:
         assignment = manifest.get('taxonomy')
         if isinstance(assignment, dict) and ('contract' in assignment or 'version' in assignment):
@@ -655,7 +738,8 @@ def validate_conference_workbench_assets(paper_id, manifest, text, asset_records
         raise ConferencePublicationError('会议研究工作区页面身份未绑定本篇已核验来源')
     for record in records:
         name = Path(record['path']).name
-        raw = read_bytes(record['sourcePath'])
+        source_path = resolve_runtime_source_path(record['sourcePath'])
+        raw = read_bytes(source_path)
         expected_url = load_publish_to_blog()._researcher_public_url(Path(record['path']))
         if sha_bytes(raw) != record['sourceSha256'] or bound[name].get('sha256') != sha_bytes(raw) \
                 or bound[name].get('url') != expected_url or len(raw) > 256 * 1024 \
@@ -663,7 +747,7 @@ def validate_conference_workbench_assets(paper_id, manifest, text, asset_records
                 or expected_bundle['sidecars'].get(Path(record['path'])) != raw:
             raise ConferencePublicationError('会议研究工作区导出字节未绑定已审页面')
         if name.endswith('.json'):
-            data = read_json(record['sourcePath'])
+            data = read_json(source_path)
             if data.get('paperId') != paper_id or data.get('sourceKind') != 'conference' \
                     or data.get('sourceSha256') != source or data.get('authors') != expected_authors \
                     or data.get('originalTitle') != re.sub(r'\s+', ' ', paper['title']).strip() \
@@ -959,7 +1043,7 @@ def write_generation_image(images, record, *, previous_record=None,
     """仅 generate 在共享仓库锁内调用；原清单已由完整流程验证。"""
     relative = safe_image_relative(record.get('path'), '图片目标')
     target = under(images, relative, '图片仓库目标')
-    data = read_bytes(record['sourcePath'])
+    data = read_bytes(resolve_runtime_source_path(record['sourcePath']))
     if sha_bytes(data) != record['sourceSha256'] or len(data) != record['size']:
         raise ConferencePublicationError(f'图片 staging 字节在生成期间漂移: {relative}')
     if not target.exists():
@@ -1040,7 +1124,7 @@ def verify_tree(repo, base, tree, records):
 
 def transaction_snapshot(repo, base, identity, records, new_source_sha=None):
     snapshot = remote_snapshot(repo)
-    if snapshot['remoteIdentitySha256'] != identity:
+    if not remote_identity_matches(snapshot, identity):
         raise ConferencePublicationError('发布 remote identity 漂移')
     head = snapshot['head']
     if head != base:
@@ -1090,12 +1174,12 @@ def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot
     if snapshot['head'] != snapshot['remoteMain'] \
             or image_snapshot['head'] != image_snapshot['remoteMain']:
         raise ConferencePublicationError('generation 基线迁移拒绝已有未同步本地/远端提交')
-    for repository, current, base_key, identity_key, records, label, current_identity in (
+    for repository, current, base_key, identity_key, records, label, current_snapshot in (
             (repo, snapshot['head'], 'baseHead', 'remoteIdentitySha256',
-             previous.get('files'), '博客', snapshot['remoteIdentitySha256']),
+             previous.get('files'), '博客', snapshot),
             (images, image_snapshot['head'], 'imageBaseHead', 'imageRemoteIdentitySha256',
-             previous.get('imageFiles'), '图片', image_snapshot['remoteIdentitySha256'])):
-        if previous.get(identity_key) != current_identity:
+             previous.get('imageFiles'), '图片', image_snapshot)):
+        if not remote_identity_matches(current_snapshot, previous.get(identity_key)):
             raise ConferencePublicationError(f'旧 generation {label} remote identity 已漂移')
         base = previous.get(base_key)
         if not isinstance(base, str) or not re.fullmatch(r'[0-9a-f]{40}', base):
@@ -1248,7 +1332,7 @@ def validate_conference_tag_catalogs(repo, files):
     for record in files:
         if record.get('kind') not in {'paper', 'aggregate'}:
             continue
-        raw = read_bytes(record['sourcePath'])
+        raw = read_bytes(resolve_runtime_source_path(record['sourcePath']))
         if sha_bytes(raw) != record['sourceSha256']:
             raise ConferencePublicationError('标签核验前会议暂存页面字节与发布清单不一致。')
         try:
@@ -1339,8 +1423,10 @@ def require_publication_figure_view_ready(generation):
 
 def generate(conference_id, process_id, *, figure_crop_manifest=None, figure_crop_base_sha=None):
     repo, images = blog_repo(), image_repo()
-    with shared_blog_repository_lock(repo, owner=f'conference-generate:{conference_id}'), \
-            shared_blog_repository_lock(images, owner=f'conference-generate-images:{conference_id}'):
+    with shared_publication_repository_locks(
+            repo, images,
+            blog_owner=f'conference-generate:{conference_id}',
+            image_owner=f'conference-generate-images:{conference_id}'):
         if (publication_dir(conference_id, process_id) / 'publish.json').exists():
             # 格式升级不能成为重新生成已发布内容的理由。
             result = publication_state(conference_id, process_id)
@@ -1453,7 +1539,7 @@ def generate(conference_id, process_id, *, figure_crop_manifest=None, figure_cro
                         raise ConferencePublicationError(f'会议目标存在人工修改: {record["path"]}')
         for record in files:
             target = under(repo, record['path'], '博客目标')
-            data = read_bytes(record['sourcePath'])
+            data = read_bytes(resolve_runtime_source_path(record['sourcePath']))
             if sha_bytes(data) != record['sourceSha256']:
                 raise ConferencePublicationError(f'staging 字节在生成期间漂移: {record["path"]}')
             if target.exists() and read_bytes(target) != data:
@@ -1544,7 +1630,8 @@ def validate_generation(conference_id, process_id, repo, images, *,
                 raise ConferencePublicationError('出版图片视图只支持真实外部图片 v2 generation')
             bundle = _publication_figure_view_bundle(bundle, conference_id, process_id,
                 expected=generation['figurePublicationView'], replay=True)
-            if generation.get('files') != bundle['files'] or generation.get('imageFiles') != bundle['imageFiles']:
+            if not records_match_relocated(generation.get('files'), bundle['files']) \
+                    or not records_match_relocated(generation.get('imageFiles'), bundle['imageFiles']):
                 raise ConferencePublicationError('出版图片视图逐记录重算与 generation 不一致')
         if generation.get('completionReceiptSha256') != bundle['completion']['receiptSha256'] \
                 or saved_files != publication_record_identities(bundle['files']) \
@@ -1552,7 +1639,7 @@ def validate_generation(conference_id, process_id, repo, images, *,
             raise ConferencePublicationError('会议 generation 与当前已核验来源和暂存页面不一致')
     if allow_committed:
         snapshot = remote_snapshot(repo)
-        if snapshot['remoteIdentitySha256'] != generation['remoteIdentitySha256'] \
+        if not remote_identity_matches(snapshot, generation['remoteIdentitySha256']) \
                 or generation['remoteMainBefore'] != generation['baseHead']:
             raise ConferencePublicationError('博客 HEAD 或远端 main 在会议发布期间发生漂移')
         if snapshot['head'] != generation['baseHead']:
@@ -1737,7 +1824,7 @@ def run_hugo(repo, generation):
         for record in image_files:
             tree = generation.get('renderImageTree')
             data = (git(image_repo(), 'show', f'{tree}:{record["path"]}', binary=True).stdout
-                    if tree else read_bytes(record['sourcePath']))
+                    if tree else read_bytes(resolve_runtime_source_path(record['sourcePath'])))
             if sha_bytes(data) != record['sourceSha256']:
                 raise ConferencePublicationError('Hugo Figure 字节漂移')
             try:
@@ -1745,11 +1832,14 @@ def run_hugo(repo, generation):
             except (ValueError, OSError) as exc:
                 raise ConferencePublicationError('Hugo Figure 无法解码为 PNG') from exc
         env = build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
-        result = subprocess.run(
-            [hugo, '--source', str(source), '--destination', str(output),
-             '--contentDir', str(content),
-             '--cacheDir', str(root / 'cache'), '--environment', 'production', '--quiet'],
-            cwd=source, env=env, capture_output=True, text=True, timeout=300, check=False)
+        try:
+            result = subprocess.run(
+                [hugo, '--source', str(source), '--destination', str(output),
+                 '--contentDir', str(content), '--noBuildLock',
+                 '--cacheDir', str(root / 'cache'), '--environment', 'production', '--quiet'],
+                cwd=source, env=env, capture_output=True, text=True, timeout=300, check=False)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raise ConferencePublicationError('Hugo gate 构建超时或无法执行（请在隔离目录检查 Hugo 诊断）') from exc
         if result.returncode:
             raise ConferencePublicationError('Hugo gate 构建失败（请在隔离目录检查 Hugo 诊断）')
         pages = []
@@ -1762,10 +1852,14 @@ def run_hugo(repo, generation):
             except ValueError as exc:
                 raise ConferencePublicationError(f'{record["path"]}: {exc}') from exc
             pages.append({'path': record['path'], 'sourceSha256': record['sourceSha256'], **page})
+        try:
+            version_proc = subprocess.run([hugo, 'version'], env=env, capture_output=True,
+                                          text=True, timeout=30, check=True)
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError) as exc:
+            raise ConferencePublicationError('无法获取 Hugo 版本信息') from exc
         return {'status': 'passed', **mechanical_gate_header(), 'pages': pages,
                 'implementationSha256': gate_fingerprint(),
-                'hugoVersion': subprocess.run([hugo, 'version'], env=env, capture_output=True,
-                                          text=True, check=True).stdout.strip()[:300]}
+                'hugoVersion': version_proc.stdout.strip()[:300]}
 
 
 def blog_runtime_present(repo):
@@ -2017,22 +2111,24 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
 
 
 def review(conference_id, process_id):
-    repo = blog_repo()
-    with shared_blog_repository_lock(repo, owner=f'conference-review:{conference_id}'):
+    repo, images = blog_repo(), image_repo()
+    with shared_publication_repository_locks(
+            repo, images,
+            blog_owner=f'conference-review:{conference_id}',
+            image_owner=f'conference-review-images:{conference_id}'):
         if (publication_dir(conference_id, process_id) / 'publish.json').exists():
             result = publication_state(conference_id, process_id)
             print(json.dumps(result, ensure_ascii=False))
             return result
-        images = image_repo()
         generation, _, _ = validate_generation(
             conference_id, process_id, repo, images, allow_committed=True)
         require_content_review_runtime(repo)
+        # 先运行免费的本地 Hugo 机械门禁，再发起付费语义与多模态审查。
+        # 整个 review 对博客仓库和图片仓库都是只读的。
+        hugo = run_hugo(repo, generation)
         from conference_publication_figure_view import review_contexts_from_generation
         content_review = review_pages(repo, publication_page_files(generation),
             figure_review_contexts=review_contexts_from_generation(generation))
-        # 按已认证的 generation 重建 Hugo，跑完语义与多模态 review 之后再封凭证。
-        # 整个 review 对博客仓库和图片仓库都是只读的。
-        hugo = run_hugo(repo, generation)
         if content_review.get('status') != 'passed':
             raise ConferencePublicationError('会议页面语义 review 未通过')
         validate_generation(conference_id, process_id, repo, images, allow_committed=True)
@@ -2124,12 +2220,24 @@ def conference_sidecar_urls(pages, generation):
     records = [record for record in generation.get('files', []) if record.get('kind') == 'sidecar']
     if not records:
         return []
-    origins = {(urlsplit(page['url']).scheme, urlsplit(page['url']).netloc) for page in pages}
-    if len(origins) != 1:
+    prefixes = set()
+    for page in pages:
+        parsed = urlsplit(str(page.get('url') or ''))
+        if parsed.scheme not in {'https', 'http'} or not parsed.netloc or '/posts/' not in parsed.path:
+            raise ConferencePublicationError('会议研究工作区公开地址缺少有效的已审页面路径')
+        base_path = parsed.path.split('/posts/', 1)[0].rstrip('/')
+        prefixes.add((parsed.scheme, parsed.netloc, base_path))
+    if len(prefixes) != 1:
         raise ConferencePublicationError('会议研究工作区公开地址缺少唯一已审页面站点')
-    scheme, hostname = next(iter(origins))
-    return [(f'{scheme}://{hostname}' + load_publish_to_blog()._researcher_public_url(Path(record['path'])), record)
-            for record in records]
+    scheme, hostname, base_path = next(iter(prefixes))
+    urls = []
+    for record in records:
+        rel = Path(record['path'])
+        if not rel.parts or rel.parts[0] != 'static':
+            raise ConferencePublicationError(f'会议研究工作区文件路径非法: {record["path"]}')
+        public_relative = Path(*rel.parts[1:]).as_posix()
+        urls.append((f'{scheme}://{hostname}{base_path}/{public_relative}', record))
+    return urls
 
 
 def verify_conference_publication_urls(pages, image_records, generation):
@@ -2207,7 +2315,7 @@ def check_self_hash(value, field):
 
 def verify_published_tree(repo, commit, identity, records):
     snapshot = remote_snapshot(repo)
-    if snapshot['remoteIdentitySha256'] != identity:
+    if not remote_identity_matches(snapshot, identity):
         raise ConferencePublicationError('已发布仓库 remote identity 变化')
     if not re.fullmatch(r'[0-9a-f]{40}', str(commit or '')) \
             or git(repo, 'merge-base', '--is-ancestor', commit, snapshot['remoteMain'], check=False).returncode:
@@ -2230,8 +2338,10 @@ def online_attempts(directory):
 def fresh_online_acceptance(directory, repo, images, generation, published, mechanical, commit, image_commit):
     """每次显式 verify 都开一次可留档的尝试，绝不复用旧的 GET 结果。"""
     image_files = publication_image_files(generation)
-    with shared_blog_repository_lock(repo, owner='conference-online-reverify'), \
-            shared_blog_repository_lock(images, owner='conference-online-reverify-images'):
+    with shared_publication_repository_locks(
+            repo, images,
+            blog_owner='conference-online-reverify',
+            image_owner='conference-online-reverify-images'):
         attempts = online_attempts(directory)
         number = int(attempts[-1].name.split('.')[0].split('-')[1]) + 1 if attempts else 1
         if number > 99999999:
@@ -2351,7 +2461,10 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
     had_legacy_proof = bool(existing_proofs)
     proof_path = existing_proofs[0] if had_legacy_proof else new_proof_path
     if not had_legacy_proof and verify_urls:
-        with shared_blog_repository_lock(repo, owner=f'conference-legacy-verify:{conference_id}'):
+        with shared_publication_repository_locks(
+                repo, images,
+                blog_owner=f'conference-legacy-verify:{conference_id}',
+                image_owner=f'conference-legacy-verify-images:{conference_id}'):
             render_generation = {**generation, 'baseHead': commit, 'renderTree': commit,
                                  'renderImageTree': image_commit}
             mechanical = run_hugo(repo, render_generation)
@@ -2431,7 +2544,10 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
     existing = publication_dir(conference_id, process_id) / 'publish.json'
     if verify_urls:
         # 让凭证创建与 push 串行化，跨多个工作区也一样。
-        with shared_blog_repository_lock(repo, owner=f'conference-verify:{conference_id}'):
+        with shared_publication_repository_locks(
+                repo, images,
+                blog_owner=f'conference-verify:{conference_id}',
+                image_owner=f'conference-verify-images:{conference_id}'):
             generation, current, current_images = validate_generation(conference_id, process_id, repo, images)
             require_publication_figure_view_ready(generation)
             if current != snapshot or current_images != image_snapshot:
@@ -2465,41 +2581,17 @@ def push(conference_id, process_id):
     if (publication_dir(conference_id, process_id) / 'publish.json').exists():
         # 再次运行 push 时只读取已发布状态；只有显式 verify 才重新发起线上 GET。
         return status(conference_id, process_id)
-    with shared_blog_repository_lock(repo, owner=f'conference-push:{conference_id}'):
-        with shared_blog_repository_lock(images, owner=f'conference-images:{conference_id}'):
-            generation, _, _ = validate_generation(conference_id, process_id, repo, images)
-            require_publication_figure_view_ready(generation)
-            receipt = load_review(conference_id, process_id)
-            validate_review(generation, receipt)
-            # 对已经暂存的旧 generation，保留历史上的 v1 事务约定。
-            # 新的 v2 generation 一律走下面更严格的 URL 验收路径。
-            if not external_image_generation(generation):
-                image_commit = commit_delta(
-                    images, generation['imageFiles'], generation['imageBaseHead'],
-                    generation['imageRemoteIdentitySha256'], f'发布 {conference_id} 会议图片')
-                push_delta(images, generation['imageFiles'], generation['imageBaseHead'],
-                           generation['imageRemoteIdentitySha256'], image_commit)
-                commit = commit_delta(repo, generation['files'], generation['baseHead'],
-                                      generation['remoteIdentitySha256'], f'发布 {conference_id} 会议论文及汇总')
-                remote = push_delta(repo, generation['files'], generation['baseHead'],
-                                    generation['remoteIdentitySha256'], commit)
-                existing = publication_dir(conference_id, process_id) / 'publish.json'
-                body = {**current_header('conference-blog-commit'),
-                        'conferenceId': conference_id, 'processId': process_id,
-                        'generationSha256': generation['generationSha256'],
-                        'reviewSha256': receipt['reviewSha256'], 'publicationCommit': commit,
-                        'imagePublicationCommit': image_commit, 'remoteName': 'origin',
-                        'remoteVerifiedOid': remote['remoteMain'],
-                        'remoteIdentitySha256': remote['remoteIdentitySha256'],
-                        'files': generation['files']}
-                write_exact(existing, json_bytes({**body, 'publishSha256': stable(body)}))
-                print(json.dumps({'status': 'pushed', 'conferenceId': conference_id,
-                                  'processId': process_id, 'publicationCommit': commit,
-                                  'remoteVerifiedOid': remote['remoteMain']}, ensure_ascii=False))
-                return
-            # 动远端之前，两个索引都要先校验。
-            verify_index(repo, generation['baseHead'], generation['files'])
-            verify_index(images, generation['imageBaseHead'], generation['imageFiles'])
+    with shared_publication_repository_locks(
+            repo, images,
+            blog_owner=f'conference-push:{conference_id}',
+            image_owner=f'conference-images:{conference_id}'):
+        generation, _, _ = validate_generation(conference_id, process_id, repo, images)
+        require_publication_figure_view_ready(generation)
+        receipt = load_review(conference_id, process_id)
+        validate_review(generation, receipt)
+        # 对已经暂存的旧 generation，保留历史上的 v1 事务约定。
+        # 新的 v2 generation 一律走下面更严格的 URL 验收路径。
+        if not external_image_generation(generation):
             image_commit = commit_delta(
                 images, generation['imageFiles'], generation['imageBaseHead'],
                 generation['imageRemoteIdentitySha256'], f'发布 {conference_id} 会议图片')
@@ -2509,10 +2601,36 @@ def push(conference_id, process_id):
                                   generation['remoteIdentitySha256'], f'发布 {conference_id} 会议论文及汇总')
             remote = push_delta(repo, generation['files'], generation['baseHead'],
                                 generation['remoteIdentitySha256'], commit)
-            accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote)
-            print(json.dumps({'status': 'complete', 'complete': True, 'publicationCommit': commit,
-                              'completionScope': 'mechanical-html+remote-oid+online-urls',
-                              'semanticReview': 'passed', 'visualInspection': 'not_performed'}))
+            existing = publication_dir(conference_id, process_id) / 'publish.json'
+            body = {**current_header('conference-blog-commit'),
+                    'conferenceId': conference_id, 'processId': process_id,
+                    'generationSha256': generation['generationSha256'],
+                    'reviewSha256': receipt['reviewSha256'], 'publicationCommit': commit,
+                    'imagePublicationCommit': image_commit, 'remoteName': 'origin',
+                    'remoteVerifiedOid': remote['remoteMain'],
+                    'remoteIdentitySha256': remote['remoteIdentitySha256'],
+                    'files': generation['files']}
+            write_exact(existing, json_bytes({**body, 'publishSha256': stable(body)}))
+            print(json.dumps({'status': 'pushed', 'conferenceId': conference_id,
+                              'processId': process_id, 'publicationCommit': commit,
+                              'remoteVerifiedOid': remote['remoteMain']}, ensure_ascii=False))
+            return
+        # 动远端之前，两个索引都要先校验。
+        verify_index(repo, generation['baseHead'], generation['files'])
+        verify_index(images, generation['imageBaseHead'], generation['imageFiles'])
+        image_commit = commit_delta(
+            images, generation['imageFiles'], generation['imageBaseHead'],
+            generation['imageRemoteIdentitySha256'], f'发布 {conference_id} 会议图片')
+        push_delta(images, generation['imageFiles'], generation['imageBaseHead'],
+                   generation['imageRemoteIdentitySha256'], image_commit)
+        commit = commit_delta(repo, generation['files'], generation['baseHead'],
+                              generation['remoteIdentitySha256'], f'发布 {conference_id} 会议论文及汇总')
+        remote = push_delta(repo, generation['files'], generation['baseHead'],
+                            generation['remoteIdentitySha256'], commit)
+        accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote)
+        print(json.dumps({'status': 'complete', 'complete': True, 'publicationCommit': commit,
+                          'completionScope': 'mechanical-html+remote-oid+online-urls',
+                          'semanticReview': 'passed', 'visualInspection': 'not_performed'}))
 
 
 def main():

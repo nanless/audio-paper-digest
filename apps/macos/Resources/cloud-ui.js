@@ -84,20 +84,24 @@ export function mountCloud(app){
  function paint(){
   if(disposed)return;
   for(const key of fields)if(!dirty.has(key)){if(key==='automatic')nodes[key].checked=state[key]===true;else nodes[key].value=state[key]??(key==='folder'?'PaperDigest':key==='intervalHours'?24:'');}
-  const damaged=state.pending?.damaged===true,busy=submitting||state.busy===true,configured=typeof state.account==='string'&&!!state.account.trim()&&typeof state.folder==='string'&&!!state.folder;
+  const damaged=state.pending?.damaged===true,fullSyncDamaged=state.fullSyncPending?.damaged===true,hasAnyPending=Boolean(state.pending||state.fullSyncPending),anyDamaged=damaged||fullSyncDamaged,busy=submitting||state.busy===true,configured=typeof state.account==='string'&&!!state.account.trim()&&typeof state.folder==='string'&&!!state.folder;
   for(const node of Object.values(nodes))node.disabled=busy;
   $('cloud-save').disabled=busy||!dirty.size;$('cloud-discard').disabled=busy||!dirty.size;
   for(const id of ['cloud-session-password','cloud-clear-session-password','cloud-set-password','cloud-delete-password','cloud-check','cloud-sync-personal','cloud-upload','cloud-list'])$(id).disabled=busy||!!dirty.size||!configured;
   $('cloud-clear-session-password').disabled=busy||!!dirty.size||!configured||state.sessionPasswordAvailable!==true;
   $('cloud-month').disabled=busy;
-  $('cloud-sync-workspace').disabled=busy||!!dirty.size||!state.account;
-  $('cloud-archive-pending').textContent=damaged?'原样保留损坏材料并停止本次续传…':'保留快照并停止本次续传…';$('cloud-archive-pending').hidden=!state.pending;$('cloud-archive-pending').disabled=busy||!!dirty.size||!state.pending;$('cloud-reveal-transfers').disabled=submitting;
+  $('cloud-sync-workspace').disabled=busy||!!dirty.size||!state.account||fullSyncDamaged;
+  $('cloud-sync-workspace').textContent=fullSyncDamaged?'请先处理未完成同步材料':state.fullSyncPending?'继续同步全部研究资料':'同步全部研究资料';
+  $('cloud-archive-pending').textContent=anyDamaged?'原样保留损坏材料并停止本次续传…':'保留快照并停止本次续传…';$('cloud-archive-pending').hidden=!hasAnyPending;$('cloud-archive-pending').disabled=busy||!!dirty.size||!hasAnyPending;$('cloud-reveal-transfers').disabled=submitting;
   $('cloud-cancel').disabled=!(busy&&typeof state.activeJobID==='string'&&state.activeJobID)||cancelPending;
   for(const button of pane.querySelectorAll('[data-cloud-restore]'))button.disabled=busy||!!dirty.size;
   pane.dataset.submitting=submitting?'true':'';
   $('cloud-status').textContent=(state.busy?'传输正在进行。':'')+(state.sessionPasswordAvailable===true?('本次内存中已有应用密码，退出后清除；'+(state.sessionPasswordVerified===true?'本次密码已用于成功的云端请求，完整备份仍须另行核验。':'尚未检查连接。')):({confirmed:'本次已确认应用密码状态；连接与完整传输结果仍须另行核验。',missing:'尚未保存应用密码。',unknown:'应用密码状态未检查；只有主动连接或传输才访问钥匙串。'}[state.credentialState]||'应用密码状态未检查。'));
   $('cloud-last').textContent=state.lastBackup?'最近已确认完整备份：'+time(state.lastBackup.createdAt)+' · '+size(state.lastBackup.encodedBytes):'尚无已确认的完整备份记录。';
-  $('cloud-pending').textContent=damaged?'未完成的本机传输材料已损坏或缺少有效检查点，可原样保留；须手工核对，不能保证完整或可恢复。':state.pending?'待续传的同一快照：'+time(state.pending.createdAt)+' · '+size(state.pending.encodedBytes)+' · '+(Number.isSafeInteger(state.pending.fileCount)&&state.pending.fileCount>=0?state.pending.fileCount:'未记录')+' 个文件；继续时不重新采集变化中的资料。':'';
+  const pendingNotes=[];
+  if(state.pending)pendingNotes.push(damaged?'未完成的本机传输材料已损坏或缺少有效检查点，可原样保留；须手工核对，不能保证完整或可恢复。':'待续传的同一快照：'+time(state.pending.createdAt)+' · '+size(state.pending.encodedBytes)+' · '+(Number.isSafeInteger(state.pending.fileCount)&&state.pending.fileCount>=0?state.pending.fileCount:'未记录')+' 个文件；继续时不重新采集变化中的资料。');
+  if(state.fullSyncPending)pendingNotes.push(fullSyncDamaged?'未完成的全资料同步材料已损坏或缺少有效检查点，可原样保留；须手工核对，不能保证完整或可恢复。':'待续传的全资料同步快照：'+time(state.fullSyncPending.createdAt)+' · '+size(state.fullSyncPending.encodedBytes)+' · '+(Number.isSafeInteger(state.fullSyncPending.fileCount)&&state.fullSyncPending.fileCount>=0?state.fullSyncPending.fileCount:'未记录')+' 个文件；继续时沿原快照续传。');
+  $('cloud-pending').textContent=pendingNotes.join(' ');
   $('cloud-upload').textContent=damaged?'请先处理未完成材料':state.pending?'继续保存同一快照':'立即保存全部资料';if(damaged)$('cloud-upload').disabled=true;
   $('cloud-message').textContent=dirty.size?'设置尚未保存，请先保存后再连接或传输。':message;
   $('cloud-error').textContent=localError||stateReadError||(typeof state.lastError==='string'?state.lastError:'');
@@ -131,7 +135,7 @@ export function mountCloud(app){
    else if(command==='cloud.clearSessionPassword')message='本次内存密码已清除；自动备份已暂停。';
    else if(command==='cloud.setPassword'||command==='cloud.deletePassword')message='应用密码操作已结束；密码仅由原生钥匙串管理。';
    await refresh();
-   if(command==='cloud.archivePending')message=state.pending?'原续传仍保留，请核对原生窗口提示。':'本次续传已停止，原传输材料保留在本机；云端半成品不会自动删除。';
+   if(command==='cloud.archivePending')message=(state.pending||state.fullSyncPending)?'原续传仍保留，请核对原生窗口提示。':'本次续传已停止，原传输材料保留在本机；云端半成品不会自动删除。';
   }catch(e){if(!disposed&&token===action){localError=e?.message||String(e);message='';await refresh().catch(()=>{});}}
   finally{if(!disposed&&token===action){submitting=false;paint();}}
  }
@@ -158,7 +162,7 @@ export function mountCloud(app){
   finally{if(!disposed&&token===action){submitting=false;paint();}}
  };
  for(const [id,command]of [['cloud-session-password','cloud.setSessionPassword'],['cloud-clear-session-password','cloud.clearSessionPassword'],['cloud-set-password','cloud.setPassword'],['cloud-delete-password','cloud.deletePassword'],['cloud-check','cloud.check'],['cloud-sync-personal','cloud.syncPersonal'],['cloud-sync-workspace','cloud.syncWorkspace'],['cloud-upload','cloud.upload']])$(id).onclick=()=>perform(command);
- $('cloud-archive-pending').onclick=()=>{if(state.pending)return perform('cloud.archivePending');};
+ $('cloud-archive-pending').onclick=()=>{if(state.pending||state.fullSyncPending)return perform('cloud.archivePending');};
  $('cloud-reveal-transfers').onclick=()=>perform('cloud.revealTransfers');
  $('cloud-cancel').onclick=async()=>{
   if(disposed||cancelPending||!(submitting||state.busy)||!state.activeJobID)return;

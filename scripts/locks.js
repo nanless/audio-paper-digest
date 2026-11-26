@@ -86,12 +86,21 @@ function readOwnerRecord(target, entry) {
     if (!record || typeof record !== 'object' || Array.isArray(record)) fail('INVALID_OWNER');
     return record;
 }
+function isLockEntryName(name) {
+    return name.endsWith('.lock') || /\.lock\.reclaim(?:\b|$)/.test(name);
+}
 function rowFor(target, entry, root, nowMs, shared, problems, scope) {
     let record = null;
     try { record = readOwnerRecord(target, entry); }
     catch (error) { problem(problems, scope, 'read-owner', error, root, target); }
     const rawPid = record && (record.pid ?? record.ownerPid);
-    const pid = Number.isSafeInteger(Number(rawPid)) && Number(rawPid) > 0 ? Number(rawPid) : null;
+    let pid = null;
+    if (typeof rawPid === 'number' && Number.isSafeInteger(rawPid) && rawPid > 0) {
+        pid = rawPid;
+    } else if (typeof rawPid === 'string' && /^[1-9]\d*$/.test(rawPid.trim())) {
+        const parsedPid = Number(rawPid.trim());
+        if (Number.isSafeInteger(parsedPid) && parsedPid > 0) pid = parsedPid;
+    }
     const hostValue = record && (record.hostname || record.host);
     const hostname = typeof hostValue === 'string' && hostValue.length <= 255 && !/[\x00-\x1f\x7f]/.test(hostValue) ? hostValue : null;
     const validTime = value => typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : null;
@@ -112,7 +121,9 @@ function shouldDescend(directory, entry, depth) {
     // 声明范围内的 symlink 也交给安全目录读取器拒绝，不能静默冒成已扫描。
     if ((!entry.isDirectory() && !entry.isSymbolicLink()) || depth >= 3) return false;
     const groups = ['conference-processes', 'conference-queues', 'conference-filter-evidence-runs',
-        'page-source-crosswalks', 'conference-analysis-executions', 'conference-filters', 'fresh-rewrites', 'conference-page-staging'];
+        'page-source-crosswalks', 'conference-analysis-executions', 'conference-filters', 'fresh-rewrites',
+        'conference-page-staging', 'historical-direct-rewrite-registries', 'fetched-arxiv-sources',
+        'paper-source-authorities', 'conference-executions', 'daily-deployment-observations'];
     return depth === 0 && ['.analysis-runs', 'locks', ...groups].includes(entry.name)
         || groups.includes(path.basename(directory)) && depth === 1
         || entry.name.includes('stage-locks') && depth < 2;
@@ -130,7 +141,7 @@ function collectLocal(dirs, nowMs, root) {
             for (const entry of entries) {
                 if (['.hugo_build.lock', 'node_modules', '.git'].includes(entry.name)) continue;
                 const target = path.join(directory, entry.name);
-                if (entry.name.endsWith('.lock')) locks.push(rowFor(target, entry, root, nowMs, false, problems, scope));
+                if (isLockEntryName(entry.name)) locks.push(rowFor(target, entry, root, nowMs, false, problems, scope));
                 else if (shouldDescend(directory, entry, depth)) visit(target, depth + 1);
             }
         };
@@ -174,7 +185,7 @@ function collectShared(root, nowMs, options = {}) {
         const entries = readDirectory(directory, true);
         state.status = entries === null ? 'not_present' : 'scanned';
         for (const entry of entries || []) {
-            if (!entry.name.endsWith('.lock') && !entry.isDirectory()) continue;
+            if (!isLockEntryName(entry.name) && !entry.isDirectory() && !entry.isSymbolicLink()) continue;
             locks.push(rowFor(path.join(directory, entry.name), entry, root, nowMs, true, problems, 'shared-blog'));
         }
         if (problems.length) state.status = 'partial';

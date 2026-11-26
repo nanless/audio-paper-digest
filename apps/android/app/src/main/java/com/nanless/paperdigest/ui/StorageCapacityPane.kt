@@ -3,6 +3,9 @@ package com.nanless.paperdigest.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CleaningServices
+import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -33,30 +36,38 @@ import java.util.Locale
   operation=kind;error=null
   scope.launch{try{action()}catch(e:CancellationException){throw e}catch(e:Exception){error=e.message?:"本次核对未完成，未将未知结果显示为成功"}finally{operation=null}}
  }
- HorizontalDivider();Text("存储容量",style=MaterialTheme.typography.titleMedium)
- Text("读取本机实际文件大小和可用空间。云端保留快照属于传输材料的一部分，不重复相加。",style=MaterialTheme.typography.bodySmall)
- OutlinedButton({perform("measure"){refresh()}},enabled=!busy){Text(if(operation=="measure")"正在统计实际文件…" else "重新统计容量")}
- measured?.let{report->
-  Text("实际可用空间：${storageBytes(storageCount(report,"availableBytes"))}")
-  Text("统计时间：${report.getString("measuredAt")}",style=MaterialTheme.typography.labelSmall)
-  report.rows("rows").forEach{row->
-   Column(Modifier.fillMaxWidth().padding(vertical=4.dp)){
-    Text(row.getString("label")+(if(row.getBoolean("exists"))"" else "（尚未创建）"))
-    Text("${storageBytes(storageCount(row,"bytes"))} · ${storageCount(row,"fileCount")} 文件",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+ SectionCard(
+  title="存储容量",
+  subtitle="读取本机实际文件大小和可用空间。云端保留快照属于传输材料的一部分，不重复相加。",
+  icon=Icons.Outlined.Storage,
+ ) {
+  OutlinedButton({perform("measure"){refresh()}},enabled=!busy){Text(if(operation=="measure")"正在统计实际文件…" else "重新统计容量")}
+  measured?.let{report->
+   Text("实际可用空间：${storageBytes(storageCount(report,"availableBytes"))}",style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.primary)
+   Text("统计时间：${report.getString("measuredAt")}",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+   report.rows("rows").forEach{row->
+    Column(Modifier.fillMaxWidth().padding(vertical=4.dp)){
+     Text(row.getString("label")+(if(row.getBoolean("exists"))"" else "（尚未创建）"),style=MaterialTheme.typography.bodyMedium)
+     Text("${storageBytes(storageCount(row,"bytes"))} · ${storageCount(row,"fileCount")} 文件",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+    }
    }
+   report.optJSONObject("retainedCloud")?.let{retained->Text("其中保留的云传输快照：${storageBytes(storageCount(retained,"bytes"))} · ${storageCount(retained,"fileCount")} 文件（已包含在传输材料内）",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+   report.optJSONObject("lastCleanup")?.let{Text("上次清理回执：${cleanupOutcome(it)}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
   }
-  report.optJSONObject("retainedCloud")?.let{retained->Text("其中保留的云传输快照：${storageBytes(storageCount(retained,"bytes"))} · ${storageCount(retained,"fileCount")} 文件（已包含在传输材料内）",style=MaterialTheme.typography.bodySmall)}
-  report.optJSONObject("lastCleanup")?.let{Text("上次清理回执：${cleanupOutcome(it)}",style=MaterialTheme.typography.bodySmall)}
  }
- Text("清理已导出的临时副本",style=MaterialTheme.typography.titleMedium)
- Text("仅核对本机导出临时文件：已成功写出，而且所选目的文件现在仍能完整回读并核对 SHA。每次最多 20 份，不删除研究资料、PDF、离线包、费用记录、未知文件或用户选择的目的文件。",style=MaterialTheme.typography.bodySmall)
- OutlinedButton({perform("prepare"){
-  val next=controller.execute("storage.cleanup.prepare");validateCleanupPlan(next);currentCoroutineContext().ensureActive()
-  if(storageCount(next,"documents")==0L){plan=null;message="当前没有满足完整导出回读条件的临时副本。未删除文件。"}else{plan=JSONObject(next.toString());message=null}
- }},enabled=!busy){Text(if(operation=="prepare")"正在完整回读已导出文件…" else "核对可清理的临时副本…")}
- if(operation=="commit")Text("正在清理已确认的临时副本；完成后会重新统计实际容量。",style=MaterialTheme.typography.bodySmall)
- message?.let{Text(it,color=MaterialTheme.colorScheme.primary)}
- error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+ SectionCard(
+  title="清理已导出的临时副本",
+  subtitle="仅核对本机导出临时文件：已成功写出，而且所选目的文件现在仍能完整回读并核对 SHA。每次最多 20 份，不删除研究资料、PDF、离线包、费用记录、未知文件或用户选择的目的文件。",
+  icon=Icons.Outlined.CleaningServices,
+ ) {
+  OutlinedButton({perform("prepare"){
+   val next=controller.execute("storage.cleanup.prepare");validateCleanupPlan(next);currentCoroutineContext().ensureActive()
+   if(storageCount(next,"documents")==0L){plan=null;message="当前没有满足完整导出回读条件的临时副本。未删除文件。"}else{plan=JSONObject(next.toString());message=null}
+  }},enabled=!busy){Text(if(operation=="prepare")"正在完整回读已导出文件…" else "核对可清理的临时副本…")}
+  if(operation=="commit")Text("正在清理已确认的临时副本；完成后会重新统计实际容量。",style=MaterialTheme.typography.bodySmall)
+  message?.let{Text(it,color=MaterialTheme.colorScheme.primary)}
+  error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+ }
  plan?.let{prepared->
   AlertDialog(onDismissRequest={if(operation!="commit")plan=null},title={Text("清理这些已核验的临时副本？")},text={
    Column(Modifier.heightIn(max=330.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)){

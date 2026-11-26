@@ -4,18 +4,36 @@ import CryptoKit
 private actor FiltersFixtureTransport {
     var files: [String: Data] = [:]
     var statuses: [String: Int] = [:]
+    var networkErrors: Set<String> = []
+    var requests: [String] = []
 
     func set(_ path: String, data: Data) {
         files[path] = data
         statuses.removeValue(forKey: path)
+        networkErrors.remove(path)
     }
 
     func setStatus(_ path: String, status: Int) {
         statuses[path] = status
         files.removeValue(forKey: path)
+        networkErrors.remove(path)
+    }
+
+    func setNetworkError(_ path: String) {
+        networkErrors.insert(path)
+        statuses.removeValue(forKey: path)
+        files.removeValue(forKey: path)
+    }
+
+    func requestCount(_ path: String) -> Int {
+        requests.filter { $0 == path }.count
     }
 
     func read(_ url: URL, _ limit: Int) throws -> Data {
+        requests.append(url.path)
+        if networkErrors.contains(url.path) {
+            throw LibraryService.ServiceError.network("simulated offline network error")
+        }
         if let code = statuses[url.path] {
             throw LibraryService.ServiceError.httpStatus(code)
         }
@@ -272,6 +290,35 @@ private actor FiltersFixtureTransport {
         let codeAfterTier2 = await service.listResponse(payload: ["resource": "code"])
         let codeIDs = Set(((codeAfterTier2["papers"] as? [[String: Any]]) ?? []).compactMap { $0["id"] as? String })
         try check(codeIDs == Set(["arxiv:2611.00001", "conference:icassp:2026:bench-7"]), "Tier 2 resource-badges merges with Tier 1 signals")
+
+        // Tier 2 offline / network-down and 503 fallback: returns Tier 1 cachedDemoIds, does not mark loaded, and recovers on retry
+        let offlineRoot = try tempDir()
+        defer { try? FileManager.default.removeItem(at: offlineRoot) }
+        let offlineArticlesDir = offlineRoot.appendingPathComponent("PublishedLibrary/articles", isDirectory: true)
+        try FileManager.default.createDirectory(at: offlineArticlesDir, withIntermediateDirectories: true)
+        try jsonBytes(demoArticleObj).write(to: offlineArticlesDir.appendingPathComponent("demo-p4.json"))
+        let offlineService = try LibraryService(dataDirectory: offlineRoot, siteBaseURL: base, transport: { url, limit in
+            try await transport.read(url, limit)
+        })
+        _ = try await offlineService.sync()
+        await transport.setNetworkError("/blog/client/signals/resource-badges.json")
+        let resOffline = try await offlineService.resourceBadgesResponse(forceRefresh: false)
+        try check((resOffline["available"] as? Bool) == false, "offline network error falls back gracefully")
+        try check((resOffline["cachedDemoIds"] as? [String]) == ["arxiv:2611.00004"], "offline network error still returns Tier 1 cachedDemoIds")
+
+        // Because Tier 2 was NOT marked loaded on network failure, next non-forced call retries and loads Tier 2 once network recovers
+        await transport.set("/blog/client/signals/resource-badges.json", data: try jsonBytes(goodBadges))
+        let resRecovered = try await offlineService.resourceBadgesResponse(forceRefresh: false)
+        try check((resRecovered["available"] as? Bool) == true, "Tier 2 recovers cleanly on next non-forced load after network failure")
+        try check((resRecovered["cachedDemoIds"] as? [String]) == ["arxiv:2611.00004"], "Tier 1 cachedDemoIds preserved after recovery")
+
+        // Subsequent forced refresh hitting 503 preserves previously loaded Tier 2 cachedSignals AND Tier 1 cachedDemoIds
+        await transport.setStatus("/blog/client/signals/resource-badges.json", status: 503)
+        let res503 = try await offlineService.resourceBadgesResponse(forceRefresh: true)
+        try check((res503["available"] as? Bool) == true, "transient 503 preserves prior Tier 2 cachedSignals")
+        let papers503 = (res503["papers"] as? [String: Any]) ?? [:]
+        try check(papers503["conference:icassp:2026:bench-7"] != nil, "prior Tier 2 badge entry retained on transient 503")
+        try check((res503["cachedDemoIds"] as? [String]) == ["arxiv:2611.00004"], "Tier 1 cachedDemoIds still returned on transient 503")
 
         // 8. VerifiedDesktopDetail parses & forwards assessment.rankBucket & assessment.documentType
         let articleHTML = Data("<div id='article-body'><p>Detail body</p></div>".utf8)

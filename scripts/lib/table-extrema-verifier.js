@@ -388,7 +388,11 @@ function extractAdjacentParagraphsByLines(lines, startLine, endLine, secStartLin
     const adjacent = [];
     // 包含所属 ### 小节标题与紧邻表前的 #### 四级标题，拦截标题内“十二项基准最优”等与表内数据矛盾的极值断言
     if (secStartLine >= 0 && secStartLine < lines.length && /^#{3,4}\s+\S/.test(lines[secStartLine].trim())) {
-        adjacent.push(lines[secStartLine].trim().replace(/^#{3,4}\s+/, ''));
+        const trimmed = lines[secStartLine].trim();
+        adjacent.push({
+            text: trimmed.replace(/^#{3,4}\s+/, ''),
+            inSectionHeading: /^###\s+\S/.test(trimmed)
+        });
     }
     let i = startLine - 1;
     while (i >= secStartLine && !lines[i].trim()) i -= 1;
@@ -398,11 +402,11 @@ function extractAdjacentParagraphsByLines(lines, startLine, endLine, secStartLin
             paraLines.unshift(lines[i].trim());
             i -= 1;
         }
-        if (paraLines.length > 0) adjacent.push(paraLines.join(' '));
+        if (paraLines.length > 0) adjacent.push({ text: paraLines.join(' '), inSectionHeading: false });
         while (i >= secStartLine && !lines[i].trim()) i -= 1;
     }
     if (i > secStartLine && /^####\s+\S/.test(lines[i].trim())) {
-        adjacent.push(lines[i].trim().replace(/^####\s+/, ''));
+        adjacent.push({ text: lines[i].trim().replace(/^####\s+/, ''), inSectionHeading: false });
     }
     let j = endLine + 1;
     while (j <= secEndLine && !lines[j].trim()) j += 1;
@@ -412,9 +416,25 @@ function extractAdjacentParagraphsByLines(lines, startLine, endLine, secStartLin
             paraLines.push(lines[j].trim());
             j += 1;
         }
-        if (paraLines.length > 0) adjacent.push(paraLines.join(' '));
+        if (paraLines.length > 0) adjacent.push({ text: paraLines.join(' '), inSectionHeading: false });
     }
     return adjacent;
+}
+
+const COMPARATIVE_BASELINE_CUE_RE = /(?:对|对比|相比|相较于?|较|高于|低于|优于|领先|超越|反超|胜过|比)\s*[^，,。；;\n]{0,48}$/;
+
+function isComparativeBaselineNumber(clause, numIndex) {
+    const rawWindow = clause.slice(Math.max(0, numIndex - 64), numIndex);
+    const lastBreak = Math.max(
+        rawWindow.lastIndexOf('，'),
+        rawWindow.lastIndexOf(','),
+        rawWindow.lastIndexOf('。'),
+        rawWindow.lastIndexOf('；'),
+        rawWindow.lastIndexOf(';'),
+        rawWindow.lastIndexOf('\n')
+    );
+    const beforeNum = lastBreak >= 0 ? rawWindow.slice(lastBreak + 1) : rawWindow;
+    return COMPARATIVE_BASELINE_CUE_RE.test(beforeNum);
 }
 
 function splitAtomicClauses(para) {
@@ -460,8 +480,8 @@ function findTableExtremaIssues(article, sections = null) {
         if (parsed.transposed) {
             const header = table.header || [];
             const rows = table.rows || [];
-            for (const para of adjacentParagraphs) {
-                for (const clause of splitAtomicClauses(para)) {
+            for (const paraEntry of adjacentParagraphs) {
+                for (const clause of splitAtomicClauses(paraEntry.text)) {
                     if (!SUPERLATIVE_CLAIM_RE.test(clause)) continue;
                     if (NEGATED_OR_QUALIFIED_RE.test(clause)) continue;
                     const clauseNums = extractClauseNumbers(clause);
@@ -508,8 +528,7 @@ function findTableExtremaIssues(article, sections = null) {
                         );
                         const candidateEntries = labelMatched.length > 0 ? labelMatched : entries;
                         for (const cn of clauseNums) {
-                            const beforeNum = clause.slice(Math.max(0, cn.index - 16), cn.index);
-                            if (/(?:对|对比|相比|高于|低于|优于|领先|超越|比)\s*[^，,。；;]{0,12}$/.test(beforeNum)) continue;
+                            if (isComparativeBaselineNumber(clause, cn.index)) continue;
                             const hit = candidateEntries.find(e => clauseNumberMatchesEntry(cn, e));
                             if (!hit) continue;
                             const strictlyBeaten = targetDir === 'up'
@@ -525,6 +544,7 @@ function findTableExtremaIssues(article, sections = null) {
                                     tableIndex: tIdx + 1,
                                     sectionIndex: sec.index,
                                     sectionHeading: sec.heading,
+                                    ...(paraEntry.inSectionHeading ? { inSectionHeading: true } : {}),
                                     columnHeader: rowLabel,
                                     polarity: targetDir,
                                     claimedValue: hit.raw,
@@ -543,8 +563,8 @@ function findTableExtremaIssues(article, sections = null) {
             continue;
         }
 
-        for (const para of adjacentParagraphs) {
-            for (const clause of splitAtomicClauses(para)) {
+        for (const paraEntry of adjacentParagraphs) {
+            for (const clause of splitAtomicClauses(paraEntry.text)) {
                 if (!SUPERLATIVE_CLAIM_RE.test(clause)) continue;
                 if (NEGATED_OR_QUALIFIED_RE.test(clause)) continue;
 
@@ -567,6 +587,7 @@ function findTableExtremaIssues(article, sections = null) {
                                 tableIndex: tIdx + 1,
                                 sectionIndex: sec.index,
                                 sectionHeading: sec.heading,
+                                ...(paraEntry.inSectionHeading ? { inSectionHeading: true } : {}),
                                 columnHeader: col.header,
                                 polarity: col.polarity,
                                 clause,
@@ -632,8 +653,7 @@ function findTableExtremaIssues(article, sections = null) {
                         const candidateEntries = labelMatchedEntries.length > 0 ? labelMatchedEntries : modelEntries;
 
                         for (const cn of clauseNums) {
-                            const beforeNum = clause.slice(Math.max(0, cn.index - 16), cn.index);
-                            if (/(?:对|对比|相比|高于|低于|优于|领先|超越|比)\s*[^，,。；;]{0,12}$/.test(beforeNum)) continue;
+                            if (isComparativeBaselineNumber(clause, cn.index)) continue;
                             const hit = candidateEntries.find(e => clauseNumberMatchesEntry(cn, e));
                             if (!hit) continue;
                             foundInThisCol = true;
@@ -676,6 +696,7 @@ function findTableExtremaIssues(article, sections = null) {
                             tableIndex: tIdx + 1,
                             sectionIndex: sec.index,
                             sectionHeading: sec.heading,
+                            ...(paraEntry.inSectionHeading ? { inSectionHeading: true } : {}),
                             columnHeader: v.col.header,
                             polarity: v.targetDir,
                             claimedValue: v.claimedValue,

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const { setupScriptLogging, closeScriptLogging } = require('./log-setup');
-setupScriptLogging(__filename);
+const { requireExternalRuntime } = require('./env-loader.js');
 
 /**
  * 测试主模型或副模型 API Key 可用性
@@ -109,9 +109,11 @@ async function main(argv = process.argv.slice(2)) {
     console.log();
 
     const messages = [{ role: 'user', content: 'Hello, reply with "OK" only.' }];
-    // 推理模型会先消耗 reasoning tokens；过小预算只能证明鉴权成功，
-    // 不能证明能产出业务层可解析的最终文本。
-    const body = buildRequestBody(apiType, model, messages, 256);
+    // 推理模型会先消耗 reasoning tokens；使用 minimal 推理档位与充足预算，
+    // 既验证鉴权又确保能稳定产出可解析的最终文本。
+    const body = buildRequestBody(apiType, model, messages, 1024, undefined, {
+        reasoningStage: 'apiReaderConceptTerms'
+    });
     const bodyStr = JSON.stringify(body);
     const headers = buildHeaders(apiType, key, bodyStr);
 
@@ -154,6 +156,8 @@ async function main(argv = process.argv.slice(2)) {
 }
 
 if (require.main === module) {
+    requireExternalRuntime('test-api-key.js');
+    setupScriptLogging(__filename);
     main()
         .catch(err => {
             console.error(`❌ 未处理错误: ${err.message}`);

@@ -30,7 +30,8 @@ const { spawnSync } = require('node:child_process');
 const {
     hasAccountPoolHeader,
     evaluateAccountQuota,
-    validateAccountSubrecords
+    validateAccountSubrecords,
+    resolveSecondaryApiKeys
 } = require('./llm-account-pool.js');
 const {
     isIpLiteral,
@@ -493,28 +494,38 @@ function readEnvFileReadOnly(envFile) {
     }
     let raw;
     let fd;
+    let openedMode = stat.mode & 0o777;
     try {
+        const MAX_ENV_BYTES = 2 * 1024 * 1024;
         fd = fs.openSync(envFile, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
         const opened = fs.fstatSync(fd);
-        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size > 2 * 1024 * 1024) {
-            return { exists: true, mode: stat.mode & 0o777, entries: {}, readError: '.env 打开后身份异常或过大', error: null };
+        openedMode = opened.mode & 0o777;
+        if (!opened.isFile() || (process.platform !== 'win32' && opened.nlink !== 1)
+            || opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size > MAX_ENV_BYTES) {
+            return { exists: true, mode: openedMode, entries: {}, readError: '.env 打开后身份异常或过大', error: null };
         }
-        const buf = Buffer.alloc(opened.size);
-        let offset = 0;
-        while (offset < opened.size) {
-            const n = fs.readSync(fd, buf, offset, opened.size - offset, null);
+        const chunks = [];
+        let total = 0;
+        const buf = Buffer.alloc(65536);
+        while (total <= MAX_ENV_BYTES) {
+            const toRead = Math.min(buf.length, MAX_ENV_BYTES + 1 - total);
+            const n = fs.readSync(fd, buf, 0, toRead, null);
             if (n <= 0) break;
-            offset += n;
+            chunks.push(Buffer.from(buf.subarray(0, n)));
+            total += n;
         }
-        raw = buf.subarray(0, offset).toString('utf8');
+        if (total > MAX_ENV_BYTES) {
+            return { exists: true, mode: openedMode, entries: {}, readError: '.env 打开后身份异常或过大', error: null };
+        }
+        raw = Buffer.concat(chunks, total).toString('utf8');
     } catch (error) {
-        return { exists: true, mode: stat.mode & 0o777, entries: {}, readError: `无法读取 .env: ${error?.code || error?.message || error}`, error: null };
+        return { exists: true, mode: openedMode, entries: {}, readError: `无法读取 .env: ${error?.code || error?.message || error}`, error: null };
     } finally {
         if (fd !== undefined) fs.closeSync(fd);
     }
     return {
         exists: true,
-        mode: stat.mode & 0o777,
+        mode: openedMode,
         entries: parseDotEnvText(raw),
         readError: null,
         error: null
@@ -564,29 +575,70 @@ function evaluatePrimaryModel(env) {
 
 function evaluateSecondaryModel(env) {
     const keys = SECONDARY_MODEL_ENV;
-    const present = Object.entries(keys).filter(([, key]) => hasEnvValue(env, key));
-    const missingKeys = Object.values(keys).filter(key => !hasEnvValue(env, key));
+    const anySecondaryKey = [
+        keys.model,
+        keys.endpoint,
+        keys.apiKey,
+        'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS',
+        'PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY'
+    ];
+    const present = anySecondaryKey.filter(key => hasEnvValue(env, key));
     if (present.length === 0) {
         return makeCheck('warn', '副模型配置', '未配置副模型（将按单模型模式运行）',
-            '如需多模态图像分析，补全 PAPER_ANALYZER_SECONDARY_MODEL / ENDPOINT / API_KEY');
+            '如需多模态图像分析，补全 PAPER_ANALYZER_SECONDARY_MODEL（可复用同服务主端点与账号池）');
     }
-    if (missingKeys.length > 0) {
-        return makeCheck('warn', '副模型配置', `副模型配置不完整（缺少 ${missingKeys.join('、')}），将按单模型模式运行`,
-            '补全 PAPER_ANALYZER_SECONDARY_* 三项后生效');
+    if (!hasEnvValue(env, keys.model)) {
+        return makeCheck('warn', '副模型配置', `副模型配置不完整（缺少 ${keys.model}），将按单模型模式运行`,
+            '补全 PAPER_ANALYZER_SECONDARY_MODEL 后生效，或清理多余副模型项');
     }
     const model = String(env[keys.model]).trim();
-    const endpoint = describeEndpoint(env[keys.endpoint]);
-    if (!isHttpUrl(env[keys.endpoint])) {
-        return makeCheck('warn', '副模型配置', `模型 ${model}；ENDPOINT 不是合法 HTTP(S) URL`,
-            '检查 .env 的 PAPER_ANALYZER_SECONDARY_ENDPOINT');
-    }
+    const explicitEndpoint = hasEnvValue(env, keys.endpoint) ? String(env[keys.endpoint]).trim() : '';
+    const primaryEndpoint = hasEnvValue(env, 'PAPER_ANALYZER_ENDPOINT') ? String(env.PAPER_ANALYZER_ENDPOINT).trim() : '';
+    const effectiveEndpoint = explicitEndpoint || primaryEndpoint;
+    const endpoint = effectiveEndpoint ? describeEndpoint(effectiveEndpoint) : '(未配置)';
     if (!SUPPORTED_MODELS.includes(model)) {
         const primaryConfigured = String(env.PAPER_ANALYZER_MODEL || '').trim();
         const suggestedModel = SUPPORTED_MODELS.includes(primaryConfigured) ? primaryConfigured : REQUIRED_MODEL;
-        return makeCheck('fail', '副模型配置', `副模型 ${model} 不在受支持清单（可选 ${SUPPORTED_MODELS.join(' / ')}；endpoint ${endpoint}；API Key 已配置，值不显示）`,
+        return makeCheck('fail', '副模型配置', `副模型 ${model} 不在受支持清单（可选 ${SUPPORTED_MODELS.join(' / ')}；endpoint ${endpoint}）`,
             `把 .env 的 PAPER_ANALYZER_SECONDARY_MODEL 设为 ${suggestedModel}`);
     }
-    return makeCheck('ok', '副模型配置', `副模型 ${model}（endpoint ${endpoint}；API Key 已配置，值不显示）`);
+    if (!effectiveEndpoint) {
+        return makeCheck('fail', '副模型配置', `副模型 ${model} 缺少可用 ENDPOINT（未配置 ${keys.endpoint} 且无可复用的主端点）`,
+            '在 .env 补全 PAPER_ANALYZER_SECONDARY_ENDPOINT 或 PAPER_ANALYZER_ENDPOINT');
+    }
+    if (!isHttpUrl(effectiveEndpoint)) {
+        return makeCheck('warn', '副模型配置', `模型 ${model}；ENDPOINT 不是合法 HTTP(S) URL`,
+            '检查 .env 的 PAPER_ANALYZER_SECONDARY_ENDPOINT');
+    }
+    let resolvedKeys;
+    try {
+        resolvedKeys = resolveSecondaryApiKeys({
+            primaryEndpoint,
+            secondaryEndpoint: effectiveEndpoint,
+            primaryKey: env.PAPER_ANALYZER_API_KEY || '',
+            primaryApiKeys: credentialPoolValues(env, PRIMARY_POOL_ENV_KEYS),
+            secondaryKey: env[keys.apiKey] || '',
+            secondaryFallbackApiKeys: env.PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS || '',
+            secondaryTertiaryFallbackApiKey: env.PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY || '',
+            secondaryModel: model
+        });
+    } catch (error) {
+        return makeCheck('fail', '副模型配置', `副模型 ${model} 凭据配置无效：${error.message}`,
+            '跨服务副模型必须在 .env 显式配置 PAPER_ANALYZER_SECONDARY_API_KEY');
+    }
+    if (!Array.isArray(resolvedKeys) || resolvedKeys.length === 0) {
+        return makeCheck('fail', '副模型配置', `副模型 ${model} 缺少可用 API Key（未配置 ${keys.apiKey} 且无可复用的主账号 key）`,
+            '在 .env 补全 PAPER_ANALYZER_SECONDARY_API_KEY');
+    }
+    const inheritedNotes = [];
+    if (!explicitEndpoint) inheritedNotes.push('复用主端点');
+    if (!hasEnvValue(env, keys.apiKey)
+        && !hasEnvValue(env, 'PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS')
+        && !hasEnvValue(env, 'PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY')) {
+        inheritedNotes.push('复用同服务主账号池');
+    }
+    const suffix = inheritedNotes.length ? `，${inheritedNotes.join('、')}` : '';
+    return makeCheck('ok', '副模型配置', `副模型 ${model}（endpoint ${endpoint}${suffix}；API Key 已配置，值不显示）`);
 }
 
 // 生产池与副模型池的 key 变量：只比较值是否相同，不打印 key 或值。

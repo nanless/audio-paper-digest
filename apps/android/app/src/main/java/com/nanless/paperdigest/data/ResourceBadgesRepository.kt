@@ -71,7 +71,9 @@ class ResourceBadgesRepository(
                         ?.nullableString("sha256")
                         .orEmpty()
                     val pid = obj.nullableString("paperId")?.takeIf { it.isNotBlank() }
-                        ?: obj.nullableString("appearanceId")?.takeIf { it.isNotBlank() }?.let { "page:$it" }
+                        ?: obj.nullableString("appearanceId")?.takeIf { it.isNotBlank() }?.let { raw ->
+                            runCatching { "page:" + URI(CatalogRepository.sameSite(raw)).path }.getOrNull()
+                        }
                         ?: ""
                     if (articleSha in demoArticleShas && pid.isNotEmpty()) hits.add(pid)
                 }
@@ -90,10 +92,24 @@ class ResourceBadgesRepository(
             )
         }
         val url = CatalogRepository.sameSite("client/signals/resource-badges.json")
-        val response = if (transport != null) {
-            transport.invoke(url, MAX_INDEX_BYTES)
-        } else {
-            publishedHttp.execute(Request.Builder().url(url).header("Cache-Control", "no-cache").get().build(), MAX_INDEX_BYTES)
+        val response = try {
+            if (transport != null) {
+                transport.invoke(url, MAX_INDEX_BYTES)
+            } else {
+                publishedHttp.execute(Request.Builder().url(url).header("Cache-Control", "no-cache").get().build(), MAX_INDEX_BYTES)
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (invalid: IllegalArgumentException) {
+            throw invalid
+        } catch (_: Exception) {
+            // Optional Tier 2 network / transport error: preserve prior cachedSignals,
+            // do not mark Tier 2 loaded, and still return Tier 1 local cachedDemoIds.
+            return@withLock ResourceBadgesResult(
+                available = cachedSignals != null,
+                papers = cachedSignals.orEmpty(),
+                cachedDemoIds = demoIds,
+            )
         }
         if (response.code == 404 || response.code == 410) {
             cachedSignals = null
@@ -101,7 +117,12 @@ class ResourceBadgesRepository(
             return@withLock ResourceBadgesResult(available = false, papers = emptyMap(), cachedDemoIds = demoIds)
         }
         if (response.code != 200) {
-            throw AppFailure("http", "开源与资源信号索引返回 HTTP ${response.code}。")
+            // Transient non-404/410 HTTP error: preserve prior cachedSignals and Tier 1 cachedDemoIds.
+            return@withLock ResourceBadgesResult(
+                available = cachedSignals != null,
+                papers = cachedSignals.orEmpty(),
+                cachedDemoIds = demoIds,
+            )
         }
         val parsed = parseIndex(response.bytes)
         cachedSignals = parsed

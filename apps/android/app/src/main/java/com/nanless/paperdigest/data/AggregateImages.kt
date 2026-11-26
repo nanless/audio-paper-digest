@@ -49,10 +49,12 @@ object AggregateImages {
         require(if(parser==null)!value.has("parserContract") else value.opt("parserContract")==parser){"图片实际平台解析声明不符"}
         return plan
     }
+    const val MAX_SLOTS=512
     const val MAX_IMAGE_BYTES=16*1024*1024
     const val MAX_TRANSFER_BYTES=64*1024*1024
     const val MAX_REFERENCED_BYTES=64*1024*1024
     private val raster=setOf("image/png","image/jpeg","image/gif","image/webp")
+    private val supportedMimes=raster+"image/svg+xml"
     fun rasterMIME(header:ByteArray):String {
         if(header.size>=8&&header.take(8).toByteArray().contentEquals(byteArrayOf(0x89.toByte(),80,78,71,13,10,26,10)))return "image/png"
         if(header.size>=3&&header[0]==0xff.toByte()&&header[1]==0xd8.toByte()&&header[2]==0xff.toByte())return "image/jpeg"
@@ -60,9 +62,18 @@ object AggregateImages {
         if(header.size>=12&&String(header,0,4,Charsets.US_ASCII)=="RIFF"&&String(header,8,4,Charsets.US_ASCII)=="WEBP")return "image/webp"
         error("汇总图片字节类型不受支持")
     }
+    fun imageMIME(bytes:ByteArray):String {
+        runCatching{return rasterMIME(bytes.copyOfRange(0,minOf(16,bytes.size)))}
+        val text=PublishedUtf8.decode(bytes).trim()
+        require(text.startsWith("<svg",ignoreCase=true)&&text.contains("http://www.w3.org/2000/svg")){"汇总图片字节类型不受支持"}
+        DesktopDetailsRepository.validateSafeStaticSvgBytes(bytes)
+        val root=Jsoup.parse(text,"",org.jsoup.parser.Parser.xmlParser()).children().single()
+        require(root.attr("xmlns").trim()=="http://www.w3.org/2000/svg"&&root.children().isNotEmpty()){"汇总图片字节类型不受支持"}
+        return "image/svg+xml"
+    }
     /** Integer/range checks precede blob allocation; every repeated reference consumes the raw-byte budget. */
     fun records(plan:AggregateImagePlan,rows:JSONArray):List<AggregateImageRecord> {
-        require(rows.length()==plan.slots.size&&rows.length()<=128)
+        require(rows.length()==plan.slots.size&&rows.length()<=MAX_SLOTS)
         return (0 until rows.length()).map{i->val row=rows.getJSONObject(i);require(canonical(row.getJSONObject("slot"))==canonical(plan.slots[i].json()))
             val sha=row.optString("sha256").takeUnless{it.isEmpty()};val mime=row.optString("mime").takeUnless{it.isEmpty()};val reason=row.optString("missingReason").takeUnless{it.isEmpty()}
             val size=if(row.has("bytes")&&!row.isNull("bytes")){val value=row.get("bytes");require(value is Int||value is Long);(value as Number).toLong().also{require(it in 1..MAX_IMAGE_BYTES.toLong())}.toInt()}else null
@@ -70,9 +81,9 @@ object AggregateImages {
         }.also{validateReferenceBudget(it)}
     }
     fun validateReferenceBudget(records:List<AggregateImageRecord>) {
-        require(records.size<=128);var total=0
+        require(records.size<=MAX_SLOTS);var total=0
         for(record in records){
-            if(record.sha256!=null){require(PublishedAggregateReader.validSHA(record.sha256)&&record.slot.sourceURL!=null&&record.mime in raster&&record.missingReason==null);val size=requireNotNull(record.bytes);require(size in 1..MAX_IMAGE_BYTES&&size<=MAX_REFERENCED_BYTES-total){"页面图片引用累计超过64 MiB"};total+=size}
+            if(record.sha256!=null){require(PublishedAggregateReader.validSHA(record.sha256)&&record.slot.sourceURL!=null&&record.mime in supportedMimes&&record.missingReason==null);val size=requireNotNull(record.bytes);require(size in 1..MAX_IMAGE_BYTES&&size<=MAX_REFERENCED_BYTES-total){"页面图片引用累计超过64 MiB"};total+=size}
             else require(record.mime==null&&record.bytes==null&&!record.missingReason.isNullOrBlank()){"图片缺项状态无效"}
         }
     }
@@ -158,11 +169,11 @@ internal object AggregateImageLoader {
             if(blob==null){
                 val remaining=minOf(AggregateImages.MAX_IMAGE_BYTES,AggregateImages.MAX_TRANSFER_BYTES-transferred,AggregateImages.MAX_REFERENCED_BYTES-referenced)
                 if(remaining<=0){records+=missing(slot);continue}
-                val bytes=try{fetch(address,remaining)}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(_:Exception){transferred=AggregateImages.MAX_TRANSFER_BYTES;records+=missing(slot);continue}
+                val bytes=try{fetch(address,remaining)}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(_:Exception){records+=missing(slot);continue}
                 kotlinx.coroutines.currentCoroutineContext().ensureActive();check()
-                if(bytes.isEmpty()||bytes.size>remaining){transferred=AggregateImages.MAX_TRANSFER_BYTES;records+=missing(slot);continue}
+                if(bytes.isEmpty()||bytes.size>remaining){transferred=(transferred+bytes.size).coerceAtMost(AggregateImages.MAX_TRANSFER_BYTES);records+=missing(slot);continue}
                 transferred+=bytes.size
-                val supported=runCatching{AggregateImages.rasterMIME(bytes.copyOfRange(0,minOf(16,bytes.size)))}.isSuccess
+                val supported=runCatching{AggregateImages.imageMIME(bytes)}.isSuccess
                 if(!supported){records+=missing(slot);continue}
                 // Filesystem/publication errors are not rewritten as ordinary missing network images.
                 blob=store.cacheImageBlob(bytes);downloaded[address]=blob

@@ -135,7 +135,7 @@ class OfflineStore(private val root: File) {
         val manifest = OfflineFoundationJSON.parse(JsonFiles.read(BackupCodec.checkedFile(folder, "manifest.json"), 2 * 1024 * 1024L))
         val version = manifest.getString("contract")
         require(ClientProtocols.hasValidHeader(manifest,"paperdigest-offline-package") && manifest.getString("id") == id && manifest.getString("paperID").isNotEmpty() && https(manifest.getString("blogURL")) && https(manifest.getString("sourceURL")) && BackupCodec.validSHA(manifest.getString("articleRevisionSHA256"))) { "离线包合同或来源无效" }
-        val entries = manifest.getJSONArray("files").objects(); require(entries.size in 2..35)
+        val entries = manifest.getJSONArray("files").objects(); require(entries.size in 2..67)
         val names = HashSet<String>(); val limits = mapOf("paper" to 8L * 1024 * 1024, "article" to 128L * 1024 * 1024, "pdf" to 100L * 1024 * 1024, "image" to 16L * 1024 * 1024)
         entries.forEach { entry ->
             val path = entry.getString("path"); val role = entry.getString("role"); val hash = entry.getString("sha256"); val bytes = CloudManifest.number(entry, "bytes")
@@ -214,11 +214,12 @@ class OfflineStore(private val root: File) {
                 nullable(pointer, "filePath")?.let { old -> require(StoragePaths.resolve(old, root, pdfHash).canonicalFile == pdfFile.canonicalFile) }
             }
             val verified = StoragePaths.resolve(pdfFile.absolutePath, root, pdfHash, 100L * 1024 * 1024)
-            require(JsonFiles.read(verified, 100L * 1024 * 1024).take(5).toByteArray().contentEquals("%PDF-".toByteArray()))
+            val pdfBytes = JsonFiles.read(verified, 100L * 1024 * 1024)
+            require(pdfBytes.size >= 5 && pdfBytes.copyOfRange(0, 5).contentEquals("%PDF-".toByteArray()))
             PDDocument.load(verified, MemoryUsageSetting.setupTempFileOnly()).use { require(it.numberOfPages > 0) }
-            payloads["original.pdf"] = Triple(JsonFiles.read(verified, 100L * 1024 * 1024), "pdf", paper.pdfURL)
+            payloads["original.pdf"] = Triple(pdfBytes, "pdf", paper.pdfURL)
         }
-        val resources = originalArticle.getJSONArray("resources").objects(); require(resources.size <= 32); var total = 0L
+        val resources = originalArticle.getJSONArray("resources").objects(); require(resources.size <= 64); var total = 0L
         resources.forEach { r ->
             require(r.getString("kind") == "image" && https(r.getString("sourceURL")))
             val hash = r.getString("sha256"); val file = StoragePaths.resolve(r.getString("localPath"), root, hash, 16L * 1024 * 1024); val bytes = JsonFiles.read(file, 16L * 1024 * 1024)

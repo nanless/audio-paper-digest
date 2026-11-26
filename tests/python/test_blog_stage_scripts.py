@@ -662,6 +662,47 @@ body
         module.plan_post_publish_visual_assets.assert_not_called()
         self.assertIn('博客推送完成，远端提交已核验', output.getvalue())
 
+    def test_review_blog_include_id_resolves_scoped_failure_help_inside_scope_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / 'current'
+            current.mkdir()
+            paper_id = '2611.00042'
+            with mock.patch.object(publish_module, 'CURRENT_DIR', current):
+                batch_failure = publish_module.review_failure_path('2026-11-26')
+                with publish_module.publication_scope(paper_id):
+                    scoped_failure = publish_module.review_failure_path('2026-11-26')
+            batch_failure.write_text(json.dumps({
+                'files': [{
+                    'path': 'content/posts/2026-11-26-batch.md', 'sha256': 'b' * 64,
+                    'issues': [{'severity': 'error', 'description': '批次其他论文问题'}],
+                }],
+            }), encoding='utf-8')
+            scoped_failure.write_text(json.dumps({
+                'files': [{
+                    'path': 'content/posts/2026-11-26-single.md', 'sha256': 'a' * 64,
+                    'issues': [{'severity': 'error', 'description': '表格 粘连复写'}],
+                }],
+            }), encoding='utf-8')
+            batch_help = current / batch_failure.name.replace('blog-review-failure-', 'blog-review-help-')
+            scoped_help = current / scoped_failure.name.replace('blog-review-failure-', 'blog-review-help-')
+
+            with mock.patch.object(publish_module, 'CURRENT_DIR', current), \
+                    mock.patch.object(publish_module, 'blog_publication_lock', lambda _d: contextlib.nullcontext()), \
+                    mock.patch.object(review_blog, '_run_review',
+                                      side_effect=publish_module.PublishDataValidationError('单篇审查阻断')), \
+                    mock.patch.object(review_blog, 'require_external_runtime'), \
+                    mock.patch.object(review_blog, 'load_publish_to_blog', return_value=publish_module), \
+                    mock.patch.object(sys, 'argv', [
+                        'review-blog.py', '--date', '2026-11-26', '--include-id', paper_id,
+                    ]), contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaises(SystemExit) as caught:
+                review_blog.main()
+            self.assertEqual(caught.exception.code, 1)
+            self.assertTrue(scoped_help.exists(), '应为 --include-id 生成对应单篇作用域的 review-help')
+            self.assertFalse(batch_help.exists(), '单篇失败不得误生成全批次 review-help')
+            help_data = json.loads(scoped_help.read_text(encoding='utf-8'))
+            self.assertEqual(help_data['entries'][0]['path'], 'content/posts/2026-11-26-single.md')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -193,7 +193,44 @@ function parseRefreshCliArgs(args) {
         }
         options.reviewFeedbackById = feedback;
     }
+    if (options.factFeedbackFiles.length > 0) {
+        parseAndValidateFactFeedbackFiles(options.factFeedbackFiles, options.all ? null : options.ids, options);
+    }
     return options;
+}
+
+function parseAndValidateFactFeedbackFiles(factFeedbackFiles, targetIds = null, options = {}) {
+    if (factFeedbackFiles === undefined || factFeedbackFiles === null) return new Map();
+    if (!Array.isArray(factFeedbackFiles)) {
+        throw new Error('factFeedbackFiles 必须为非空文件路径数组。');
+    }
+    if (factFeedbackFiles.length === 0) return new Map();
+    if (options.authorsOnly || options.figuresOnly || options.surfaceBindingsOnly || options.scoringAndReader) {
+        throw new Error('--fact-feedback-file 只能用于刷新完整读者文章，不能与 --authors-only、--figures-only、--surface-bindings-only 或 --scoring-and-reader 同时使用。');
+    }
+    const factReview = require('./lib/daily-fact-review');
+    const targetSet = Array.isArray(targetIds)
+        ? new Set(targetIds.map(id => normalizedId(id)).filter(Boolean))
+        : null;
+    const byPaperId = new Map();
+    for (const file of factFeedbackFiles) {
+        if (typeof file !== 'string' || !file.trim()) {
+            throw new Error('factFeedbackFiles 必须为非空文件路径数组。');
+        }
+        const feedback = factReview.readFeedback(file);
+        const paperId = normalizedId({ arxivId: feedback.paperId });
+        if (!paperId) {
+            throw new Error(`事实反馈文件缺少有效的论文 ID：${file}`);
+        }
+        if (byPaperId.has(paperId)) {
+            throw new Error(`同一论文不能提供多份事实反馈文件：${paperId}（${byPaperId.get(paperId).file}；${file}）`);
+        }
+        if (targetSet !== null && !targetSet.has(paperId)) {
+            throw new Error(`事实反馈文件指向的论文不在本次刷新目标中：${paperId}（文件 ${file}；目标 ${[...targetSet].join(', ') || '无'}）`);
+        }
+        byPaperId.set(paperId, { file, feedback });
+    }
+    return byPaperId;
 }
 
 function hasCurrentReaderV3(paper, options) {
@@ -269,12 +306,25 @@ async function refreshApiReaders(targetIds, options = {}) {
 }
 
 function readRefreshEntryPlan(resultPath, targetIds = null, options = {}) {
+    const factFeedbackById = parseAndValidateFactFeedbackFiles(options.factFeedbackFiles, targetIds, options);
     const payload = readJsonFileStrict(resultPath);
     const entryPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(payload, {
         label: '读者文章批次入口'
     });
+    const rows = Array.isArray(payload) ? payload : payload?.papers;
+    const boundByPaperId = new Map();
+    if (factFeedbackById.size > 0) {
+        const factReview = require('./lib/daily-fact-review');
+        for (const [id, entry] of factFeedbackById) {
+            const paper = Array.isArray(rows) ? rows.find(candidate => normalizedId(candidate) === id) : null;
+            if (!paper) {
+                throw new Error(`事实反馈文件指向的论文不在当前分析结果中：${id}（文件 ${entry.file}）`);
+            }
+            boundByPaperId.set(id, factReview.validateFeedback(entry.feedback, entryPlan, paper));
+        }
+    }
     if (Array.isArray(targetIds) && targetIds.length > 0) {
-        assertBatchTargetsMayRefreshDailyReader(payload, entryPlan, targetIds, options);
+        assertBatchTargetsMayRefreshDailyReader(payload, entryPlan, targetIds, options, boundByPaperId);
     }
     return entryPlan;
 }
@@ -305,6 +355,7 @@ async function refreshApiReadersInternal(targetIds, options = {}) {
 
 async function refreshApiReadersWithEntryPlan(targetIds, options = {}) {
     const ids = [...new Set(targetIds.map(normalizedId).filter(Boolean))];
+    const factFeedbackById = parseAndValidateFactFeedbackFiles(options.factFeedbackFiles, ids, options);
     const config = Config.ANALYSIS_CONFIG || {};
     const concurrency = options.concurrency ?? config.apiReaderConcurrency ?? 5;
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > MAX_REFRESH_CONCURRENCY) {
@@ -334,8 +385,14 @@ async function refreshApiReadersWithEntryPlan(targetIds, options = {}) {
             },
             runItem: async id => {
                 try {
-                    const itemOptions = options.reviewFeedbackById
-                        ? { ...options, reviewFeedback: options.reviewFeedbackById[id] } : options;
+                    const itemFeedbackEntry = factFeedbackById.get(id);
+                    const itemOptions = {
+                        ...options,
+                        ...(options.reviewFeedbackById ? { reviewFeedback: options.reviewFeedbackById[id] } : {}),
+                        ...(factFeedbackById.size > 0
+                            ? { factFeedbackFiles: itemFeedbackEntry ? [itemFeedbackEntry.file] : [] }
+                            : {})
+                    };
                     const result = await refreshApiReader(id, itemOptions);
                     failures.delete(id);
                     return { success: true, result };
@@ -552,11 +609,12 @@ function assertMayRefreshDailyReaderRecord(paper, plan, options = {}) {
     throw error;
 }
 
-function assertBatchTargetsMayRefreshDailyReader(payload, entryPlan, targetIds, options = {}) {
+function assertBatchTargetsMayRefreshDailyReader(payload, entryPlan, targetIds, options = {}, boundByPaperId = null) {
     if (!Array.isArray(targetIds) || !targetIds.length) return;
     const rows = Array.isArray(payload) ? payload : payload?.papers;
     if (!Array.isArray(rows)) return;
     const blocked = [];
+    const factReview = boundByPaperId && boundByPaperId.size > 0 ? require('./lib/daily-fact-review') : null;
     for (const rawId of targetIds) {
         const id = normalizedId(rawId);
         if (!id) continue;
@@ -564,7 +622,9 @@ function assertBatchTargetsMayRefreshDailyReader(payload, entryPlan, targetIds, 
         if (!paper) continue;
         const itemOptions = options.reviewFeedbackById
             ? { ...options, reviewFeedback: options.reviewFeedbackById[id] } : options;
-        const reason = getDailyOperatorOrRetainedCandidateRefreshBlockReason(paper, entryPlan, itemOptions);
+        const bound = boundByPaperId?.get(id) || null;
+        const check = () => getDailyOperatorOrRetainedCandidateRefreshBlockReason(paper, entryPlan, itemOptions);
+        const reason = bound && factReview ? factReview.withFactReview(bound, check) : check();
         if (reason) blocked.push({ id, reason });
     }
     if (!blocked.length) return;
@@ -768,18 +828,32 @@ function readRefreshTargetAndPlan(resultPath, requested, entryPlan = null) {
 async function refreshApiReaderInternal(targetId, options = {}) {
     const requested = normalizedId(targetId);
     if (!requested) throw new Error('用法: node scripts/refresh-api-reader.js <arxiv-id>');
+    const factFeedbackById = parseAndValidateFactFeedbackFiles(options.factFeedbackFiles, [requested], options);
+    const factEntry = factFeedbackById.get(requested) || null;
     const resultPath = Config.FILES.deepAnalysisResult;
     const { paper: existing, plan: initialDailySourcePlan } =
         readRefreshTargetAndPlan(resultPath, requested, refreshRecoveryEntryScope.getStore());
-    if (!options.scoringAndReader && (scoringRefresh.hasCheckpoint(existing) || scoringRefresh.hasPreservedCheckpoint(existing)))
-        scoringRefresh.assertNoPending(existing);
-    if (existing) assertMayRefreshDailyReaderRecord(existing, initialDailySourcePlan, options);
-    if (!existing || (!isSuccessfulAnalysisRecord(existing)
-        && !(options.scoringAndReader && (canRepairScoringBinding(existing) || scoringRefresh.hasCheckpoint(existing)
-            || scoringRefresh.hasPreservedCheckpoint(existing)))
-        && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing))
-        && !canRepairCompletedPrimaryReader(existing, initialDailySourcePlan, options))) {
-        throw new Error(`${requested} 的已有分析记录不满足所选刷新模式的条件，不能开始刷新。`);
+    const runPreLockChecks = () => {
+        if (!options.scoringAndReader && (scoringRefresh.hasCheckpoint(existing) || scoringRefresh.hasPreservedCheckpoint(existing)))
+            scoringRefresh.assertNoPending(existing);
+        if (existing) assertMayRefreshDailyReaderRecord(existing, initialDailySourcePlan, options);
+        if (!existing || (!isSuccessfulAnalysisRecord(existing)
+            && !(options.scoringAndReader && (canRepairScoringBinding(existing) || scoringRefresh.hasCheckpoint(existing)
+                || scoringRefresh.hasPreservedCheckpoint(existing)))
+            && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing))
+            && !canRepairCompletedPrimaryReader(existing, initialDailySourcePlan, options))) {
+            throw new Error(`${requested} 的已有分析记录不满足所选刷新模式的条件，不能开始刷新。`);
+        }
+    };
+    if (factEntry) {
+        if (!existing) {
+            throw new Error(`${requested} 的已有分析记录不满足所选刷新模式的条件，不能开始刷新。`);
+        }
+        const factReview = require('./lib/daily-fact-review');
+        const initialBound = factReview.validateFeedback(factEntry.feedback, initialDailySourcePlan, existing);
+        factReview.withFactReview(initialBound, runPreLockChecks);
+    } else {
+        runPreLockChecks();
     }
 
     let result, failure;
@@ -787,6 +861,7 @@ async function refreshApiReaderInternal(targetId, options = {}) {
         result = await withPaperAnalysisLock(existing, async () => {
         const { paper: storedAnalysisRecord, plan: lockedDailySourcePlan } =
             readRefreshTargetAndPlan(resultPath, requested, refreshRecoveryEntryScope.getStore() || initialDailySourcePlan);
+        const runLockedRefresh = async () => {
         if (!options.scoringAndReader && (scoringRefresh.hasCheckpoint(storedAnalysisRecord) || scoringRefresh.hasPreservedCheckpoint(storedAnalysisRecord)))
             scoringRefresh.assertNoPending(storedAnalysisRecord);
         if (storedAnalysisRecord) assertMayRefreshDailyReaderRecord(storedAnalysisRecord, lockedDailySourcePlan, options);
@@ -992,21 +1067,7 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                 options
             ), { refreshReaderDiagnostics: options.refreshReaderDiagnostics }
         );
-        let refreshed;
-        if (Array.isArray(options.factFeedbackFiles) && options.factFeedbackFiles.length > 0) {
-            const factReview = require('./lib/daily-fact-review');
-            const matchedFeedback = options.factFeedbackFiles
-                .map(file => factReview.readFeedback(file))
-                .find(item => normalizedId({ arxivId: item.paperId }) === requested);
-            if (matchedFeedback) {
-                const bound = factReview.validateFeedback(matchedFeedback, lockedDailySourcePlan, storedAnalysisRecord);
-                refreshed = await factReview.withFactReview(bound, executeRefreshWithDailyContext);
-            } else {
-                refreshed = await executeRefreshWithDailyContext();
-            }
-        } else {
-            refreshed = await executeRefreshWithDailyContext();
-        }
+        let refreshed = await executeRefreshWithDailyContext();
         if (completedPrimaryRecoveryInput) {
             refreshed = finishReviewedPrimaryReaderRefresh(completedPrimaryRecoveryInput,
                 refreshed, lockedDailySourcePlan, options);
@@ -1034,6 +1095,20 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                 + ` | article_sha=${refreshed.apiReaderArticleSha256}`
                 + ` | papers_sync=${sync.updated}`);
         return savedRecord;
+        };
+        if (factEntry) {
+            if (!storedAnalysisRecord) {
+                throw new Error(`取得分析锁后，${requested} 的记录已不存在，或不再满足所选刷新模式的条件。`);
+            }
+            const factReview = require('./lib/daily-fact-review');
+            const lockedFeedback = factReview.readFeedback(factEntry.file);
+            if (normalizedId({ arxivId: lockedFeedback.paperId }) !== requested) {
+                throw new Error(`取得分析锁后，事实反馈文件的论文身份已变化：${factEntry.file}`);
+            }
+            const lockedBound = factReview.validateFeedback(lockedFeedback, lockedDailySourcePlan, storedAnalysisRecord);
+            return await factReview.withFactReview(lockedBound, runLockedRefresh);
+        }
+        return await runLockedRefresh();
         });
     } catch (error) { failure = error; }
     // 结束来源核验是独立失败源：原刷新失败与收尾核验失败必须同时保留，

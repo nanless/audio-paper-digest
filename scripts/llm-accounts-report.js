@@ -10,12 +10,31 @@ const STATE_FILE = path.join(PROJECT_ROOT, 'data', 'runtime', 'llm-account-pool.
 const nowMs = () => Date.now();
 
 function readState(file) {
-    if (!fs.existsSync(file)) return { state: null, error: null };
+    let stat;
     try {
-        const state = JSON.parse(fs.readFileSync(file, 'utf8'));
-        return { state, error: null, present: true };
+        stat = fs.lstatSync(file);
     } catch (error) {
-        return { state: null, error: error.message };
+        if (error && error.code === 'ENOENT') return { state: null, error: null };
+        return { state: null, error: '账号池状态文件无法访问', present: true };
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+        return { state: null, error: '账号池状态路径必须为普通文件', present: true };
+    }
+    const flags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0);
+    let fd;
+    try {
+        fd = fs.openSync(file, flags);
+        if (!fs.fstatSync(fd).isFile()) {
+            return { state: null, error: '账号池状态路径必须为普通文件', present: true };
+        }
+        const state = JSON.parse(fs.readFileSync(fd, 'utf8'));
+        return { state, error: null, present: true };
+    } catch (_) {
+        return { state: null, error: '账号池状态文件不可读或 JSON 损坏', present: true };
+    } finally {
+        if (fd !== undefined) {
+            try { fs.closeSync(fd); } catch (_) { /* ignore */ }
+        }
     }
 }
 
@@ -27,8 +46,9 @@ function describe(state, atMs) {
         const groups = service && service.groups ? service.groups : {};
         const activeByGroup = new Map(Object.entries(groups).map(([id, group]) => [id, group]));
         for (const [accountId, record] of Object.entries(accounts)) {
-            const blockedUntil = Number(record && record.blockedUntilMs);
-            const blocked = Number.isFinite(blockedUntil) && blockedUntil > atMs;
+            const evaluated = pool.evaluateAccountQuota(record, atMs);
+            const blocked = !evaluated.eligible;
+            const blockedUntil = evaluated.activeBlockedUntilMs > atMs ? evaluated.activeBlockedUntilMs : 0;
             const matchingGroups = [...activeByGroup.entries()].filter(([, group]) => group && group.activeAccountId === accountId);
             const groupSelected = matchingGroups
                 .map(([, group]) => Number(group.lastSelectedAtMs))
@@ -37,7 +57,7 @@ function describe(state, atMs) {
             rows.push({
                 account: `账号 ${rows.length + 1}`,
                 status: blocked ? 'quota_blocked' : (record && record.status === 'quota_blocked' ? 'eligible_after_cooldown' : (record && record.status) || 'eligible'),
-                blockedUntil: blocked ? new Date(blockedUntil).toISOString() : null,
+                blockedUntil: blocked && blockedUntil ? new Date(blockedUntil).toISOString() : null,
                 lastSelectedAt: lastSelected ? new Date(lastSelected).toISOString() : null,
                 groups: matchingGroups.map(([, group], index) => `组 ${index + 1}`)
             });

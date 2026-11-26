@@ -2915,7 +2915,7 @@ extension LibraryService {
 
         let localizedHTML = try Self.localizeImagesPreservingDataURI(sanitizedHTML, replacements: replacements)
         let honestOffline = allRequiredGuideMediaCached
-            && articleResources.count <= 32
+            && articleResources.count <= 64
             && articleResources.allSatisfy { $0.localPath != nil && $0.sha256 != nil }
 
         // Epoch / snapshot consistency check BEFORE committing cached article (§8)

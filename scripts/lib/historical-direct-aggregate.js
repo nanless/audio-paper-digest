@@ -669,7 +669,7 @@ function publicHttps(value, label) {
     return url.href;
 }
 function renderAggregate(scope, key, members, options = {}) {
-    const display = scope === 'daily' ? `语音/音乐/音频论文速递 ${key}`
+    const display = scope === 'daily' ? `音频研究日报 ${key}`
         : scope === 'conference-task' ? `${options.conferenceKey.toUpperCase()} · ${options.displayLabel}`
             : `${key.toUpperCase()} 论文汇总`;
     const tags = [...new Set(members.flatMap(item => item.canonical.labels))].sort();

@@ -5,7 +5,9 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.Credentials
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
@@ -45,6 +47,25 @@ class ZoteroDavBackend internal constructor(root:File,private val secrets:Secret
     suspend fun archive(prepared:ZoteroDavPrepared,lease:ZoteroDavLease):JSONObject=mutex.withLock{
         davRequire(synchronized(preparedLeases){preparedLeases[prepared]===lease},"stale")
         try{run(prepared,lease)}finally{synchronized(preparedLeases){preparedLeases.remove(prepared)}}
+    }
+    /** Authenticated WebDAV PROPFIND check against the target zotero root without creating or modifying objects. */
+    suspend fun probe(lease:ZoteroDavLease)=withContext(Dispatchers.IO){
+        val context=currentCoroutineContext();val check:()->Unit={context.ensureActive();lease.requireCurrent()}
+        try{
+            check()
+            val auth=davAuthorization(lease,check)
+            val body="""<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>"""
+                .toRequestBody("application/xml; charset=utf-8".toMediaType())
+            val request=Request.Builder()
+                .url(lease.target.root)
+                .header("Authorization",auth)
+                .header("Depth","0")
+                .header("User-Agent","audio-paper-digest/1.0")
+                .method("PROPFIND",body)
+                .build()
+            val response=transport.exchange(request,4096,check=check);check()
+            davRequire(response.code in setOf(200,204,207),if(response.code==404)"target" else httpCode(response.code))
+        }catch(e:Exception){throw safe(e)}
     }
     /** Only an explicit same-target resume can get a fresh credential attempt; no key mutation calls this. */
     suspend fun resume(id:String,lease:ZoteroDavLease):JSONObject=mutex.withLock{

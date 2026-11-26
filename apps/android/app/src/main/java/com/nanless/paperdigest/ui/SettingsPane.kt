@@ -1,5 +1,6 @@
 package com.nanless.paperdigest.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.rememberScrollState
@@ -36,11 +37,14 @@ import java.time.ZoneOffset
  BoxWithConstraints(Modifier.fillMaxSize()){
  val wide=maxWidth>=840.dp
  Row(Modifier.fillMaxSize()){
- if(wide)Column(Modifier.width(208.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
-  Text("设置",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.padding(vertical=16.dp))
-  categories.forEach{category->
-   NavigationDrawerItem(label={Text(settingsCategoryLabel(category))},selected=pane==category,onClick={pane=category},icon={SettingsCategoryIcon(category)})
+ if(wide){
+  Column(Modifier.width(216.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceContainerLow).verticalScroll(rememberScrollState()).padding(16.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+   Text("设置",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.padding(vertical=16.dp))
+   categories.forEach{category->
+    NavigationDrawerItem(label={Text(settingsCategoryLabel(category))},selected=pane==category,onClick={pane=category},icon={SettingsCategoryIcon(category)})
+   }
   }
+  VerticalDivider(color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.6f))
  }
  Column(Modifier.weight(1f).fillMaxHeight()){
  if(!wide)Row(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){
@@ -92,7 +96,12 @@ import java.time.ZoneOffset
  val verifies=kind in setOf(SecretKind.CLOUD,SecretKind.ZOTERO,SecretKind.ZOTERO_DAV)
  suspend fun verifySaved(){
   try {
-   controller.execute(if(kind==SecretKind.CLOUD)"cloud.check"else"zotero.check",JSONObject())
+   val command=when(kind){
+    SecretKind.CLOUD->"cloud.check"
+    SecretKind.ZOTERO_DAV->"zotero.checkDav"
+    else->"zotero.check"
+   }
+   controller.execute(command,JSONObject())
    close()
   }catch(cancelled:kotlinx.coroutines.CancellationException){throw cancelled}
   catch(failure:Exception){error="凭据已安全保存，连接检查未通过："+(failure.message?:"请核对网络与目标权限。")}
@@ -156,7 +165,7 @@ import java.time.ZoneOffset
  fun retireList(){listGate.invalidate();versions=emptyList();listedTicket=null;listing=false;error=null}
  LaunchedEffect(actualContext){retireList()}
  DisposableEffect(listGate){onDispose{listGate.invalidate()}}
- var saving by remember{mutableStateOf(false)};val busy=cloud.optBoolean("busy")||saving||state.busy;val pending=cloud.optJSONObject("pending");val scope=rememberCoroutineScope()
+ var saving by remember{mutableStateOf(false)};val busy=cloud.optBoolean("busy")||saving||state.busy;val pending=cloud.optJSONObject("pending");val fullSyncPending=cloud.optJSONObject("fullSyncPending");val hasAnyPending=pending!=null||fullSyncPending!=null;val scope=rememberCoroutineScope()
  val transferID=cloud.optString("activeJobID")
  val configured=cloud.optString("account").isNotBlank()&&cloud.optString("credentialState") !in setOf("missing","unavailable")
  val targetChanged=account.trim()!=cloud.optString("account")||folder!=cloud.optString("folder","PaperDigest")
@@ -179,12 +188,13 @@ import java.time.ZoneOffset
  OutlinedButton({action("cloud.check",JSONObject())},enabled=!dirty&&!busy&&cloud.optString("account").isNotBlank()){Text("重新检查连接与权限")}
  Text(if(cloud.optString("account").isBlank())"尚未配置账号"else when(cloud.optString("credentialState")){"present"->"应用密码已保存；以最近一次连接检查结果为准";"missing"->"尚未保存应用密码";else->"账号已保存，连接待检查"},style=MaterialTheme.typography.bodySmall)
  if(pending!=null)Text(if(pending.optBoolean("damaged"))"未完成材料损坏或缺少检查点。可原样保留，但不能保证完整恢复。" else "有未完成的同一快照：${pending.optLong("fileCount")} 文件 / ${pending.optLong("encodedBytes")} 字节。继续不会创建新版本。")
+ if(fullSyncPending!=null)Text(if(fullSyncPending.optBoolean("damaged"))"未完成的全资料同步材料损坏或缺少检查点。可原样保留，但不能保证完整恢复。" else "有未完成的全资料同步快照：${fullSyncPending.optLong("encodedBytes")} 字节。可继续同步或原样保留后更换目录。")
  Button({action("cloud.upload",JSONObject())},enabled=configured&&transferID.isEmpty()&&!dirty&&!busy&&pending?.optBoolean("damaged")!=true){Text(if(pending==null)"保存完整快照" else "继续保存同一快照")}
  if(transferID.isNotEmpty()){
   Text(if(cloud.optString("transferStatus")=="queued")"备份等待系统调度或网络可用。" else "正在保存完整快照。")
   OutlinedButton({action("jobs.cancel",obj("id" to transferID))}){Text("取消备份（保留续传）")}
  }
- if(pending!=null)TextButton({confirm=true},enabled=!busy&&!dirty){Text("保留快照并停止本次续传…")}
+ if(hasAnyPending)TextButton({confirm=true},enabled=!busy&&!dirty){Text("保留快照并停止本次续传…")}
  cloud.optJSONObject("lastBackup")?.let{Text("最近完整保存：${it.optString("createdAt")} · ${it.optLong("encodedBytes")} 字节",style=MaterialTheme.typography.bodySmall)};if(cloud.optBoolean("automaticPaused"))Text("自动备份已暂停：请检查上述原因后显式重新启用。",color=MaterialTheme.colorScheme.error)
  HorizontalDivider();Text("已保存版本",style=MaterialTheme.typography.titleMedium);Text("版本按 UTC 月份归档，时间显示为本机时区。列表不会自动联网；目标或月份变化后请重新读取。")
  OutlinedTextField(month,{month=it;retireList()},label={Text("UTC 月份 YYYY-MM")},singleLine=true,enabled=!busy)
@@ -193,12 +203,12 @@ import java.time.ZoneOffset
   if(listGate.accepts(ticket,actualContext,month)&&!dirty&&reply.optString("selectionContext")==ticket.context&&reply.optString("month")==ticket.month){versions=reply.rows("snapshots");listedTicket=ticket;error=null}
  }catch(e:Exception){if(e is kotlinx.coroutines.CancellationException)throw e;if(listGate.accepts(ticket,actualContext,month))error=e.message}finally{if(listGate.accepts(ticket,actualContext,month))listing=false}}},enabled=!dirty&&!busy&&!listing&&actualContext.isNotEmpty()&&month.matches(Regex("\\d{4}-\\d{2}"))){Text(if(listing)"正在读取…" else "读取此月版本")};error?.let{Text(it)}
  versions.forEach{v->key(v.optString("selectionID")){var details by remember{mutableStateOf(false)};val ticket=listedTicket
-  OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){
-   Text(cloudLocalTime(v.optString("createdAt")));Text(cloudReadableBytes(v.optLong("encodedBytes")),style=MaterialTheme.typography.bodySmall)
+  EditorialCard{
+   Text(cloudLocalTime(v.optString("createdAt")),style=MaterialTheme.typography.titleSmall);Text(cloudReadableBytes(v.optLong("encodedBytes")),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
    TextButton({details=!details}){Text(if(details)"收起校验信息" else "查看校验信息")}
    if(details){Text("快照 SHA-256：${v.optString("sha256")}",style=MaterialTheme.typography.labelSmall);Text("清单 SHA-256：${v.optString("manifestSHA256")}",style=MaterialTheme.typography.labelSmall);Text("${v.optInt("chunkCount")} 个分块 · 清单 ${v.optInt("manifestBytes")} 字节",style=MaterialTheme.typography.bodySmall)}
    TextButton({if(ticket!=null&&listGate.accepts(ticket,actualContext,month)&&!dirty)action("cloud.restore.prepare",obj("selectionID" to v.getString("selectionID")))},enabled=!busy&&!dirty&&ticket!=null&&listGate.accepts(ticket,actualContext,month)){Text("校验并准备恢复…")}
-  }}
+  }
  }}
  if(confirm)AlertDialog(onDismissRequest={confirm=false},title={Text("原样保留并结束本次续传？")},text={Text("本机原快照和检查点移入保留区，云端半成品不自动删除。完整有效的快照可以导出后从文件恢复；损坏材料需要人工核对。")},confirmButton={TextButton({action("cloud.archivePending",JSONObject());confirm=false}){Text("保留并停止")}},dismissButton={TextButton({confirm=false}){Text("取消")}})
 }
@@ -214,18 +224,39 @@ internal fun settingsCategoryLabel(category:String)=when(category){"开始"->"�
 
 @Composable internal fun ConnectionSetupOverview(state:UiState,open:(String)->Unit){
  Text("连接你的研究资料",style=MaterialTheme.typography.titleLarge)
- Text("阅读网站文章可以直接开始。建议连接以下服务，保存研究资料并把论文归档到自己的文库；两项可以独立使用。")
- OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
-  Text("WebDAV 备份（坚果云）",style=MaterialTheme.typography.titleMedium)
-  Text("备份整个工作台：论文、笔记、研究输入与回答。填写坚果云账号和应用密码即可，默认目录已准备好。")
-  Text(if(state.cloud.optString("account").isBlank())"尚未配置"else"账号已保存 · 可前往检查连接",style=MaterialTheme.typography.labelMedium)
+ Text("阅读网站文章可以直接开始。建议连接以下服务，保存研究资料并把论文归档到自己的文库；各项可以独立使用。",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+ EditorialCard{
+  Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)){
+   Surface(shape=MaterialTheme.shapes.small,color=MaterialTheme.colorScheme.primaryContainer){Icon(Icons.Outlined.CloudQueue,null,Modifier.padding(8.dp).size(18.dp),tint=MaterialTheme.colorScheme.onPrimaryContainer)}
+   Column(Modifier.weight(1f)){
+    Text("WebDAV 备份（坚果云）",style=MaterialTheme.typography.titleMedium)
+    Text(if(state.cloud.optString("account").isBlank())"尚未配置"else"账号已保存 · 可前往检查连接",style=MaterialTheme.typography.labelSmall,color=if(state.cloud.optString("account").isBlank())MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary)
+   }
+  }
+  Text("备份整个工作台：论文、笔记、研究输入与回答。填写坚果云账号和应用密码即可，默认目录已准备好。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
   Button({open("坚果云")}){Text("配置 WebDAV 备份")}
- }}
- OutlinedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
-  Text("Zotero 归档",style=MaterialTheme.typography.titleMedium)
-  Text("把选定论文、PDF、导读和笔记放入 Zotero。使用专用 API key 和个人文库 ID，默认使用 Zotero Storage。")
-  Text(if(state.zotero.optString("libraryID").isBlank())"尚未配置"else if(state.zotero.optString("credentialState")=="confirmed")"连接已核验"else"目标已保存 · 连接待核验",style=MaterialTheme.typography.labelMedium)
+ }
+ EditorialCard{
+  Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)){
+   Surface(shape=MaterialTheme.shapes.small,color=MaterialTheme.colorScheme.tertiaryContainer){Icon(Icons.Outlined.Bookmarks,null,Modifier.padding(8.dp).size(18.dp),tint=MaterialTheme.colorScheme.onTertiaryContainer)}
+   Column(Modifier.weight(1f)){
+    Text("Zotero 归档",style=MaterialTheme.typography.titleMedium)
+    Text(if(state.zotero.optString("libraryID").isBlank())"尚未配置"else if(state.zotero.optString("credentialState")=="confirmed")"连接已核验"else"目标已保存 · 连接待核验",style=MaterialTheme.typography.labelSmall,color=if(state.zotero.optString("credentialState")=="confirmed")MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+   }
+  }
+  Text("把选定论文、PDF、导读和笔记放入 Zotero。使用专用 API key 和个人文库 ID，默认使用 Zotero Storage。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
   Button({open("Zotero")}){Text("配置 Zotero 归档")}
- }}
- Text("Zotero 附件 WebDAV 是可选的附件同步方式；与工作台完整备份分别设置。",style=MaterialTheme.typography.bodySmall)
+ }
+ EditorialCard{
+  Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)){
+   Surface(shape=MaterialTheme.shapes.small,color=MaterialTheme.colorScheme.secondaryContainer){Icon(Icons.Outlined.AutoAwesome,null,Modifier.padding(8.dp).size(18.dp),tint=MaterialTheme.colorScheme.onSecondaryContainer)}
+   Column(Modifier.weight(1f)){
+    Text("模型与 HTTP CONNECT 代理",style=MaterialTheme.typography.titleMedium)
+    Text(if(state.settings.optString("httpProxy").isNotBlank())"代理已配置 · 可随时调整模型" else "下载 arXiv 原文 PDF 或使用 Muse 模型时建议配置代理",style=MaterialTheme.typography.labelSmall,color=if(state.settings.optString("httpProxy").isNotBlank())MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+   }
+  }
+  Text("配置研究问答模型、端点及 HTTP CONNECT 代理，所有凭据仅在本机加密保存。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+  OutlinedButton({open("模型")}){Text("配置模型与代理")}
+ }
+ Text("Zotero 附件 WebDAV 是可选的附件同步方式；与工作台完整备份分别设置。",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
 }

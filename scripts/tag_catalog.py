@@ -351,9 +351,10 @@ def tag_prompt_text_sha256(tag_catalog, prompt_text_contract=TAG_PROMPT_TEXT_CON
 def resolve_label_candidates(tag_catalog, label, facet=None, *, mode=LABEL_MODE_LEGACY):
     """查找标签对应的概念；无法唯一确定时不替调用方作选择。
 
-    current 模式只接受已启用概念的中文首选名称，并按既有规则统一名称格式。
-    legacy 模式另接受英文名称、别名和停用概念。为兼容历史审计，本函数默认
-    使用 legacy；生产调用须使用 resolve_current_label 或明确传入 mode='current'。
+    current 模式只接受带 # 前缀且大小写完全一致的已启用概念中文首选名称
+    （与 JS resolveCurrentTag 保持一致）。
+    legacy 模式另接受去 #、大小写无关、英文名称、别名和停用概念。为兼容历史审计，
+    本函数默认使用 legacy；生产调用须使用 resolve_current_label 或明确传入 mode='current'。
     调用方仍须拒绝停用概念，不能自动沿 replacedBy 改用替代概念。
     """
     data = _validate_tag_catalog_content(tag_catalog)
@@ -361,6 +362,21 @@ def resolve_label_candidates(tag_catalog, label, facet=None, *, mode=LABEL_MODE_
         raise ValueError(f'未知的分类维度：{facet}。')
     if mode not in LABEL_MODES:
         raise ValueError(f'未知的标签查找模式：{mode}。')
+    if mode == LABEL_MODE_CURRENT:
+        if not isinstance(label, str):
+            return []
+        token = label.strip(_JS_WHITESPACE)
+        if not token.startswith('#'):
+            return []
+        exact_display_index = {}
+        for concept in data['concepts']:
+            if concept['status'] != 'active':
+                continue
+            if facet is not None and concept['facet'] != facet:
+                continue
+            display = f'#{concept["preferredLabel"]["zh"]}'
+            exact_display_index.setdefault(display, []).append(concept)
+        return list(exact_display_index.get(token, ()))
     normalized = normalize_label(label)
     if not normalized:
         return []
@@ -368,12 +384,7 @@ def resolve_label_candidates(tag_catalog, label, facet=None, *, mode=LABEL_MODE_
     for concept in data['concepts']:
         if facet is not None and concept['facet'] != facet:
             continue
-        if mode == LABEL_MODE_CURRENT:
-            if concept['status'] != 'active':
-                continue
-            labels = (concept['preferredLabel']['zh'],)
-        else:
-            labels = (*concept['preferredLabel'].values(), *concept['aliases'])
+        labels = (*concept['preferredLabel'].values(), *concept['aliases'])
         if any(normalize_label(value) == normalized for value in labels):
             matching_concepts.append(concept)
     return matching_concepts

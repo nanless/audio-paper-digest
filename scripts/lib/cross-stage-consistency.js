@@ -320,13 +320,15 @@ function extractPercentageMetricNumbers(text) {
         const esc = metric.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         // Exclude hyphen-prefixed compound metrics (CS-WER / SA-WER must not collide with bare WER)
         // and properly parse leading-dot decimals (.58 -> 0.58, NOT 58!).
-        const re = new RegExp(`(?<![A-Za-z0-9_-])${esc}(?![A-Za-z0-9_-])[^。！？!?\n\\d.]{0,18}?([+-]?(?:\\d+\\.\\d+|\\.\\d+|\\d+))(%?)`, 'gi');
+        const re = new RegExp(`(?<![A-Za-z0-9_-])${esc}(?![A-Za-z0-9_-])([^。！？!?\n\\d.]{0,18}?)([+-]?(?:\\d+\\.\\d+|\\.\\d+|\\d+))(%?)`, 'gi');
         let m;
         while ((m = re.exec(src)) !== null) {
-            const val = Number(m[1]);
+            const bridge = m[1] || '';
+            if (/(?:提升|提高|增加|降低|下降|减少|相差|差距|改善|降幅|增幅)\s*(?:了|约|达|达到)?\s*$/.test(bridge)) continue;
+            const val = Number(m[2]);
             if (!Number.isFinite(val) || val === 0) continue;
             if (!map.has(metric)) map.set(metric, []);
-            map.get(metric).push({ value: val, hasPercent: m[2] === '%', raw: `${m[1]}${m[2]}` });
+            map.get(metric).push({ value: val, hasPercent: m[3] === '%', raw: `${m[2]}${m[3]}` });
         }
     }
     return map;

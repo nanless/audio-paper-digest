@@ -18,6 +18,7 @@ const pdfLayout = require('./pdf-layout.js');
 const { classifyFailure, analysisFailureFromRecord } = require('./workflow-error-policy.js');
 const codec = require('./protocol-codec');
 const { recordHeaderFor: readRecordHeader } = require('./workflow-record-format');
+const { relocatePathWithinRoot, matchesRelocatedRepoPath } = require('./repo-rename-path.js');
 
 const CONFERENCE_VISUAL_PAGE_LIMIT = 6;
 const REGISTRY_CONTRACT = codec.contract('historical-direct-rewrite-execution-registry');
@@ -1505,7 +1506,7 @@ async function replayCompletedAnalysisForStaging({ plan, item, active, generatio
     }
     const expectedDirectory = executionDirectory(executionRoot, item, sourceDescriptor);
     if (typeof active.analysis.directory !== 'string' || !path.isAbsolute(active.analysis.directory)
-        || path.resolve(active.analysis.directory) !== expectedDirectory) {
+        || !matchesRelocatedRepoPath(active.analysis.directory, expectedDirectory)) {
         fail(`${item.paperId} completed analysis directory drifted`);
     }
     const loaded = readRegular(path.join(expectedDirectory, 'analysis.json'));
@@ -1556,7 +1557,9 @@ function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
     }
     assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: completed.sourceDescriptor,
         analysis: completed.analysis, sourceDetails: completed.sourceDetails, readerPdfSourceHandle: completed.readerPdfSourceHandle });
-    const analysisFile = path.join(active.analysis.directory, 'analysis.json');
+    const resolvedAnalysisDirectory = relocatePathWithinRoot(active.analysis.directory, path.resolve(__dirname, '../..'))
+        || path.resolve(active.analysis.directory);
+    const analysisFile = path.join(resolvedAnalysisDirectory, 'analysis.json');
     const analysisFileSha256 = writeAtomic(analysisFile, completed.analysis);
     const analysisRecordSha256 = stableHash(completed.analysis);
     if (analysisRecordSha256 === beforeRecordSha256) {
@@ -1694,12 +1697,14 @@ function replayDirectPageStaging({ plan, item, active, stagingRoot, executionRoo
     if (!staging?.pageStaging || !staging.analysisArtifact || !active?.source || !active?.analysis) {
         fail(`${item.paperId} staged execution lacks a direct page staging receipt`);
     }
+    const safeStagingRoot = safeDirectory(stagingRoot, false, 'staging root');
     const { routeDirectory, rendererDirectory: currentDirectory, analysisBoundDirectory } =
-        directPages.stagingDirectories({ stagingRoot: safeDirectory(stagingRoot, false, 'staging root'),
+        directPages.stagingDirectories({ stagingRoot: safeStagingRoot,
             item, sourceDescriptor: active.source,
             rendererImplementationSha256: staging.pageStaging.rendererImplementationSha256,
             analysisRecordSha256: staging.analysisArtifact.analysisRecordSha256 });
-    const directory = safeDirectory(staging.directory, false, 'direct staging directory');
+    const relocatedStagingDirectory = relocatePathWithinRoot(staging.directory, safeStagingRoot) || staging.directory;
+    const directory = safeDirectory(relocatedStagingDirectory, false, 'direct staging directory');
     if (directory !== routeDirectory && directory !== currentDirectory
         && directory !== analysisBoundDirectory) {
         fail(`${item.paperId} staged page directory drifted`);
@@ -1712,7 +1717,7 @@ function replayDirectPageStaging({ plan, item, active, stagingRoot, executionRoo
     }
     const executionDirectory = path.join(safeDirectory(executionRoot, false, 'execution root'), item.runId,
         item.route.kind === 'arxiv-fresh-fetch' ? active.source.sourceRunIdentitySha256 : 'conference-local');
-    if (path.resolve(active.analysis.directory) !== executionDirectory) fail(`${item.paperId} staged analysis directory drifted`);
+    if (!matchesRelocatedRepoPath(active.analysis.directory, executionDirectory)) fail(`${item.paperId} staged analysis directory drifted`);
     const storedAnalysis = readRegular(path.join(executionDirectory, 'analysis.json'));
     const analysis = JSON.parse(storedAnalysis.bytes.toString('utf8'));
     if (storedAnalysis.sha256 !== active.analysis.analysisFileSha256

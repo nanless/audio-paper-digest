@@ -156,6 +156,21 @@ class PushDryRunTests(unittest.TestCase):
         dirty_plan = push_blog.plan_dry_run(dirty, dirty._paths, {})
         self.assertEqual(dirty_plan['unrelated'], ['static/unrelated.png'])
 
+        # Rename from outside allowed into allowed flags both outside originalPath and rename entry
+        rename_outside = FakeModule(b'R  content/posts/a.md\x00static/outside.png\x00', {})
+        rename_outside_plan = push_blog.plan_dry_run(rename_outside, rename_outside._paths, {})
+        self.assertIn('static/outside.png', rename_outside_plan['unrelated'])
+        self.assertTrue(any('R:' in item for item in rename_outside_plan['unrelated']))
+
+        # Rename/copy even when both paths are in allowed is flagged as unrelated
+        rename_inside = FakeModule(b'R  content/posts/b.md\x00content/posts/a.md\x00', {})
+        rename_inside_plan = push_blog.plan_dry_run(rename_inside, rename_inside._paths, {})
+        self.assertTrue(any('R:' in item for item in rename_inside_plan['unrelated']))
+
+        copy_inside = FakeModule(b'C  content/posts/b.md\x00content/posts/a.md\x00', {})
+        copy_inside_plan = push_blog.plan_dry_run(copy_inside, copy_inside._paths, {})
+        self.assertTrue(any('C:' in item for item in copy_inside_plan['unrelated']))
+
     def test_main_dry_run_prints_manifest_and_never_calls_git_push(self):
         module = dry_run_module()
         output = run_main(module, ['push-blog.py', '--date', '2026-10-21', '--dry-run'])

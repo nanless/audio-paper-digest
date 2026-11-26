@@ -25,7 +25,7 @@
 Reader 指面向初学研究者的解读长文；内部主分析、来源和发布凭证分别核验。常见术语见[写作约定](docs/writing-guide.md#术语先解释再统一称呼)。下列检查未通过时，先停止，不用生产任务测试配置。
 
 1. 先跑只读体检 `npm run doctor -- --offline`（需要探测 arXiv 时用 `--network`），再核对 `pwd`，将 `$HOME/code/github_repos/audio-research-workbench` 展开为真实绝对路径并确认当前工作区一致，执行 `npm run workspace:role -- status`；角色保持 `daily`。历史操作通过已配置跨角色开关运行，不进入废弃工作区。
-2. Node、Python 和依赖有效，项目 `.env` 权限为 `0600`。主模型及启用的副模型按项目配置统一为 `muse-spark-1.3-contributor`（2026-11-16 起，环境上限 `xhigh`，默认按阶段分级推理：主分析与 Reader 长文保持 `xhigh`，审校与 Reader 局部修复为 `high`，图片与摘要/表格/结构修补为 `medium`，日更筛选与发布文本审查为 `low`，纯机械结构化阶段为 `minimal`）；arXiv 抓取强制使用项目 HTTP CONNECT 代理。
+2. Node、Python 和依赖有效，项目 `.env` 权限为 `0600`。主模型及启用的副模型按项目配置统一为 `muse-spark-1.3-contributor`（2026-11-16 起，环境上限 `xhigh`，默认按阶段分级推理：主分析与 Reader 长文保持 `xhigh`，审校与 Reader 局部修复为 `high`，图片与摘要/表格/结构修补为 `medium`，日更筛选与发布文本审查为 `low`，纯机械结构化阶段为 `minimal`）；arXiv 抓取强制使用项目 HTTP CONNECT 代理。多账号共享池默认启用到期优先调度（`PD_LLM_ACCOUNT_POOL_STRATEGY=expiry_priority`，三窗口均有额时按北京时间月到期最早、同天剩余月额度最多优先；运行时经代理自动同步官方 `/zen/go/v1/usage` 实时额度，也可用 `npm run llm:accounts:quota -- sync` 立即同步与 `npm run llm:accounts` 查看状态）。
 3. 确认真实博客仓库与目标页面没有人工修改冲突，检查其他生成、审查与发布进程，三流程错峰运行。
 4. 所有脚本、检查和测试在沙箱外执行，不绕过环境、角色或来源检查，不把 `data/`、日志、缓存、密钥纳入 Git。
 

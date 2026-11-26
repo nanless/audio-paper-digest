@@ -167,6 +167,35 @@ import Darwin
             try await rejects("offline open rejects actual PDF byte tamper"){_=try await detached.openPackage(id:actualID)}
             try detachedPDFBytes.write(to:detachedPDF)
             try expect(try await detached.openPackage(id:actualID)["offlineMode"] as? Bool==true,"restoring exact package bytes recovers offline reading without website or bundle")
+            // Track-1 Item 2: offline package allows up to 64 images (67 manifest files) and rejects 65 images.
+            let multiDir = FileManager.default.temporaryDirectory.appendingPathComponent("PD-Storage-64-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: multiDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: multiDir) }
+            let multiStore = try DesktopStore(directory: multiDir)
+            let multiStorage = DesktopStorage(directory: multiDir, store: multiStore)
+            let multiBlog = "https://nanless.github.io/audio-research-portal/posts/multi-fig-36/"
+            var multiResources: [[String: Any]] = []
+            for idx in 1...36 {
+                let bytes = Data("PNG-FIXTURE-UNIQUE-\(idx)".utf8)
+                let h = hash(bytes)
+                let rel = "PublishedLibrary/assets/\(h).png"
+                let fileURL = multiDir.appendingPathComponent(rel)
+                try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try bytes.write(to: fileURL)
+                multiResources.append(["kind": "image", "sourceURL": "https://arxiv.org/html/2501.00001v1/fig\(idx).png", "localPath": fileURL.path, "sha256": h])
+            }
+            let multiArticle: [String: Any] = ["paperID": "arxiv:2610.99936", "html": "<p>36 figures</p>", "plainText": "36 figures", "citation": ["paperKey": "arxiv:2610.99936"], "sourceURL": "https://arxiv.org/abs/2610.99936v1", "sourceVersion": "2610.99936v1", "revisionSHA256": hash(Data("rev36".utf8)), "completeOffline": true, "isStale": false, "resources": multiResources]
+            let multiPaper: [String: Any] = ["id": "arxiv:2610.99936", "title": "36 Figure Conference Paper", "blogURL": multiBlog, "sourceURL": "https://arxiv.org/abs/2610.99936v1", "sourceVersion": "2610.99936v1"]
+            let multiCacheURL = multiDir.appendingPathComponent("PublishedLibrary/articles/\(hash(Data(multiBlog.utf8))).json")
+            try FileManager.default.createDirectory(at: multiCacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try json(multiArticle).write(to: multiCacheURL)
+            let pkg36 = try await multiStorage.register(paper: multiPaper, article: multiArticle, pdf: nil)
+            try expect(pkg36["status"] as? String == "verified" && pkg36["files"] as? Int == 38, "offline package accepts 36 unique figures (38 manifest files)")
+            var overResources = multiResources
+            for idx in 37...65 { overResources.append(multiResources[idx % 36]) }
+            var overArticle = multiArticle; overArticle["resources"] = overResources
+            try json(overArticle).write(to: multiCacheURL)
+            try await rejects("offline package rejects 65 figures (above 64 limit)") { _ = try await multiStorage.register(paper: multiPaper, article: overArticle, pdf: nil) }
             print("DesktopStorage PASS \(checks) checks; real temporary tree, immutable source bytes, zero deletion/network/model/credential requests")
         }catch{fputs("DesktopStorage FAIL after \(checks) checks: \(error.localizedDescription)\n",stderr);exit(1)}
     }

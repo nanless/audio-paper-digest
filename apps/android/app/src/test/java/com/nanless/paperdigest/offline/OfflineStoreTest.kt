@@ -74,4 +74,55 @@ class OfflineStoreTest {
         val opened = OfflineStore(root).open(packet.getString("id")); assertNull(opened.article.mathMLContract); assertTrue(opened.article.notices.any { it.contains("旧离线HTML") })
         assertTrue(opened.articleJSON.getBoolean("offlineMode")); assertEquals("not-checked", opened.articleJSON.getString("websiteFreshness")); assertTrue(folder.isDirectory)
     }
+    @Test fun singlePaperPackageSupportsUpTo64ScientificImages() = temp { root ->
+        val tinyPng = Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==")
+        val paper = Paper(
+            id = "conference:icml:2026:many-figs",
+            title = "Many Figures Conference Paper",
+            titleZh = "多图会议论文",
+            authors = listOf("Alice"),
+            date = "2026-11-26",
+            score = 8.4,
+            tags = listOf("speech"),
+            sourceKind = "conference",
+            identityStatus = "verified",
+            blogURL = CatalogRepository.SITE + "posts/many-figs/",
+            sourceURL = "https://proceedings.iclr.cc/paper_files/paper/2026/file/many-figs.pdf",
+            pdfURL = null,
+            sourceVersion = "ICML 2026",
+            citation = JSONObject().put("title", "Many Figures Conference Paper"),
+        )
+        val imgDir = File(root, "PublishedLibrary/images").apply { mkdirs() }
+        val resources = (1..36).map { i ->
+            val imgBytes = tinyPng.copyOf()
+            val file = File(imgDir, "fig-$i.png").apply { writeBytes(imgBytes) }
+            ArticleResource(
+                sourceURL = "https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/icml-2026/0123456789ab/fig-$i.png",
+                localPath = file.absolutePath,
+                sha256 = BackupCodec.hash(imgBytes),
+            )
+        }
+        val html = "<div id='article-body'>" + resources.mapIndexed { idx, res -> "<img data-resource='${res.sourceURL}' alt='Fig ${idx + 1}'/>" }.joinToString("") + "</div>"
+        val rawArticle = Article(
+            paperID = paper.id,
+            html = html,
+            plainText = "多图会议论文正文",
+            sourceURL = paper.sourceURL!!,
+            blogURL = paper.blogURL,
+            revisionSHA256 = BackupCodec.hash(html.toByteArray()),
+            fetchedAt = "2026-11-26T00:00:00Z",
+            sourceVersion = paper.sourceVersion,
+            completeOffline = true,
+            resources = resources,
+        ).json()
+        val cache = File(root, "PublishedLibrary/articles/${BackupCodec.hash(paper.blogURL.toByteArray())}.json")
+        BackupCodec.atomicBytes(cache, OfflineFoundationJSON.encode(rawArticle))
+        val article = Article.fromJson(OfflineFoundationJSON.parse(cache.readBytes()))
+
+        val store = OfflineStore(root)
+        val registered = store.register(paper, article)
+        val opened = store.open(registered.getString("id"))
+        assertEquals(36, opened.article.resources.size)
+        assertTrue(opened.article.completeOffline)
+    }
 }

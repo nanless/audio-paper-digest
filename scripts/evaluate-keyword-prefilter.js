@@ -1,6 +1,6 @@
 #!/usr/bin/env node
+const { requireExternalRuntime } = require('./env-loader.js');
 const { setupScriptLogging } = require('./log-setup');
-setupScriptLogging(__filename);
 
 /**
  * 对历史 filtered-papers.json 的入选论文重新执行关键词预筛，检查保留了多少。
@@ -177,7 +177,11 @@ function main() {
     ) ? 0 : 2;
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+    requireExternalRuntime('evaluate-keyword-prefilter.js');
+    setupScriptLogging(__filename);
+    main();
+}
 
 module.exports = {
     DEFAULT_GOLD_FILE,

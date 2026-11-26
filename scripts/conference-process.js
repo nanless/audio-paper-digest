@@ -3,6 +3,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');
 const api = require('./lib/conference-process.js');
@@ -76,16 +77,30 @@ function readSafeJson(filename) {
         return JSON.parse(bytes.toString('utf8'));
     } finally { fs.closeSync(fd); }
 }
+const INCONSISTENT_LOCK_REASONS = new Set([
+    'changed_during_inspection', 'not_directory', 'owner_not_file', 'owner_changed',
+    'invalid_owner_encoding', 'duplicate_owner_key', 'invalid_owner_json',
+    'invalid_owner_schema', 'lock_changed', 'unexpected_lock_entry',
+    'malformed-owner', 'missing-owner', 'non-directory-lock'
+]);
 function lockStatus(engine, filename) {
     if (typeof engine?.inspectFileLockState !== 'function') return null;
     const snapshot = engine.inspectFileLockState(filename);
     if (!snapshot?.exists) return null;
     let ownerAlive = null;
-    if (Number.isInteger(snapshot.owner?.pid) && snapshot.owner.pid > 0) {
+    if (snapshot.owner?.hostname === os.hostname()
+        && Number.isInteger(snapshot.owner?.pid) && snapshot.owner.pid > 0) {
         try { process.kill(snapshot.owner.pid, 0); ownerAlive = true; }
-        catch (error) { ownerAlive = error.code === 'ESRCH' ? false : null; }
+        catch (error) {
+            if (error.code === 'ESRCH') ownerAlive = false;
+            else if (error.code === 'EPERM') ownerAlive = true;
+            else ownerAlive = null;
+        }
     }
-    return { consistent: snapshot.consistent === true, ownerAlive,
+    const consistent = typeof snapshot.consistent === 'boolean'
+        ? snapshot.consistent
+        : (Boolean(snapshot.owner) && !INCONSISTENT_LOCK_REASONS.has(snapshot.reason));
+    return { consistent, ownerAlive,
         ownerPid: snapshot.owner?.pid || null, ownerHost: snapshot.owner?.hostname || null };
 }
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -246,4 +261,4 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     return result;
 }
 if (require.main === module) main().catch(error => { console.error(`[conference-process] ${error.message}`); process.exitCode = 1; });
-module.exports = { USAGE, parseArgs, readSafeJson, processStatus, statusExitCode, main };
+module.exports = { USAGE, parseArgs, readSafeJson, lockStatus, processStatus, statusExitCode, main };

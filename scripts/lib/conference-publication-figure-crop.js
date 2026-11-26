@@ -5,6 +5,7 @@
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { isDeepStrictEqual: equal } = require('node:util');
 const codec = require('./protocol-codec');
+const { relocatePathWithinRoot, matchesRelocatedRepoPath } = require('./repo-rename-path.js');
 const root = path.resolve(__dirname, '../..');
 const CONTRACT = codec.contract('conference-publication-figure-crops');
 const PROOF_CONTRACT = codec.contract('conference-publication-figure-crop-proof');
@@ -158,7 +159,7 @@ function retainNonblockingObservation(issue, context) {
         && ['warning', 'info'].includes(issue.severity.toLowerCase()), '非阻断观察只能用于原明确warning/info');
     return { ...context, issueSha256: stable(issue), originalIssue: structuredClone(issue), doesNotGrantReviewPass: true };
 }
-function validatePublicationViewRoute(route) {
+function validatePublicationViewRoute(route, runtimeRoot) {
     need(route && ['crop', 'source-page-view'].includes(route.kind), '不是固定出版来源展示路由');
     const fields = route.kind === 'crop' ? ['evidencePath', 'evidenceSha256', 'figureOrdinals', 'issueIndex', 'kind']
         : ['figureOrdinals', 'issueIndex', 'kind'];
@@ -168,9 +169,10 @@ function validatePublicationViewRoute(route) {
         && new Set(route.figureOrdinals).size === route.figureOrdinals.length,
         '出版来源展示路由必须明确唯一原图序号且不得携带自由矩形或profile');
     if (route.kind === 'source-page-view') return null;
-    need(SHA.test(route.evidenceSha256 || '') && regular(route.evidencePath).sha256 === route.evidenceSha256,
+    const resolvedEvidence = relocatePathWithinRoot(route.evidencePath, runtimeRoot) || path.resolve(route.evidencePath);
+    need(SHA.test(route.evidenceSha256 || '') && regular(resolvedEvidence).sha256 === route.evidenceSha256,
         'crop来源分类实证SHA不闭合');
-    return { filename: route.evidencePath, sha256: route.evidenceSha256 };
+    return { filename: resolvedEvidence, sha256: route.evidenceSha256 };
 }
 function runGeometry(source, paper, figure, attestedSourceRef) {
     const number = /^Figure\s+([1-9][0-9]*)\s*[:.]?$/i.exec(figure.label || '');
@@ -234,7 +236,8 @@ function maintenancePublicationHistory(input, handle) {
     scope.assertUnchanged();
     const view = scope.generation?.figurePublicationView;
     need(view && view.processId === input.processId && view.conferenceId === input.conferenceId
-        && path.resolve(view.manifestPath) === path.resolve(input.manifestPath)
+        && (matchesRelocatedRepoPath(view.manifestPath, input.manifestPath)
+            || matchesRelocatedRepoPath(input.manifestPath, view.manifestPath))
         && view.baseGenerationSha256 === input.expectedGenerationSha256
         && equal(view.nodeDerivation, input.expectedDerivation), '历史出版证据不属于实际维护原生成');
     need(scope.baselineState?.processId === input.processId && scope.baselineState.status === 'complete'
@@ -284,7 +287,10 @@ function projectHistoricalOutcome(current, original) {
         // fields still participate in the complete outcome comparison below.
         need(displayModeFamily(item.reviewTarget.displayMode) === displayModeFamily(previous.reviewTarget.displayMode),
             '当前来源重验改变原展示模式');
-        return { ...item, reviewTarget: { ...item.reviewTarget, displayMode: previous.reviewTarget.displayMode },
+        need(matchesRelocatedRepoPath(previous.derivedSourcePath, item.derivedSourcePath),
+            '当前来源重验改变原派生像素路径');
+        return { ...item, derivedSourcePath: previous.derivedSourcePath,
+            reviewTarget: { ...item.reviewTarget, displayMode: previous.reviewTarget.displayMode },
             proofPath: previous.proofPath, proofSha256: previous.proofSha256 };
     });
     const {contract: currentContract, schemaFingerprint: currentFingerprint, derivationSha256, ...rest} = current;
@@ -314,7 +320,8 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
     need(runtimeRoot === path.join(root, 'data/runtime') && /^[a-z0-9][a-z0-9-]{0,80}$/.test(conferenceId || '')
         && UUID.test(processId || ''), '运行根或会议/流程身份不合法');
     const publication = path.join(runtimeRoot, 'conference-publications', conferenceId, processId);
-    const manifest = readJson(manifestPath, 8 * 1024 * 1024), selection = manifest.value;
+    const resolvedManifestPath = relocatePathWithinRoot(manifestPath, runtimeRoot) || path.resolve(manifestPath);
+    const manifest = readJson(resolvedManifestPath, 8 * 1024 * 1024), selection = manifest.value;
     need(codec.hasValidHeader(selection, MANIFEST), '出版派生清单格式不合法');
     const selectionHeader = codec.recordHeader(selection.contract, MANIFEST, selection.schemaFingerprint);
     need(equal(Object.keys(selection).sort(), [...Object.keys(selectionHeader), 'conferenceId', 'processId',
@@ -385,7 +392,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
             if (route.kind !== 'unresolved') need(originalIssue && typeof originalIssue.severity === 'string'
                 && originalIssue.severity.toLowerCase() === 'error', '实际修复路由只能用于原真实blocking error');
             if (['crop', 'source-page-view'].includes(route.kind)) {
-                const evidencePin = validatePublicationViewRoute(route);
+                const evidencePin = validatePublicationViewRoute(route, runtimeRoot);
                 if (evidencePin) routeEvidencePins.push(evidencePin);
                 // source-page-view makes no diagnosis or scientific repair
                 // claim. Real member/PDF/Figure/source pins remain mandatory.
@@ -398,13 +405,17 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
                     : ['evidencePath', 'evidenceSha256', 'issueIndex', 'kind'];
                 need(equal(Object.keys(route).sort(), required), '非crop路由字段不完整');
                 if (route.kind !== 'unresolved') {
-                    need(SHA.test(route.evidenceSha256 || '') && regular(route.evidencePath).sha256 === route.evidenceSha256,
+                    const resolvedEvidence = relocatePathWithinRoot(route.evidencePath, runtimeRoot) || path.resolve(route.evidencePath);
+                    need(SHA.test(route.evidenceSha256 || '') && regular(resolvedEvidence).sha256 === route.evidenceSha256,
                         '路由来源分类实证SHA不闭合');
-                    routeEvidencePins.push({ filename: route.evidencePath, sha256: route.evidenceSha256 });
-                    if (route.kind === 'reader-maintenance') need(SHA.test(route.maintenanceManifestSha256 || '')
-                        && regular(route.maintenanceManifestPath).sha256 === route.maintenanceManifestSha256,
-                        '独立正常Reader维护manifest引用不闭合');
-                    if (route.kind === 'reader-maintenance') routeEvidencePins.push({ filename: route.maintenanceManifestPath, sha256: route.maintenanceManifestSha256 });
+                    routeEvidencePins.push({ filename: resolvedEvidence, sha256: route.evidenceSha256 });
+                    if (route.kind === 'reader-maintenance') {
+                        const resolvedMaintenance = relocatePathWithinRoot(route.maintenanceManifestPath, runtimeRoot) || path.resolve(route.maintenanceManifestPath);
+                        need(SHA.test(route.maintenanceManifestSha256 || '')
+                            && regular(resolvedMaintenance).sha256 === route.maintenanceManifestSha256,
+                            '独立正常Reader维护manifest引用不闭合');
+                        routeEvidencePins.push({ filename: resolvedMaintenance, sha256: route.maintenanceManifestSha256 });
+                    }
                 } else need(typeof route.reason === 'string' && route.reason.trim(), 'unresolved必须保留真实原因');
                 (route.kind === 'unresolved' ? unresolvedRoutes : deferredRoutes).push({ failureSha256: entry.failureSha256,
                     paperId: failure.paperId, originalPagePath: failure.path, originalPageSha256: failure.sha256, ...route });
@@ -478,7 +489,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
 
     const outRoot = path.join(publication, 'figure-crop-derivations', manifest.sha256);
     const results = [], blocked = [], seen = new Set(), destinations = new Map(), stageIndexes = new Map(), sourceCache = new Map(), sourceHandles = new Map();
-    const pins = [{ filename: manifestPath, sha256: manifest.sha256 }, { filename: base.filename, sha256: base.sha256 }, ...routeEvidencePins,
+    const pins = [{ filename: resolvedManifestPath, sha256: manifest.sha256 }, { filename: base.filename, sha256: base.sha256 }, ...routeEvidencePins,
         ...implementationFiles.map(([key, filename]) => ({ filename, sha256: implementation[key] }))];
     if (revalidation) pins.push(currentStatePin, { filename: issuanceStateSnapshotPath, sha256: receiptState.sha256 });
     for (const member of selection.members) {
@@ -494,12 +505,17 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
         need(oldPage.length === 1 && oldImage.length === 1 && oldPage[0].path === member.pagePath
             && oldPage[0].sourceSha256 === member.pageSha256 && oldImage[0].sourceSha256 === member.imageSha256
             && oldImage[0].size === member.imageSize, '原生成图片及页面身份不闭合');
+        const stagingRoot = path.join(runtimeRoot, 'conference-page-staging');
+        let oldPageSourcePath;
         for (const record of [oldPage[0], oldImage[0]]) {
-            beneath(path.join(runtimeRoot, 'conference-page-staging'), record.sourcePath);
-            const saved = regular(record.sourcePath); need(saved.sha256 === record.sourceSha256 && saved.bytes.length === record.size,
-                '原生成来源实物漂移'); pins.push({ filename: record.sourcePath, sha256: saved.sha256 });
+            const resolvedSource = relocatePathWithinRoot(record.sourcePath, stagingRoot);
+            need(resolvedSource, '文件越出固定根目录');
+            beneath(stagingRoot, resolvedSource);
+            const saved = regular(resolvedSource); need(saved.sha256 === record.sourceSha256 && saved.bytes.length === record.size,
+                '原生成来源实物漂移'); pins.push({ filename: resolvedSource, sha256: saved.sha256 });
+            if (record === oldPage[0]) oldPageSourcePath = resolvedSource;
         }
-        const originalStage = readJson(path.join(path.dirname(oldPage[0].sourcePath), 'manifest.json'));
+        const originalStage = readJson(path.join(path.dirname(oldPageSourcePath), 'manifest.json'));
         selfHash(originalStage.value, 'manifestSha256');
         need(originalStage.value.manifestSha256 === oldPage[0].manifestSha256
             && oldImage[0].manifestSha256 === oldPage[0].manifestSha256
@@ -507,7 +523,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
             && originalStage.value.analysisSha256 === member.analysisSha256
             && originalStage.value.sourceSnapshotSha256 === member.sourceSnapshotSha256
             && originalStage.value.contentSha256 === member.pageSha256, '原完整暂存与当前执行/来源不同');
-        pins.push({ filename: path.join(path.dirname(oldPage[0].sourcePath), 'manifest.json'), sha256: originalStage.sha256 });
+        pins.push({ filename: path.join(path.dirname(oldPageSourcePath), 'manifest.json'), sha256: originalStage.sha256 });
         // Current stage may have different implementation metadata, but its
         // actual page/asset bytes and this member's analysis must be identical.
         need(item.pageProof.contentSha256 === member.pageSha256 && item.analysisProof.analysisSha256 === member.analysisSha256
@@ -622,7 +638,7 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
                 implementation: input.expectedDerivation.implementation };
             const originalProof = { ...originalBody, proofSha256: stable(originalBody) };
             const expectedPath = path.join(outRoot, originalProof.proofSha256 + '.json');
-            need(old[0].proofPath === expectedPath && old[0].proofSha256 === originalProof.proofSha256,
+            need(matchesRelocatedRepoPath(old[0].proofPath, expectedPath) && old[0].proofSha256 === originalProof.proofSha256,
                 '原proof路径或身份与本次同PDF几何重算不一致');
             const previous = regular(expectedPath);
             need(previous.bytes.equals(jsonBytes(originalProof)), '原完整proof与当前正常几何或源逐字不同');
@@ -681,8 +697,38 @@ function operation(input, replay = false, maintenanceHandle = undefined, registe
             currentOutcome: freezeData(structuredClone(outcome)), currentRevalidationReceipt: freezeData(receipt),
             currentRevalidationReceiptPath: receiptFile, issuanceStateSnapshotPath, assertUnchanged });
     }
-    if (replay) need(equal(outcome, input.expectedDerivation), '完整派生清单或来源发生漂移');
-    return history ? Object.freeze({ outcome: freezeData(structuredClone(outcome)), assertUnchanged }) : outcome;
+    let finalOutcome = outcome;
+    if (replay && !equal(outcome, input.expectedDerivation)) {
+        const expected = input.expectedDerivation;
+        const relocatedMatch = Array.isArray(expected?.derivations)
+            && expected.derivations.length === outcome.derivations.length
+            && Array.isArray(expected?.blocked)
+            && expected.blocked.length === outcome.blocked.length
+            && outcome.derivations.every((item, idx) =>
+                matchesRelocatedRepoPath(expected.derivations[idx]?.derivedSourcePath, item.derivedSourcePath)
+                && matchesRelocatedRepoPath(expected.derivations[idx]?.proofPath, item.proofPath))
+            && outcome.blocked.every((item, idx) =>
+                matchesRelocatedRepoPath(expected.blocked[idx]?.blockedReceiptPath, item.blockedReceiptPath));
+        let projected = null;
+        if (relocatedMatch) {
+            const projectedBody = {
+                ...body,
+                derivations: outcome.derivations.map((item, idx) => ({
+                    ...item,
+                    derivedSourcePath: expected.derivations[idx].derivedSourcePath,
+                    proofPath: expected.derivations[idx].proofPath
+                })),
+                blocked: outcome.blocked.map((item, idx) => ({
+                    ...item,
+                    blockedReceiptPath: expected.blocked[idx].blockedReceiptPath
+                }))
+            };
+            projected = { ...projectedBody, derivationSha256: stable(projectedBody) };
+        }
+        need(projected && equal(projected, expected), '完整派生清单或来源发生漂移');
+        finalOutcome = expected;
+    }
+    return history ? Object.freeze({ outcome: freezeData(structuredClone(finalOutcome)), assertUnchanged }) : finalOutcome;
 }
 async function derivePublicationFigureCrops(input) {
     return require('./analysis-stop-control').withModelRequestsForbidden(() => operation(input, false));

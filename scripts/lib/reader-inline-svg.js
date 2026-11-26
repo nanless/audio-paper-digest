@@ -3,6 +3,14 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { buildChildProcessEnv } = require('../env-loader.js');
+
+const RENDERER_ALLOWED_ENV_KEYS = Object.freeze([
+    'PLAYWRIGHT_BROWSERS_PATH',
+    'XDG_CACHE_HOME',
+    'PD_PYTHON_RUNTIME_VERIFIED_BIN',
+    'PD_PYTHON_RUNTIME_DISABLE_VENV'
+]);
 
 const LEGACY_CONTRACT = 'reader-official-inline-svg-pixels-v1';
 const CONTRACT = 'reader-official-inline-svg-pixels-v2';
@@ -80,8 +88,12 @@ async function renderOfficialInlineSvg(resource, _deps = {}) {
             path.join(projectRoot, 'scripts/reader_inline_svg.py')];
         if (deps.hidpi !== false) args.push('--hidpi');
         if (deps.deterministicV2 !== false) args.push('--v2');
-        const child = spawnFn('bash', args,
-        { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'], detached: useProcessGroup });
+        const child = spawnFn('bash', args, {
+            cwd: projectRoot,
+            env: buildChildProcessEnv({}, RENDERER_ALLOWED_ENV_KEYS),
+            stdio: ['pipe', 'pipe', 'pipe'],
+            detached: useProcessGroup
+        });
         const chunks = []; let size = 0; let stderr = ''; let failure = null; let terminated = false; let exited = false;
         let timeout = null;
         child.once('exit', () => { exited = true; });

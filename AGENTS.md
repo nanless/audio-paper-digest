@@ -71,7 +71,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 ## 模型、代理、并发与预算
 
-`muse-spark-*` 走 OpenAI Responses（`/v1` 自动转为 `/v1/responses`）；兼容 `mimo-v2.6-flash` 走直连 OpenAI Chat Completions。Node 请求统一经 `requestLlmJson()`，Python 发布请求统一经 `call_publish_llm_api()`。
+`muse-spark-*` 与 `deepseek-v4.1-flash` 走 OpenAI Responses（`/v1` 自动转为 `/v1/responses`）；兼容 `mimo-v2.6-flash` 走直连 OpenAI Chat Completions。Node 请求统一经 `requestLlmJson()`，Python 发布请求统一经 `call_publish_llm_api()`。
 
 - **代理与超时**：Muse 与 arXiv 强制走项目 HTTP CONNECT 代理，每次请求建独立连接对象并用后销毁，禁止静默直连；Node CONNECT+TLS 握手共用 60 秒有效预算（不含长时间系统挂起），arXiv 源站通过 `arxiv-origin-gate.js` 限制并发（默认 `PD_ARXIV_MAX_CONCURRENCY=3`）并共享 `Retry-After` 退避。外部图片/Demo 仅允许 HTTPS，每次重定向拒绝私网/保留地址并固定已核验公网 IP。
 - **账号池调度与认证排障**：OpenCode Go 同池所有 key 默认按月到期优先调度（`PD_LLM_ACCOUNT_POOL_STRATEGY=expiry_priority`，可改 `equal_rotation`）：在月/周/5小时三窗口均有额度的账号中，优先选北京时间月到期日最早者，同天到期选有效剩余月额度最多者（月并列再比周/5小时），未同步账号排后并回退 `affinityKey`（如 `paperId`）亲和轮转；运行时默认通过项目代理自动同步官方 `/zen/go/v1/usage` 实时额度（5 分钟 TTL，`PD_LLM_ACCOUNT_POOL_LIVE_SYNC=0` 可关）并叠加本地消耗扣减，也支持 `npm run llm:accounts:quota -- sync` 手动同步。仅 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 允许同请求内换号并按窗口落盘冷却。普通 401 立即停止生产并保存在途结果，随后在独立诊断中逐号探测完整账号池，禁止因单号 401 要求用户更换全部密钥，且严禁展示密钥或稳定凭据指纹。

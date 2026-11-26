@@ -82,6 +82,29 @@ test('转义竖线/行内代码不误报，全角粘连能检出', () => {
     assert.ok(tableCheck.checkText(full).some(issue => issue.code === 'table-glued-duplicate'));
 });
 
+test('竖线前连续反斜杠按奇偶正确区分转义与列分隔符', () => {
+    assert.deepStrictEqual(tableCheck.cellsOfRow('| x \\\\| y |'), ['x \\\\', 'y']);
+    assert.deepStrictEqual(tableCheck.cellsOfRow('| x | y\\\\|'), ['x', 'y\\\\']);
+    assert.deepStrictEqual(tableCheck.cellsOfRow('| x \\\\\\| y | z |'), ['x \\\\| y', 'z']);
+    assert.deepStrictEqual(tableCheck.cellsOfRow('| x \\| y | `a|b` |'), ['x | y', '`a|b`']);
+
+    const escapedBackslashBeforePipe = [
+        '| Expr | Val |',
+        '| --- | --- |',
+        '| x \\\\| 1.0 |',
+        '| y | z\\\\|',
+        '| a \\\\\\| b | 2.0 |'
+    ].join('\n');
+    assert.strictEqual(tableCheck.tablesOfText(escapedBackslashBeforePipe).length, 1);
+    assert.deepStrictEqual(tableCheck.checkText(escapedBackslashBeforePipe), []);
+
+    // 无外框表：只有偶数个反斜杠后的竖线才算未转义竖线
+    const borderless = 'A \\\\| B\n--- | ---\n1 | 2';
+    assert.strictEqual(tableCheck.tablesOfText(borderless).length, 1);
+    assert.deepStrictEqual(tableCheck.checkText(borderless), []);
+    assert.strictEqual(tableCheck.tablesOfText('A \\\\\\| B\n--- | ---').length, 0);
+});
+
 test('干净表格通过', () => {
     const text = [
         '| 条件 | 数值 |',

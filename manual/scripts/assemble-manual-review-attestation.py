@@ -45,6 +45,8 @@ def valid_review_shard(relative, expected_item, item, module=None, date=None):
         return False
     if item.get('sha256') != expected_item.get('sha256'):
         return False
+    if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
+        return False
     checks = item.get('checks') or {}
     if deleted:
         if checks != {'deletionVerified': True}:
@@ -115,101 +117,101 @@ def main():
                     'notes': f'复用 {relative} 原有的逐页审查通过记录；正文 SHA 未改变，不表示本次重新执行模型审查。',
                     'cacheReuse': reuse,
                 }
-    missing = sorted(set(expected) - set(shards))
-    if args.plan:
-        states = {'pass': [], 'missing': [], 'stale': [], 'failed': []}
+        missing = sorted(set(expected) - set(shards))
+        if args.plan:
+            states = {'pass': [], 'missing': [], 'stale': [], 'failed': []}
+            seen_tasks = set()
+            for relative, expected_item in expected.items():
+                item = shards.get(relative)
+                if item is None:
+                    states['missing'].append(relative)
+                elif (
+                    item.get('sha256') != expected_item.get('sha256')
+                    or (item.get('deleted') is True) != (expected_item.get('deleted') is True)
+                ):
+                    states['stale'].append(relative)
+                else:
+                    valid = valid_review_shard(relative, expected_item, item, module, date)
+                    task_name = str((item.get('reviewSubagent') or {}).get('taskName') or '').strip()
+                    if valid and 'cacheReuse' not in item and task_name in seen_tasks:
+                        valid = False
+                    if valid and 'cacheReuse' not in item:
+                        seen_tasks.add(task_name)
+                    states['pass' if valid else 'failed'].append(relative)
+            print(json.dumps({
+                'date': date,
+                'publicationScope': manifest.get('publicationScope'),
+                'shardDir': str(shard_dir),
+                'attestationPath': str(output_path),
+                'counts': {key: len(value) for key, value in states.items()},
+                'pending': states['missing'] + states['stale'] + states['failed'],
+            }, ensure_ascii=False))
+            return
+        if missing:
+            raise SystemExit(f'以下文件缺少独立审查记录：{missing}')
+        files = []
         seen_tasks = set()
         for relative, expected_item in expected.items():
-            item = shards.get(relative)
-            if item is None:
-                states['missing'].append(relative)
-            elif (
-                item.get('sha256') != expected_item.get('sha256')
-                or (item.get('deleted') is True) != (expected_item.get('deleted') is True)
+            item = shards[relative]
+            sha256 = item.get('sha256')
+            deleted = expected_item.get('deleted') is True
+            if (
+                sha256 != expected_item.get('sha256')
+                or (item.get('deleted') is True) != deleted
             ):
-                states['stale'].append(relative)
+                raise SystemExit(f'单页审查记录中的文件 SHA 或删除标记与生成清单不一致：{relative}')
+            subagent = item.get('reviewSubagent') or {}
+            if not valid_review_shard(relative, expected_item, item, module, date):
+                raise SystemExit(f'单页审查记录未通过核验：{relative}')
+            task_name = subagent.get('taskName', '').strip()
+            if 'cacheReuse' not in item and task_name in seen_tasks:
+                raise SystemExit(f'不同文件复用了同一个独立审查任务名称：{task_name}')
+            if 'cacheReuse' not in item:
+                seen_tasks.add(task_name)
+            notes = item['notes']
+            paper_id_match = re.search(r'(\d{4}[.-]\d{4,5})(?=\.md$)', relative)
+            if paper_id_match:
+                paper_id = paper_id_match.group(1).replace('-', '.')
+                if paper_id not in notes:
+                    notes = f'{paper_id}：{notes}'
+            output_item = {
+                'path': relative,
+                'sha256': sha256,
+                'checks': item['checks'],
+                'notes': notes,
+            }
+            if 'cacheReuse' in item:
+                output_item['cacheReuse'] = item['cacheReuse']
             else:
-                valid = valid_review_shard(relative, expected_item, item, module, date)
-                task_name = str((item.get('reviewSubagent') or {}).get('taskName') or '').strip()
-                if valid and 'cacheReuse' not in item and task_name in seen_tasks:
-                    valid = False
-                if valid and 'cacheReuse' not in item:
-                    seen_tasks.add(task_name)
-                states['pass' if valid else 'failed'].append(relative)
-        print(json.dumps({
-            'date': date,
-            'publicationScope': manifest.get('publicationScope'),
-            'shardDir': str(shard_dir),
-            'attestationPath': str(output_path),
-            'counts': {key: len(value) for key, value in states.items()},
-            'pending': states['missing'] + states['stale'] + states['failed'],
-        }, ensure_ascii=False))
-        return
-    if missing:
-        raise SystemExit(f'以下文件缺少独立审查记录：{missing}')
-    files = []
-    seen_tasks = set()
-    for relative, expected_item in expected.items():
-        item = shards[relative]
-        sha256 = item.get('sha256')
-        deleted = expected_item.get('deleted') is True
-        if (
-            sha256 != expected_item.get('sha256')
-            or (item.get('deleted') is True) != deleted
-        ):
-            raise SystemExit(f'单页审查记录中的文件 SHA 或删除标记与生成清单不一致：{relative}')
-        subagent = item.get('reviewSubagent') or {}
-        if not valid_review_shard(relative, expected_item, item, module, date):
-            raise SystemExit(f'单页审查记录未通过核验：{relative}')
-        task_name = subagent.get('taskName', '').strip()
-        if 'cacheReuse' not in item and task_name in seen_tasks:
-            raise SystemExit(f'不同文件复用了同一个独立审查任务名称：{task_name}')
-        if 'cacheReuse' not in item:
-            seen_tasks.add(task_name)
-        notes = item['notes']
-        paper_id_match = re.search(r'(\d{4}[.-]\d{5})(?=\.md$)', relative)
-        if paper_id_match:
-            paper_id = paper_id_match.group(1).replace('-', '.')
-            if paper_id not in notes:
-                notes = f'{paper_id}：{notes}'
-        output_item = {
-            'path': relative,
-            'sha256': sha256,
-            'checks': item['checks'],
-            'notes': notes,
+                output_item['reviewSubagent'] = item['reviewSubagent']
+                output_item['imageFindings'] = item.get('imageFindings', [])
+            if deleted:
+                output_item['deleted'] = True
+            files.append(output_item)
+        payload = {
+            **current_review_statement_fields(),
+            'mode': 'manual_complete',
+            'agent': 'Codex 独立单页人工审查',
+            'basis': 'deterministic_and_manual_semantic_review',
+            'reason': '逐页核对本次生成清单；相同字节复用原通过记录，新增或变化页面由当前模型的独立单页助手完成语义与图片审查。',
+            'checks': {
+                'generationManifestVerified': True,
+                'baseHeadVerified': True,
+                'fileHashesVerified': True,
+                'frontmatterVerified': True,
+                'markdownVerified': True,
+                'contentSemanticsVerified': True,
+                'imageReferencesVerified': True,
+                'hugoGateVerified': True,
+            },
+            'files': files,
         }
-        if 'cacheReuse' in item:
-            output_item['cacheReuse'] = item['cacheReuse']
-        else:
-            output_item['reviewSubagent'] = item['reviewSubagent']
-            output_item['imageFindings'] = item.get('imageFindings', [])
-        if deleted:
-            output_item['deleted'] = True
-        files.append(output_item)
-    payload = {
-        **current_review_statement_fields(),
-        'mode': 'manual_complete',
-        'agent': 'Codex 独立单页人工审查',
-        'basis': 'deterministic_and_manual_semantic_review',
-        'reason': '逐页核对本次生成清单；相同字节复用原通过记录，新增或变化页面由当前模型的独立单页助手完成语义与图片审查。',
-        'checks': {
-            'generationManifestVerified': True,
-            'baseHeadVerified': True,
-            'fileHashesVerified': True,
-            'frontmatterVerified': True,
-            'markdownVerified': True,
-            'contentSemanticsVerified': True,
-            'imageReferencesVerified': True,
-            'hugoGateVerified': True,
-        },
-        'files': files,
-    }
-    if machine_assets is not None:
-        payload['machineAssets'] = machine_assets
-    if manifest.get('publicationScope') is not None:
-        payload['publicationScope'] = manifest['publicationScope']
-    atomic_write_json(output_path, payload, mode=0o600)
-    print(f'已汇总 {len(files)} 个文件的人工审查声明：{output_path}')
+        if machine_assets is not None:
+            payload['machineAssets'] = machine_assets
+        if manifest.get('publicationScope') is not None:
+            payload['publicationScope'] = manifest['publicationScope']
+        atomic_write_json(output_path, payload, mode=0o600)
+        print(f'已汇总 {len(files)} 个文件的人工审查声明：{output_path}')
 
 
 if __name__ == '__main__':

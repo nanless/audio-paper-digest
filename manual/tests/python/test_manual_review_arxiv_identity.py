@@ -188,6 +188,54 @@ class ManualReviewArxivIdentityTest(unittest.TestCase):
                 with self.subTest(paper_id=paper_id):
                     self.assertIn('不是规范', self.receipt_error(root, 'hep-th/9901001', reviewed_id=paper_id))
 
+    def test_assembler_validates_notes_length_4digit_arxiv_and_scope_during_cache_reuse(self):
+        # Short / non-string notes must be rejected by valid_review_shard before writing
+        for bad_notes in (None, 123, '', '   ', '太短了'):
+            with self.subTest(bad_notes=bad_notes), tempfile.TemporaryDirectory() as tmp, assembler_workspace(tmp) as workspace:
+                item = statement('2608.12345')['files'][0]
+                item['notes'] = bad_notes
+                write_assembler_inputs(workspace, item)
+                with mock.patch.object(sys, 'argv', ['assemble', '--date', DATE]), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(SystemExit, '未通过核验'):
+                        assembler.main()
+                self.assertFalse(workspace.output.exists())
+
+        # 4-digit arXiv filename (e.g. 0704-0001.md) gets 0704.0001 prefix when missing from notes
+        with tempfile.TemporaryDirectory() as tmp, assembler_workspace(tmp) as workspace:
+            item = statement('0704.0001')['files'][0]
+            item['path'] = 'content/posts/2026-08-25-0704-0001.md'
+            item['notes'] = '核对方法数据流、实验数值对比、开源范围与局限边界均与原文一致。'
+            write_assembler_inputs(workspace, item)
+            with mock.patch.object(sys, 'argv', ['assemble', '--date', DATE]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                assembler.main()
+            payload = json.loads(workspace.output.read_text(encoding='utf-8'))
+            self.assertTrue(payload['files'][0]['notes'].startswith('0704.0001：'))
+
+        # validate_manual_cache_reuse executes inside publication_scope(include_id)
+        observed_scopes = []
+        with tempfile.TemporaryDirectory() as tmp, assembler_workspace(tmp) as workspace:
+            item = statement('2608.12345')['files'][0]
+            write_assembler_inputs(workspace, item)
+            workspace.manifest.write_text(json.dumps({
+                'schemaVersion': 3, 'date': DATE,
+                'publicationScope': {'mode': 'single-paper', 'includeId': '2608.12345'},
+                'publishedPapers': [{'arxivId': '2608.12345'}],
+                'files': [{'path': item['path'], 'deleted': False, 'sha256': item['sha256']}],
+            }), encoding='utf-8')
+            fake_reuse = {'sourceDate': '2026-08-24', 'sourcePath': item['path'], 'sha256': item['sha256']}
+
+            def check_scope(_item, _date):
+                observed_scopes.append(publisher._ACTIVE_PUBLICATION_INCLUDE_ID)
+
+            with mock.patch.object(publisher, 'manual_cache_reuse_for_file', return_value=fake_reuse), \
+                    mock.patch.object(publisher, 'validate_manual_cache_reuse', side_effect=check_scope), \
+                    mock.patch.object(sys, 'argv', ['assemble', '--date', DATE, '--include-id', '2608.12345']), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                assembler.main()
+            self.assertEqual(observed_scopes, ['2608.12345'])
+
 
 if __name__ == '__main__':
     unittest.main()

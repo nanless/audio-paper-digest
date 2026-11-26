@@ -6,10 +6,26 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
+function normalizePlatformRootSymlink(resolvedPath) {
+    if (process.platform !== 'darwin') return resolvedPath;
+    for (const [alias, real] of [['/var', '/private/var'], ['/tmp', '/private/tmp']]) {
+        if (resolvedPath === alias || resolvedPath.startsWith(`${alias}/`)) {
+            try {
+                if (fs.lstatSync(alias).isSymbolicLink() && fs.realpathSync(alias) === real) {
+                    return `${real}${resolvedPath.slice(alias.length)}`;
+                }
+            } catch (_) {
+                // ignore if alias does not exist
+            }
+        }
+    }
+    return resolvedPath;
+}
+
 function preserveResponse(event, response, options = {}) {
-    const directory = path.resolve(options.recoveryDirectory || (options.directory
+    const directory = normalizePlatformRootSymlink(path.resolve(options.recoveryDirectory || (options.directory
         ? path.join(options.directory, 'response-recovery')
-        : require('../config').FILES.llmResponseRecoveryDir));
+        : require('../config').FILES.llmResponseRecoveryDir)));
     let current = path.parse(directory).root;
     for (const part of directory.slice(current.length).split(path.sep).filter(Boolean)) {
         current = path.join(current, part);
@@ -18,10 +34,11 @@ function preserveResponse(event, response, options = {}) {
         if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('响应恢复目录必须为真实目录');
     }
     fs.chmodSync(directory, 0o700);
+    const savedEvent = event ?? null;
     const savedResponse = response == null ? null : { statusCode: response.statusCode ?? null, body: response.body ?? null,
         ...(typeof response.raw === 'string' ? { raw: response.raw } : {}) };
-    const body = { contract: 'llm-response-recovery-v1', event,
-        eventSha256: sha(JSON.stringify(event)), response: savedResponse,
+    const body = { contract: 'llm-response-recovery-v1', event: savedEvent,
+        eventSha256: sha(JSON.stringify(savedEvent)), response: savedResponse,
         responseSha256: sha(JSON.stringify(savedResponse)) };
     const bytes = Buffer.from(JSON.stringify(body) + '\n');
     const filename = path.join(directory, `${crypto.randomUUID()}.json`);
@@ -57,7 +74,7 @@ function preserveResponse(event, response, options = {}) {
             throw new Error('响应恢复文件回读字节或身份不一致');
         }
     } finally { fs.closeSync(readFd); }
-    return { filename, sha256: sha(bytes), responseSha256: body.responseSha256, eventId: event?.eventId || null };
+    return { filename, sha256: sha(bytes), responseSha256: body.responseSha256, eventId: savedEvent?.eventId || null };
 }
 
 function persistenceError(cause, event, response, options = {}) {

@@ -316,6 +316,101 @@ class CatalogRepository(private val context: Context?, private val personal: Per
      *  bytes at the two addresses makes every foreground check look like a new full snapshot. */
     private suspend fun readCatalogIndex(): Pair<String, ByteArray> = catalogIndexEntry { url -> read(url, MAX_TOTAL) }
 
+    /**
+     * Live `paper-desktop-snapshot` omits `page` aggregates (`/about/`, `/conferences/`, `/links/`)
+     * for v1.5.0 compatibility. Supplement them from verified `client/index.json` shards when
+     * available (or canonical portal page descriptors on live endpoints), without altering mock
+     * unit tests that serve only `client/details/manifest.json`.
+     */
+    private suspend fun fetchSupplementalPortalPages(existingAggregateUrls: Set<String>): List<JSONObject> {
+        val missingCanonical = CANONICAL_PORTAL_PAGES.filter { (path, _, _) -> (SITE + path) !in existingAggregateUrls }
+        if (missingCanonical.isEmpty()) return emptyList()
+        val collected = LinkedHashMap<String, JSONObject>()
+        var clientIndexPresent = false
+        try {
+            val indexUrl = SITE + "client/index.json"
+            val indexBytes = read(indexUrl, MAX_TOTAL)
+            clientIndexPresent = true
+            val manifest = JSONObject(PublishedUtf8.decode(indexBytes))
+            val family = "paper-search-index-manifest"
+            if (ClientProtocols.hasValidHeader(manifest, family) && manifest.opt("contract") == ClientProtocols.contract(family)) {
+                val descriptors = manifest.getJSONArray("shards").objects()
+                val valid = descriptors.size in 1..128 &&
+                    manifest.getInt("recordCount") > 0 &&
+                    manifest.getLong("totalBytes") in 1..MAX_TOTAL.toLong() &&
+                    descriptors.all { s ->
+                        val p = s.optString("url"); val h = s.optString("sha256")
+                        p.matches(SEARCH_SHARD_PATTERN) && h.matches(SHA256_PATTERN) &&
+                            p.endsWith("-${h.take(12)}.json") && s.optInt("bytes") in 1..(1024 * 1024) && s.optInt("recordCount") > 0
+                    }
+                if (valid) {
+                    val toInspect = LinkedHashSet<JSONObject>().apply {
+                        descriptors.forEach { s -> if (File(directory, "index/${s.getString("sha256")}.json").isFile) add(s) }
+                        descriptors.takeLast(2).forEach(::add)
+                        descriptors.firstOrNull()?.let(::add)
+                        if (descriptors.size <= 4) addAll(descriptors)
+                    }
+                    for (s in toInspect) {
+                        coroutineContext.ensureActive()
+                        val sha = s.getString("sha256")
+                        val expectedBytes = s.getInt("bytes")
+                        val file = File(directory, "index/$sha.json")
+                        var bytes = if (file.isFile) runCatching { JsonFiles.read(file, 1024 * 1024L) }.getOrElse { byteArrayOf() } else byteArrayOf()
+                        if (bytes.size != expectedBytes || sha256(bytes) != sha) {
+                            bytes = read(sameSite(URI(indexUrl).resolve(s.getString("url")).toASCIIString()), 1024 * 1024)
+                            if (bytes.size != expectedBytes || sha256(bytes) != sha) continue
+                            JsonFiles.write(file, bytes)
+                        }
+                        PublishedUtf8.reader(ByteArrayInputStream(bytes)).use { rawReader ->
+                            val reader = StrictStreamJson(rawReader)
+                            reader.beginArray()
+                            while (reader.hasNext()) {
+                                coroutineContext.ensureActive()
+                                val row = reader.readValue(0) as? JSONObject ?: continue
+                                if (row.optString("pageType") != "page") continue
+                                val url = runCatching { PublishedAggregateReader.pageURL(row.getString("permalink")) }.getOrNull() ?: continue
+                                if (url in existingAggregateUrls || collected.containsKey(url)) continue
+                                val title = row.optString("title").takeIf { it.isNotBlank() } ?: continue
+                                collected[url] = JSONObject()
+                                    .put("pageType", "page")
+                                    .put("permalink", URI(url).rawPath)
+                                    .put("title", title)
+                                    .put("titleZh", row.optString("titleZh", title).ifBlank { title })
+                                    .put("summary", row.optString("summary"))
+                                    .put("date", row.optString("date"))
+                                    .put("categories", row.optJSONArray("categories") ?: JSONArray())
+                                    .put("tags", row.optJSONArray("tags") ?: JSONArray())
+                            }
+                            reader.endArray(); reader.expectEndDocument()
+                        }
+                        if (missingCanonical.all { (path, _, _) -> (SITE + path) in collected }) break
+                    }
+                }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Optional supplemental portal page discovery never breaks a valid desktop-details sync.
+        }
+        if (clientIndexPresent || fetchOverride == null) {
+            for ((path, title, summary) in missingCanonical) {
+                val url = SITE + path
+                if (url !in collected) {
+                    collected[url] = JSONObject()
+                        .put("pageType", "page")
+                        .put("permalink", URI(url).rawPath)
+                        .put("title", title)
+                        .put("titleZh", title)
+                        .put("summary", summary)
+                        .put("date", "")
+                        .put("categories", JSONArray())
+                        .put("tags", JSONArray())
+                }
+            }
+        }
+        return collected.values.toList()
+    }
+
     /** Probe `client/details/manifest.json` first; fall back to `client/index.json` -> `index.json` ONLY on HTTP 404/410. */
     private suspend fun probeDesktopManifest(): ByteArray? = try {
         read(SITE + DesktopDetailsRepository.MANIFEST_PATH, DesktopDetailsRepository.MAX_MANIFEST_BYTES)
@@ -369,6 +464,7 @@ class CatalogRepository(private val context: Context?, private val personal: Per
                 previousEpoch = previous.epoch,
                 previousIsDesktop = previousIsDesktop,
                 progress = progress,
+                supplementalPageLoader = ::fetchSupplementalPortalPages,
             )
             try {
                 operationContext.ensureActive()
@@ -836,7 +932,7 @@ class CatalogRepository(private val context: Context?, private val personal: Per
         val allowed = article.resources.mapNotNull { it.sha256 }.toSet()
         val source = article.markdown ?: ""
         val doc = Jsoup.parseBodyFragment(org.commonmark.renderer.html.HtmlRenderer.builder().escapeHtml(true).build().render(org.commonmark.parser.Parser.builder().build().parse(source)))
-        doc.select("img[src]").take(32).forEach { image ->
+        doc.select("img[src]").take(64).forEach { image ->
             val value = image.attr("src")
             if (value.startsWith("data:image/") && value.length <= 24 * 1024 * 1024) runCatching {
                 val comma = value.indexOf(','); require(comma in 1..100 && value.substring(0, comma).endsWith(";base64"))
@@ -903,6 +999,14 @@ class CatalogRepository(private val context: Context?, private val personal: Per
     companion object {
         const val SITE = "https://nanless.github.io/audio-research-portal/"
         const val MAX_TOTAL = 64 * 1024 * 1024
+        private val CANONICAL_PORTAL_PAGES = listOf(
+            Triple("conferences/", "会议论文集", "全部已收录音频顶会与研讨会论文目录"),
+            Triple("about/", "关于本站", "项目介绍、收录标准与更新说明"),
+            Triple("links/", "研究资源", "音频研究常用网站、工具与论文资源导航"),
+        )
+        private val PROCEEDINGS_MLR_VOLUME = Regex("^v[0-9]+$")
+        private val PROCEEDINGS_MLR_SEGMENT = Regex("^[A-Za-z0-9_-]+$")
+        private val PROCEEDINGS_MLR_PDF = Regex("^[A-Za-z0-9_-]+\\.pdf$")
         /** The one catalog entry both [sync] and the foreground probe read. The preferred
          *  `client/index.json` only falls back to the legacy `index.json` on the exact 404/410
          *  that means the entry does not exist; every other failure stays an error. */
@@ -999,17 +1103,46 @@ class CatalogRepository(private val context: Context?, private val personal: Per
             return rawPath.split('/').none { it == "." || it == ".." }
         }
 
+        internal fun isApprovedOfficialProceedingsPdf(uri: URI): Boolean {
+            if (uri.scheme?.lowercase() != "https" || uri.host == null || uri.userInfo != null || uri.rawUserInfo != null ||
+                uri.port !in listOf(-1, 443) || uri.rawQuery != null || uri.query != null || uri.fragment != null || uri.rawFragment != null
+            ) return false
+            if (uri.host.lowercase() != "raw.githubusercontent.com") return false
+            val rawPath = uri.rawPath ?: return false
+            if (rawPath.contains('%') || rawPath.contains('\\') || rawPath.contains("//")) return false
+            val parts = rawPath.split('/')
+            if (parts.size != 7 || parts.any { it == "." || it == ".." }) return false
+            return parts[0].isEmpty() &&
+                parts[1] == "mlresearch" &&
+                PROCEEDINGS_MLR_VOLUME.matches(parts[2]) &&
+                parts[3] == "main" &&
+                parts[4] == "assets" &&
+                PROCEEDINGS_MLR_SEGMENT.matches(parts[5]) &&
+                PROCEEDINGS_MLR_PDF.matches(parts[6])
+        }
+
         internal fun externalResourceProxy(uri: URI, configured: String?): String? {
             val proxy = configured?.takeIf { it.isNotBlank() } ?: return null
             val host = uri.host?.lowercase() ?: return null
-            return if (host in setOf("arxiv.org", "export.arxiv.org") || isOwnedPublishedImage(uri) || isOwnedRawBlog(uri)) proxy else null
+            return if (host in setOf("arxiv.org", "export.arxiv.org") || isOwnedPublishedImage(uri) || isOwnedRawBlog(uri) || isApprovedOfficialProceedingsPdf(uri)) proxy else null
         }
 
         fun approvedResource(uri: URI): Boolean {
             if (uri.scheme?.lowercase() != "https" || uri.host == null || uri.userInfo != null || uri.port !in listOf(-1, 443) || uri.fragment != null) return false
             val host = uri.host.lowercase()
-            if (host in setOf("arxiv.org", "export.arxiv.org", "isca-archive.org", "www.isca-archive.org", "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc", "aclanthology.org", "zenodo.org")) return true
+            if (host in setOf(
+                "arxiv.org", "export.arxiv.org",
+                "isca-archive.org", "www.isca-archive.org",
+                "openreview.net", "proceedings.mlr.press", "proceedings.iclr.cc",
+                "papers.nips.cc", "proceedings.neurips.cc",
+                "aclanthology.org", "zenodo.org",
+                "ojs.aaai.org", "openaccess.thecvf.com",
+                "eurasip.org", "www.eurasip.org",
+                "nime.org", "www.nime.org",
+                "dafx26.mit.edu", "icmc2026.ligeti-zentrum.de",
+            )) return true
             if (isOwnedPublishedImage(uri)) return true
+            if (isApprovedOfficialProceedingsPdf(uri)) return true
             if (host == "nanless.github.io") return runCatching { sameSite(uri.toASCIIString()); true }.getOrDefault(false)
             return isOwnedRawBlog(uri)
         }
@@ -1055,7 +1188,7 @@ class CatalogRepository(private val context: Context?, private val personal: Per
                 listOf("sourceUrl" to paper.sourceURL, "pdfUrl" to paper.pdfURL).forEach { (key, expected) -> require(expected == null || citation.optString(key).isEmpty() || citation.optString(key) == expected) { "页面来源地址与目录不符" } }
             }
             sanitize(body, paper.blogURL)
-            require(body.select("img").size <= 32) { "单篇科学图超过32张" }
+            require(body.select("img").size <= 64) { "单篇科学图超过64张" }
             val html = body.html()
             return PublishedSourceWarning.present(Article(paper.id, html, articlePlainText(body), paper.sourceURL ?: paper.blogURL, paper.blogURL, sha256(html.toByteArray()), now(), paper.sourceVersion, false, emptyList(), false, citation, catalogEpoch = epoch, pdfURL = paper.pdfURL, mathMLContract = "published-html-mathml"))
         }

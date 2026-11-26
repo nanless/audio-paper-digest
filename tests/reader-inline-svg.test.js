@@ -206,3 +206,87 @@ test('正常日更材料化只省略已鉴别的源依赖，环境错误仍原�
     await assert.rejects(daily.ephemeralReaderFigures(id, [figure], plan), actual => actual === error);
     assert.deepEqual(snapshot(), before);
 });
+
+test('v2 质量拒绝精确透传 raw_latex_leak_in_svg 与 foreign_object_text_overlap 原因且子进程剥离密钥环境', async t => {
+    const rawLatexInput = resource(
+        '<svg id="latex-leak" width="180" height="80" viewBox="0 0 180 80">'
+        + '<rect width="180" height="80" fill="white"/>'
+        + '<text x="10" y="40">\\scriptsize leaked label</text></svg>'
+    );
+    const overlapInput = resource(
+        '<svg id="fo-overlap" width="220" height="100" viewBox="0 0 220 100">'
+        + '<foreignObject x="10" y="10" width="120" height="40"><div xmlns="http://www.w3.org/1999/xhtml">First block text</div></foreignObject>'
+        + '<foreignObject x="12" y="12" width="120" height="40"><div xmlns="http://www.w3.org/1999/xhtml">Second overlapping text</div></foreignObject>'
+        + '</svg>'
+    );
+
+    for (const [input, expectedReason] of [
+        [rawLatexInput, 'raw_latex_leak_in_svg'],
+        [overlapInput, 'foreign_object_text_overlap']
+    ]) {
+        const expectedJson = JSON.stringify({
+            contract: 'reader-inline-svg-error-v1',
+            code: 'unsupported_dependency',
+            reason: expectedReason
+        });
+        const child = spawnSync('bash', [
+            path.join(projectRoot, 'scripts/python-runtime.sh'),
+            path.join(projectRoot, 'scripts/reader_inline_svg.py'),
+            '--v2'
+        ], { cwd: projectRoot, input: input.inlineSvg, encoding: 'utf8', timeout: 30000 });
+        assert.equal(child.error, undefined);
+        assert.equal(child.status, 65, `${expectedReason}: stderr=${child.stderr}`);
+        assert.equal(child.stdout, '');
+        assert.equal(child.stderr.trim(), expectedJson);
+        await assert.rejects(renderer.renderOfficialInlineSvg(input), error =>
+            error.code === 'READER_INLINE_SVG_UNSUPPORTED_DEPENDENCY'
+            && error.unsupportedDependencyReason === expectedReason
+            && renderer.isUnsupportedDependencyFailure(error)
+            && deep.isPermanentApiReaderFigureFailure(error));
+    }
+
+    // Subprocess env must strip API keys & proxy credentials while keeping Playwright/Python runtime vars
+    const watched = [
+        'PAPER_ANALYZER_API_KEY', 'HTTPS_PROXY', 'KIMI_API_KEY',
+        'PLAYWRIGHT_BROWSERS_PATH', 'XDG_CACHE_HOME',
+        'PD_PYTHON_RUNTIME_VERIFIED_BIN', 'PD_PYTHON_RUNTIME_DISABLE_VENV'
+    ];
+    const saved = Object.fromEntries(watched.map(key => [key, process.env[key]]));
+    process.env.PAPER_ANALYZER_API_KEY = 'sk-svg-secret';
+    process.env.HTTPS_PROXY = 'http://u:p@127.0.0.1:7897';
+    process.env.KIMI_API_KEY = 'sk-kimi-svg';
+    process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/pw-browsers';
+    process.env.XDG_CACHE_HOME = '/tmp/xdg-cache';
+    process.env.PD_PYTHON_RUNTIME_VERIFIED_BIN = '/tmp/fake-py';
+    process.env.PD_PYTHON_RUNTIME_DISABLE_VENV = '1';
+    t.after(() => {
+        for (const key of watched) {
+            if (saved[key] === undefined) delete process.env[key];
+            else process.env[key] = saved[key];
+        }
+    });
+    const capturedEnvs = [];
+    await assert.rejects(renderer.renderOfficialInlineSvg(dependent(), {
+        spawn: (_cmd, _args, opts) => {
+            capturedEnvs.push(opts.env);
+            const child = new EventEmitter();
+            child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
+            child.kill = () => true;
+            child.stdin.once('finish', () => queueMicrotask(() => {
+                child.stdout.end('');
+                child.stderr.end(errorJson);
+                child.emit('close', 65);
+            }));
+            return child;
+        }
+    }), error => renderer.isUnsupportedDependencyFailure(error));
+    assert.equal(capturedEnvs.length, 1);
+    const childEnv = capturedEnvs[0];
+    assert.equal(childEnv.PAPER_ANALYZER_API_KEY, undefined);
+    assert.equal(childEnv.HTTPS_PROXY, undefined);
+    assert.equal(childEnv.KIMI_API_KEY, undefined);
+    assert.equal(childEnv.PLAYWRIGHT_BROWSERS_PATH, '/tmp/pw-browsers');
+    assert.equal(childEnv.XDG_CACHE_HOME, '/tmp/xdg-cache');
+    assert.equal(childEnv.PD_PYTHON_RUNTIME_VERIFIED_BIN, '/tmp/fake-py');
+    assert.equal(childEnv.PD_PYTHON_RUNTIME_DISABLE_VENV, '1');
+});

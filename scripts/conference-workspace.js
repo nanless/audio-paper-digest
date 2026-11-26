@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { requireExternalRuntime } = require('./env-loader.js');
+const { requireExternalRuntime, buildChildProcessEnv, VCS_CHILD_ENV_KEYS } = require('./env-loader.js');
 const { treeStats } = require('./runtime-storage.js');
 const protocols = require('./lib/protocol-codec');
 
@@ -148,7 +148,7 @@ function runGit(repo, args) {
         stdio: ['ignore', 'pipe', 'ignore'],
         maxBuffer: 2 * 1024 * 1024,
         timeout: 30_000,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        env: buildChildProcessEnv({ GIT_TERMINAL_PROMPT: '0' }, VCS_CHILD_ENV_KEYS)
     });
     return { status: result.status, stdout: result.stdout || '', error: result.error || null };
 }
@@ -277,17 +277,55 @@ function itemStatusCounts(items) {
     return counts;
 }
 
-function validateItems(items, processId) {
+function validateItems(items, processId, state = null) {
     if (!items || typeof items !== 'object' || Array.isArray(items)) return false;
+    const preservedComplete = new Set([
+        ...(Array.isArray(state?.sourceUpgradePromotion?.preservedOriginalCompletePaperIds)
+            ? state.sourceUpgradePromotion.preservedOriginalCompletePaperIds : []),
+        ...(Array.isArray(state?.sourceUpgradePromotion?.preservedPriorUpgradePaperIds)
+            ? state.sourceUpgradePromotion.preservedPriorUpgradePaperIds : [])
+    ]);
     return Object.entries(items).every(([paperId, item]) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)
             || item.paperId !== paperId || !ITEM_STATES.has(item.status)
-            || item.analysisRunId !== deterministicUuid(processId, paperId, 'analysis')
             || !Number.isSafeInteger(item.attempts) || item.attempts < 0
             || (item.retryBudgetStart !== undefined
                 && (!Number.isSafeInteger(item.retryBudgetStart)
                     || item.retryBudgetStart < 0 || item.retryBudgetStart > item.attempts))
             || (item.retryNotBefore != null && !Number.isFinite(Date.parse(item.retryNotBefore)))) return false;
+        const revision = item.readerRevision;
+        if (revision !== undefined && revision !== null) {
+            if (typeof revision !== 'object' || Array.isArray(revision)) return false;
+            const { revisionSha256, ...body } = revision;
+            let validWindow = false;
+            let validOriginal = false;
+            try {
+                const additional = protocols.hasValidHeader(revision, 'conference-reader-recovery-window');
+                validWindow = additional
+                    && UUID_RE.test(revision.grantId || '')
+                    && SHA256_RE.test(revision.grantSha256 || '')
+                    && SHA256_RE.test(revision.failedAnalysisFileSha256 || '')
+                    && revision.originalMemberPaperId === paperId && revision.maxAttempts === 3
+                    && revision.executionId === require('./lib/conference-recovery-grant').grantedRecoveryExecutionId(
+                        revision.grantId, revision.failedExecutionId, revision.failedAnalysisFileSha256, revision);
+                validOriginal = !additional && protocols.hasValidHeader(revision, 'conference-reader-source-revision')
+                    && revision.executionId === require('./lib/conference-analysis-adapter').readerRevisionExecutionId(
+                        revision.parentExecutionId, revision.parentAnalysisFileSha256, revision);
+            } catch (_) {
+                return false;
+            }
+            if (revisionSha256 !== stableHash(body) || (!validOriginal && !validWindow)
+                || revision.paperId !== paperId || revision.executionId !== item.analysisRunId
+                || (!preservedComplete.has(paperId)
+                    && revision.parentExecutionId !== deterministicUuid(processId, paperId, 'analysis'))) {
+                return false;
+            }
+        }
+        if (!revision && !preservedComplete.has(paperId)
+            && item.analysisRunId !== deterministicUuid(processId, paperId, 'analysis')) return false;
+        if (preservedComplete.has(paperId)
+            && (!(item.preservedOriginalComplete || item.preservedPriorUpgradeComplete)
+                || !UUID_RE.test(item.analysisRunId || ''))) return false;
         return item.status !== 'complete' || Boolean(item.sourceProof && item.analysisProof && item.pageProof);
     });
 }
@@ -314,7 +352,7 @@ function validateProcessStateShape(state, processId) {
         || !state.authority || typeof state.authority !== 'object' || Array.isArray(state.authority)
         || !SHA256_RE.test(state.authority.implementationSha256 || '')
         || !validTagCatalogFields(state.authority, protocols.format(state.contract, 'conference-process', state.schemaFingerprint))
-        || !validateItems(state.items, state.processId)) return false;
+        || !validateItems(state.items, state.processId, state)) return false;
     if (state.sourceImplementationSha256 !== undefined
         && !SHA256_RE.test(state.sourceImplementationSha256 || '')) return false;
     const incomplete = Object.values(state.items).filter(item => item.status !== 'complete');

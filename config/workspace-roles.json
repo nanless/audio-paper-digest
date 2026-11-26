@@ -41,11 +41,15 @@
         "migrate-conference-process.js",
         "conference-complete-stage-worker.js",
         "conference-publication-figure-crop-replay-cli.js",
-        "recover-conference-process-locks.js"
+        "recover-conference-process-locks.js",
+        "prepare-daily-fetch-witness-recovery.js",
+        "waive-analysis-failures.js",
+        "waive-post-publish-visuals.js"
       ],
       "historyExact": [
         "page-source-crosswalk.js",
-        "arxiv-source-authority.js"
+        "arxiv-source-authority.js",
+        "activate-fresh-publication.js"
       ],
       "historyPrefixes": [
         "conference-",
@@ -63,6 +67,7 @@
         "review-blog.py",
         "push-blog.py",
         "publish-to-blog.py",
+        "publish-conference.py",
         "conference-filter-evidence-extract.py",
         "indextts_synth.py",
         "conference_publication_figure_crop.py",
@@ -70,7 +75,8 @@
       ],
       "historyExact": [
         "conference-extract.py",
-        "history-inventory.py"
+        "history-inventory.py",
+        "publication_activation.py"
       ],
       "historyPrefixes": [
         "conference-",

@@ -227,7 +227,7 @@ def render_packet(packet):
             f'paper_digest_tags_concepts: {json.dumps(tag_metadata["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}',
             f'paper_digest_primary_method: {json.dumps(tag_metadata["primaryMethod"], ensure_ascii=False)}',
             publisher._researcher_workbench_frontmatter(workbench).rstrip(),
-            '---', '', f'# 📄 {reader_title}', '', f'> 会议论文 ID：`{projected["directPaperId"]}`', ''
+            '---', '', f'# 📄 {publisher.markdown_title_for_publish(reader_title)}', '', f'> 会议论文 ID：`{projected["directPaperId"]}`', ''
         ]
         frontmatter.extend([render_tag_hierarchy_markdown(
             tag_metadata, publisher._PAGE_TAG_CATALOG).rstrip(), ''])
@@ -252,7 +252,7 @@ def render_packet(packet):
         if implementation_specs_block:
             frontmatter.extend(['## ⚙️ 关键实现与复现规格', '', implementation_specs_block, ''])
         frontmatter.extend(['---',
-            f'[← 返回 {date} 语音/音乐/音频论文速递]({publisher.BASE_PATH}/posts/{date}/)', ''])
+            f'[← 返回 {date} 音频研究日报]({publisher.BASE_PATH}/posts/{date}/)', ''])
         return {
             'markdown': publisher.sanitize_markdown_for_publish('\n'.join(frontmatter)),
             'assets': [{'path': relative.as_posix(),

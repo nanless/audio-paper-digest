@@ -4,9 +4,18 @@ import Darwin
 extension LibraryService {
     private static let approvedHosts: Set<String> = [
         "arxiv.org", "export.arxiv.org", "www.isca-archive.org", "isca-archive.org",
-        "openreview.net", "proceedings.mlr.press", "papers.nips.cc", "proceedings.neurips.cc",
-        "aclanthology.org", "zenodo.org"
+        "openreview.net", "proceedings.mlr.press", "proceedings.iclr.cc", "papers.nips.cc", "proceedings.neurips.cc",
+        "aclanthology.org", "zenodo.org",
+        "ojs.aaai.org", "openaccess.thecvf.com",
+        "eurasip.org", "www.eurasip.org",
+        "nime.org", "www.nime.org",
+        "dafx26.mit.edu", "icmc2026.ligeti-zentrum.de"
     ]
+    private static let dnsQueue = DispatchQueue(
+        label: "com.nanless.PaperDigest.dns.library",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
 
     // These are published image layouts, not a grant to arbitrary GitHub content.
     // Keep owner/repository/branch and every path component exact; each redirect
@@ -51,14 +60,39 @@ extension LibraryService {
         return parts.count >= 5 && !parts.contains(".") && !parts.contains("..") && !(parts.last?.isEmpty ?? true)
     }
 
+    // Narrowly scoped official PMLR proceedings PDFs hosted under mlresearch on raw.githubusercontent.com.
+    // Rejects userinfo, non-443 ports, query, fragment, percent-encoding, backslashes, empty/dot segments,
+    // and any path outside /mlresearch/v<N>/main/assets/<slug>/<file>.pdf.
+    static func isApprovedOfficialProceedingsPdf(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              url.host?.lowercased() == "raw.githubusercontent.com",
+              url.user == nil, url.password == nil,
+              url.port == nil || url.port == 443,
+              url.query == nil, url.fragment == nil,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
+        let path = components.percentEncodedPath
+        guard !path.contains("%"), !path.contains("\\"), !path.contains("//") else { return false }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 7,
+              parts[0].isEmpty,
+              parts[1] == "mlresearch",
+              parts[2].range(of: #"\Av[0-9]+\z"#, options: .regularExpression) != nil,
+              parts[3] == "main",
+              parts[4] == "assets",
+              parts[5].range(of: #"\A[A-Za-z0-9_-]+\z"#, options: .regularExpression) != nil,
+              parts[6].range(of: #"\A[A-Za-z0-9_-]+\.pdf\z"#, options: .regularExpression) != nil,
+              !parts.contains("."), !parts.contains("..") else { return false }
+        return true
+    }
+
     static func isApprovedExternalResource(_ url: URL) -> Bool {
         guard url.scheme == "https", let host = url.host?.lowercased(), url.user == nil, url.password == nil, url.port == nil || url.port == 443 else { return false }
-        return approvedHosts.contains(host) || isOwnedPublishedImage(url) || isOwnedRawBlog(url)
+        return approvedHosts.contains(host) || isOwnedPublishedImage(url) || isOwnedRawBlog(url) || isApprovedOfficialProceedingsPdf(url)
     }
 
     static func externalResourceProxy(_ url: URL, configured: URL?) -> URL? {
         let host = url.host?.lowercased()
-        return host == "arxiv.org" || host == "export.arxiv.org" || isOwnedPublishedImage(url) || isOwnedRawBlog(url) ? configured : nil
+        return host == "arxiv.org" || host == "export.arxiv.org" || isOwnedPublishedImage(url) || isOwnedRawBlog(url) || isApprovedOfficialProceedingsPdf(url) ? configured : nil
     }
 
     func configureNetwork(httpProxy: String?) throws {
@@ -147,7 +181,7 @@ extension LibraryService {
                 // Direct fetch to an approved academic domain: pin resolved IP and reject all
                 // private/loopback/link-local/metadata ranges while allowing local TUN Fake-IP
                 // (RFC 2544 198.18.0.0/15) used by VPN clients such as Clash/Mihomo.
-                let address = try Self.publicAddress(host, allowSyntheticTun: true)
+                let address = try await Self.publicAddress(host, allowSyntheticTun: true)
                 let target = address.contains(":") ? "[\(address)]" : address
                 arguments += ["--connect-to", "\(host):443:\(target):443", "--proxy", "", "--noproxy", "*"]
             }
@@ -187,7 +221,22 @@ extension LibraryService {
         try Task.checkCancellation()
     }
 
-    private static func publicAddress(_ host: String, allowSyntheticTun: Bool = false) throws -> String {
+    private static func publicAddress(_ host: String, allowSyntheticTun: Bool = false) async throws -> String {
+        try Task.checkCancellation()
+        let address: String = try await withCheckedThrowingContinuation { continuation in
+            dnsQueue.async {
+                do {
+                    continuation.resume(returning: try publicAddressSync(host, allowSyntheticTun: allowSyntheticTun))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+        try Task.checkCancellation()
+        return address
+    }
+
+    private static func publicAddressSync(_ host: String, allowSyntheticTun: Bool = false) throws -> String {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM; hints.ai_flags = AI_ADDRCONFIG
         var list: UnsafeMutablePointer<addrinfo>?

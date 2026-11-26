@@ -98,7 +98,12 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
         if (state.nativeResourceBadgesEnabled) {
             val isPostSyncRefresh = badgesSyncStamp != null && badgesSyncStamp != state.catalogSyncedAt && !state.settings.optBoolean("offlineMode")
             badgesSyncStamp = state.catalogSyncedAt ?: ""
-            runCatching { controller.execute("library.resourceBadges", obj("refresh" to isPostSyncRefresh)) }
+            try {
+                controller.execute("library.resourceBadges", obj("refresh" to isPostSyncRefresh))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+            }
         }
     }
     var routeRevision by remember { mutableLongStateOf(0) }
@@ -144,10 +149,10 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
             "ui.resources" -> {navigateCurrent("resources");return@action}
             "ui.tasks" -> {navigateCurrent("tasks");return@action}
             "ui.session.open" -> {val id=payload.getString("id");if(state.sessions.none{it.optString("id")==id})return@action;selectedSessionID=id;navigateCurrent("session");return@action}
-            "ui.settings" -> {settingsPaneRequest=payload.optString("pane").takeIf{it in listOf("开始","阅读","模型","资料","坚果云","Zotero")};settingsRequestID++;navigateCurrent("settings");return@action}
+            "ui.settings" -> {settingsPaneRequest=payload.optString("pane").takeIf{it in setOf("开始","阅读","模型","资料","坚果云","Zotero","关于")};settingsRequestID++;navigateCurrent("settings");return@action}
         }
         if(command.endsWith("restore.prepare")&&preparedRestoreJSON!=null){localError="请先确认或取消已校验的恢复材料";return@action}
-        val guarded=command.startsWith("export.retained.") || command in setOf("pdf.open","pdf.studySource.open","library.sync","storage.prepare","export.prepare","retained.export.prepare","export.delivery.prepare","export.pending.list","export.reconcile","cloud.restore.prepare","app.restore.prepare","zotero.prepare","zotero.archive","zotero.resume","cloud.upload","cloud.check","zotero.check")
+        val guarded=command.startsWith("export.retained.") || command in setOf("pdf.open","pdf.studySource.open","library.sync","storage.prepare","export.prepare","retained.export.prepare","export.delivery.prepare","export.pending.list","export.reconcile","cloud.restore.prepare","app.restore.prepare","zotero.prepare","zotero.archive","zotero.resume","cloud.upload","cloud.check","zotero.check","zotero.checkDav")
         if(guarded&&pendingActions[command]==true)return@action
         if(guarded)pendingActions[command]=true
         scope.launch {
@@ -240,9 +245,23 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
         BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             val wide=maxWidth>=840.dp
             Row(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                if(wide) NavigationRail(containerColor=MaterialTheme.colorScheme.background) { Spacer(Modifier.height(24.dp)); Icon(Icons.Outlined.AutoStories,null,Modifier.padding(20.dp).size(28.dp),tint=MaterialTheme.colorScheme.primary); tabs.forEachIndexed {i,t->NavigationRailItem(tabSelected(t.first),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})} }
+                if(wide) {
+                    NavigationRail(containerColor=MaterialTheme.colorScheme.surfaceContainerLow) {
+                        Spacer(Modifier.height(20.dp))
+                        Surface(
+                            shape=MaterialTheme.shapes.small,
+                            color=MaterialTheme.colorScheme.primaryContainer,
+                            modifier=Modifier.padding(bottom=16.dp),
+                        ) {
+                            Icon(Icons.Outlined.AutoStories,null,Modifier.padding(10.dp).size(24.dp),tint=MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
+                        tabs.forEachIndexed {i,t->NavigationRailItem(tabSelected(t.first),{navigate(t.first)},{Icon(icons[i],t.second)},label={Text(t.second)})}
+                    }
+                    VerticalDivider(color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.7f))
+                }
                 Scaffold(
                     Modifier.weight(1f),
+                    containerColor = MaterialTheme.colorScheme.background,
                     snackbarHost = { SnackbarHost(snackbar) },
                     bottomBar = {
                         Column(Modifier.fillMaxWidth()) {
@@ -253,7 +272,8 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                                 onOpenPaper = { pid -> action("paper.open", obj("paperID" to pid)) },
                             )
                             if (!wide) {
-                                NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
+                                NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest, tonalElevation = 0.dp) {
                                     tabs.forEachIndexed { i, t ->
                                         NavigationBarItem(tabSelected(t.first), { navigate(t.first) }, { Icon(icons[i], t.second) }, label = { Text(t.second) })
                                     }
@@ -264,34 +284,39 @@ internal fun JSONObject.ids(key:String):List<String> = optJSONArray(key)?.let { 
                 ) { padding ->
                     Column(Modifier.fillMaxSize().padding(padding)) {
                         if(setupReminder&&route in setOf("library","aggregates")&&(state.cloud.optString("account").isBlank()||state.zotero.optString("libraryID").isBlank())) {
-                            Surface(color=MaterialTheme.colorScheme.secondaryContainer,modifier=Modifier.fillMaxWidth()) {
-                                Row(Modifier.padding(horizontal=12.dp,vertical=6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
-                                    Text("连接 WebDAV / Zotero，保存研究资料",Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)
-                                    TextButton({action("ui.settings",obj("pane" to "开始"))}){Text("简单配置")}
-                                    IconButton({setupReminder=false}){Icon(Icons.Outlined.Close,"稍后配置，本次先阅读")}
+                            Surface(color=MaterialTheme.colorScheme.surfaceContainerLow,modifier=Modifier.fillMaxWidth()) {
+                                Column {
+                                    Row(Modifier.padding(horizontal=14.dp,vertical=6.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                                        Icon(Icons.Outlined.CloudQueue,null,Modifier.size(16.dp),tint=MaterialTheme.colorScheme.primary)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("连接 WebDAV / Zotero，保存研究资料",Modifier.weight(1f),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurface)
+                                        TextButton({action("ui.settings",obj("pane" to "开始"))}){Text("简单配置")}
+                                        IconButton({setupReminder=false}){Icon(Icons.Outlined.Close,"稍后配置，本次先阅读")}
+                                    }
+                                    HorizontalDivider(color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.6f))
                                 }
                             }
                         }
                         if(state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                         state.storageWarning?.let{warning->
-                            Surface(color=MaterialTheme.colorScheme.tertiaryContainer,modifier=Modifier.fillMaxWidth()){
+                            Surface(color=MaterialTheme.colorScheme.tertiaryContainer,contentColor=MaterialTheme.colorScheme.onTertiaryContainer,modifier=Modifier.fillMaxWidth()){
                                 Column(Modifier.padding(12.dp)){
-                                    Text(warning)
+                                    Text(warning,style=MaterialTheme.typography.bodySmall)
                                     TextButton({action("ui.settings",obj("pane" to "资料"))}){Text("前往资料，导出完整备份")}
                                 }
                             }
                         }
 
-                        (localError ?: state.error)?.let { message -> Surface(color=MaterialTheme.colorScheme.errorContainer,modifier=Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp)){Text(message,Modifier.weight(1f));TextButton({localError=null;action("app.bootstrap",JSONObject())}){Text("重新载入")}} }}
+                        (localError ?: state.error)?.let { message -> Surface(color=MaterialTheme.colorScheme.errorContainer,contentColor=MaterialTheme.colorScheme.onErrorContainer,modifier=Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){Text(message,Modifier.weight(1f),style=MaterialTheme.typography.bodySmall);TextButton({localError=null;action("app.bootstrap",JSONObject())}){Text("重新载入")}} }}
                         savedScreens.SaveableStateProvider(if(route=="reader")"reader-${state.selectedPaperId}" else route){when(route){
                             "library" -> LibraryPane(state,controller,action,{importPDF.launch(arrayOf("application/pdf"))},websiteIndex,true,libraryDirectoryRequest,librarySearchMemo)
                             "resources" -> WebsiteResourcesPane(state,action)
                             "aggregates" -> AggregatePane(state,action,aggregateLink,aggregateLinkCurrent,aggregateSection,aggregateSectionRequest,pendingAggregateReturn==null)
                             "reader" -> Column(Modifier.fillMaxSize()) {
-                                if(readerReturnID!=null)Surface(color=MaterialTheme.colorScheme.surfaceContainer){Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
+                                if(readerReturnID!=null)Surface(color=MaterialTheme.colorScheme.surfaceContainerLow){Column{Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically){
                                     TextButton({action("ui.reader.return",JSONObject())}){Icon(Icons.Outlined.ArrowBack,null);Spacer(Modifier.width(6.dp));Text(readerReturnLabel)}
-                                    Text(readerReturnTitle,Modifier.weight(1f).padding(end=12.dp),maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,style=MaterialTheme.typography.labelMedium)
-                                }}
+                                    Text(readerReturnTitle,Modifier.weight(1f).padding(end=12.dp),maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                                };HorizontalDivider(color=MaterialTheme.colorScheme.outlineVariant.copy(alpha=0.6f))}}
                                 Box(Modifier.weight(1f)){ReaderPane(state,controller,action)}
                             }
                             "tasks" -> NonOccludingViewport{TasksPane(state,action)}
@@ -392,10 +417,8 @@ internal fun exportDeliveryNamespace(original:JSONObject):String = when(original
  }
 }
 @Composable internal fun EmptyPane(title:String,text:String){
- Column(Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=36.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-  Surface(shape=MaterialTheme.shapes.large,color=MaterialTheme.colorScheme.primaryContainer){Icon(Icons.Outlined.AutoStories,null,Modifier.padding(18.dp).size(28.dp),MaterialTheme.colorScheme.onPrimaryContainer)}
-  Text(title,style=MaterialTheme.typography.titleLarge)
-  Text(text,color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodyMedium)
+ Box(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=20.dp)){
+  StatePanel(title=title,text=text,icon=Icons.Outlined.AutoStories)
  }
 }
 

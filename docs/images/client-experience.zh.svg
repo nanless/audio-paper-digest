@@ -1,89 +1,98 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="442" viewBox="0 0 960 442" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="464" viewBox="0 0 960 464" role="img" aria-labelledby="title desc">
   <title id="title">Mac 与 Android 工作台阅读、播客与同步边界</title>
-  <desc id="desc">左侧公开网站与播客 Release 只读流入中间的 Mac 与 Android 工作台；右侧分为三条彼此隔离的个人路径：个人研究模型、Zotero 文献归档（Mac 本地接口与 Android Web API 分别授权）以及 WebDAV 版本化备份（虚线表示用户确认后恢复）。</desc>
+  <desc id="desc">Studio Monograph 客户端数据边界图：左侧音频研究门户快照与 1.5.0 每日音频播客只读流入 Mac 与 Android 工作台；右侧四条隔离通道分别处理个人模型提问、Zotero 文献归档、一键双向同步 WebDAV（含笔记冲突无损合并）以及完整研究空间版本快照备份（虚线表示用户确认后恢复）。</desc>
   <defs>
     <style>
-      text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #0f172a; }
+      text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; fill: #182120; }
       .t-main { font-size: 21px; font-weight: 700; }
-      .t-sub { font-size: 13.5px; fill: #475569; }
-      .t-card { font-size: 15.5px; font-weight: 700; }
-      .t-badge { font-size: 11.5px; font-weight: 700; }
-      .t-body { font-size: 13px; fill: #334155; }
-      .t-small { font-size: 12px; fill: #475569; }
-      .l-solid { fill: none; stroke: #2563eb; stroke-width: 2; marker-end: url(#a-blue); }
-      .l-teal { fill: none; stroke: #0d9488; stroke-width: 2; marker-end: url(#a-teal); }
-      .l-dash { fill: none; stroke: #0d9488; stroke-width: 2; stroke-dasharray: 6 4; marker-end: url(#a-teal); }
+      .t-sub { font-size: 13px; fill: #4a5755; }
+      .t-card { font-size: 15px; font-weight: 700; }
+      .t-head { font-size: 15.5px; font-weight: 700; fill: #f7f5f0; }
+      .t-badge { font-size: 12px; font-weight: 700; }
+      .t-body { font-size: 12.8px; fill: #2d3a38; }
+      .t-small { font-size: 12px; fill: #556360; }
+      .l-teal { fill: none; stroke: #0f5c58; stroke-width: 2; marker-end: url(#a-teal); }
+      .l-bi { fill: none; stroke: #1f8a82; stroke-width: 2.2; marker-start: url(#a-teal-rev); marker-end: url(#a-teal); }
+      .l-copper { fill: none; stroke: #b85a34; stroke-width: 2; marker-end: url(#a-copper); }
+      .l-dash { fill: none; stroke: #b85a34; stroke-width: 2; stroke-dasharray: 6 4; marker-end: url(#a-copper); }
     </style>
-    <marker id="a-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-      <path d="M0,1 L7.5,4 L0,7 Z" fill="#2563eb"/>
-    </marker>
     <marker id="a-teal" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-      <path d="M0,1 L7.5,4 L0,7 Z" fill="#0d9488"/>
+      <path d="M0,1 L7.5,4 L0,7 Z" fill="#0f5c58"/>
+    </marker>
+    <marker id="a-teal-rev" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto">
+      <path d="M7.5,1 L0,4 L7.5,7 Z" fill="#1f8a82"/>
+    </marker>
+    <marker id="a-copper" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,1 L7.5,4 L0,7 Z" fill="#b85a34"/>
     </marker>
   </defs>
 
-  <rect width="960" height="442" rx="16" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+  <rect width="960" height="464" rx="16" fill="#f7f5f0" stroke="#d6cfc3" stroke-width="1.5"/>
 
-  <text x="32" y="42" class="t-main">Mac 与 Android 工作台 · 公开订阅与个人资料边界</text>
-  <text x="32" y="65" class="t-sub">实线：只读获取或主动写入　　虚线：用户确认后按版本恢复（不自动静默合并）</text>
+  <text x="32" y="42" class="t-main">Mac 与 Android 工作台（1.5.0）· 公开订阅与个人同步边界</text>
+  <text x="32" y="64" class="t-sub">单向实线：只读获取或主动写入　　双向实线：一键同步 WebDAV　　虚线：用户确认后按快照回滚</text>
 
-  <!-- Left: Public sources -->
-  <rect x="32" y="96" width="224" height="122" rx="12" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.6"/>
-  <text x="48" y="124" class="t-card" fill="#1d4ed8">音频研究门户</text>
-  <text x="48" y="149" class="t-body">静态详情快照与分类索引</text>
-  <text x="48" y="170" class="t-body">单篇导读、汇总与引用</text>
-  <text x="48" y="196" class="t-small">只读获取，不触发重分析</text>
+  <!-- Left: Public read-only inputs -->
+  <rect x="32" y="92" width="218" height="134" rx="12" fill="#eef6f4" stroke="#9ec9c3" stroke-width="1.5"/>
+  <text x="48" y="120" class="t-card" fill="#0f5c58">音频研究门户</text>
+  <text x="48" y="146" class="t-body">静态详情快照与分类树</text>
+  <text x="48" y="168" class="t-body">图文导读、汇总与引用</text>
+  <text x="48" y="202" class="t-small">只读拉取 · 不触发重分析</text>
 
-  <rect x="32" y="236" width="224" height="114" rx="12" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.6"/>
-  <text x="48" y="264" class="t-card" fill="#0f766e">每日音频播客</text>
-  <text x="48" y="289" class="t-body">GitHub Release 受控下载</text>
-  <text x="48" y="310" class="t-body">SHA-256 校验与本地缓存</text>
-  <text x="48" y="334" class="t-small">150 MiB / 5 期 LRU，不进备份</text>
+  <rect x="32" y="242" width="218" height="140" rx="12" fill="#fdf6f1" stroke="#e4bfa8" stroke-width="1.5"/>
+  <text x="48" y="270" class="t-card" fill="#a64d2a">每日音频播客（1.5.0）</text>
+  <text x="48" y="296" class="t-body">受控 Release HTTPS 下载</text>
+  <text x="48" y="318" class="t-body">流式 SHA-256 + MP3 校验</text>
+  <text x="48" y="356" class="t-small">150 MiB / 5 期 LRU 不进备份</text>
 
-  <!-- Arrows Left -> Center -->
-  <path d="M260 157 H306" class="l-solid"/>
-  <path d="M260 293 H306" class="l-teal"/>
+  <path d="M254 159 H296" class="l-teal"/>
+  <path d="M254 312 H296" class="l-copper"/>
 
   <!-- Center: Workbench App -->
-  <rect x="310" y="96" width="276" height="254" rx="14" fill="#ffffff" stroke="#a78bfa" stroke-width="1.8"/>
-  <rect x="310" y="96" width="276" height="44" rx="14" fill="#f5f3ff"/>
-  <rect x="310" y="126" width="276" height="14" fill="#f5f3ff"/>
-  <text x="328" y="124" class="t-card" fill="#5b21b6">音频研究工作台（1.5.0）</text>
+  <rect x="300" y="92" width="276" height="290" rx="14" fill="#ffffff" stroke="#b9cfc9" stroke-width="1.8"/>
+  <rect x="300" y="92" width="276" height="44" rx="14" fill="#182120"/>
+  <rect x="300" y="122" width="276" height="14" fill="#182120"/>
+  <text x="318" y="120" class="t-head">音频研究工作台（v1.5.0）</text>
 
-  <text x="328" y="164" class="t-badge" fill="#4338ca">Mac（Apple 芯片）· Android（4 ABI）</text>
-  <text x="328" y="190" class="t-body">• 400 项九维分类浏览与离线检索</text>
-  <text x="328" y="214" class="t-body">• 中文导读 + 原始 PDF 对照阅读</text>
-  <text x="328" y="238" class="t-body">• 收藏分区、批注与结构化笔记</text>
-  <text x="328" y="262" class="t-body">• 原生播客播放（0.75×–2.0× / 章节）</text>
-  <text x="328" y="286" class="t-body">• HTML5 / MathML / SVG 净化渲染</text>
-  <text x="328" y="328" class="t-small">本机凭据与完整性校验密钥留在设备内</text>
+  <text x="318" y="160" class="t-badge" fill="#0f5c58">Mac（Apple 芯片）· Android（4 ABI）</text>
+  <text x="318" y="188" class="t-body">• 400 项九维分类与多词离线检索</text>
+  <text x="318" y="213" class="t-body">• 中文精读 + 原始 PDF 双栏对照</text>
+  <text x="318" y="238" class="t-body">• 收藏分区、批注与结构化笔记</text>
+  <text x="318" y="263" class="t-body">• 原生播客（章节 · 0.75×–2.0×）</text>
+  <text x="318" y="288" class="t-body">• Studio Monograph 净化渲染</text>
+  <line x1="318" y1="314" x2="558" y2="314" stroke="#e5dfd4" stroke-width="1"/>
+  <text x="318" y="340" class="t-small">API 密钥与本机校验键永不离机</text>
+  <text x="318" y="362" class="t-small">Mac 钥匙串 / Android Keystore 保护</text>
 
   <!-- Arrows Center -> Right -->
-  <path d="M590 140 H640" class="l-solid"/>
-  <path d="M590 223 H640" class="l-solid"/>
-  <path d="M590 298 H640" class="l-teal"/>
-  <path d="M644 328 H594" class="l-dash"/>
+  <path d="M580 125 H626" class="l-teal"/>
+  <path d="M580 198 H626" class="l-teal"/>
+  <path d="M584 272 H624" class="l-bi"/>
+  <path d="M580 338 H626" class="l-copper"/>
+  <path d="M628 362 H584" class="l-dash"/>
 
   <!-- Right 1: Personal LLM -->
-  <rect x="644" y="96" width="284" height="78" rx="11" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
-  <text x="660" y="121" class="t-card">个人研究模型（按需配置）</text>
-  <text x="660" y="143" class="t-body">仅主动提问时发送确认的提取文字</text>
-  <text x="660" y="162" class="t-small">不发原始 PDF/图片，不共用生产配额</text>
+  <rect x="630" y="92" width="298" height="66" rx="11" fill="#ffffff" stroke="#d6cfc3" stroke-width="1.4"/>
+  <text x="646" y="116" class="t-card">个人研究模型（按需自配）</text>
+  <text x="646" y="140" class="t-small">仅主动提问发确认提取文字 · 账单独立</text>
 
   <!-- Right 2: Zotero -->
-  <rect x="644" y="186" width="284" height="78" rx="11" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
-  <text x="660" y="211" class="t-card">Zotero 文献归档</text>
-  <text x="660" y="233" class="t-body">Mac：本机接口 · Android：官方 Web API</text>
-  <text x="660" y="252" class="t-small">两端分别授权，不自动继承另一设备许可</text>
+  <rect x="630" y="166" width="298" height="66" rx="11" fill="#ffffff" stroke="#d6cfc3" stroke-width="1.4"/>
+  <text x="646" y="190" class="t-card">Zotero 文献归档</text>
+  <text x="646" y="214" class="t-small">Mac 本机接口 · Android Web API 分别授权</text>
 
-  <!-- Right 3: WebDAV -->
-  <rect x="644" y="276" width="284" height="74" rx="11" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
-  <text x="660" y="301" class="t-card" fill="#15803d">WebDAV 完整研究备份</text>
-  <text x="660" y="323" class="t-body">独立目录保存快照版本，确认后恢复</text>
-  <text x="660" y="341" class="t-small">密钥、登录凭据与校验键不随备份迁移</text>
+  <!-- Right 3: One-Click WebDAV Sync -->
+  <rect x="630" y="240" width="298" height="68" rx="11" fill="#eef6f4" stroke="#1f8a82" stroke-width="1.5"/>
+  <text x="646" y="264" class="t-card" fill="#0f5c58">一键双向同步 WebDAV</text>
+  <text x="646" y="288" class="t-small">同步收藏/笔记/离线文件 · 笔记冲突无损合并</text>
+
+  <!-- Right 4: Full-Space Backup -->
+  <rect x="630" y="316" width="298" height="66" rx="11" fill="#fdf6f1" stroke="#e4bfa8" stroke-width="1.5"/>
+  <text x="646" y="340" class="t-card" fill="#a64d2a">完整研究空间快照备份</text>
+  <text x="646" y="364" class="t-small">独立目录分版本保存 · 确认后按时点恢复</text>
 
   <!-- Footer -->
-  <rect x="32" y="376" width="896" height="44" rx="8" fill="#f1f5f9"/>
-  <text x="48" y="396" class="t-small">隐私与升级提示：恢复备份会保留历史问答记录，但不会自动重新调用模型；WebDAV 备份目录与 Zotero 附件同步目录彼此隔离。</text>
-  <text x="48" y="413" class="t-small">1.5.0 兼容 1.4.x 备份与旧站点路径过渡，Mac 本地签名要求 macOS 15+，Android 1.4.4+ 可直接覆盖升级。</text>
+  <rect x="32" y="402" width="896" height="44" rx="8" fill="#ece8de"/>
+  <text x="48" y="421" class="t-small">隔离边界：WebDAV 同步/备份目录与 Zotero 附件目录相互独立；恢复快照保留历史问答但不重发模型请求。</text>
+  <text x="48" y="438" class="t-small">升级提示：1.5.0 兼容 1.4.x 备份与旧站点路径；macOS 需 15+（Apple 芯片），Android 1.4.4+ 可直接覆盖升级。</text>
 </svg>

@@ -8,7 +8,6 @@ const { printErrorGuidance, redactSensitive } = require('./lib/error-guidance.js
 
 let currentReanalyzeBatchDate = null;
 let currentReanalyzeStageStartedAt = Date.now();
-setupScriptLogging(__filename);
 
 /**
  * 重新分析已有论文
@@ -37,68 +36,22 @@ const {
     resetReaderForForcedReanalysis
 } = require('./lib/reanalysis-helpers.js');
 
-loadEnvFile();
-
-const requiredEnvVars = ['PAPER_ANALYZER_API_KEY', 'PAPER_ANALYZER_MODEL', 'PAPER_ANALYZER_ENDPOINT'];
-const missingEnvVars = requiredEnvVars.filter(name => !process.env[name]);
-if (missingEnvVars.length > 0) {
-    console.error('[reanalyze] 错误: 缺少必需环境变量');
-    console.error(`[reanalyze] 缺少: ${missingEnvVars.join(', ')}`);
-    console.error('[reanalyze] 请在项目根目录的 .env 文件中配置后重试');
-    writeStageSummary({
-        stage: '分析', status: 'error',
-        message: `缺少必需环境变量: ${missingEnvVars.join(', ')}`
-    });
-    printErrorGuidance(Object.assign(new Error(`缺少必需环境变量: ${missingEnvVars.join(', ')}`), { code: 'ENV_MISSING' }),
-        { stage: 'reanalyze' });
-    process.exit(1);
-}
-
-// 解析命令行参数：严格白名单，未知 --flag（例如少了 s 的
-// --retry-failed-reader）直接报用法并退出非零，不能静默退化成普通重分析。
-const args = process.argv.slice(2);
-let dataFileArg = null;
-let concurrencyArg = null;
-try {
-    ({ dataFile: dataFileArg, concurrency: concurrencyArg } = parseReanalyzeCliArgs(args));
-} catch (error) {
-    console.error(`[reanalyze] 错误: ${error.message}`);
-    process.exit(1);
-}
-
-const DEFAULT_CURRENT_FILE = Config.FILES.deepAnalysisResult;
-const DATA_FILE = dataFileArg || DEFAULT_CURRENT_FILE;
-
-// 并发度：命令行 > 环境变量 > 配置默认值。非法值直接停止，不能像旧实现那样
-// 用 parseInt 截断小数，或把无效的 PD_REANALYZE_CONCURRENCY 静默换成默认值。
-let CONCURRENCY;
-try {
-    CONCURRENCY = parseReanalyzeConcurrency({
-        cliValue: concurrencyArg,
-        envValue: process.env.PD_REANALYZE_CONCURRENCY,
+async function reanalyzeAll(options = {}) {
+    const dataFile = options.dataFile || Config.FILES.deepAnalysisResult;
+    const concurrency = parseReanalyzeConcurrency({
+        cliValue: options.concurrency,
+        envValue: options.concurrency !== undefined ? undefined : process.env.PD_REANALYZE_CONCURRENCY,
         fallback: Config.ANALYSIS_CONFIG.concurrency
     });
-} catch (error) {
-    console.error(`[reanalyze] 错误: ${error.message}`);
-    writeStageSummary({ stage: '分析', status: 'error', message: `并发参数非法: ${error.message}` });
-    printErrorGuidance(Object.assign(new Error(error.message),
-        { code: 'INVALID_CONCURRENCY' }), { stage: 'reanalyze' });
-    process.exit(1);
-}
+    console.log(`[reanalyze] 读取数据文件: ${dataFile}`);
 
-async function reanalyzeAll(options = {}) {
-    console.log(`[reanalyze] 读取数据文件: ${DATA_FILE}`);
-
-    if (!fs.existsSync(DATA_FILE)) {
-        console.error(`[reanalyze] ❌ 文件不存在: ${DATA_FILE}`);
-        writeStageSummary({ stage: '分析', status: 'error', message: `分析结果文件不存在: ${DATA_FILE}` });
-        printErrorGuidance(Object.assign(new Error(`分析结果文件不存在: ${DATA_FILE}`), { code: 'ENOENT' }),
-            { stage: 'reanalyze' });
-        process.exit(1);
+    if (!fs.existsSync(dataFile)) {
+        console.error(`[reanalyze] ❌ 文件不存在: ${dataFile}`);
+        throw Object.assign(new Error(`分析结果文件不存在: ${dataFile}`), { code: 'ENOENT' });
     }
 
     let dailySourcePlan;
-    const data = updateJsonFileLocked(DATA_FILE, current => {
+    const data = updateJsonFileLocked(dataFile, current => {
         const prepared = dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
             readJsonFileStrict(Config.FILES.filteredPapers), { label: 'reanalyze recovery' });
         dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(prepared, {
@@ -136,7 +89,7 @@ async function reanalyzeAll(options = {}) {
     }
     console.log(`[reanalyze] 共 ${papers.length} 篇论文需要重新分析`);
     console.log(`[reanalyze] 模型: ${process.env.PAPER_ANALYZER_MODEL}`);
-    console.log(`[reanalyze] 并发度: ${CONCURRENCY}`);
+    console.log(`[reanalyze] 并发度: ${concurrency}`);
     console.log(`[reanalyze] 开始时间: ${getBeijingLocaleString()}`);
     console.log('');
 
@@ -153,7 +106,7 @@ async function reanalyzeAll(options = {}) {
     const preparedIds = new Set();
     let digestStatusUpdated = 0;
     const doSave = attempted => {
-        updateJsonFileLocked(DATA_FILE, current => ({
+        updateJsonFileLocked(dataFile, current => ({
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: getBeijingISOString(),
             batchDate,
@@ -167,7 +120,7 @@ async function reanalyzeAll(options = {}) {
     // 预先建立 ID -> 索引映射，避免并发时 findIndex 可能找到错误位置
     const paperIndexMap = new Map(papers.map((p, i) => [normalizedId(p), i]).filter(([key]) => key));
 
-    updateJsonFileLocked(DATA_FILE, current => {
+    updateJsonFileLocked(dataFile, current => {
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: Array.isArray(current) ? current : (current?.papers || []),
@@ -186,11 +139,14 @@ async function reanalyzeAll(options = {}) {
     });
 
     const runAnalysisFromDailySources = () => (options.analyzeBatch || analyzeBatch)(papers, {
-        checkpointFilePath: DATA_FILE,
+        checkpointFilePath: dataFile,
         preparePaperLocked: paper => {
-            const current = readJsonFileStrict(DATA_FILE);
+            const current = readJsonFileStrict(dataFile);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            const lockedPlan = dailyFreshSources.requireLockedDailyFreshSourceRecoveryPlan(current, {
+                entryPlan: dailySourcePlan, paper: latest || paper, label: '锁内强制重分析恢复'
+            });
             const id = normalizedId(paper);
             const firstPreparation = !preparedIds.has(id);
             preparedIds.add(id);
@@ -198,16 +154,16 @@ async function reanalyzeAll(options = {}) {
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
                     firstPreparation ? resetReaderForForcedReanalysis(currentPaper) : currentPaper,
-                    dailySourcePlan
+                    lockedPlan
                 ),
                 skip: false
             };
         },
-        concurrency: CONCURRENCY,
+        concurrency,
         maxRetries: 2,
         maxRounds: Config.ANALYSIS_CONFIG.batchMaxRounds,
         retryDelayMs: 2000,
-        onRoundDone: require('./digest-run-report').createAnalysisBatchRetryReporter(DATA_FILE, {
+        onRoundDone: require('./digest-run-report').createAnalysisBatchRetryReporter(dataFile, {
             workflow: 'daily-forced-reanalysis', batchDate,
             sourceReference: dailyFreshSources.dailyFreshSourceReference(dailySourcePlan), papers
         }),
@@ -227,7 +183,7 @@ async function reanalyzeAll(options = {}) {
             doSave(attempted);
         },
         onPaperStart: (idx, total, paper) => {
-            if (CONCURRENCY === 1) {
+            if (concurrency === 1) {
                 console.log(`\n[reanalyze] ════════════════════════════════════════════`);
                 console.log(`[reanalyze] [${idx + 1}/${total}] 分析: ${paper.arxivId} - ${paper.title.substring(0, 50)}...`);
             }
@@ -240,7 +196,7 @@ async function reanalyzeAll(options = {}) {
                     papers[targetIdx] = result.result;
                 }
             }
-            if (CONCURRENCY > 1) {
+            if (concurrency > 1) {
                 const status = result.success ? '✅' : '❌';
                 console.log(`[reanalyze] ${status} [${idx + 1}/${total}] ${paper.arxivId} | ${result.parsed?.score || 'N/A'} | ${(duration/1000).toFixed(1)}s`);
             } else {
@@ -254,7 +210,10 @@ async function reanalyzeAll(options = {}) {
         }
     });
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
-    const finalPayload = updateJsonFileLocked(DATA_FILE, current => {
+    const finalPayload = updateJsonFileLocked(dataFile, current => {
+        dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, {
+            entryPlan: dailySourcePlan, label: '强制重分析结束来源核验'
+        });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
         const { remaining: remainingFailed, status } = getAnalysisRunSummary(currentPapers);
         const payload = {
@@ -293,7 +252,7 @@ async function reanalyzeAll(options = {}) {
     if (sourceSummary) console.log(`[reanalyze] 文本来源: ${sourceSummary}`);
     if (digestStatusUpdated > 0) console.log(`[reanalyze] papers.json 状态已同步: ${digestStatusUpdated} 篇`);
     console.log(`[reanalyze] 结束时间: ${getBeijingLocaleString()}`);
-    console.log(`[reanalyze] 数据已保存至: ${DATA_FILE}`);
+    console.log(`[reanalyze] 数据已保存至: ${dataFile}`);
     return {
         success: stats.success,
         failed: finalPayload.stats.reanalyzeFailed,
@@ -306,7 +265,56 @@ async function reanalyzeAll(options = {}) {
 
 if (require.main === module) {
     requireExternalRuntime('reanalyze.js', { enforceWorkspaceRole: true });
-    reanalyzeAll().then(result => {
+    setupScriptLogging(__filename);
+    loadEnvFile();
+
+    const requiredEnvVars = ['PAPER_ANALYZER_API_KEY', 'PAPER_ANALYZER_MODEL', 'PAPER_ANALYZER_ENDPOINT'];
+    const missingEnvVars = requiredEnvVars.filter(name => !process.env[name]);
+    if (missingEnvVars.length > 0) {
+        console.error('[reanalyze] 错误: 缺少必需环境变量');
+        console.error(`[reanalyze] 缺少: ${missingEnvVars.join(', ')}`);
+        console.error('[reanalyze] 请在项目根目录的 .env 文件中配置后重试');
+        writeStageSummary({
+            stage: '分析', status: 'error',
+            message: `缺少必需环境变量: ${missingEnvVars.join(', ')}`
+        });
+        printErrorGuidance(Object.assign(new Error(`缺少必需环境变量: ${missingEnvVars.join(', ')}`), { code: 'ENV_MISSING' }),
+            { stage: 'reanalyze' });
+        process.exit(1);
+    }
+
+    // 解析命令行参数：严格白名单，未知 --flag（例如少了 s 的
+    // --retry-failed-reader）直接报用法并退出非零，不能静默退化成普通重分析。
+    let dataFileArg = null;
+    let concurrencyArg = null;
+    try {
+        ({ dataFile: dataFileArg, concurrency: concurrencyArg } = parseReanalyzeCliArgs(process.argv.slice(2)));
+    } catch (error) {
+        console.error(`[reanalyze] 错误: ${error.message}`);
+        process.exit(1);
+    }
+
+    // 并发度：命令行 > 环境变量 > 配置默认值。非法值直接停止，不能像旧实现那样
+    // 用 parseInt 截断小数，或把无效的 PD_REANALYZE_CONCURRENCY 静默换成默认值。
+    let cliConcurrency;
+    try {
+        cliConcurrency = parseReanalyzeConcurrency({
+            cliValue: concurrencyArg,
+            envValue: process.env.PD_REANALYZE_CONCURRENCY,
+            fallback: Config.ANALYSIS_CONFIG.concurrency
+        });
+    } catch (error) {
+        console.error(`[reanalyze] 错误: ${error.message}`);
+        writeStageSummary({ stage: '分析', status: 'error', message: `并发参数非法: ${error.message}` });
+        printErrorGuidance(Object.assign(new Error(error.message),
+            { code: 'INVALID_CONCURRENCY' }), { stage: 'reanalyze' });
+        process.exit(1);
+    }
+
+    reanalyzeAll({
+        dataFile: dataFileArg || Config.FILES.deepAnalysisResult,
+        concurrency: cliConcurrency
+    }).then(result => {
         if (result.status === 'complete') {
             console.log('\n[reanalyze] 文本重新分析已完成，可以继续生成、审查和发布博客');
         } else {

@@ -993,13 +993,11 @@ class IndexTTSHttpBackend(BaseTtsBackend):
                 'input': text,
                 'voice': voice,
                 'response_format': 'wav',
-                'extra_body': {
-                    'spk_audio_prompt': voice,
-                    'emo_vector': list(emo_vector),
-                    'emo_alpha': float(emo_alpha),
-                    'emotion_hint': emotion_hint,
-                    'role': role,
-                },
+                'spk_audio_prompt': voice,
+                'emo_vector': list(emo_vector),
+                'emo_alpha': float(emo_alpha),
+                'emotion_hint': emotion_hint,
+                'role': role,
             }
         if self.http_mode == 'gradio':
             return {
@@ -1585,7 +1583,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help='TTS backend to use.',
     )
     parser.add_argument('--device', choices=('auto', 'cuda', 'mps', 'cpu'), default='auto')
-    parser.add_argument('--model-dir', default=os.environ.get('PD_INDEXTTS_MODEL_DIR', 'checkpoints'))
+    parser.add_argument('--model-dir', default=os.environ.get('PD_INDEXTTS_MODEL_DIR', '').strip() or 'checkpoints')
     parser.add_argument('--cfg-path', default=os.environ.get('PD_INDEXTTS_CFG_PATH', ''))
     parser.add_argument('--voice-prompt', default=os.environ.get('PD_INDEXTTS_VOICE_PROMPT', ''))
     parser.add_argument('--cohost-voice-prompt', default=os.environ.get('PD_INDEXTTS_COHOST_VOICE_PROMPT', ''))
@@ -1598,7 +1596,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--allow-local-endpoint',
         action='store_true',
-        default=os.environ.get('PD_INDEXTTS_ALLOW_LOCAL_ENDPOINT', '') == '1',
+        default=os.environ.get('PD_INDEXTTS_ALLOW_LOCAL_ENDPOINT', '').strip().lower() in ('1', 'true', 'yes', 'on'),
         help='Explicitly allow loopback http://127.0.0.1 / localhost for local IndexTTS daemon.',
     )
     parser.add_argument('--format', choices=('mp3', 'wav', 'auto'), default='mp3')

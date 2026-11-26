@@ -34,6 +34,12 @@ const TRANSPORT_ENV_KEYS = Object.freeze([
     'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'
 ]);
 
+// 受严格核验的进程级输入/运行时标记，不改变模型或代理配置；与 scripts/project_env.py 保持一致。
+const PROCESS_INPUT_KEYS = Object.freeze([
+    'PD_PUBLISH_RASTER_RECOVERY_FILE',
+    'PD_PYTHON_RUNTIME_VERIFIED_BIN'
+]);
+
 function isScriptsEntrypoint(scriptPath = process.argv[1]) {
     if (!scriptPath) return false;
     // 在 `node -e` 下，argv[1] 是第一个用户参数，不是被执行的模块。
@@ -87,9 +93,10 @@ const DEFAULT_JS_WORKSPACE_ROLE_COMMANDS = Object.freeze({
         'daily-scoring-refresh-checkpoint-cli.js', 'compact-papers-ledger.js', 'publish-daily-podcast.js',
         'calibrate-batch-scores.js', 'conference-workspace.js', 'migrate-conference-process.js',
         'conference-complete-stage-worker.js', 'conference-publication-figure-crop-replay-cli.js',
-        'recover-conference-process-locks.js'
+        'recover-conference-process-locks.js', 'prepare-daily-fetch-witness-recovery.js',
+        'waive-analysis-failures.js', 'waive-post-publish-visuals.js'
     ],
-    historyExact: ['page-source-crosswalk.js', 'arxiv-source-authority.js'],
+    historyExact: ['page-source-crosswalk.js', 'arxiv-source-authority.js', 'activate-fresh-publication.js'],
     historyPrefixes: ['conference-', 'historical-', 'history-']
 });
 const WORKSPACE_ROLE_CONFIG_PATH = path.join(PROJECT_ROOT, 'config', 'workspace-roles.json');
@@ -184,14 +191,20 @@ function readEnvFileStrict(envFile, { enforcePermissions = false } = {}) {
         if (opened.size > MAX_ENV_BYTES) {
             throw new Error(`项目 .env 超过大小限制 (${MAX_ENV_BYTES} bytes): ${envFile}`);
         }
-        const buf = Buffer.alloc(opened.size);
-        let offset = 0;
-        while (offset < opened.size) {
-            const n = fs.readSync(fd, buf, offset, opened.size - offset, null);
+        const chunks = [];
+        let total = 0;
+        const buf = Buffer.alloc(65536);
+        while (total <= MAX_ENV_BYTES) {
+            const toRead = Math.min(buf.length, MAX_ENV_BYTES + 1 - total);
+            const n = fs.readSync(fd, buf, 0, toRead, null);
             if (n <= 0) break;
-            offset += n;
+            chunks.push(Buffer.from(buf.subarray(0, n)));
+            total += n;
         }
-        return buf.subarray(0, offset).toString('utf8');
+        if (total > MAX_ENV_BYTES) {
+            throw new Error(`项目 .env 超过大小限制 (${MAX_ENV_BYTES} bytes): ${envFile}`);
+        }
+        return Buffer.concat(chunks, total).toString('utf8');
     } finally {
         fs.closeSync(fd);
     }
@@ -213,6 +226,10 @@ function buildChildProcessEnv(extra = {}, allowedKeys = []) {
 }
 
 function loadProjectEnv(envFile) {
+    const processInputs = {};
+    for (const key of PROCESS_INPUT_KEYS) {
+        if (process.env[key] !== undefined) processInputs[key] = process.env[key];
+    }
     const parsed = parseEnvFile(envFile);
 
     for (const key of Object.keys(process.env)) {
@@ -222,6 +239,9 @@ function loadProjectEnv(envFile) {
     }
 
     for (const [key, val] of Object.entries(parsed)) {
+        process.env[key] = val;
+    }
+    for (const [key, val] of Object.entries(processInputs)) {
         process.env[key] = val;
     }
 
@@ -240,6 +260,7 @@ module.exports = {
     CHILD_ENV_PASSTHROUGH_KEYS,
     VCS_CHILD_ENV_KEYS,
     TRANSPORT_ENV_KEYS,
+    PROCESS_INPUT_KEYS,
     isScriptsEntrypoint,
     requiredWorkspaceRoleForCommand,
     requireExternalRuntime,

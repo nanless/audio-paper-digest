@@ -1325,7 +1325,27 @@ test('Wave 14.4 Regression [P2-9, P2-10, P2-11]: scoreDecimals tie stats, unidir
             '--output', replayOut
         ]);
         assert.equal(replayed.sidecar.config.bidirectional, false);
+        assert.equal(replayed.sidecar.config.rounds, 3);
         assert.equal(replayed.sidecar.calibrationSha256, liveUni.sidecar.calibrationSha256);
+
+        // Explicit --rounds / --rounds= in --replay mode MUST override replayMetadata.rounds!
+        assert.equal(cli.parseCliArgs(['--replay', liveOut]).roundsExplicit, false);
+        assert.equal(cli.parseCliArgs(['--replay', liveOut, '--rounds', '5']).roundsExplicit, true);
+        assert.equal(cli.parseCliArgs(['--replay', liveOut, '--rounds=2']).roundsExplicit, true);
+        const replayRounds5 = await cli.runCalibrationCli([
+            '--input', inputPath,
+            '--replay', liveOut,
+            '--rounds', '5',
+            '--output', path.join(tmpDir, 'replay-rounds-5.json')
+        ]);
+        assert.equal(replayRounds5.sidecar.config.rounds, 5);
+        const replayRoundsEq2 = await cli.runCalibrationCli([
+            '--input', inputPath,
+            '--replay', liveOut,
+            '--rounds=2',
+            '--output', path.join(tmpDir, 'replay-rounds-2.json')
+        ]);
+        assert.equal(replayRoundsEq2.sidecar.config.rounds, 2);
 
         // loadReplayComparisons rejects symlink and directory
         const replayLink = path.join(tmpDir, 'replay-symlink.json');

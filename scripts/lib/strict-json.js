@@ -17,7 +17,11 @@ function strictJson(bytes, label) {
         else if (token === '}' || token === ']') stack.pop();
         else if (token === ',' && top?.object) top.expectKey = true;
         else if (token.startsWith('"') && top?.object && top.expectKey) {
-            const key = JSON.parse(token);
+            let key;
+            try { key = JSON.parse(token); } catch (error) {
+                const reason = String(error?.message || '').replace(/^JSON\.parse:\s*/, '').trim();
+                throw new Error(`${label} JSON 键语法非法: ${reason || '无效字符串字面量'}`);
+            }
             if (top.keys.has(key)) throw new Error(`${label} 的 JSON 中出现重复字段：${key}`);
             top.keys.add(key); top.expectKey = false;
         }

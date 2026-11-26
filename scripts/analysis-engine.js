@@ -553,19 +553,19 @@ function inspectFileLockState(filePath, options = {}) {
     const lockPath = `${filePath}.lock`;
     const snapshot = readFileLockSnapshot(lockPath);
     if (!snapshot.exists) {
-        return { lockPath, exists: false, active: false, reclaimable: true, reason: 'missing' };
+        return { lockPath, exists: false, consistent: true, active: false, reclaimable: true, reason: 'missing', owner: null };
     }
     if (!snapshot.consistent) {
-        return { lockPath, exists: true, active: true, reclaimable: false,
-            reason: snapshot.reason || 'changed_during_inspection' };
+        return { lockPath, exists: true, consistent: false, active: true, reclaimable: false,
+            reason: snapshot.reason || 'changed_during_inspection', owner: null };
     }
     if (snapshot.entryNames.includes('.reclaiming.json')) {
-        return { lockPath, exists: true, active: true, reclaimable: false,
-            reason: 'reclaim_in_progress' };
+        return { lockPath, exists: true, consistent: true, active: true, reclaimable: false,
+            reason: 'reclaim_in_progress', owner: null };
     }
     const leaseMtimeMs = snapshot.ownerFile?.mtimeMs ?? snapshot.directory.mtimeMs;
     const ageMs = Math.max(0, nowMs - leaseMtimeMs);
-    const reclaimable = fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs);
+    const reclaimable = fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs, options);
     let ownerActive = null;
     if (ownerIsOnThisMachine(snapshot.owner)
         && Number.isInteger(snapshot.owner.pid) && snapshot.owner.pid > 0) {
@@ -576,16 +576,28 @@ function inspectFileLockState(filePath, options = {}) {
             else throw error;
         }
     }
+    const owner = snapshot.owner && (strictCurrentFileLockOwner(snapshot) || exactLegacyFileLockOwner(snapshot))
+        ? {
+            pid: snapshot.owner.pid,
+            hostname: snapshot.owner.hostname,
+            acquiredAt: snapshot.owner.acquiredAt
+        }
+        : null;
     return {
         lockPath,
         exists: true,
+        consistent: true,
         active: ownerActive === true || !reclaimable,
         reclaimable,
         reason: ownerActive === true ? 'live_local_owner'
-            : ageMs <= staleMs ? 'within_stale_threshold'
-                : reclaimable ? snapshot.owner ? 'stale_non_live_owner' : 'stale_unowned'
+            : reclaimable
+                ? (ageMs <= staleMs
+                    ? 'reclaimable_dead_owner'
+                    : (snapshot.owner ? 'stale_non_live_owner' : 'stale_unowned'))
+                : ageMs <= staleMs ? 'within_stale_threshold'
                     : 'unreclaimable_owner',
-        ageMs
+        ageMs,
+        owner
     };
 }
 
@@ -1897,10 +1909,24 @@ function extractVisibleDisplayFormulaBlocks(article) {
                     continue;
                 }
                 if (run === 1) {
-                    const mathEnd = seg.indexOf('\\]', pos + 2);
-                    if (mathEnd >= 0) {
-                        blocks.push(original.slice(segment.start + pos, segment.start + mathEnd + 2));
-                        pos = mathEnd + 2;
+                    let scan = pos + 2;
+                    let closeEnd = -1;
+                    while (scan < seg.length) {
+                        if (seg[scan] !== '\\') {
+                            scan += 1;
+                            continue;
+                        }
+                        let cRun = 0;
+                        while (scan + cRun < seg.length && seg[scan + cRun] === '\\') cRun += 1;
+                        if (scan + cRun < seg.length && seg[scan + cRun] === ']' && cRun % 2 === 1) {
+                            closeEnd = scan + cRun + 1;
+                            break;
+                        }
+                        scan += cRun;
+                    }
+                    if (closeEnd >= 0) {
+                        blocks.push(original.slice(segment.start + pos, segment.start + closeEnd));
+                        pos = closeEnd;
                     } else {
                         pos += 2;
                     }
@@ -2005,6 +2031,7 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
     const figuresSha256 = stableSha256(figures);
     const authorsSha256 = stableSha256(authors);
     const authorIdentity = authors.identity;
+    if (!authorIdentity || typeof authorIdentity !== 'object' || Array.isArray(authorIdentity)) return false;
     const authorIdentitySha256 = stableSha256(authorIdentity);
     const allowOfficialMetadataAuthorSource = !paper.arxivId
         && authorIdentity.conferencePdfAuthorParser === 'conference-pdf-author-pdf-page1-v3';
@@ -2898,6 +2925,7 @@ async function analyzeBatchInternal(papers, options = {}) {
     };
 
     let processedCount = 0;
+    let sinceLastSave = 0;
     let runStopError = null;
     const skipDecisions = new Map();
     const updateOutcome = (idx, result) => {
@@ -3064,13 +3092,15 @@ async function analyzeBatchInternal(papers, options = {}) {
                 if (onBatchDone) {
                     await onBatchDone(batchNum, ready.results.slice(), { round: currentRound, maxRounds });
                 }
-                processedCount += ready.results.filter(result => !result.skipped).length;
-                if (saveInterval > 0 && onSave && processedCount > 0
-                    && processedCount % saveInterval === 0) {
+                const batchProcessed = ready.results.filter(result => !result.skipped).length;
+                processedCount += batchProcessed;
+                sinceLastSave += batchProcessed;
+                if (saveInterval > 0 && onSave && sinceLastSave >= saveInterval) {
                     await onSave(snapshotResults(), {
                         ...stats,
                         savedAt: getBeijingISOString()
                     });
+                    sinceLastSave = 0;
                 }
                 nextBatchToFinalize++;
             }

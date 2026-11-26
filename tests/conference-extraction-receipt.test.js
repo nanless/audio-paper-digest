@@ -181,3 +181,75 @@ test('被哈希的 receipt/artifact 键全部是 ASCII，非 ASCII 只出现在�
     assert.ok(bundle.nonAsciiValueCount > 0,
         'artifact 的值里应当有中文（limitations），这条用来确认断言区分的是键而不是值');
 });
+
+test('离线 PDF 凭证核验子进程剥离 API 密钥与代理凭据，仅放行必需运行时变量', t => {
+    const os = require('node:os');
+    const Module = require('node:module');
+    const extractionFixture = require('./helpers/conference-extraction-fixture.js');
+    const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'extraction-receipt-env-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const pdfBytes = extractionFixture.buildPdf('env-check');
+    const extracted = extractionFixture.runProductionExtraction({
+        sourceRoot: dir,
+        value: '991100',
+        discoveryBinding: {
+            catalogSha256: 'a'.repeat(64),
+            metadataSnapshotSha256: 'b'.repeat(64),
+            metadataIndex: 0,
+            metadataRecordSha256: 'c'.repeat(64)
+        },
+        pdfBytes,
+        stamp: '2026-10-01T00:00:00.000Z'
+    });
+
+    const filename = require.resolve('../scripts/lib/conference-extraction-receipt.js');
+    const capturedEnvs = [];
+    const isolated = new Module(filename, module);
+    const originalRequire = isolated.require.bind(isolated);
+    isolated.filename = filename;
+    isolated.paths = Module._nodeModulePaths(path.dirname(filename));
+    isolated.require = name => name === 'node:child_process' ? {
+        execFileSync: (_cmd, _args, opts) => {
+            capturedEnvs.push(opts.env);
+            throw Object.assign(new Error('sentinel-verify-stop'), { stderr: 'sentinel-verify-stop' });
+        }
+    } : originalRequire(name);
+    isolated._compile(fs.readFileSync(filename, 'utf8'), filename);
+
+    const watched = [
+        'PAPER_ANALYZER_API_KEY', 'HTTPS_PROXY', 'KIMI_API_KEY',
+        'PD_PYTHON_RUNTIME_VERIFIED_BIN', 'PD_PYTHON_RUNTIME_DISABLE_VENV',
+        'AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE', 'AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE',
+        'PD_WORKSPACE_ALLOW_CROSS_ROLE'
+    ];
+    const saved = Object.fromEntries(watched.map(key => [key, process.env[key]]));
+    process.env.PAPER_ANALYZER_API_KEY = 'sk-receipt-secret';
+    process.env.HTTPS_PROXY = 'http://u:secret@127.0.0.1:7897';
+    process.env.KIMI_API_KEY = 'sk-kimi-receipt';
+    process.env.PD_PYTHON_RUNTIME_VERIFIED_BIN = '/tmp/fake-python-receipt';
+    process.env.PD_PYTHON_RUNTIME_DISABLE_VENV = '1';
+    process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE = 'daily';
+    process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE = '1';
+    process.env.PD_WORKSPACE_ALLOW_CROSS_ROLE = '1';
+    t.after(() => {
+        for (const key of watched) {
+            if (saved[key] === undefined) delete process.env[key];
+            else process.env[key] = saved[key];
+        }
+    });
+
+    assert.throws(
+        () => isolated.exports.loadExtractionHandle(dir, extracted.receiptName, { replay: true }),
+        /sentinel-verify-stop/
+    );
+    assert.equal(capturedEnvs.length, 1);
+    const childEnv = capturedEnvs[0];
+    assert.equal(childEnv.PAPER_ANALYZER_API_KEY, undefined);
+    assert.equal(childEnv.HTTPS_PROXY, undefined);
+    assert.equal(childEnv.KIMI_API_KEY, undefined);
+    assert.equal(childEnv.PD_PYTHON_RUNTIME_VERIFIED_BIN, '/tmp/fake-python-receipt');
+    assert.equal(childEnv.PD_PYTHON_RUNTIME_DISABLE_VENV, '1');
+    assert.equal(childEnv.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE, 'daily');
+    assert.equal(childEnv.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE, '1');
+    assert.equal(childEnv.PD_WORKSPACE_ALLOW_CROSS_ROLE, '1');
+});

@@ -434,28 +434,28 @@ function applyEnvOverrides() {
     const coreSummaryRepairMaxTokens = readPositiveInt('PD_ANALYSIS_CORE_SUMMARY_REPAIR_MAX_TOKENS');
     if (coreSummaryRepairMaxTokens) ANALYSIS_CONFIG.coreSummaryRepairMaxTokens = coreSummaryRepairMaxTokens;
     if (process.env.PD_API_READER_THINKING_MODE !== undefined) {
-        const mode = process.env.PD_API_READER_THINKING_MODE;
+        const mode = String(process.env.PD_API_READER_THINKING_MODE).trim();
         if (!['enabled', 'disabled'].includes(mode)) {
             throw new Error('PD_API_READER_THINKING_MODE 只能为 enabled 或 disabled');
         }
         ANALYSIS_CONFIG.apiReaderThinkingMode = mode;
     }
     if (process.env.PD_ANALYSIS_AUXILIARY_THINKING_MODE !== undefined) {
-        const mode = process.env.PD_ANALYSIS_AUXILIARY_THINKING_MODE;
+        const mode = String(process.env.PD_ANALYSIS_AUXILIARY_THINKING_MODE).trim();
         if (!['enabled', 'disabled'].includes(mode)) {
             throw new Error('PD_ANALYSIS_AUXILIARY_THINKING_MODE 只能为 enabled 或 disabled');
         }
         ANALYSIS_CONFIG.auxiliaryThinkingMode = mode;
     }
     if (process.env.PD_ANALYSIS_PRIMARY_THINKING_MODE !== undefined) {
-        const mode = process.env.PD_ANALYSIS_PRIMARY_THINKING_MODE;
+        const mode = String(process.env.PD_ANALYSIS_PRIMARY_THINKING_MODE).trim();
         if (!['enabled', 'disabled'].includes(mode)) {
             throw new Error('PD_ANALYSIS_PRIMARY_THINKING_MODE 只能为 enabled 或 disabled');
         }
         ANALYSIS_CONFIG.primaryThinkingMode = mode;
     }
     if (process.env.PD_ANALYSIS_REPAIR_THINKING_MODE !== undefined) {
-        const mode = process.env.PD_ANALYSIS_REPAIR_THINKING_MODE;
+        const mode = String(process.env.PD_ANALYSIS_REPAIR_THINKING_MODE).trim();
         if (!['enabled', 'disabled'].includes(mode)) {
             throw new Error('PD_ANALYSIS_REPAIR_THINKING_MODE 只能为 enabled 或 disabled');
         }

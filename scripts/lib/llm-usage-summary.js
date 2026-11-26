@@ -62,8 +62,9 @@ function safeLabel(value, fallback = 'unknown') {
 }
 
 // 真实 llm-usage 事件当前没有 accountId 字段，所以“按账号”默认不可得，不能伪造
-// unknown 分组。写入端以后补上账号时只接受 64 位十六进制指纹；其他形态转成不可逆短指纹，
-// 不把原始凭据带进状态面板。
+// unknown 分组。accountKey 仅用于同次汇总内部的账号归并，绝不把 64 位十六进制
+// 稳定凭据指纹或短指纹直接暴露到 summary.byAccount / formatText() 输出中；对外
+// 统一匿名化为按调用量降序排列的当次临时编号 acct#1..N。
 function accountKey(event) {
     const raw = event?.accountId ?? event?.account_id ?? event?.accountKey ?? event?.account_key
         ?? event?.apiKeyId ?? event?.api_key_id ?? event?.keyId ?? event?.account;
@@ -181,6 +182,32 @@ function sortedBuckets(buckets) {
     )).map(([key, bucket]) => [key, { ...bucket, cost: roundCost(bucket.cost) }]));
 }
 
+function anonymizedAccountBuckets(buckets) {
+    const sorted = [...buckets.entries()].sort((left, right) => (
+        right[1].total - left[1].total
+        || right[1].success - left[1].success
+        || right[1].cost - left[1].cost
+        || left[0].localeCompare(right[0])
+    ));
+    return Object.fromEntries(sorted.map(([_rawKey, bucket], index) => [
+        `acct#${index + 1}`,
+        { ...bucket, cost: roundCost(bucket.cost) }
+    ]));
+}
+
+function sanitizeAccountBucketsForDisplay(byAccount) {
+    const entries = Object.entries(byAccount || {});
+    if (entries.length === 0) return {};
+    if (entries.every(([key]) => /^acct#\d+$/.test(key))) return byAccount;
+    const sorted = entries.sort((left, right) => (
+        (right[1]?.total || 0) - (left[1]?.total || 0)
+        || (right[1]?.success || 0) - (left[1]?.success || 0)
+        || (right[1]?.cost || 0) - (left[1]?.cost || 0)
+        || left[0].localeCompare(right[0])
+    ));
+    return Object.fromEntries(sorted.map(([_key, bucket], index) => [`acct#${index + 1}`, bucket]));
+}
+
 function aggregateRecords(records, date) {
     const summary = emptySummary(date);
     const byStage = new Map();
@@ -203,7 +230,7 @@ function aggregateRecords(records, date) {
     }
     summary.byStage = sortedBuckets(byStage);
     summary.byModel = sortedBuckets(byModel);
-    summary.byAccount = sortedBuckets(byAccount);
+    summary.byAccount = anonymizedAccountBuckets(byAccount);
     summary.cost = roundCost(summary.cost);
     return summary;
 }
@@ -508,8 +535,9 @@ function formatText(summary) {
     if (summary.total === 0) lines.push('  该日期没有可用的用量事件。');
     lines.push(...formatBuckets('按阶段', summary.byStage));
     lines.push(...formatBuckets('按模型', summary.byModel));
-    if (Object.keys(summary.byAccount || {}).length > 0) {
-        lines.push(...formatBuckets('按账号', summary.byAccount));
+    const safeAccounts = sanitizeAccountBucketsForDisplay(summary.byAccount);
+    if (Object.keys(safeAccounts).length > 0) {
+        lines.push(...formatBuckets('按账号', safeAccounts));
     } else {
         lines.push('  按账号: 不可得（事件未记录账号字段）');
     }

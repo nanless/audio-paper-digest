@@ -350,16 +350,11 @@ extension LibraryService {
             ]
         }
         let url = try sameSite("client/signals/resource-badges.json")
+        let bytes: Data
         do {
-            let bytes = try await read(url, limit: Self.maxResourceBadgesBytes)
-            let parsed = try Self.parseResourceBadgesIndex(bytes)
-            cachedResourceBadges = parsed
-            resourceBadgesLoaded = true
-            return [
-                "available": true,
-                "papers": parsed,
-                "cachedDemoIds": cachedDemoIds
-            ]
+            bytes = try await read(url, limit: Self.maxResourceBadgesBytes)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch ServiceError.httpStatus(404), ServiceError.httpStatus(410) {
             // Optional Tier 2 endpoint: HTTP 404/410 is silent-graceful.
             cachedResourceBadges = nil
@@ -369,7 +364,26 @@ extension LibraryService {
                 "papers": [:],
                 "cachedDemoIds": cachedDemoIds
             ]
+        } catch ServiceError.invalid(let message) {
+            // HTTP 200 payload exceeding the size limit still fails closed.
+            throw ServiceError.invalid(message)
+        } catch {
+            // Optional Tier 2 network / transient HTTP error: do not mark loaded,
+            // preserve prior cachedSignals, and still return Tier 1 local cachedDemoIds.
+            return [
+                "available": cachedResourceBadges != nil,
+                "papers": cachedResourceBadges ?? [:],
+                "cachedDemoIds": cachedDemoIds
+            ]
         }
+        let parsed = try Self.parseResourceBadgesIndex(bytes)
+        cachedResourceBadges = parsed
+        resourceBadgesLoaded = true
+        return [
+            "available": true,
+            "papers": parsed,
+            "cachedDemoIds": cachedDemoIds
+        ]
     }
 
     /// Synchronous current-source read. Command entry points await `ensureReady()` first; the only
