@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://nanless.github.io/audio-research-portal/"><img src="https://img.shields.io/badge/Live_Portal-Studio_Monograph_2.0-0f5c58?style=flat-square" alt="Audio Research Portal" /></a>
-  <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0"><img src="https://img.shields.io/badge/Client-v1.5.0_(Build_24)-b85a34?style=flat-square" alt="Client v1.5.0" /></a>
+  <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1"><img src="https://img.shields.io/badge/Client-v1.5.1_(Build_25)-b85a34?style=flat-square" alt="Client v1.5.1" /></a>
   <img src="https://img.shields.io/badge/macOS-15%2B_Apple_Silicon-182120?style=flat-square" alt="macOS 15+" />
   <img src="https://img.shields.io/badge/Android-9%2B_(4_ABIs)-182120?style=flat-square" alt="Android 9+" />
   <img src="https://img.shields.io/badge/Archive-9%2C300%2B_Guides_(8%2C650%2B_Papers)-1f8a82?style=flat-square" alt="9,300+ Guides (8,650+ Papers)" />
@@ -86,7 +86,7 @@ Production, publishing, and personal reading stay isolated: this repository push
 | Zotero Archiving (metadata + guide + PDF + notes) | BibTeX / RIS / Obsidian | Local Zotero Desktop API | Official Zotero Web API v3 |
 | Nutstore WebDAV sync & full-space backups | — | One-click bidirectional sync + lossless merge / snapshots | One-click bidirectional sync + lossless merge / snapshots |
 
-- **Source & public release**: Current source version is **1.5.1 (build 25) (not yet published)** (see the [1.5.1 pre-release record](docs/workbench-1.5.1-review.md)). The latest published release on both macOS and Android is **1.5.0 / build 24** (published 26 Nov 2026, commit `5b5a8e79`); see [GitHub Release v1.5.0](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.0), [1.5.0 release record](docs/workbench-1.5.0-review.md), and [client release verification](docs/client-release-verification.md).
+- **Current published release**: Both macOS and Android are at **1.5.1 (build 25)** (published 27 Nov 2026, Beijing time, annotated tag `v1.5.1`, commit `7622f2ec`; previous release: `1.5.0 / build 24`); see [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1), [1.5.1 release record](docs/workbench-1.5.1-review.md), and [client release verification](docs/client-release-verification.md).
 - **Upgrade notes**: Upgrading macOS from 1.4.x renames the bundle to `音频研究工作台.app` while keeping `com.nanless.PaperDigest`, data directories, and Keychain entries (local ad-hoc signature, macOS 15+ Apple silicon)—quit and remove the old bundle after installing. Android keeps the 1.4.4+ signing certificate so 1.4.4–1.5.0 upgrade in place; 1.4.3 requires backing up and uninstalling first.
 
 ---

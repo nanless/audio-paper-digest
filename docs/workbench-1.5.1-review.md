@@ -1,8 +1,8 @@
-# 工作台 1.5.1 预发布记录
+# 工作台 1.5.1 发版记录
 
 [English](README.en.md) · 返回[文档索引](README.md)
 
-版本 **1.5.1（构建号 25）（尚未公开发布）** 是 `1.5.0 / 构建号 24`（2026-11-26 公开发布，来源提交 `5b5a8e79`）之后的双端质量加固与 Studio Monograph 界面升级预发布版本，同时完成内容生产引擎中官方会议与历史更新产线的全面日更齐平改造。目前仅完成源码版本推进与自动化预冻结验证，尚未创建公开发行标签或上传 GitHub Release 附件；公开下载仍以最近已公开发行版本 `1.5.0 / 构建号 24` 为准（见 [1.5.0 发版记录](workbench-1.5.0-review.md) 与 [客户端发行核验](client-release-verification.md)）。
+版本 **1.5.1（构建号 25）** 是 `1.5.0 / 构建号 24`（2026-11-26 公开发布，来源提交 `5b5a8e79`）之后的双端质量加固与 Studio Monograph 界面升级版本，同时完成内容生产引擎中官方会议与历史更新产线的全面日更齐平改造。1.5.1 已于 2026-11-27 02:11（北京时间，`2026-11-26T18:11:07Z`）公开发布：附注标签 `v1.5.1`（`2f9ba004…`）指向冻结发行提交 `7622f2ec`，[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)（Release ID `459751293`）含 12 件附件；签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
 
 ## 1.5.0 之后的改动
 
@@ -28,18 +28,24 @@
 ### 3. 版本、签名边界与随包许可同步
 
 - macOS `apps/macos/Info.plist` 升为 `1.5.1`（构建号 `25`），同步更新 `apps/macos/package.json`（保留 `katex` `0.19.1` 不变）、`apps/macos/Sources/AppDocuments.swift` 回退版本号、`apps/macos/release_tools.py` `1.5.1` 发行说明、`apps/macos/Tests/Branding.test.py`，并通过 `apps/macos/refresh_licenses.py` 刷新随包许可清单与第三方声明页面。
-- Android `apps/android/app/build.gradle.kts` 升为 `versionName = "1.5.1"`、`versionCode = 25`；未来正式打包继续沿用 `1.4.4–1.5.0` 的发布签名库（证书 SHA-256 `6a0c3138…`），已安装 `1.4.4–1.5.0` 的用户可直接覆盖升级，`1.4.3`（`d7c680d9…`）用户仍需先导出备份、卸载旧版再安装；零新增权限、依赖或组件。
+- Android `apps/android/app/build.gradle.kts` 升为 `versionName = "1.5.1"`、`versionCode = 25`；正式打包沿用 `1.4.4–1.5.0` 的发布签名库（证书 SHA-256 `6a0c3138…`），已安装 `1.4.4–1.5.0` 的用户可直接覆盖升级，`1.4.3`（`d7c680d9…`）用户仍需先导出备份、卸载旧版再安装；零新增权限、依赖或组件。
 
-## 预发布自动化验证范围
+## 本轮已执行的自动化验证
 
-本轮预冻结验证在发布提交与打包前执行，覆盖以下离线自动化检查（均须 100% 通过后才进入提交、打包与发行阶段）：
+- 索引、配置、协议与文档一致性：`node scripts/generate-scripts-index.js --check`、`npm run docs:check`、`npm run config:check`、`npm run doctor -- --offline` 与 `bash scripts/python-runtime.sh apps/generate-client-protocols.py --check` 全部通过。
+- 服务端 Python 与跨模块 Node 回归：全量 Python 2,706 项测试与 2,145 项跨模块 Node 测试（含角色守卫、配置 Schema、历史过时审计、脚本索引与文档一致性测试）全部通过，0 失败。
+- macOS 客户端全量离线回归（`bash apps/macos/test.sh`）：62/62 项 Swift/CJS 与界面测试、89/89 项 Python 发版/打包与品牌测试全部通过，0 失败。
+- Android 客户端全量离线回归（`bash apps/android/test.sh`）：998 项 JUnit 单元测试、`lintDebug`、资产通道与 Python 发行检查全部通过，0 失败。
+- 线上门户同步：“音频研究门户”提交 `d65f0ef8` 的 GitHub Pages 构建与部署成功。
 
-- 索引、配置、协议与文档一致性：`node scripts/generate-scripts-index.js --check`、`npm run docs:check`、`npm run config:check`、`npm run doctor -- --offline`、`bash scripts/python-runtime.sh apps/generate-client-protocols.py --check`。
-- 角色守卫、配置 Schema、历史审计与文档测试：`tests/workspace-role.test.js`、`tests/env-schema.test.js`、`tests/documentation.test.js`、`tests/docs-consistency.test.js`、`tests/docs-consistency-real.test.js`、`tests/scripts-index.test.js`、`tests/historical-outdated-audit.test.js`。
-- macOS 全量离线回归：`bash apps/macos/test.sh`（全部 Swift/CJS、Playwright 与 Python 品牌/发版测试）。
-- Android 全量离线回归：`bash apps/android/test.sh`（全部 JUnit 单元测试、`lintDebug`、资产通道与 Python 发行检查）。
+## 发行结果
 
-## 发行状态（尚未公开发布）
+- 发布时间：2026-11-27 02:11（北京时间，`2026-11-26T18:11:07Z`）。
+- 标签与提交：附注标签 `v1.5.1`（标签对象 `2f9ba0044cd0428142513391db7699dbd2aa41ac`），指向冻结发行提交 `7622f2ec8ba4d201e5ba9f38e5f69b0ff63de12c`（`7622f2ec`）；GitHub Release ID `459751293`（`draft: false`，`prerelease: false`）。
+- 附件与匿名下载：12 件附件（Mac 6 件：DMG、ZIP、`RELEASE_NOTES.md`、`build-info.json`、`release-manifest.json`、`SHA256SUMS`；Android 6 件：APK、`android-build-info.json`、`android-source-inputs.json`、`android-runtime-materials.json`、`android-release-manifest.json`、`ANDROID-SHA256SUMS`）。2026-11-27 未登录请求（无 Cookie、无 `Authorization` 头）访问发行页（149,599 字节）与全部 12 件附件均返回 HTTP 200，下载字节数、SHA-256 与双端 `verify-downloaded` 包体/签名回读（`androidAPKReverified: true`、`macArtifactsReverified: true`、`downloadedAssetsSHAExact: true`）均一致，详见[客户端发行核验](client-release-verification.md)。
+- 双端签名：Mac 公开 ZIP 内 `音频研究工作台.app` 经 `codesign -dv --verbose=4` 核对为 `Identifier=com.nanless.PaperDigest`、`arm64`、`Signature=adhoc`、`TeamIdentifier=not set`、CDHash `8e57b7980dd6d7d814e4e4c75dc2063f111ad8ac`（`8e57b798…`）；Android 公开 APK 沿用 `1.4.4–1.5.0` 发布签名库（证书 SHA-256 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，`6a0c3138…`，APK Signature Scheme v3，`signingOrigin: provided-signed-apk`），已安装 `1.4.4–1.5.0` 的用户可直接覆盖升级，`1.4.3`（`d7c680d9…`）用户仍需先导出备份、卸载旧版再安装。
+- 人工验收：未重新执行 84/86 项人工图形与实机验收矩阵；本版通过双端全量自动测试、服务端 Python/Node 回归、打包回读、匿名下载签名核验与线上门户部署核验覆盖。
 
-- 当前状态：**预发布（尚未公开发布）**，尚未生成正式 DMG/ZIP/APK 附件、尚未打 `v1.5.1` 标签、尚未创建 GitHub Release。
-- 人工验收边界：本轮预发布未重新执行 84/86 项人工图形与实机验收矩阵；最新完整人工图形与实机验收范围仍属 `1.3.0`（见 [1.3.0 记录](workbench-1.3.0-review.md#正式发行与升级检查)）。待正式构建、双端打包回读、签名验证、标签公开与匿名下载核验完成后，再补充正式发布结果与 12 件附件校验表至[客户端发行核验](client-release-verification.md)。
+## 发行范围与遗留
+
+`mac-app-release.md` 要求在公开前完成 86 项人工验收；1.5.1 实际未重新执行 84/86 项人工图形与实机验收矩阵，只在自动化测试、打包回读、匿名下载签名复核与线上门户部署核验层面覆盖本轮改动。1.4.3 至 1.5.0 同样未重做其中的 69 项图形验收，安装、图形首启、旧资料升级和业务操作的最新完整人工范围仍属 1.3.0，见[1.3.0 记录](workbench-1.3.0-review.md#正式发行与升级检查)。最终字节已随 `7622f2ec` 冻结提交，附注标签、12 件附件与公开匿名下载核验已按发行流程完成。
