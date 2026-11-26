@@ -68,6 +68,7 @@ from llm_account_pool import (
     resolve_api_key_pool,
     resolve_primary_api_key_pool,
     select_api_key,
+    sync_opencode_go_pool_usage,
 )
 from utils import parse_analysis, read_tag_validation
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, is_tag_stage_record_declaration, read_tag_stage_record
@@ -7547,6 +7548,19 @@ def _open_publish_json_with_account_pool(
     if resolved_affinity:
         resolved_affinity = re.sub(r'^arxiv:', '', resolved_affinity, flags=re.IGNORECASE)
         resolved_affinity = re.sub(r'^(\d{4}\.\d{4,5})v\d+$', r'\1', resolved_affinity, flags=re.IGNORECASE)
+    if (
+        len(api_keys) > 1
+        and is_opencode_go_endpoint(endpoint)
+        and type(opener) is urllib.request.OpenerDirector
+        and getattr(opener, '_pd_live_usage_sync_allowed', False)
+        and getattr(urllib.request.build_opener, '__module__', '') == 'urllib.request'
+    ):
+        live_proxy = getattr(opener, '_pd_live_usage_proxy', None) or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+        if live_proxy:
+            try:
+                sync_opencode_go_pool_usage(api_keys, endpoint, state_file, proxy_url=live_proxy)
+            except Exception as sync_exc:
+                print(f'  [llm-account-pool] 实时同步额度失败（回退至本地状态）: {sync_exc}')
     for _account_attempt in range(max_account_attempts):
         elapsed = time.monotonic() - started
         remaining = max(0.001, float(timeout) - elapsed)
@@ -7901,6 +7915,8 @@ def call_publish_llm_api(
                     _KeepAliveHTTPSHandler(),
                     _PublishLLMNoRedirectHandler(),
                 )
+                opener._pd_live_usage_sync_allowed = True
+                opener._pd_live_usage_proxy = proxy
             else:
                 opener = urllib.request.build_opener(
                     urllib.request.ProxyHandler({}),
@@ -7908,6 +7924,8 @@ def call_publish_llm_api(
                     _KeepAliveHTTPSHandler(),
                     _PublishLLMNoRedirectHandler(),
                 )
+                opener._pd_live_usage_sync_allowed = True
+                opener._pd_live_usage_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
             with with_llm_usage_context({**(usage_context or {}), 'transportAttempt': attempt + 1}):
                 status, data = _open_publish_json_with_account_pool(
                     api_url=api_url,

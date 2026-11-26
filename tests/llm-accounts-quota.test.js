@@ -170,3 +170,63 @@ test('llm-accounts-quota CLI 支持 --help、非法参数返回退出码 2、沙
     assert.notStrictEqual(sandboxed.status, 0);
     assert.strictEqual(sandboxed.stdout, '');
 });
+
+test('llm-accounts-quota sync 通过官方 /zen/go/v1/usage 实时同步并按北京时间同日剩余排序且不泄露凭据', async t => {
+    const { stateFile, env } = makeFixture(t);
+    const fetcher = async ({ apiKey }) => {
+        if (apiKey === FAKE_KEYS[0]) {
+            return {
+                statusCode: 200,
+                body: {
+                    usage: {
+                        rolling: { status: 'ok', percent: 0, resetsAt: '2026-11-26T09:00:00.000Z' },
+                        weekly: { status: 'ok', percent: 3, resetsAt: '2026-11-30T00:00:00.000Z' },
+                        monthly: { status: 'ok', percent: 70, resetsAt: '2026-12-03T10:01:43.000Z' }
+                    }
+                }
+            };
+        }
+        if (apiKey === FAKE_KEYS[1]) {
+            return {
+                statusCode: 200,
+                body: {
+                    usage: {
+                        rolling: { status: 'ok', percent: 0, resetsAt: '2026-11-26T09:00:00.000Z' },
+                        weekly: { status: 'ok', percent: 3, resetsAt: '2026-11-30T00:00:00.000Z' },
+                        monthly: { status: 'ok', percent: 36, resetsAt: '2026-12-02T16:01:25.000Z' }
+                    }
+                }
+            };
+        }
+        return {
+            statusCode: 200,
+            body: {
+                usage: {
+                    rolling: { status: 'ok', percent: 0, resetsAt: '2026-11-26T09:00:00.000Z' },
+                    weekly: { status: 'ok', percent: 5, resetsAt: '2026-11-30T00:00:00.000Z' },
+                    monthly: { status: 'ok', percent: 15, resetsAt: '2026-12-12T07:46:42.000Z' }
+                }
+            }
+        };
+    };
+
+    const opts = cli.parseArgs(['sync', '--json', '--state', stateFile]);
+    const res = await cli.runSyncCommand(opts, env, { nowMs: BASE_NOW, fetcher });
+    assert.strictEqual(res.action, 'sync');
+    assert.strictEqual(res.sync.synced, 3);
+    assert.strictEqual(res.sync.failed, 0);
+    // 账号 1 (12-03 剩30%) 与 账号 2 (12-03 剩64%) 同日到期，账号 2 胜出成为 #1
+    assert.strictEqual(res.nextSlot, 2);
+    assert.strictEqual(res.rows.find(r => r.slot === 2).priorityRank, 1);
+    assert.strictEqual(res.rows.find(r => r.slot === 2).monthlyRemainingPct, 64);
+    assert.strictEqual(res.rows.find(r => r.slot === 2).monthlyResetSource, 'live_api');
+    assert.strictEqual(res.rows.find(r => r.slot === 1).priorityRank, 2);
+    assert.strictEqual(res.rows.find(r => r.slot === 1).monthlyRemainingPct, 30);
+    assert.strictEqual(res.rows.find(r => r.slot === 3).priorityRank, 3);
+
+    const rendered = JSON.stringify(res) + '\n' + cli.formatStatusText(res);
+    assert.match(rendered, /实时API/);
+    for (const secret of [...FAKE_KEYS, ENDPOINT, ...FAKE_KEYS.map(k => pool.getAccountId(k))]) {
+        assert.ok(!rendered.includes(secret));
+    }
+});

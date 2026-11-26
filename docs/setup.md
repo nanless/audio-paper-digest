@@ -58,7 +58,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 1. **三窗口硬门槛**：每次选号只从月额度、周额度、5 小时滚动额度（及余额）全部未冷却且未标为 `0%` 的可用账号里选择；任一窗口触发限额 429 只冷却该对应窗口，窗口重置后自动回到可用池。
 2. **月到期最先优先**：在所有三窗口均有额度的账号里，优先选择下一次月额度到期日最早的账号（按北京时间 `Asia/Shanghai` 日期 `YYYY-MM-DD` 比较）。
 3. **同天到期选剩余最多**：若多个账号月额度在同一北京时间自然日到期，优先选择有效剩余月额度百分比最高的账号；月剩余并列时再依次比较周剩余、5 小时剩余与更早的精确重置时间。每次请求成功后，Node 与 Python 都会按实际响应消耗动态扣减对应账号的月/周/5 小时本地估算剩余（估算保底 `0.01%`，不会在未收到真实 429 前锁死账号）。
-4. **到期日来源与自动学习**：可通过 `npm run llm:accounts:quota` 查看优先级队列、批量导入或手工配置各账号的月到期日与初始剩余额度，也可用 `npm run llm:accounts:quota -- init-from-history` 从历史 `monthly` 429 记录一键初始化；运行中首次触发月限额 429 时会自动学习该账号的月续期锚点并按月滚动。未知到期日的账号（Tier 2）排在已知到期日账号（Tier 1）之后，并回退为原有 `affinityKey`（如 `paperId`）亲和哈希与等权轮转。
+4. **官方实时额度自动同步与手动管理**：运行时默认开启 `PD_LLM_ACCOUNT_POOL_LIVE_SYNC=1`（缓存 TTL 默认 5 分钟，可用 `PD_LLM_ACCOUNT_POOL_SYNC_TTL_MS` 调整），由 Node 与 Python 经项目代理自动请求 OpenCode Go 官方 `GET https://opencode.ai/zen/go/v1/usage`，直接获取所有账号的 5 小时、周、月三个窗口精确已用百分比（自动换算为剩余百分比）、状态与 `resetsAt` 重置时刻并原子落盘；遇到网络异常时自动回退至本地缓存与消耗扣减，不中断主任务。也可随时运行 `npm run llm:accounts:quota -- sync` 强制立即同步，或用 `status` / `set` / `import` / `init-from-history` 查看和管理。未知到期日的账号（Tier 2）排在已知到期日账号（Tier 1）之后，并回退为原有 `affinityKey`（如 `paperId`）亲和哈希与等权轮转。
 
 只有 OpenCode Go 返回 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，才允许在同一逻辑请求内切换账号，且每个账号至多尝试一次。普通认证 401 会停止本次运行；普通 429、5xx、网络或代理故障、响应截断和内容校验失败都不触发切换。全部账号不可用时，程序停止派发并保存进度。
 

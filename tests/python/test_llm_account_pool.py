@@ -1132,6 +1132,66 @@ class LlmAccountPoolTest(unittest.TestCase):
             eq_b = select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms + 86400000 + 2000, strategy='equal_rotation')
             self.assertNotEqual(eq_a['api_key'], eq_b['api_key'])
 
+    def test_live_usage_api_sync_parses_used_percent_blocks_limited_and_caches_ttl(self):
+        from datetime import datetime, timezone
+        from llm_account_pool import (
+            get_opencode_go_usage_url,
+            sync_opencode_go_pool_usage,
+        )
+        self.assertEqual(get_opencode_go_usage_url(ENDPOINT), 'https://opencode.ai/zen/go/v1/usage')
+        self.assertIsNone(get_opencode_go_usage_url('https://example.test/v1'))
+        now_ms = int(datetime(2026, 11, 26, 4, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'live_pool.json'
+            keys = ['py-live-1', 'py-live-2', 'py-live-3']
+            calls = []
+
+            def fake_fetcher(url, api_key, timeout_ms, proxy_url):
+                calls.append(api_key)
+                if api_key == 'py-live-1':
+                    return {
+                        'status_code': 200,
+                        'body': {
+                            'usage': {
+                                'rolling': {'status': 'rate_limited', 'percent': 100, 'resetsAt': '2026-11-26T06:00:00.000Z'},
+                                'weekly': {'status': 'ok', 'percent': 10, 'resetsAt': '2026-11-30T00:00:00.000Z'},
+                                'monthly': {'status': 'ok', 'percent': 20, 'resetsAt': '2026-11-29T17:43:55.000Z'},
+                            },
+                        },
+                    }
+                if api_key == 'py-live-2':
+                    return {
+                        'status_code': 200,
+                        'body': {
+                            'usage': {
+                                'rolling': {'status': 'ok', 'percent': 0, 'resetsAt': '2026-11-26T09:00:00.000Z'},
+                                'weekly': {'status': 'ok', 'percent': 3, 'resetsAt': '2026-11-30T00:00:00.000Z'},
+                                'monthly': {'status': 'ok', 'percent': 36, 'resetsAt': '2026-12-02T16:01:25.000Z'},
+                            },
+                        },
+                    }
+                return {
+                    'status_code': 200,
+                    'body': {
+                        'usage': {
+                            'rolling': {'status': 'ok', 'percent': 0, 'resetsAt': '2026-11-26T09:00:00.000Z'},
+                            'weekly': {'status': 'ok', 'percent': 3, 'resetsAt': '2026-11-30T00:00:00.000Z'},
+                            'monthly': {'status': 'ok', 'percent': 70, 'resetsAt': '2026-12-03T10:01:43.000Z'},
+                        },
+                    },
+                }
+
+            sync1 = sync_opencode_go_pool_usage(keys, ENDPOINT, state_file, now_ms=now_ms, fetcher=fake_fetcher)
+            self.assertEqual(sync1['synced'], 3)
+            self.assertEqual(len(calls), 3)
+            # py-live-1 5h 被 rate_limited 跳过；同日 12-03 中 py-live-2 (64%剩) > py-live-3 (30%剩)
+            pick = select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms + 1000)
+            self.assertEqual(pick['api_key'], 'py-live-2')
+            # TTL 内再次调用直接走缓存
+            sync_cached = sync_opencode_go_pool_usage(keys, ENDPOINT, state_file, now_ms=now_ms + 30000, ttl_ms=300000, fetcher=fake_fetcher)
+            self.assertTrue(sync_cached['from_cache'])
+            self.assertEqual(len(calls), 3)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1909,4 +1909,80 @@ describe('OpenCode Go 月到期优先、同天剩余最多与三窗口额度调�
         });
         assert.strictEqual(nodeFallback.apiKey, 'parity-k3');
     });
+
+    it('syncOpenCodeGoPoolUsage 实时同步 /zen/go/v1/usage：转换已用百分比、同日排序、TTL 缓存与窗口冷却同步', async () => {
+        const { file } = tempState();
+        const keys = ['live-k1', 'live-k2', 'live-k3'];
+        assert.strictEqual(pool.getOpenCodeGoUsageUrl(ENDPOINT), 'https://opencode.ai/zen/go/v1/usage');
+        assert.strictEqual(pool.getOpenCodeGoUsageUrl('https://other.example/v1'), null);
+
+        // 先给 live-k2 放一个过时的本地 5h 冷却，验证服务端返回 status=ok 时立即解除
+        pool.markQuotaExhausted(selectionFor(keys, keys[1]), {
+            limitClass: 'rolling_5h',
+            blockedUntilMs: BASE_NOW + 2 * 3600_000
+        }, file, { nowMs: BASE_NOW });
+
+        let fetchCalls = 0;
+        const fetcher = async ({ url, apiKey }) => {
+            fetchCalls += 1;
+            assert.strictEqual(url, 'https://opencode.ai/zen/go/v1/usage');
+            if (apiKey === 'live-k1') {
+                // 最早到期 11-30，但 5h 窗口已 rate_limited -> 必须被跳过
+                return {
+                    statusCode: 200,
+                    body: {
+                        usage: {
+                            rolling: { status: 'rate_limited', percent: 100, resetsAt: '2026-11-26T06:00:00.000Z' },
+                            weekly: { status: 'ok', percent: 10, resetsAt: '2026-11-30T00:00:00.000Z' },
+                            monthly: { status: 'ok', percent: 20, resetsAt: '2026-11-29T17:43:55.000Z' }
+                        }
+                    }
+                };
+            }
+            if (apiKey === 'live-k2') {
+                // 北京 2026-12-03 00:01 到期，已用 36% -> 剩余 64%
+                return {
+                    statusCode: 200,
+                    body: {
+                        usage: {
+                            rolling: { status: 'ok', percent: 0, resetsAt: '2026-11-26T09:00:00.000Z' },
+                            weekly: { status: 'ok', percent: 3, resetsAt: '2026-11-30T00:00:00.000Z' },
+                            monthly: { status: 'ok', percent: 36, resetsAt: '2026-12-02T16:01:25.000Z' }
+                        }
+                    }
+                };
+            }
+            // live-k3：北京 2026-12-03 18:01 到期，已用 70% -> 剩余 30%（同日到期但剩余少于 live-k2）
+            return {
+                statusCode: 200,
+                body: {
+                    usage: {
+                        rolling: { status: 'ok', percent: 0, resetsAt: '2026-11-26T09:00:00.000Z' },
+                        weekly: { status: 'ok', percent: 3, resetsAt: '2026-11-30T00:00:00.000Z' },
+                        monthly: { status: 'ok', percent: 70, resetsAt: '2026-12-03T10:01:43.000Z' }
+                    }
+                }
+            };
+        };
+
+        const sync1 = await pool.syncOpenCodeGoPoolUsage(keys, ENDPOINT, file, { nowMs: BASE_NOW, fetcher });
+        assert.strictEqual(sync1.synced, 3);
+        assert.strictEqual(sync1.failed, 0);
+        assert.strictEqual(fetchCalls, 3);
+
+        // live-k1 因 5h 窗口 rate_limited 跳过；live-k2 解除旧冷却并在 12-03 同日以 64% > 30% 胜出
+        const picked = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: BASE_NOW + 1000 });
+        assert.strictEqual(picked.apiKey, 'live-k2');
+
+        // TTL 内重复同步直接命中缓存，不发任何网络请求
+        const syncCached = await pool.syncOpenCodeGoPoolUsage(keys, ENDPOINT, file, { nowMs: BASE_NOW + 60_000, fetcher, ttlMs: 300_000 });
+        assert.strictEqual(syncCached.fromCache, true);
+        assert.strictEqual(syncCached.skipped, 3);
+        assert.strictEqual(fetchCalls, 3);
+
+        // 超过 5h 重置时间点（06:00Z）后，live-k1 自动恢复并成为 #1（2026-11-30 最早到期）
+        const afterReset = Date.parse('2026-11-26T06:05:00Z');
+        const pickedAfter = pool.selectApiKey(keys, ENDPOINT, file, { nowMs: afterReset });
+        assert.strictEqual(pickedAfter.apiKey, 'live-k1');
+    });
 });

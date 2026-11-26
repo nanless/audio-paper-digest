@@ -25,7 +25,8 @@ const {
     replaceCredentialHeaders,
     selectApiKey,
     markQuotaExhausted,
-    recordAccountUsage
+    recordAccountUsage,
+    syncOpenCodeGoPoolUsage
 } = require('./llm-account-pool.js');
 
 // ═══════════════════════════════════════════════════════
@@ -1489,6 +1490,26 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
     const affinityKey = typeof options.affinityKey === 'string' && options.affinityKey.trim()
         ? options.affinityKey.trim()
         : (typeof scopedPaperId === 'string' ? scopedPaperId.trim() : '');
+    const canLiveSync = isOpenCodeGoEndpoint(endpoint) && (
+        typeof options.usageFetcher === 'function'
+        || (!options.accountPoolStateFile
+            && typeof options.transport !== 'function'
+            && typeof options.requestImpl !== 'function'
+            && typeof options.httpsRequest !== 'function')
+    );
+    if (canLiveSync) {
+        const liveProxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
+        if (liveProxy || typeof options.usageFetcher === 'function') {
+            try {
+                await syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, {
+                    proxyUrl: liveProxy,
+                    ...(typeof options.usageFetcher === 'function' ? { fetcher: options.usageFetcher } : {})
+                });
+            } catch (syncErr) {
+                console.warn(`[llm-account-pool] 实时同步额度失败（回退至本地状态）: ${syncErr.message}`);
+            }
+        }
+    }
     for (let accountAttempt = 0; accountAttempt < apiKeys.length; accountAttempt += 1) {
         require('./lib/analysis-stop-control').assertMayStartRequest();
         const remainingMs = totalTimeoutMs - (Date.now() - startedAt);

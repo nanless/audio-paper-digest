@@ -10,7 +10,8 @@
  * 4. 未配置月到期日的账号排在已知到期日账号之后，并回退为原有亲和/等权轮转；首次触发月限额 429 时自动学习到期日。
  *
  * 用法：
- *   npm run llm:accounts:quota -- [status] [--route primary|secondary] [--json] [--state PATH]
+ *   npm run llm:accounts:quota -- [status] [--live] [--route primary|secondary] [--json] [--state PATH]
+ *   npm run llm:accounts:quota -- sync [--route primary|secondary] [--json] [--state PATH]
  *   npm run llm:accounts:quota -- init-from-history [--route primary|secondary] [--json] [--state PATH]
  *   npm run llm:accounts:quota -- set --account <1..N> [--monthly-expiry YYYY-MM-DD|ISO] [--monthly-day 1-31] \
  *       [--monthly-remaining 0-100] [--monthly-remaining-usd N] [--monthly-budget-usd N] \
@@ -42,11 +43,16 @@ function printHelp() {
         'OpenCode Go 账号池额度与到期优先调度管理（不泄露密钥与账号指纹）',
         '',
         '用法:',
-        '  npm run llm:accounts:quota -- [status] [--route primary|secondary] [--json] [--state PATH]',
+        '  npm run llm:accounts:quota -- [status] [--live] [--route primary|secondary] [--json] [--state PATH]',
+        '  npm run llm:accounts:quota -- sync [--route primary|secondary] [--json] [--state PATH]',
         '  npm run llm:accounts:quota -- init-from-history [--route primary|secondary] [--json] [--state PATH]',
         '  npm run llm:accounts:quota -- set --account <1..N> [选项...]',
         '  npm run llm:accounts:quota -- import --file <JSON_PATH> [--route primary|secondary] [--json] [--state PATH]',
         '  npm run llm:accounts:quota -- clear --account <1..N> [--route primary|secondary] [--json] [--state PATH]',
+        '',
+        'sync / --live:',
+        '  通过项目代理实时请求 OpenCode Go 官方 GET /zen/go/v1/usage，拉取所有账号的',
+        '  5 小时 / 周 / 月三窗口真实剩余百分比与精确重置时间并写入状态文件。',
         '',
         'set 可用选项:',
         '  --account <1..N>            必选，当前配置中的账号序号（与 llm:accounts 输出一致）',
@@ -61,7 +67,8 @@ function printHelp() {
         '  --clear-cooldown            手动清除该账号当前已存的窗口冷却记录',
         '',
         '环境变量:',
-        '  PD_LLM_ACCOUNT_POOL_STRATEGY=expiry_priority|equal_rotation（默认 expiry_priority）'
+        '  PD_LLM_ACCOUNT_POOL_STRATEGY=expiry_priority|equal_rotation（默认 expiry_priority）',
+        '  PD_LLM_ACCOUNT_POOL_LIVE_SYNC=1|0（默认 1，运行时自动按 5 分钟 TTL 同步官方实时额度）'
     ].join('\n'));
 }
 
@@ -111,13 +118,14 @@ function parseArgs(argv) {
         command = args[0];
         startIndex = 1;
     }
-    if (!['status', 'init-from-history', 'set', 'import', 'clear'].includes(command)) {
-        throw new QuotaCliUsageError(`未知子命令：${command}（支持 status / init-from-history / set / import / clear）`);
+    if (!['status', 'sync', 'init-from-history', 'set', 'import', 'clear'].includes(command)) {
+        throw new QuotaCliUsageError(`未知子命令：${command}（支持 status / sync / init-from-history / set / import / clear）`);
     }
 
     const opts = {
         help: false,
         command,
+        live: command === 'sync',
         route: 'primary',
         json: false,
         stateFile: DEFAULT_STATE_FILE,
@@ -130,6 +138,8 @@ function parseArgs(argv) {
         const flag = args[i];
         if (flag === '--json') {
             opts.json = true;
+        } else if (flag === '--live') {
+            opts.live = true;
         } else if (flag === '--state') {
             opts.stateFile = path.resolve(readOptionValue(args, i, '--state'));
             i += 1;
@@ -374,9 +384,17 @@ function formatUsd(value) {
 }
 
 function formatSourceTag(source) {
+    if (source === 'live_api') return '实时API';
     if (source === 'manual') return '手动';
     if (source === 'auto_429') return '429自动学习';
     return '未配置';
+}
+
+function formatBeijingDateTime(iso) {
+    if (!iso) return null;
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return null;
+    return new Date(ms + 8 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ');
 }
 
 function formatStatusText(summary, meta = {}) {
@@ -396,8 +414,10 @@ function formatStatusText(summary, meta = {}) {
     for (const row of ordered) {
         const rank = row.priorityRank !== null ? `#${row.priorityRank}` : '冷却';
         const labelPart = row.label ? ` [${row.label}]` : '';
-        const expiryPart = row.nextMonthlyExpiryBeijing
-            ? `月到期 ${row.nextMonthlyExpiryBeijing}（${formatSourceTag(row.monthlyResetSource)}）`
+        const bjTime = formatBeijingDateTime(row.nextMonthlyResetIso);
+        const expiryDisplay = bjTime || row.nextMonthlyExpiryBeijing;
+        const expiryPart = expiryDisplay
+            ? `月到期 ${expiryDisplay}（${formatSourceTag(row.monthlyResetSource)}）`
             : '月到期 未配置（Tier 2）';
         const quotaPart = `月 ${formatPct(row.monthlyRemainingPct)} / 周 ${formatPct(row.weeklyRemainingPct)} / 5h ${formatPct(row.rolling5hRemainingPct)}`;
         const spentPart = `本地已耗 月${formatUsd(row.monthlySpentUsd)} 周${formatUsd(row.weeklySpentUsd)} 5h${formatUsd(row.rolling5hSpentUsd)}`;
@@ -520,7 +540,33 @@ function runCommand(opts, env, options = {}) {
     throw new QuotaCliUsageError(`不支持的子命令：${opts.command}`);
 }
 
-function main(argv = process.argv.slice(2)) {
+async function runSyncCommand(opts, env, options = {}) {
+    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const resolved = resolveRoutePool(env, opts.route);
+    const strategy = env.PD_LLM_ACCOUNT_POOL_STRATEGY;
+    const proxyUrl = env.HTTPS_PROXY || env.HTTP_PROXY || env.https_proxy || env.http_proxy || '';
+    const syncResult = await pool.syncOpenCodeGoPoolUsage(resolved.keys, resolved.endpoint, opts.stateFile, {
+        force: true,
+        nowMs,
+        proxyUrl,
+        ...(typeof options.fetcher === 'function' ? { fetcher: options.fetcher } : {})
+    });
+    const { state } = readStateReadOnly(opts.stateFile);
+    const summary = pool.describePoolPriorities(resolved.keys, resolved.endpoint, state, { nowMs, strategy });
+    return {
+        action: 'sync',
+        route: resolved.route,
+        sync: {
+            synced: syncResult.synced,
+            failed: syncResult.failed,
+            authErrors: syncResult.authErrors,
+            results: syncResult.results
+        },
+        ...summary
+    };
+}
+
+async function main(argv = process.argv.slice(2)) {
     try {
         require('./env-loader').requireExternalRuntime('llm-accounts-quota.js');
     } catch (error) {
@@ -535,12 +581,21 @@ function main(argv = process.argv.slice(2)) {
     }
 
     const env = require('./env-loader').loadProjectEnv();
-    const result = runCommand(opts, env);
+    const result = (opts.command === 'sync' || opts.live)
+        ? await runSyncCommand(opts, env)
+        : runCommand(opts, env);
 
     if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
     } else {
-        if (result.action === 'init-from-history') {
+        if (result.action === 'sync') {
+            console.log(`已实时同步 ${result.sync.synced}/${result.rows.length} 个账号的官方三窗口额度（失败 ${result.sync.failed} 个）。`);
+            for (const item of result.sync.results || []) {
+                if (!item.ok) {
+                    console.log(`  ⚠️ 账号 ${item.slot} 同步失败：${item.error || '未知错误'}`);
+                }
+            }
+        } else if (result.action === 'init-from-history') {
             console.log(`已从历史 monthly 429 记录初始化 ${result.initialized.length} 个账号，跳过 ${result.skipped.length} 个账号。`);
         } else if (result.action === 'set') {
             console.log(`已更新 账号 ${result.updatedAccount} 的额度/到期配置。`);
@@ -551,7 +606,7 @@ function main(argv = process.argv.slice(2)) {
         }
         console.log(formatStatusText(result, { route: result.route }));
     }
-    return 0;
+    return result.action === 'sync' && result.sync.synced === 0 && result.sync.failed > 0 ? 1 : 0;
 }
 
 module.exports = {
@@ -560,16 +615,18 @@ module.exports = {
     resolveRoutePool,
     readStateReadOnly,
     runCommand,
+    runSyncCommand,
     formatStatusText,
     main
 };
 
 if (require.main === module) {
-    try {
-        process.exitCode = main();
-    } catch (error) {
-        const exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1;
-        console.error(`[llm-accounts-quota] ${error?.message || error}`);
-        process.exitCode = exitCode;
-    }
+    Promise.resolve()
+        .then(() => main())
+        .then(code => { process.exitCode = code; })
+        .catch(error => {
+            const exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1;
+            console.error(`[llm-accounts-quota] ${error?.message || error}`);
+            process.exitCode = exitCode;
+        });
 }
