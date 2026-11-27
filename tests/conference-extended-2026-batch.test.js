@@ -642,8 +642,8 @@ test('ijcai-html parses IJCAI 2026 rows, tracks, DOIs, and skips frontmatter row
     assert.equal(parsed.papers.length, 1);
     assertAllPapersMeetIdentityContract(parsed.papers);
     assert.equal(parsed.papers[0].id, 'ijcai2026-0042');
-    assert.equal(parsed.papers[0].recordUrl, 'https://www.ijcai.org/proceedings/2026/42');
-    assert.equal(parsed.papers[0].pdfUrl, 'https://www.ijcai.org/proceedings/2026/0042.pdf');
+    assert.equal(parsed.papers[0].recordUrl, 'https://ijcai.org/proceedings/2026/42');
+    assert.equal(parsed.papers[0].pdfUrl, 'https://ijcai.org/proceedings/2026/0042.pdf');
     assert.equal(parsed.papers[0].doi, '10.24963/ijcai.2026/42');
     assert.equal(parsed.papers[0].track, 'Speech and Audio');
     assert.deepEqual(parsed.papers[0].authors, ['Lin Wei', 'Omar Hassan']);
@@ -1000,8 +1000,8 @@ test('adversarial hardening: cross-volume redirects, Zenodo query/backfill/0-aut
     assert.equal(ijcaiHardened.papers.length, 1);
     assert.equal(ijcaiHardened.papers[0].id, 'ijcai2026-0077');
     assert.equal(ijcaiHardened.papers[0].title, 'Neural Vocoder Acceleration');
-    assert.equal(ijcaiHardened.papers[0].recordUrl, 'https://www.ijcai.org/proceedings/2026/77');
-    assert.equal(ijcaiHardened.papers[0].pdfUrl, 'https://www.ijcai.org/proceedings/2026/0077.pdf');
+    assert.equal(ijcaiHardened.papers[0].recordUrl, 'https://ijcai.org/proceedings/2026/77');
+    assert.equal(ijcaiHardened.papers[0].pdfUrl, 'https://ijcai.org/proceedings/2026/0077.pdf');
 
     // [LOW-4] ACL skips outer wrapper .d-sm-flex and off-host/query/hash links
     const aclNestedHtml = `

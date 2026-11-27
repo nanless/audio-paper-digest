@@ -332,8 +332,8 @@ const EXTENDED_PROVIDERS = Object.freeze({
     'ijcai-2026': Object.freeze({
         conference: Object.freeze({ id: 'ijcai-2026', year: 2026 }),
         parser: 'ijcai-html',
-        indexUrl: 'https://www.ijcai.org/proceedings/2026/',
-        allowedHosts: Object.freeze(['www.ijcai.org']),
+        indexUrl: 'https://ijcai.org/proceedings/2026/',
+        allowedHosts: Object.freeze(['ijcai.org', 'www.ijcai.org']),
         recordPath: /^\/proceedings\/2026\/\d+\/?$/,
         pdfPath: /^\/proceedings\/2026\/\d+\.pdf$/,
         defaultTrack: 'IJCAI 2026'
