@@ -82,7 +82,7 @@ const SCORING_EVIDENCE_PROFILE_KEYS = Object.freeze([
     'primaryStrengths', 'primaryDefects'
 ]);
 
-const OPEN_SOURCE_DEFICIT = /(?:不开源|闭源|未开源|没有开源|代码未提供|权重未提供|数据集未提供|缺少(?:代码|权重|数据集|核心(?:产物|材料))|(?:代码|权重|数据集|核心(?:产物|材料))(?:未|没有|尚未)公开)/;
+const OPEN_SOURCE_DEFICIT = /(?:不开源|闭源|未开源|没有开源|代码未提供|权重未提供|数据集未提供|缺少(?:代码|权重|数据集|核心(?:产物|材料))|(?:代码|权重|数据集|核心(?:产物|材料))(?:未|没有|尚未)公开|(?:维持|保持|采用)?专有发布|限制公开访问)/;
 const VERIFIED_RESOURCE_DENIAL = /(?:(?:未|没有|尚未)(?:发布|公开|提供)[^.。；;]{0,16}(?:代码|模型权重|数据集)|(?:代码|模型权重|数据集)[^.。；;]{0,16}(?:未|没有|尚未)(?:发布|公开|提供))/;
 const REPRODUCIBILITY_DEFICIT = /(?:无法复现|不可复现|缺少|未提供|未披露|没有|不足|不完整|不清楚)[^.。；;]{0,18}(?:超参数|训练配置|硬件配置|复现步骤|实现细节)|(?:超参数|训练配置|硬件配置|复现步骤|实现细节)[^.。；;]{0,18}(?:缺失|不足|不完整|未提供|未披露|不清楚)/;
 
@@ -130,8 +130,7 @@ function findForbiddenDeductionClauses(reason, patterns, options = {}) {
                     .replace(/(^|[，,、]|\[[A-Z][A-Z0-9_/-]*\]\s*|(?:涵盖|包含|覆盖|包括|比较|对比|针对|按|分|报告|给出|统计|测量|记录|列出))闭源((?:(?:与|和|及)开源)(?:分组|排序|系统|模型|基线|竞品|对照|方案|两类|两组|两套)|(?:API|商业|商用|专有)?(?:API|系统|模型)(?:[^，,。；;\n]{0,20})(?:与|和|及)开源)/gu,
                         '$1对照$2')
                     .replace(/((?:与|相比|对比|比较|超越|超过|逼近|接近|赶超|媲美|领先|优于|对标|匹敌|落后|低于|弱于|不及)(?:当前|现有|主流|商用|商业|大型|顶级|头部|其他|部分|已有|最强|多种|多个|多项|所有|同类|工业级|外部|第三方|的|了|于|较|\s*\d+(?:\.\d+)?[BMK]\s*(?:与|和|及|或)\s*|\s*[A-Za-z0-9_.-]+\s*(?:与|和|及|或)\s*){0,4})闭源((?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集|基线|竞品|区间|水平|梯队|阵营|版本|对手)|\s+[A-Z][A-Za-z0-9_.+-]{1,30})/giu,
-                        (full, lead, tail, offset, whole) => {
-                            if (/(?:本文|本论文|本研究|本工作|自身|作者|该文)(?:的)?$/u.test(whole.slice(0, offset))) return full;
+                        (full, lead, tail) => {
                             if (/^\s+[A-Za-z]/u.test(tail) && !/^\s+[A-Z]/u.test(tail)) return full;
                             if (/^[a-z]/u.test(tail)) return full;
                             return `${lead}对照${tail}`;
@@ -140,9 +139,22 @@ function findForbiddenDeductionClauses(reason, patterns, options = {}) {
                         '$1对照$2')
                     .replace(/((?:^|[，,、在的]|(?:公开|开源)(?:与|和|及)))闭源((?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集)(?:评测|测试)?基准)/giu,
                         (full, lead, tail, offset, whole) => (/(?:本文|本论文|本研究|本工作|自身|作者|该文)(?:的)?$/u.test(whole.slice(0, offset + lead.length)) ? full : `${lead}对照${tail}`))
-                    .replace(/(^|[，,、]|与|和|及|将|把|对|用|以|多个|主流|外部|第三方|既有|现有)闭源((?:(?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集|区间|水平)|\s+[A-Z][A-Za-z0-9_.+-]{1,30})(?:[^，,。；;\n]{0,12}(?:相比|对比|比较|基准|对照|作为基准|(?:存在|仍有)[^，,。；;\n]{0,6}差距|的差距)))/giu,
+                    .replace(/(^|[，,、]|与|和|及|将|把|对|用|以|多个|主流|外部|第三方|既有|现有)闭源((?:(?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集|区间|水平)|\s+[A-Z][A-Za-z0-9_.+-]{1,30})(?:[^，,。；;\n]{0,12}?(?:作为(?:(?:对比|评测|测试)?(?:基准|基线)|对比对象|参考)|相比|对比|比较|基准|对照|(?:存在|仍有)[^，,。；;\n]{0,6}差距|的差距)))/giu,
                         (full, lead, tail, offset, whole) => {
-                            if (/(?:本文|本论文|本研究|本工作|自身|作者|该文)(?:的)?$/u.test(whole.slice(0, offset))) return full;
+                            const isPrepositionLead = ['将', '把', '用', '以'].includes(lead);
+                            const ownerPrefix = isPrepositionLead
+                                ? whole.slice(0, offset)
+                                : whole.slice(0, offset + lead.length);
+                            const subjectOwned = /(?:本文|本论文|本研究|本工作|自身|作者|该文)(?:的)?$/u.test(ownerPrefix);
+                            const afterClosedSource = whole.slice(offset + lead.length + 2);
+                            const explicitBaselineRole = /^(?:(?:商业|商用|专有)?\s*(?:模型|系统|服务|API|方案|产品|数据集|区间|水平)|\s+[A-Z][A-Za-z0-9_.+-]{1,30})\s*作为(?:(?:对比|评测|测试)?(?:基准|基线)|对比对象|参考)/iu.test(afterClosedSource);
+                            if (subjectOwned && !(isPrepositionLead && explicitBaselineRole)) return full;
+                            if (/^\s+[A-Za-z]/u.test(tail) && !/^\s+[A-Z]/u.test(tail)) return full;
+                            if (/^[a-z]/u.test(tail)) return full;
+                            return `${lead}对照${tail}`;
+                        })
+                    .replace(/((?:与|相比|对比|比较|超越|超过|逼近|接近|赶超|媲美|领先|优于|对标|匹敌|落后|低于|弱于|不及)(?:当前|现有|主流|商用|商业|大型|顶级|头部|其他|部分|已有|最强|多种|多个|多项|所有|同类|工业级|外部|第三方|的|了|于|较){0,4})(?:专有发布(?:的)?闭源|专有发布)((?:的)?(?:商业|商用|对照)?\s*(?:模型|系统|服务|API|方案|产品|数据集|基线|竞品|版本|对手)|\s+[A-Z][A-Za-z0-9_.+-]{1,30})/giu,
+                        (full, lead, tail) => {
                             if (/^\s+[A-Za-z]/u.test(tail) && !/^\s+[A-Z]/u.test(tail)) return full;
                             if (/^[a-z]/u.test(tail)) return full;
                             return `${lead}对照${tail}`;

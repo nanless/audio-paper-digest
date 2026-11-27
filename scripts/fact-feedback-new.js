@@ -229,15 +229,16 @@ function buildFactFeedback(options = {}) {
     }
 
     const details = daily.readDailyFreshSource(plan, paper);
+    const generation = details.freshSourceDescriptor.sourceGeneration;
     const stored = sourceApi.readFreshArxivRewriteSource({
         rootDir: plan.sourcesDir,
         arxivId: targetPaperId,
-        generation: daily.SOURCE_GENERATION
+        generation
     });
     const sourceDir = path.join(
         plan.sourcesDir,
         targetPaperId,
-        `generation-${String(daily.SOURCE_GENERATION).padStart(6, '0')}`
+        `generation-${String(generation).padStart(6, '0')}`
     );
     const sourceFiles = {
         'source.txt': stored.manifest.text.responseSha256,

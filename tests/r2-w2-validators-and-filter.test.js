@@ -591,7 +591,7 @@ describe('R2-W2.6: filter-scope-evidence v2 slimming (30K, cold-replay safe) & a
         assert.match(excerpt, /birdsong/);
     });
 
-    it('routes abstract-only dailyFilter calls to minimal reasoning effort while keeping scopeEvidence calls at low', async t => {
+    it('routes both abstract-only and scopeEvidence dailyFilter calls to low reasoning effort', async t => {
         withTempSources(t);
         const prevEffort = process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
         const prevTiered = process.env.PD_TIERED_REASONING_EFFORT;
@@ -605,9 +605,9 @@ describe('R2-W2.6: filter-scope-evidence v2 slimming (30K, cold-replay safe) & a
         });
 
         assert.equal(utils.STAGE_REASONING_EFFORT_TIERS.dailyFilter, 'low');
-        assert.equal(utils.STAGE_REASONING_EFFORT_TIERS.dailyFilterAbstractOnly, 'minimal');
+        assert.equal(utils.STAGE_REASONING_EFFORT_TIERS.dailyFilterAbstractOnly, 'low');
         assert.equal(utils.resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'dailyFilter'), 'low');
-        assert.equal(utils.resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'dailyFilterAbstractOnly'), 'minimal');
+        assert.equal(utils.resolveStageReasoningEffort('xhigh', 'muse-spark-1.3-contributor', 'dailyFilterAbstractOnly'), 'low');
 
         const filterConfig = { endpoint: 'https://example.invalid/v1', key: 'local-test', model: 'muse-spark-1.3-contributor' };
         const capturedBodies = [];
@@ -622,7 +622,7 @@ describe('R2-W2.6: filter-scope-evidence v2 slimming (30K, cold-replay safe) & a
             };
         };
 
-        // 1) Pure abstract-only speech paper (no scopeEvidence) -> reasoning.effort === 'minimal'
+        // 1) Pure abstract-only speech paper (no scopeEvidence) -> reasoning.effort === 'low'
         const abstractOnlyPaper = {
             arxivId: '2611.98801',
             title: 'Streaming Neural Speech Recognition',
@@ -635,7 +635,7 @@ describe('R2-W2.6: filter-scope-evidence v2 slimming (30K, cold-replay safe) & a
             requestFn: mockRequestFn
         });
         assert.equal(resAbstract.related, true);
-        assert.equal(capturedBodies[0].body.reasoning?.effort, 'minimal');
+        assert.equal(capturedBodies[0].body.reasoning?.effort, 'low');
         assert.equal(capturedBodies[0].usageStage, 'dailyFilter');
         assert.match(capturedBodies[0].body.prompt_cache_key, /^pd:dailyFilter:/);
 

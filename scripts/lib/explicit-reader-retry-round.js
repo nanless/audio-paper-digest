@@ -213,12 +213,18 @@ function exhaustedInitialFullWithoutLocalDraft(payload, paper) {
             .find(Boolean);
         if (missingComma) {
             const pos = Number(missingComma[1]);
-            if (Number.isSafeInteger(pos) && pos > 0 && pos < payload.rawDraft.length) {
-                try {
-                    const value = JSON.parse(`${payload.rawDraft.slice(0, pos)},${payload.rawDraft.slice(pos)}`);
-                    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-                } catch (__) { return false; }
+            if (Number.isSafeInteger(pos) && pos > 0) {
+                const candidates = trimmed === payload.rawDraft ? [trimmed] : [trimmed, payload.rawDraft];
+                for (const source of candidates) {
+                    if (pos < source.length) {
+                        try {
+                            const value = JSON.parse(`${source.slice(0, pos)},${source.slice(pos)}`);
+                            if (value && typeof value === 'object' && !Array.isArray(value)) return true;
+                        } catch (__) { /* try next coordinate base */ }
+                    }
+                }
             }
+            return false;
         }
         const trailingCommaPosMatch = payload.issues
             .map(issue => String(issue.message || '').match(
@@ -229,18 +235,17 @@ function exhaustedInitialFullWithoutLocalDraft(payload, paper) {
         if (hasTrailingCommaIssue) {
             if (trailingCommaPosMatch) {
                 const pos = Number(trailingCommaPosMatch[1]);
-                if (Number.isSafeInteger(pos) && pos > 0 && pos < payload.rawDraft.length
-                    && (payload.rawDraft[pos] === '}' || payload.rawDraft[pos] === ']')) {
+                if (Number.isSafeInteger(pos) && pos > 0 && pos < trimmed.length
+                    && (trimmed[pos] === '}' || trimmed[pos] === ']')) {
                     let commaPos = pos - 1;
-                    while (commaPos >= 0 && /\s/.test(payload.rawDraft[commaPos])) commaPos -= 1;
-                    if (commaPos >= 0 && payload.rawDraft[commaPos] === ',') {
+                    while (commaPos >= 0 && /\s/.test(trimmed[commaPos])) commaPos -= 1;
+                    if (commaPos >= 0 && trimmed[commaPos] === ',') {
                         try {
-                            const value = JSON.parse(`${payload.rawDraft.slice(0, commaPos)}${payload.rawDraft.slice(commaPos + 1)}`);
-                            return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-                        } catch (__) { return false; }
+                            const value = JSON.parse(`${trimmed.slice(0, commaPos)}${trimmed.slice(commaPos + 1)}`);
+                            if (value && typeof value === 'object' && !Array.isArray(value)) return true;
+                        } catch (__) { /* fall through to bounded candidate scan */ }
                     }
                 }
-                return false;
             }
             const candidates = [...trimmed.matchAll(/,(\s*[}\]])/g)];
             if (candidates.length >= 1 && candidates.length <= 32) {

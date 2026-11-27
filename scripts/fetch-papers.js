@@ -18,7 +18,13 @@ const { buildFilterInputSha256 } = require('./lib/filter-input-contract.js');
 const { parseFilterDecision, parseFilterDecisionDetails } = require('./lib/filter-decision.js');
 const { renderFilterPrompt } = require('./lib/filter-prompt.js');
 const { LLM_FILTER_PROMPT_PATH } = require('./lib/prompt-contracts.js');
-const { captureFilterScopeEvidence, assertFilterScopeEvidence, renderFilterScopeEvidence, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
+const {
+    captureFilterScopeEvidence,
+    captureFilterScopeEvidenceWithFullText,
+    assertFilterScopeEvidence,
+    renderFilterScopeEvidence,
+    validatedDecisionInputSha256
+} = require('./lib/filter-scope-evidence.js');
 const {
     KEYWORD_PREFILTER_PROFILE,
     evaluateKeywordPrefilter,
@@ -1958,8 +1964,7 @@ async function getSpeechAudioDecision(paper, options = {}) {
 
     try {
         circuitBreaker.assertClosed();
-        const reasoningStage = options.reasoningStage
-            || (scopeEvidence ? 'dailyFilter' : 'dailyFilterAbstractOnly');
+        const reasoningStage = options.reasoningStage || 'dailyFilter';
         const request = (messages, maxTokens) => callModelForFilter(
             messages,
             maxTokens,
@@ -2104,9 +2109,16 @@ async function filterPapersWithLLM(papers, options = {}) {
                 const paper = scopeTargets[index];
                 const id = normalizedId(paper);
                 try {
-                    const evidence = await captureFilterScopeEvidence(paper, decisionMetadata.batchDate,
-                        decisionOptions.scopeSourceOverrides || {});
-                    scopeOutcomes[index] = { kind: 'evidence', id, paper, evidence };
+                    const { evidence, fullText } = await captureFilterScopeEvidenceWithFullText(
+                        paper,
+                        decisionMetadata.batchDate,
+                        decisionOptions.scopeSourceOverrides || {}
+                    );
+                    // 在 worker 内立即基于完整官方正文评估音频锚点，使 fullText 随本轮结束立即可被 GC 回收。
+                    const bodyAnchor = useKeywordPreFilter
+                        ? evaluateScopeBodyAudioAnchor(fullText, paper)
+                        : { pass: true };
+                    scopeOutcomes[index] = { kind: 'evidence', id, paper, evidence, bodyAnchor };
                     completed += 1;
                     if (completed === scopeTargets.length || completed % 10 === 0) {
                         console.log(`[filter] 官方全文取证进度: ${completed}/${scopeTargets.length} (并发=${effectiveScopeConcurrency})`);
@@ -2141,9 +2153,7 @@ async function filterPapersWithLLM(papers, options = {}) {
                 continue;
             }
             const evidence = outcome.evidence;
-            const bodyAnchor = useKeywordPreFilter
-                ? evaluateScopeBodyAudioAnchor(evidence.text, paper)
-                : { pass: true };
+            const bodyAnchor = outcome.bodyAnchor || { pass: true };
             if (!bodyAnchor.pass) {
                 decisions.set(id, {
                     id,

@@ -736,7 +736,7 @@ test('podcast pipeline F3 fixes: RSS dedupe, Workbench branding, env blogBaseUrl
         );
         const xml = fs.readFileSync(res.rssPath, 'utf8');
         assert.match(xml, /<link>https:\/\/custom\.example\.org\/portal\/<\/link>/);
-        assert.match(xml, /href="https:\/\/custom\.example\.org\/portal\/podcast\.xml"/);
+        assert.match(xml, /href="https:\/\/custom\.example\.org\/portal\/feeds\/podcast\.xml"/);
         assert.ok(
             res.releaseResult.plannedCommands.createArgs.some(arg => arg.includes('Audio Research Workbench'))
         );

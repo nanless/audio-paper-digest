@@ -40,6 +40,7 @@ function parseArgs(argv = process.argv.slice(2)) {
         allFailed: false,
         mode: 'auto',
         budget: 320000,
+        budgetExplicit: false,
         full: false,
         out: null,
         dryRun: false,
@@ -74,6 +75,7 @@ function parseArgs(argv = process.argv.slice(2)) {
                 throw new Error(`--budget 必须是 80000 或 320000，收到：${parsed}`);
             }
             options.budget = parsed;
+            options.budgetExplicit = true;
         } else if (value === '--out') {
             options.out = path.resolve(requireValue('--out', argv[++index]));
         } else {
@@ -198,26 +200,8 @@ function computeSourceFileShas(plan, paper) {
     return { details, sourceFiles };
 }
 
-function resolveOriginalEnvelopeProof(attemptsDir, found) {
+function resolveOriginalEnvelopeProof(_attemptsDir, found) {
     const currentIdentitySha = repair.hashDraft(found.envelope.identity);
-    const audits = found.envelope?.payload?.readerRecoveryRevisions || [];
-    if (audits.length > 0) {
-        const firstAudit = audits[0];
-        const archived = firstAudit?.archivedName ? path.join(attemptsDir, firstAudit.archivedName) : null;
-        if (archived && fs.existsSync(archived)) {
-            const checked = repair.readFailedCandidateEnvelope(attemptsDir, null, archived);
-            if (checked && checked.envelopeSha256 === firstAudit.oldEnvelopeSha256
-                && repair.hashDraft(checked.envelope.identity) === firstAudit.fromIdentitySha256
-                && repair.hashDraft(checked.envelope.payload) === firstAudit.oldPayloadSha256) {
-                return {
-                    identitySha256: currentIdentitySha,
-                    originalIdentitySha256: firstAudit.fromIdentitySha256,
-                    envelopeSha256: firstAudit.oldEnvelopeSha256,
-                    payloadSha256: firstAudit.oldPayloadSha256
-                };
-            }
-        }
-    }
     return {
         identitySha256: currentIdentitySha,
         originalIdentitySha256: currentIdentitySha,
@@ -237,6 +221,15 @@ function buildGrantForPaper({ plan, paper, found, options }) {
             throw new Error(`${canonical} 已有明确付费重试轮（${payload.explicitReaderRetryRound.roundId}），不能再生成首轮 base 授权，请使用 --mode local 或 --mode full`);
         }
         const parentMode = options.mode === 'full' || options.full ? 'full' : 'local';
+        const explicitBudgetRequested = options.budgetExplicit === true
+            || (options.budgetExplicit === undefined && options.budget !== undefined);
+        if (explicitBudgetRequested) {
+            const fixedBudget = parentRecovery.BUDGETS[parentMode].maxReservedOutputTokens;
+            throw new Error(
+                `${canonical} 已有明确付费重试轮（${payload.explicitReaderRetryRound.roundId}），`
+                + `父轮恢复子授权（mode=${parentMode}）使用固定预算 ${fixedBudget} tokens，不能同时指定 --budget（收到：${options.budget}）；请移除 --budget 后重试`
+            );
+        }
         const grant = parentRecovery.planParentRecovery({
             directory: plan.readerAttemptsDir,
             identity,
@@ -289,7 +282,7 @@ function buildGrantForPaper({ plan, paper, found, options }) {
         maxResponses: 3,
         maxFullResponses: 1,
         maxPhysicalRequests: 6,
-        maxReservedOutputTokens: options.budget,
+        maxReservedOutputTokens: options.budget ?? 320000,
         ...(fullRegenerationReason ? { fullRegenerationReason } : {})
     };
     retry.assertGrant(grant);

@@ -89,7 +89,7 @@ function validateFeedback(feedback, plan, paper) {
     // 官方四文件完整性与计划对应关系先由现有来源入口核验；再比反馈所指字节。
     const details = daily.readDailyFreshSource(plan, paper);
     if (!daily.isPaperBoundToPlan(paper, plan)) fail('正式分析未绑定当前封存来源，不能保留旧阶段作定向修复');
-    const stored = sourceApi.readFreshArxivRewriteSource({ rootDir: plan.sourcesDir, arxivId: feedback.paperId, generation: daily.SOURCE_GENERATION });
+    const stored = sourceApi.readFreshArxivRewriteSource({ rootDir: plan.sourcesDir, arxivId: feedback.paperId, generation: details.freshSourceDescriptor?.sourceGeneration ?? daily.SOURCE_GENERATION });
     const actual = { 'source.txt': stored.manifest.text.responseSha256, 'source.pdf': stored.manifest.pdf.responseSha256,
         'source-runtime.json': stored.manifest.runtimeMetadata.responseSha256, 'source-manifest.json': stored.sourceManifestSha256 };
     if (daily.stableHash(actual) !== daily.stableHash(feedback.sourceFiles)) fail('反馈来源SHA已过期');

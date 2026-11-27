@@ -65,6 +65,9 @@ function assertKnownBatchAnalyzeArguments(argv = process.argv.slice(2)) {
     return positionals;
 }
 
+const COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR =
+    '局部事实纠错没有当前错误原句，也没有同反馈已完成证明；不能扩大为完整主文请求';
+
 // 仅在显式开启 --reader-fact-local=auto 时执行 6 项只读预检，全部通过才启用单句局部修订。
 function evaluateReaderFactLocalAuto(paper, feedback, dailySourcePlan, context = {}) {
     const {
@@ -92,14 +95,7 @@ function evaluateReaderFactLocalAuto(paper, feedback, dailySourcePlan, context =
         const source = dailyFreshSources.readDailyFreshSource(dailySourcePlan, paper);
         const bound = factReview.validateFeedback(feedback, dailySourcePlan, paper);
         const parent = savedFacts.readSavedFeedback(paper, dailySourcePlan);
-        const checkInScope = () => {
-            const effectiveFeedback = factReview.reviewFeedback('apiReaderArticle', normalizedId(paper)).trim();
-            if (!deep.hasReviewedReaderFactLocalSeed(paper, source.text, effectiveFeedback)) {
-                return { eligible: false, reason: 'missing_reviewed_fact_local_seed' };
-            }
-            const seed = deep.prepareApiReaderRevisionSeed(paper, source.text, effectiveFeedback, {
-                readerFactLocalRevision: true
-            });
+        const evaluateCoverageFromSeed = seed => {
             const signedRecoveryDraft = require('./lib/signed-reader-recovery-draft').convert(seed);
             const coverageIssues = repair.assertReaderFactLocalCoverage(
                 signedRecoveryDraft, feedback.rejectedReaderClaims
@@ -115,16 +111,199 @@ function evaluateReaderFactLocalAuto(paper, feedback, dailySourcePlan, context =
             }
             return { eligible: true, paths };
         };
+        const checkInScope = () => {
+            const effectiveFeedback = factReview.reviewFeedback('apiReaderArticle', normalizedId(paper)).trim();
+            if (!deep.hasReviewedReaderFactLocalSeed(paper, source.text, effectiveFeedback)) {
+                return { eligible: false, reason: 'missing_reviewed_fact_local_seed' };
+            }
+            const seed = deep.prepareApiReaderRevisionSeed(paper, source.text, effectiveFeedback, {
+                readerFactLocalRevision: true
+            });
+            return evaluateCoverageFromSeed(seed);
+        };
+        // 纯内存只读评估（绝不调用 withFactReview，零磁盘写入 fact-feedback/<sha>.json）。
+        const checkReadOnlyInMemory = () => {
+            if (paper?.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete') {
+                return { eligible: false, reason: factReview.READER_PRIMARY_REQUIRED };
+            }
+            const parentFeedback = parent?.feedback || null;
+            const parentBound = parentFeedback
+                ? factReview.validateFeedback(parentFeedback, dailySourcePlan, parent.paper)
+                : null;
+            const savedPrimary = paper.analysisManifest?.stages?.primaryAnalysis?.factReview;
+            if (savedPrimary !== undefined
+                && (!parentBound
+                    || dailyFreshSources.stableHash(factReview.validateProof(savedPrimary)) !== dailyFreshSources.stableHash(parentBound.proof))) {
+                return { eligible: false, reason: 'Reader纠错缺少原主分析反馈身份' };
+            }
+            if (parentFeedback) {
+                if (['paperId', 'runId', 'batchDate'].some(key => parentFeedback[key] !== feedback[key])
+                    || dailyFreshSources.stableHash(parentFeedback.sourceFiles) !== dailyFreshSources.stableHash(feedback.sourceFiles)) {
+                    return { eligible: false, reason: 'Reader双反馈来源身份不一致' };
+                }
+                if (parentFeedback.readerFeedback.trim()
+                    && (!feedback.readerFeedback.includes(parentFeedback.readerFeedback)
+                        || parentFeedback.rejectedReaderClaims.some(claim => !feedback.rejectedReaderClaims.includes(claim))
+                        || parentFeedback.sourceQuotes.some(quote => !feedback.sourceQuotes.includes(quote)))) {
+                    return { eligible: false, reason: '新Reader反馈遗漏旧Reader事实约束' };
+                }
+            }
+            let parentStage = null;
+            const savedReader = paper.analysisManifest?.stages?.apiReaderArticle?.factReview;
+            if (savedReader !== undefined
+                && dailyFreshSources.stableHash(factReview.validateProof(savedReader)) !== dailyFreshSources.stableHash(bound.proof)
+                && (!parentBound || dailyFreshSources.stableHash(savedReader) !== dailyFreshSources.stableHash(parentBound.proof))) {
+                if (!parentBound || !parent?.readerFeedback
+                    || dailyFreshSources.stableHash(parentBound.proof) !== dailyFreshSources.stableHash(factReview.proofFor(parent.feedback))) {
+                    return { eligible: false, reason: 'Reader纠错缺少原Reader事实反馈包' };
+                }
+                const oldReader = factReview.validateFeedback(parent.readerFeedback, dailySourcePlan, paper);
+                if (dailyFreshSources.stableHash(oldReader.proof) !== dailyFreshSources.stableHash(savedReader)
+                    || !savedFacts.completedReaderUpstream(paper, dailySourcePlan)) {
+                    return { eligible: false, reason: 'Reader纠错缺少原Reader事实反馈包' };
+                }
+                if (!feedback.readerFeedback.includes(oldReader.feedback.readerFeedback)
+                    || oldReader.feedback.rejectedReaderClaims.some(claim => !feedback.rejectedReaderClaims.includes(claim))
+                    || oldReader.feedback.sourceQuotes.some(quote => !feedback.sourceQuotes.includes(quote))) {
+                    return { eligible: false, reason: '新Reader反馈遗漏旧Reader事实约束' };
+                }
+                parentStage = parent.savedParentStage || 'fullStageReanalysis';
+            }
+            const includeCoreFeedback = parentStage === 'coreSummaryRepair'
+                || parent?.savedParentStage === 'coreSummaryRepair';
+            const guidance = [...new Set([
+                feedback.readerFeedback,
+                includeCoreFeedback ? (parentFeedback?.coreFeedback || '') : '',
+                parentFeedback?.primaryFeedback || ''
+            ].filter(Boolean))].join('\n原主文事实约束仍适用，但本次只修Reader：\n');
+            const quotes = [...new Set([...feedback.sourceQuotes, ...(parentFeedback?.sourceQuotes || [])])];
+            const rawEffectiveFeedback = `${guidance}\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n${quotes.join('\n')}`;
+            if (rawEffectiveFeedback.length > 4000) {
+                return { eligible: false, reason: 'rendered_feedback_exceeds_limit' };
+            }
+            const effectiveFeedback = rawEffectiveFeedback.trim();
+            const hasFailure = Boolean(paper?.latestAnalysisAttemptError || paper?.error
+                || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed');
+            const stages = paper?.analysisManifest?.stages || {};
+            const allStagesIntact = Object.values(stages).every(stage =>
+                !stage || !['transient_failure', 'failed', 'contract_rejected'].includes(stage.status));
+            const expectedObligationSha = bound.proof.feedbackSha256;
+            const preflightFactReviewRejection = paper?.latestAnalysisAttemptErrorCode === 'DAILY_FACT_REVIEW_INTEGRITY'
+                && paper?.latestAnalysisAttemptRetryable === false
+                && (!paper.error || paper.error === paper.latestAnalysisAttemptError)
+                && allStagesIntact
+                && (!paper.analysisFactReviewObligation
+                    || paper.analysisFactReviewObligation.feedbackSha256 === expectedObligationSha);
+            const exhaustedReaderRecoveryOnIntactParent = [
+                'READER_FULL_ATTEMPTS_EXHAUSTED',
+                'READER_REPAIR_ATTEMPTS_EXHAUSTED',
+                'READER_REPAIR_NO_PROGRESS'
+            ].includes(paper?.latestAnalysisAttemptErrorCode)
+                && paper?.latestAnalysisAttemptErrorCategory === 'reader_recovery'
+                && paper?.latestAnalysisAttemptRetryable === false
+                && (!paper.error || paper.error === paper.latestAnalysisAttemptError)
+                && allStagesIntact
+                && engine.hasValidIntegratedApiReaderRecords(paper)
+                && (!paper.analysisFactReviewObligation
+                    || paper.analysisFactReviewObligation.feedbackSha256 === expectedObligationSha);
+            const completedPrimaryCheckpointResume = paper?.latestAnalysisAttemptError === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR
+                && paper?.latestAnalysisAttemptErrorCode === 'CONTRACT_REJECTED'
+                && (!paper.error || paper.error === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR);
+            const knownPreRequestRejection = completedPrimaryCheckpointResume
+                || preflightFactReviewRejection
+                || exhaustedReaderRecoveryOnIntactParent;
+            const hasReviewedCompletedPrimaryInMemory = () => {
+                if (deep.hasReviewedCompletedPrimaryReaderSeed(paper, source.text, effectiveFeedback)) {
+                    return true;
+                }
+                if (paper?.latestAnalysisAttemptError !== COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR
+                    || !parentBound || !parentFeedback?.primaryFeedback?.trim()) {
+                    return false;
+                }
+                const fresh = require('./lib/fresh-analysis-context');
+                const scoringFormat = require('./lib/scoring-record-format');
+                const primaryStage = paper.analysisManifest?.stages?.primaryAnalysis;
+                const scoringStage = paper.analysisManifest?.stages?.scoringAudit;
+                const readerStage = paper.analysisManifest?.stages?.apiReaderArticle;
+                const primaryFallback = !parentFeedback.readerFeedback.trim();
+                if (primaryFallback && (
+                    deep.stableFingerprint(readerStage?.factReview || null) !== deep.stableFingerprint(parentBound.proof)
+                    || readerStage?.reviewFeedbackSha256 !== factReview.sha(effectiveFeedback)
+                )) {
+                    return false;
+                }
+                if (primaryStage?.status !== 'complete' || !primaryStage.factReview
+                    || deep.stableFingerprint(primaryStage.factReview) !== deep.stableFingerprint(parentBound.proof)
+                    || !fresh.isDailyFreshSourceScope()
+                    || parentFeedback.runId !== fresh.getFreshAnalysisContext()?.runId
+                    || scoringStage?.status !== 'complete'
+                    || !scoringFormat.hasScoringAuditFormat(scoringStage)
+                    || !scoringStage.audit || typeof scoringStage.audit !== 'object' || Array.isArray(scoringStage.audit)
+                    || scoringStage.auditSha256 !== deep.stableFingerprint(scoringStage.audit)) {
+                    return false;
+                }
+                try {
+                    const scopedSource = require('./lib/model-text-sanitization').currentModelInputSource(paper);
+                    if (!require('./lib/completed-reader-upstream').completedReaderUpstream(paper, scopedSource)
+                        || !engine.hasValidIntegratedApiReaderRecords(paper)) {
+                        return false;
+                    }
+                    const sourceSha256 = factReview.sha(String(source.text || ''));
+                    if (sourceSha256 !== paper.sourceSha256
+                        || sourceSha256 !== parentFeedback.sourceFiles['source.txt']
+                        || sourceSha256 !== paper.analysisManifest?.sourceAcquisition?.sourceSha256) {
+                        return false;
+                    }
+                    fresh.assertFreshPaper(paper);
+                    const analysisText = String(paper.analysis || '');
+                    if ((parentFeedback.rejectedPrimaryClaims || []).some(claim => analysisText.includes(claim))
+                        || (parentFeedback.rejectedCoreClaims || []).some(claim => analysisText.includes(claim))) {
+                        return false;
+                    }
+                } catch (_) {
+                    return false;
+                }
+                return true;
+            };
+            const verifiedPreRequestSeed = hasFailure && !knownPreRequestRejection
+                && Boolean(require('./lib/reader-fact-pre-request-recovery')
+                    .isVerifiedReaderFactPreRequestSeed(paper, source.text, effectiveFeedback));
+            const reviewedCompletedPrimarySeed = hasFailure && !knownPreRequestRejection && !verifiedPreRequestSeed
+                && hasReviewedCompletedPrimaryInMemory();
+            const failureRecoveredBySeed = knownPreRequestRejection
+                || verifiedPreRequestSeed
+                || reviewedCompletedPrimarySeed;
+            if (hasFailure && !failureRecoveredBySeed) {
+                return { eligible: false, reason: 'missing_reviewed_fact_local_seed' };
+            }
+            if (factReview.sha(String(source.text || '')) !== paper.sourceSha256) {
+                return { eligible: false, reason: 'missing_reviewed_fact_local_seed' };
+            }
+            const seedPaper = failureRecoveredBySeed
+                ? { ...paper, latestAnalysisAttemptError: null }
+                : paper;
+            const seed = deep.prepareApiReaderRevisionSeed(seedPaper, source.text, effectiveFeedback, {
+                readerFactLocalRevision: true
+            });
+            return evaluateCoverageFromSeed(seed);
+        };
         return dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, () => {
             if (engine.paperAnalysisLockHeld(paper)) {
                 if (parent) {
                     const parentBound = factReview.validateFeedback(parent.feedback, dailySourcePlan, parent.paper);
-                    return factReview.withFactReview(parentBound, () =>
-                        factReview.withReaderFactReview(bound, paper, checkInScope));
+                    const savedParentFile = path.join(
+                        dailyFreshSources.factFeedbackDirectory(dailySourcePlan),
+                        `${parentBound.proof.feedbackSha256}.json`
+                    );
+                    if (fs.existsSync(savedParentFile)) {
+                        return factReview.withReadOnlySavedFactReview(parentBound, () =>
+                            factReview.withReaderFactReview(bound, paper, checkInScope));
+                    }
+                    return checkReadOnlyInMemory();
                 }
                 return factReview.withReaderFactReview(bound, paper, checkInScope);
             }
-            return factReview.withFactReview(bound, checkInScope);
+            return checkReadOnlyInMemory();
         });
     } catch (error) {
         return { eligible: false, reason: error?.message || 'auto_preflight_failed' };

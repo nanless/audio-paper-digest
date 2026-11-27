@@ -4,6 +4,7 @@
 const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const {
@@ -406,7 +407,8 @@ function loadExistingEpisodes(episodesDir, currentDate) {
             if (parsed
                 && (parsed.contract === 'daily-podcast-episode' || parsed.contract === 'daily-podcast-episode-v1')
                 && typeof parsed.date === 'string'
-                && parsed.date !== currentDate) {
+                && parsed.date !== currentDate
+                && (!parsed.publishStatus || parsed.publishStatus === 'published')) {
                 byDate.set(parsed.date, parsed);
             }
         } catch {
@@ -421,6 +423,24 @@ function buildChaptersReleaseUrl({ repo, tag, chaptersFileName }) {
         throw new Error(`Invalid chapters asset filename: "${chaptersFileName}"`);
     }
     return `https://github.com/${repo}/releases/download/${tag}/${chaptersFileName}`;
+}
+
+function isSameGitHubReleaseChaptersBase(chaptersBaseUrl, repo, tag) {
+    if (!chaptersBaseUrl) return true;
+    try {
+        const parsed = new URL(String(chaptersBaseUrl).trim());
+        const expectedPath = `/${repo}/releases/download/${tag}`.replace(/\/+$/, '');
+        return parsed.protocol === 'https:'
+            && parsed.hostname.toLowerCase() === 'github.com'
+            && !parsed.port
+            && !parsed.search
+            && !parsed.hash
+            && !parsed.username
+            && !parsed.password
+            && parsed.pathname.replace(/\/+$/, '') === expectedPath;
+    } catch {
+        return false;
+    }
 }
 
 function assertNotSymlinkPath(targetPath) {
@@ -607,7 +627,7 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
         });
     }
     buildPodcastRssXml([preflightMetadata, ...priorEpisodes], {
-        feedUrl: options.feedUrl || `${siteRoot}podcast.xml`,
+        feedUrl: options.feedUrl || `${siteRoot}feeds/podcast.xml`,
         link: siteRoot
     });
 
@@ -662,29 +682,52 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
 
     writeFileAtomic(chaptersPath, `${JSON.stringify(chaptersJson, null, 2)}\n`);
     let chaptersUploaded = false;
-    if (releaseResult.published && !options.dryRun && !options.localOnly) {
-        ghExecFileSyncFn('gh', [
-            'release', 'upload',
-            '--repo', releaseResult.repo,
-            '--clobber',
-            '--',
-            releaseResult.tag,
-            chaptersPath
-        ], {
-            cwd: PROJECT_ROOT,
-            encoding: 'utf8',
-            shell: false,
-            timeout: 120000,
-            env: ghEnv,
-            stdio: ['ignore', 'pipe', 'pipe']
-        });
-        chaptersUploaded = true;
+    const shouldUploadChaptersToRelease = releaseResult.published
+        && !options.dryRun
+        && !options.localOnly
+        && isSameGitHubReleaseChaptersBase(options.chaptersBaseUrl, releaseResult.repo, releaseResult.tag);
+    if (shouldUploadChaptersToRelease) {
+        let uploadPath = chaptersPath;
+        let stageDir = null;
+        try {
+            if (path.basename(chaptersPath) !== chaptersFileName) {
+                stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'podcast-chapters-stage-'));
+                if (process.platform !== 'win32') {
+                    fs.chmodSync(stageDir, 0o700);
+                }
+                uploadPath = path.join(stageDir, chaptersFileName);
+                fs.copyFileSync(chaptersPath, uploadPath);
+                if (process.platform !== 'win32') {
+                    fs.chmodSync(uploadPath, 0o400);
+                }
+            }
+            ghExecFileSyncFn('gh', [
+                'release', 'upload',
+                '--repo', releaseResult.repo,
+                '--clobber',
+                '--',
+                releaseResult.tag,
+                uploadPath
+            ], {
+                cwd: PROJECT_ROOT,
+                encoding: 'utf8',
+                shell: false,
+                timeout: 120000,
+                env: ghEnv,
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
+            chaptersUploaded = true;
+        } finally {
+            if (stageDir) {
+                fs.rmSync(stageDir, { recursive: true, force: true });
+            }
+        }
     }
     writeFileAtomic(metadataPath, `${JSON.stringify(episodeMetadata, null, 2)}\n`);
 
     const allEpisodes = [episodeMetadata, ...priorEpisodes];
     const rssXml = buildPodcastRssXml(allEpisodes, {
-        feedUrl: options.feedUrl || `${siteRoot}podcast.xml`,
+        feedUrl: options.feedUrl || `${siteRoot}feeds/podcast.xml`,
         link: siteRoot
     });
     writeFileAtomic(rssPath, rssXml);
@@ -705,7 +748,7 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     }
     writeFileAtomic(clientFeedPath, `${JSON.stringify(clientFeed, null, 2)}\n`);
 
-    const portalSync = options.portalRepo
+    const portalSync = (options.portalRepo && !options.dryRun && !options.localOnly)
         ? syncPodcastToPortalRepo({ portalRepo: options.portalRepo, rssXml, clientFeed })
         : null;
 
@@ -783,6 +826,7 @@ module.exports = {
     buildSynthCommandArgs,
     loadExistingEpisodes,
     DEFAULT_EPISODES_DIR,
+    isSameGitHubReleaseChaptersBase,
     syncPodcastToPortalRepo,
     runCheckEnv,
     runDailyPodcastPipeline,

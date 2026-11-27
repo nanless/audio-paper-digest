@@ -926,7 +926,7 @@ function buildPodcastRssXml(episodes, channelConfig = {}) {
         'channelConfig.link'
     );
     const feedUrl = validateSafeHttpsUrl(
-        channelConfig.feedUrl || 'https://nanless.github.io/audio-research-portal/podcast.xml',
+        channelConfig.feedUrl || 'https://nanless.github.io/audio-research-portal/feeds/podcast.xml',
         'channelConfig.feedUrl'
     );
     const description = String(

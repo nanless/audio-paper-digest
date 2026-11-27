@@ -5420,6 +5420,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     grantedReaderBudget.settleReaderResponse(grantedResponseLease, 'content', paidRaw);
                     if (!repairContext) fullAttempts += 1;
                     let paidCandidate = candidate;
+                    let savedPaidRaw = paidRaw;
                     if (!repairContext) {
                         paidCandidate = null;
                         try {
@@ -5430,6 +5431,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                                 if (checked.typoFixed) {
                                     console.log(`    [deep] 自动纠正当前 reader-draft schemaFingerprint 单字符抄写偏差 (${checked.editKind})`);
                                     paidDraftJson = JSON.stringify(checked.normalized);
+                                    savedPaidRaw = paidDraftJson;
                                 }
                             } catch (_) { /* 交给 parseRepairableDraft 处理 */ }
                             paidCandidate = repair.parseRepairableDraft(paidDraftJson);
@@ -5438,7 +5440,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     }
                     try { repair.saveFailedCandidate(candidateDirectory, identity, {
                         status: 'failed', draft: paidCandidate,
-                        rawDraft: repairContext ? previousDraft : paidRaw,
+                        rawDraft: repairContext ? previousDraft : savedPaidRaw,
                         draftOrderMappings, readerRecoveryRevisions, ...(recovered?.completedSourceReaderRecovery ? { completedSourceReaderRecovery: recovered.completedSourceReaderRecovery } : {}), ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}), issues: currentIssues,
                         attempts: attempt, fullAttempts, noProgress,
                         failureSignature: previousFailureSignature, validationFailureStreak,
