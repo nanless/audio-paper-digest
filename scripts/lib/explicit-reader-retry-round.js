@@ -195,16 +195,32 @@ function exhaustedInitialFullWithoutLocalDraft(payload, paper) {
         const value = JSON.parse(payload.rawDraft);
         return Boolean(value && typeof value === 'object' && !Array.isArray(value));
     } catch (_) {
-        // 完整 JSON 对象里偶发裸 LaTeX 转义（如 \( ... \)）同样属于不可局部修复的
-        // 完整响应耗尽；仍要求首尾闭合且转义裸反斜杠后是完整 JSON 对象，截断响应继续拒绝。
+        // 完整 JSON 对象里偶发裸 LaTeX 转义（如 \( ... \)）或对象/数组间偶漏逗号同样属于
+        // 不可局部修复的完整响应耗尽；仍要求首尾闭合且经单类有界语法探测后是完整 JSON 对象，截断响应继续拒绝。
+        const trimmed = payload.rawDraft.trim();
+        if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return false;
         const hasBadEscapeIssue = payload.issues.some(issue =>
             /^读者文章 JSON 无法解析: Bad escaped character in JSON/.test(issue.message || ''));
-        const trimmed = payload.rawDraft.trim();
-        if (!hasBadEscapeIssue || !trimmed.startsWith('{') || !trimmed.endsWith('}')) return false;
-        try {
-            const value = JSON.parse(trimmed.replace(/\\(?!["\\/bfnrtu])/g, '\\\\'));
-            return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-        } catch (__) { return false; }
+        if (hasBadEscapeIssue) {
+            try {
+                const value = JSON.parse(trimmed.replace(/\\(?!["\\/bfnrtu])/g, '\\\\'));
+                return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+            } catch (__) { return false; }
+        }
+        const missingComma = payload.issues
+            .map(issue => String(issue.message || '').match(
+                /^读者文章 JSON 无法解析: Expected ',' or '[}\]]' after (?:property value|array element) in JSON at position (\d+)/))
+            .find(Boolean);
+        if (missingComma) {
+            const pos = Number(missingComma[1]);
+            if (Number.isSafeInteger(pos) && pos > 0 && pos < payload.rawDraft.length) {
+                try {
+                    const value = JSON.parse(`${payload.rawDraft.slice(0, pos)},${payload.rawDraft.slice(pos)}`);
+                    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+                } catch (__) { return false; }
+            }
+        }
+        return false;
     }
 }
 function beginExplicitRound(directory, identity, recovered, paper) {
