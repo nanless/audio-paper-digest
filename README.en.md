@@ -86,8 +86,8 @@ Production, publishing, and personal reading stay isolated: this repository push
 | Zotero Archiving (metadata + guide + PDF + notes) | BibTeX / RIS / Obsidian | Local Zotero Desktop API | Official Zotero Web API v3 |
 | Nutstore WebDAV sync & full-space backups | — | One-click bidirectional sync + lossless merge / snapshots | One-click bidirectional sync + lossless merge / snapshots |
 
-- **Current published release**: Both macOS and Android are at **1.5.1 (build 25)** (published 27 Nov 2026, Beijing time, annotated tag `v1.5.1`, commit `7622f2ec`; previous release: `1.5.0 / build 24`); see [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1), [1.5.1 release record](docs/workbench-1.5.1-review.md), and [client release verification](docs/client-release-verification.md).
-- **Upgrade notes**: Upgrading macOS from 1.4.x renames the bundle to `音频研究工作台.app` while keeping `com.nanless.PaperDigest`, data directories, and Keychain entries (local ad-hoc signature, macOS 15+ Apple silicon)—quit and remove the old bundle after installing. Android keeps the 1.4.4+ signing certificate so 1.4.4–1.5.0 upgrade in place; 1.4.3 requires backing up and uninstalling first.
+- **Source & public release**: Current source version is **1.5.2 (build 26) (not yet published)** (see the [1.5.2 pre-release record](docs/workbench-1.5.2-review.md)). The latest published release on both macOS and Android is **1.5.1 / build 25** (published 27 Nov 2026, Beijing time, annotated tag `v1.5.1`, commit `7622f2ec`); see [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1), [1.5.1 release record](docs/workbench-1.5.1-review.md), and [client release verification](docs/client-release-verification.md).
+- **Upgrade notes**: Upgrading macOS from 1.4.x renames the bundle to `音频研究工作台.app` while keeping `com.nanless.PaperDigest`, data directories, and Keychain entries (local ad-hoc signature, macOS 15+ Apple silicon)—quit and remove the old bundle after installing. Android keeps the 1.4.4+ signing certificate so 1.4.4–1.5.1 upgrade in place; 1.4.3 requires backing up and uninstalling first.
 
 ---
 

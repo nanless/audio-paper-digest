@@ -86,8 +86,8 @@
 | Zotero 文献归档（书目 + 导读 + PDF + 笔记） | BibTeX / RIS / Obsidian | 本机 Zotero Desktop API | 官方 Zotero Web API v3 |
 | 坚果云 WebDAV 同步与全空间快照备份 | — | 一键双向同步 + 无损合并 / 独立快照 | 一键双向同步 + 无损合并 / 独立快照 |
 
-- **当前公开发行版本**：两端均为 **1.5.1（构建号 25）**（2026-11-27 公开发布，附注标签 `v1.5.1` 指向发行提交 `7622f2ec`；上一版为 `1.5.0 / 构建号 24`），下载与校验见 [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)、[1.5.1 发版记录](docs/workbench-1.5.1-review.md) 与 [客户端发行核验](docs/client-release-verification.md)。
-- **升级提示**：macOS 从 1.4.x 升级后应用包更名为 `音频研究工作台.app`，继续共用 `com.nanless.PaperDigest` 标识、原资料目录与钥匙串（本地 ad-hoc 签名，需 macOS 15+ Apple Silicon），安装后退出并移除旧包即可。Android 沿用 1.4.4+ 签名证书，1.4.4–1.5.0 可直接覆盖升级，1.4.3 须先备份并卸载再安装。
+- **源码与公开发行版本**：当前源码版本为 **1.5.2（构建号 26）（尚未公开发布）**（详见 [1.5.2 预发布记录](docs/workbench-1.5.2-review.md)）；最近已公开发行版本为 **1.5.1 / 构建号 25**（2026-11-27 公开发布，附注标签 `v1.5.1` 指向发行提交 `7622f2ec`），下载与校验见 [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)、[1.5.1 发版记录](docs/workbench-1.5.1-review.md) 与 [客户端发行核验](docs/client-release-verification.md)。
+- **升级提示**：macOS 从 1.4.x 升级后应用包更名为 `音频研究工作台.app`，继续共用 `com.nanless.PaperDigest` 标识、原资料目录与钥匙串（本地 ad-hoc 签名，需 macOS 15+ Apple Silicon），安装后退出并移除旧包即可。Android 沿用 1.4.4+ 签名证书，1.4.4–1.5.1 可直接覆盖升级，1.4.3 须先备份并卸载再安装。
 
 ---
 

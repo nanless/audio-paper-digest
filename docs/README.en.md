@@ -25,7 +25,7 @@ See the [terminology guide](writing-guide.md#术语先解释再统一称呼) for
 | Compare platform features and window adaptation | [Android feature mapping](android-feature-parity.md), [interface design](macos-interface-design-research.md) |
 | Understand personal study and product decisions | [Workbench design](desktop-research-workbench-plan.md), which separates current capabilities from future goals |
 
-The current published release for both Mac and Android is **1.5.1 (build 25)** (published 27 November 2026, Beijing time, annotated tag `v1.5.1`, commit `7622f2ec`), covering Studio Monograph UI refinements, cross-platform page/offline fixes, and full conference/historical pipeline parity; download from [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1) and see the [1.5.1 release record](workbench-1.5.1-review.md). The previous release is `1.5.0 / build 24` (published 26 November 2026, commit `5b5a8e79`); see the [1.5.0 release record](workbench-1.5.0-review.md).
+The current source version for both Mac and Android is **1.5.2 (build 26) (not yet published)**, covering 6-surface 58-key conference venue display parity, client concurrency/transport hardening, and server Rounds 1–4 architectural convergence; see the [1.5.2 pre-release record](workbench-1.5.2-review.md). The latest published release is **1.5.1 / build 25** (published 27 November 2026, Beijing time, annotated tag `v1.5.1`, commit `7622f2ec`); download from [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1) and see the [1.5.1 release record](workbench-1.5.1-review.md).
 
 <details>
 <summary>Previous releases 1.5.0–1.3.0 (each version retains its own date, environment, and tested scope)</summary>
@@ -121,7 +121,7 @@ Standing paid authorization permits necessary subsequent windows, with original 
 
 These records explain the problems, changes, and actual verification at the time. They are not separate current operating procedures.
 
-- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md), [1.4.4](workbench-1.4.4-review.md), [1.4.5](workbench-1.4.5-review.md), [1.4.6](workbench-1.4.6-review.md), [1.4.7](workbench-1.4.7-review.md), [1.5.0](workbench-1.5.0-review.md), [1.5.1](workbench-1.5.1-review.md).
+- Workbench versions: [1.1.0](workbench-1.1.0-review.md), [1.2.1](workbench-1.2.1-review.md), [1.3.0](workbench-1.3.0-review.md), [1.3.7](workbench-1.3.7-review.md), [1.4.0](workbench-1.4.0-review.md), [1.4.1](workbench-1.4.1-review.md), [1.4.2](workbench-1.4.2-review.md), [1.4.3](workbench-1.4.3-review.md), [1.4.4](workbench-1.4.4-review.md), [1.4.5](workbench-1.4.5-review.md), [1.4.6](workbench-1.4.6-review.md), [1.4.7](workbench-1.4.7-review.md), [1.5.0](workbench-1.5.0-review.md), [1.5.1](workbench-1.5.1-review.md), [1.5.2 (pre-release)](workbench-1.5.2-review.md).
 - Android fixes: [1.3.1](android-1.3.1-review.md), [1.3.2](android-1.3.2-review.md), [1.3.3](android-1.3.3-review.md).
 - Workbench usability: [2026-11-01 review](workbench-usability-review-20261101.md).
 

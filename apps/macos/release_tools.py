@@ -392,6 +392,15 @@ def prepare(args):
 - 两端保持同一版本（1.5.1）与构建号（25）；Android 继续沿用 1.4.4–1.5.0 发布签名库（证书 SHA-256 `6a0c3138…`），已安装 1.4.4–1.5.0 的用户可直接覆盖升级，1.4.3 用户仍需先导出备份、卸载旧版再安装；无新增权限、依赖或组件。
 
 '''
+        if info['version'] == '1.5.2':
+            changes = '''## 1.5.2 更新
+
+- 六端 58 键会议简称显示齐平：在 macOS Swift、macOS WebView JS、Android Kotlin 与音频研究门户间统一 58 组会议显示名（含 `Interspeech`、`Speech Prosody`、`ACM MM`、`DCASE`、`TASLP`、`IJCAI`、`ICCV`、`ECCV` 等）、一致的三步分隔符归一化与 ASCII 年份校验规则。
+- 1.5.1 后的双端客户端并发、传输与构建守卫加固：Android 新增 `StudyCoordinator` 后台任务对账以防恢复死锁；macOS 修复图片传输 `responseTooLarge` 边界与 `PodcastPlayerService` 竞态；双端加固聚合页与备份存储及 Zotero 边界；Android Gradle `verifyClientProtocols` 监听全部 12 份 `clients*.json` 协议文件，并补齐 Android `DocumentTables.test.cjs` 与双端测试完整性守卫。
+- 服务端、发布与门户第 1–4 轮及深度复查收敛升级：修复日更全文筛选正文锚点排除与 30K 摘录召回保障、升级 `ordinal-v2` 静态前缀 KV 缓存协议、上线 Python 共享 `pinned_http_transport.py` arXiv 源站闸门、补齐 KaTeX 渲染侧容错修复、彻底破除 JS 循环依赖（SCC 归零）并拆解发布与分析大单体。
+- 两端保持同一版本（1.5.2）与构建号（26）；Android 继续沿用 1.4.4–1.5.1 发布签名库（证书 SHA-256 `6a0c3138…`），已安装 1.4.4–1.5.1 的用户可直接覆盖升级，1.4.3 用户仍需先导出备份、卸载旧版再安装；无新增权限、依赖或组件。
+
+'''
         notes=f'''# 音频研究工作台 {info['version']}
 
 {changes}

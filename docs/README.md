@@ -23,7 +23,7 @@
 | 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
 | 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
-Mac 与 Android 当前公开发行版本均为 **1.5.1（构建号 25）**（2026-11-27 公开发布，附注标签 `v1.5.1` 指向发行提交 `7622f2ec`），汇总 Studio Monograph 视觉升级、双端页面与离线修复及会议/历史三线齐平，下载见 [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)，详见 [1.5.1 发版记录](workbench-1.5.1-review.md)。上一版为 `1.5.0 / 构建号 24`（2026-11-26 公开发布，来源提交 `5b5a8e79`），详见 [1.5.0 发版记录](workbench-1.5.0-review.md)。
+Mac 与 Android 当前源码版本均为 **1.5.2（构建号 26）（尚未公开发布）**，汇总六端 58 键会议名齐平、客户端并发与传输加固及服务端第 1–4 轮架构收敛，详见 [1.5.2 预发布记录](workbench-1.5.2-review.md)。最近已公开发行版本为 **1.5.1 / 构建号 25**（2026-11-27 公开发布，附注标签 `v1.5.1` 指向发行提交 `7622f2ec`），下载见 [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)，详见 [1.5.1 发版记录](workbench-1.5.1-review.md)。
 
 <details>
 <summary>查看 1.5.0–1.3.0 历史版本摘要（每次发版的真实测试与验证范围均以对应记录为准）</summary>
@@ -119,7 +119,7 @@ Mac 与 Android 当前公开发行版本均为 **1.5.1（构建号 25）**（202
 
 历史记录用于理解当时发现的问题、采用的修改和真实验证范围。它们不是另一套现行操作入口。
 
-- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)、[1.4.6](workbench-1.4.6-review.md)、[1.4.7](workbench-1.4.7-review.md)、[1.5.0](workbench-1.5.0-review.md)、[1.5.1](workbench-1.5.1-review.md)。
+- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)、[1.4.6](workbench-1.4.6-review.md)、[1.4.7](workbench-1.4.7-review.md)、[1.5.0](workbench-1.5.0-review.md)、[1.5.1](workbench-1.5.1-review.md)、[1.5.2（预发布）](workbench-1.5.2-review.md)。
 - Android 修复记录：[1.3.1](android-1.3.1-review.md)、[1.3.2](android-1.3.2-review.md)、[1.3.3](android-1.3.3-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 
