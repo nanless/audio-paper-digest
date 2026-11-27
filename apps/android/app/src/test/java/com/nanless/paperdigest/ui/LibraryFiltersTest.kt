@@ -48,11 +48,70 @@ class LibraryFiltersTest {
     @Test
     fun offlineConferenceVenueParsingAndCollection() {
         val interspeech = parseConferenceVenue("conference:interspeech:2026:paper-01")
-        assertEquals(ConferenceVenue("conference:interspeech:2026", "INTERSPEECH 2026"), interspeech)
+        assertEquals(ConferenceVenue("conference:interspeech:2026", "Interspeech 2026"), interspeech)
         assertEquals("NeurIPS 2025", parseConferenceVenue("conference:neurips:2025:abc")?.label)
         assertEquals("ICASSP 2026", parseConferenceVenue("conference:icassp:2026:99")?.label)
         assertNull(parseConferenceVenue("arxiv:2611.00001"))
         assertNull(parseConferenceVenue("conference:bad:year:1"))
+
+        val venueParityCases = listOf(
+            "conference:INTERSPEECH:2026:paper-02" to "Interspeech 2026",
+            "conference:icassp:2026:999" to "ICASSP 2026",
+            "conference:speech_prosody:2026:sp1" to "Speech Prosody 2026",
+            "conference:speech-prosody:2026:sp2" to "Speech Prosody 2026",
+            "conference:speechprosody:2026:sp3" to "Speech Prosody 2026",
+            "conference:Speech-Prosody:2026:sp4" to "Speech Prosody 2026",
+            "conference:waspaa:2025:w1" to "WASPAA 2025",
+            "conference:asru:2025:a1" to "ASRU 2025",
+            "conference:slt:2026:s1" to "SLT 2026",
+            "conference:ismir:2026:i1" to "ISMIR 2026",
+            "conference:dcase:2026:d1" to "DCASE 2026",
+            "conference:taslp:2026:t1" to "TASLP 2026",
+            "conference:ieee_acm_taslp:2026:t2" to "TASLP 2026",
+            "conference:ieee-acm-taslp:2026:t3" to "TASLP 2026",
+            "conference:ieee-acm_taslp:2026:t4" to "TASLP 2026",
+            "conference:neurips:2025:abc" to "NeurIPS 2025",
+            "conference:nips:2024:n1" to "NeurIPS 2024",
+            "conference:icml:2026:m1" to "ICML 2026",
+            "conference:iclr:2026:l1" to "ICLR 2026",
+            "conference:acl:2026:acl1" to "ACL 2026",
+            "conference:emnlp:2026:e1" to "EMNLP 2026",
+            "conference:naacl:2026:na1" to "NAACL 2026",
+            "conference:aaai:2026:aa1" to "AAAI 2026",
+            "conference:ijcai:2026:ij1" to "IJCAI 2026",
+            "conference:cvpr:2026:cv1" to "CVPR 2026",
+            "conference:iccv:2025:ic1" to "ICCV 2025",
+            "conference:eccv:2026:ec1" to "ECCV 2026",
+            "conference:acmmm:2026:mm1" to "ACM MM 2026",
+            "conference:acm_mm:2026:mm2" to "ACM MM 2026",
+            "conference:acm-mm:2026:mm3" to "ACM MM 2026",
+            "conference:mm:2026:mm4" to "ACM MM 2026",
+            "conference:siggraph:2026:sg1" to "SIGGRAPH 2026",
+            "conference:chi:2026:ch1" to "CHI 2026",
+            "conference:ubicomp:2026:ub1" to "UbiComp 2026",
+            "conference:mobicom:2026:mc1" to "MobiCom 2026",
+            "conference:mobisys:2026:ms1" to "MobiSys 2026",
+            "conference:sensys:2026:sn1" to "SenSys 2026",
+            "conference:odyssey:2026:od1" to "Odyssey 2026",
+            "conference:lrec:2026:lr1" to "LREC 2026",
+            "conference:coling:2026:co1" to "COLING 2026",
+            "conference:eacl:2026:ea1" to "EACL 2026",
+            "conference:kdd:2026:kd1" to "KDD 2026",
+            "conference:www:2026:ww1" to "WWW 2026",
+            "conference:icra:2026:ir1" to "ICRA 2026",
+            "conference:iros:2026:io1" to "IROS 2026",
+            "conference:corl:2026:cl1" to "CoRL 2026",
+            "conference:jmlr:2026:jm1" to "JMLR 2026",
+            "conference:tmlr:2026:tm1" to "TMLR 2026",
+            "conference:tacl:2026:ta1" to "TACL 2026",
+            "conference:spl:2026:sp5" to "SPL 2026",
+            "conference:dafx:2026:df1" to "DAFx 2026",
+            "conference:chime:2026:cm1" to "CHiME 2026",
+            "conference:custom_venue:2026:u1" to "CUSTOM_VENUE 2026",
+        )
+        for ((paperId, expectedLabel) in venueParityCases) {
+            assertEquals("Venue parity for $paperId", expectedLabel, parseConferenceVenue(paperId)?.label)
+        }
 
         val p1 = Paper("conference:interspeech:2026:1", "A", "A")
         val p2 = Paper("conference:interspeech:2026:2", "B", "B")
@@ -60,7 +119,7 @@ class LibraryFiltersTest {
         val p4 = Paper("arxiv:2611.00001", "D", "D")
         val venues = collectConferenceVenues(listOf(p1, p2, p3, p4))
         assertEquals(2, venues.size)
-        assertEquals("INTERSPEECH 2026", venues[0].first.label)
+        assertEquals("Interspeech 2026", venues[0].first.label)
         assertEquals(2, venues[0].second)
         assertEquals("ICASSP 2025", venues[1].first.label)
         assertEquals(1, venues[1].second)

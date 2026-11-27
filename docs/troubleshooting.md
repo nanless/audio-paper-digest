@@ -206,6 +206,63 @@ npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "用户已明确要�
 
 `digest:status` 只反映读取时状态，推送或变更不生图登记后须重新运行。当前日期的失败不会被归档数据掩盖；历史日期也只有在各文件日期、来源和论文集合匹配时才能使用归档。网页上线另按上述部署与页面核验要求确认。
 
+## 13. 事实反馈、重试清单与发布传输排障速查
+
+### 13.1 构造来源绑定事实反馈与 Reader 重试清单
+
+定向事实纠错文件使用 `daily-bound-fact-review-v1` 协议（单链接普通文件，上限 32 KiB），必填字段包括：
+
+- **身份与来源绑定**：`contract`（固定 `"daily-bound-fact-review-v1"`）、`paperId`（规范 arXiv ID，不含 `vN`）、`batchDate`（`YYYY-MM-DD`）、`runId`（当前封存运行 UUID）、`sourceFiles`（`source.txt`、`source.pdf`、`source-runtime.json`、`source-manifest.json` 四份 64 位 SHA-256）、`coreAnalysisSha256`、`coreSummarySha256`。
+- **反馈与逐字证据**：`coreFeedback`、`readerFeedback`、`rejectedCoreClaims`、`rejectedReaderClaims`、`sourceQuotes`（至少一条存在于封存 `source.txt` 中的逐字引文，每项 ≤3000 字符、每列表最多 20 项；单份反馈正文加 `sourceQuotes` 与固定 80 字符开销合计 ≤4000 字符；可选成对附加 `primaryFeedback`/`rejectedPrimaryClaims`、`scoringFeedback`/`rejectedScoringClaims`、`tagFeedback`/`rejectedTagClaims`）。
+
+不要手工拼接 SHA；直接用脚手架自动核验并按 `0600` 原子落盘（默认写入 `data/runtime/fact-feedbacks/`）：
+
+```bash
+# 先 --dry-run 预览校验结果，确认无误后去掉 --dry-run 写入
+npm run fact-feedback:new -- --paper 2611.12345 \
+  --reader-feedback "更正消融表后的指标口径说明" \
+  --reject "当前 Reader 正文中的错误原句" \
+  --quote "封存 source.txt 中的逐字原文引文" \
+  --dry-run
+
+# 若存在当日博客审查失败报告，可自动预填错误描述、受拒原句与来源引文
+npm run fact-feedback:new -- --from-review-failure --paper 2611.12345 --quote "封存原文逐字引文"
+```
+
+如需同步修正核心摘要，可追加 `--core-feedback <TEXT>` 与 `--reject-core <CLAIM>`；支持 `--out <PATH>` 与 `--json`。命令通过校验后会直接打印下一步可复制的 `npm run batch` 命令。
+
+原额度已技术耗尽的日更 Reader 失败候选，用 `npm run reader-retry:new` 自动校验资格、原候选证据与四源 SHA，并按 `0600` 原子生成重试清单（默认写入 `data/runtime/reader-retry-manifests/`，默认输出预留预算 `320000` tokens）：
+
+```bash
+# 指定单篇/多篇，或用 --all-failed 覆盖全部未完成失败论文（两者互斥）
+npm run reader-retry:new -- --paper 2611.12345 --mode auto --budget 320000 --dry-run
+npm run reader-retry:new -- --all-failed --mode auto
+```
+
+`--mode` 支持 `auto`（默认：首次开窗走 `base`，已有显式轮时走父轮 `local`）、`base`、`local`、`full`；`--budget` 支持 `80000` 或 `320000`；首轮要求完整再生加 `--full`（须具备 `complete_failed_draft_no_progress` 证明）。命令同样支持 `--out <PATH>`、`--dry-run`、`--json`，落盘后按提示执行 `npm run batch -- --retry-failed-readers --reader-retry-manifest <PATH>`。
+
+### 13.2 三种日更恢复入口怎样选
+
+| 当前稿状态与问题 | 应选命令 | 模型调用与关键边界 |
+|---|---|---|
+| 主分析与 Reader **均已完成并完整签名**，仅少量正文/术语/图注原句事实偏差，需由模型重写 | `npm run batch -- --fact-feedback-file <FILE> --reader-fact-local`（不确定能否局部覆盖时用 `--reader-fact-local=auto`） | 仅接受严格 Reader-only 反馈；`auto` 先过 6 项只读预检，不满足时保守回退正常 Reader 恢复；主文/摘要/评分/标签受保护。若主文已完成但 Reader 未完成，改用 `npm run reanalyze:selected -- --reader-fact-feedback-file <FILE> <ID>` |
+| 已签名日更稿仅剩**确定性少量错字、术语或已获准精确原句/表绑定尾修**，无需模型改写 | `npm run batch -- --reader-signed-corrections <MANIFEST> --fact-feedback-file <FILE>` | **零模型请求**；清单须覆盖当前完整未完成集合，受日更人工名额限制（`min(15, max(10, floor(N/10)))`），每篇 1–8 个既有节点，仍走完整解析与独立博客审查 |
+| Reader **处于未完成失败态**且原额度已耗尽（6 次内容响应、连续 2 次无进展/校验失败，或 2 次全文无可用草稿） | 先 `npm run reader-retry:new`，再 `npm run batch -- --retry-failed-readers --reader-retry-manifest <MANIFEST>`（已安装活跃轮续跑仅用 `npm run batch -- --refresh-reader-diagnostics`，不再重传首轮清单） | 依据[持续授权](../AGENTS.md#持续授权以效率和效果为准)开启受控付费窗口（首轮 3 次内容 / 1 次全文 / 6 次实际请求 / 输出预留 `80000` 或 `320000` tokens），保留原稿、旧次数与全部费用账本 |
+
+### 13.3 Python 审查抓图 `SSLEOFError`、arXiv 限流与并发调优
+
+`blog:review` 多模态图片审查经项目 HTTP CONNECT 代理并固定已验公网 IP 拉取外部原图（按 IPv4 优先逐地址尝试，每地址最多 4 次传输尝试，单图默认总截止 120 秒）。Python 侧 `scripts/pinned_http_transport.py` 已为所有 `*.arxiv.org` 启用共享 `OriginGate` 并发信号量与冷却机制：收到 `429` 或 `Retry-After` 时按响应头（或默认 8 秒，上限 120 秒）冷却；收到 `ssl.SSLEOFError`（`EOF occurred in violation of protocol`）、`ConnectionResetError`、`http.client.RemoteDisconnected` 或 HTTP `502`/`503`/`504` 时默认冷却 2 秒并叠加带随机抖动的指数退避（基础 1 秒、封顶 12 秒）；同一次审查运行内还会复用已验证图片 URL 的内存字节缓存。
+
+若代理出口抖动或并发过高仍导致反复 `SSLEOFError`、arXiv 429 或审查端 LLM `ECONNRESET`，先确认代理节点本身稳定，再在项目 `.env` 中下调相关并发（修改后直接重跑 `blog:review`，已通过页面按 SHA 永久复用）：
+
+| 环境变量 | 默认值与范围 | 作用与调优建议 |
+|---|---|---|
+| `PD_ARXIV_MAX_CONCURRENCY` | 默认 `3`（`1–6`） | arXiv 源站并发闸门（Node 抓取与 Python 原图审查共用）；频繁出现 `SSLEOFError` 或 429 时先降至 `2` 或 `1` |
+| `PD_BLOG_REVIEW_CONCURRENCY` | 日更默认 `16`（`1–32`） | 独立页与汇总页分块审查并发数；代理连接吃紧或 SVG 光栅化竞争明显时降至 `8` 或 `6` |
+| `PD_BLOG_REVIEW_LLM_MAX_INFLIGHT` | 默认 `12`（`1–32`） | 发布审查进程级 LLM 在途请求总上限，防止“页面并发 × 页内 2 路图审”叠乘打满单账号或代理；账号 429 / `ECONNRESET` 升高时降至 `6–8` |
+| `PD_BLOG_REVIEW_CHUNK_CHARS` | 默认 `20000`（`4000–24000`） | 单页文本审查分块字符数；`20000–24000` 可减少重复提示词并提高缓存命中，单块超时或输出截断时回调至 `12000–16000` |
+| `PD_LLM_USAGE_SHARD_BY_DATE` | 默认 `0`（平铺），可设 `1` | 设为 `1` 后新用量事件按北京时间 `YYYY-MM-DD/` 子目录分片并维护日索引，加速 `digest:scorecard` 与状态聚合（历史平铺文件保持只读兼容） |
+
 ## 仍无法定位
 
 记录运行命令、目标日期、最早错误、所在阶段、相关清单路径和脱敏日志片段。不要附 API 密钥、认证头、Cookie 或完整 `.env`。

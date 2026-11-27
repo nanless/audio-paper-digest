@@ -14,7 +14,7 @@
   <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1"><img src="https://img.shields.io/badge/Client-v1.5.1_(Build_25)-b85a34?style=flat-square" alt="Client v1.5.1" /></a>
   <img src="https://img.shields.io/badge/macOS-15%2B_Apple_Silicon-182120?style=flat-square" alt="macOS 15+" />
   <img src="https://img.shields.io/badge/Android-9%2B_(4_ABIs)-182120?style=flat-square" alt="Android 9+" />
-  <img src="https://img.shields.io/badge/Archive-9%2C300%2B_篇精读_(8%2C650%2B_论文)-1f8a82?style=flat-square" alt="9,300+ Guides (8,650+ Papers)" />
+  <img src="https://img.shields.io/badge/Archive-9%2C400%2B_篇归档_(8%2C650%2B_论文)-1f8a82?style=flat-square" alt="9,400+ Posts (8,650+ Papers)" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2c5e3b?style=flat-square" alt="MIT License" /></a>
 </p>
 
@@ -22,7 +22,7 @@
 
 语音、音乐、声学与 Audio LLM 方向每天在 arXiv 和顶会涌出几十篇新作——只扫摘要容易漏掉关键约束，逐篇啃原 PDF 又往往耗掉整个上午。**音频研究工作台（Audio Research Workbench）**把日常追踪拆成三个边界清晰的开源组件，让每一处数字、公式与论文原图都可回溯到封存原文：
 
-- **公开知识门户（[音频研究门户 / Audio Research Portal](https://nanless.github.io/audio-research-portal/)）**：采用 **Studio Monograph 2.0** 排版，归档 **9,300+ 篇中文精读（覆盖 8,650+ 篇已核验论文）**、每日研究汇总、19 届顶会专题与 8 大音频 SOTA 方向榜单，支持 `⌘K` 全文检索、原图缩放、表格排序与 Obsidian / BibTeX / RIS 一键导出。
+- **公开知识门户（[音频研究门户 / Audio Research Portal](https://nanless.github.io/audio-research-portal/)）**：采用 **Studio Monograph 2.0** 排版，归档 **9,400+ 篇中文精读与专题汇总（含 9,200+ 篇单篇精读、覆盖 8,650+ 篇已核验论文）**、每日研究汇总、19 届顶会专题与 8 大音频 SOTA 方向榜单，支持 `⌘K` 全文检索、原图缩放、表格排序与 Obsidian / BibTeX / RIS 一键导出。
 - **双端原生工作台（macOS & Android 1.5.x）**：只读订阅门户静态快照与每日音频播客，提供导读与原 PDF 对照、离线多词检索、按需自配模型追问、Zotero 归档以及坚果云一键双向同步 WebDAV。
 - **内容生产引擎（本仓库）**：默认通过语言模型服务（LLM/API）完成抓取去重、筛选、四文件来源封存、深度分析、八维评分、九维分类与面向初学研究者的中文长文（代码中称 **Reader**），全部通过三层审查门禁后才推送发布。
 
@@ -60,7 +60,7 @@
 
 | 你想做什么 | 从这里开始 |
 |---|---|
-| 在浏览器免费读 9,300+ 篇中文精读与 8 大专题 | 打开 **[音频研究门户](https://nanless.github.io/audio-research-portal/)** · 检索、图注缩放与导出见 [网页阅读工具](docs/blog-reading-tools.md) |
+| 在浏览器免费读 9,400+ 篇中文精读与 8 大专题 | 打开 **[音频研究门户](https://nanless.github.io/audio-research-portal/)** · 检索、图注缩放与导出见 [网页阅读工具](docs/blog-reading-tools.md) |
 | 在 Mac 上双栏对照原 PDF、记笔记与归档 Zotero | 查看 **[Mac 版使用说明](apps/macos/README.md)**（Apple Silicon，macOS 15+，无需 `.env`） |
 | 在 Android 手机 / 平板上离线阅读与听每日播客 | 查看 **[Android 版使用说明](apps/android/README.md)**（Android 9+，全 4 种 ABI） |
 | 10 分钟理清来源、分析、门户与客户端的关系 | 阅读 **[项目导读](docs/project-guide.md)** |
@@ -78,7 +78,7 @@
 
 | 能力维度 | 音频研究门户（Web） | macOS 工作台（1.5.x） | Android 工作台（1.5.x） |
 |---|:---:|:---:|:---:|
-| 9,300+ 篇精读、400 项九维分类与评分/开源筛选 | 浏览器即开 + `⌘K` 面板 | 离线快照 + NFKC 多词检索 | 离线快照 + 后台预热 |
+| 9,400+ 篇归档、400 项九维分类与评分/开源筛选 | 浏览器即开 + `⌘K` 面板 | 离线快照 + NFKC 多词检索 | 离线快照 + 后台预热 |
 | 中文精读与原始 PDF 对照 / 物理页锚定 | 官方原文直达 | AppKit + PDFKit 双栏 | 手机单栏 / 平板并排 |
 | 每日音频播客（章节跳听 / `0.75×–2.0×`） | 网页播客播放器 | `AVAudioPlayer` + SHA 缓存 | `MediaPlayer` + SHA 缓存 |
 | 排版与图注交互（Studio Monograph 风格） | 1×–6× 原图灯箱 / 表格排序 | 严格白名单净化渲染 | Material 3 紧凑净化渲染 |
@@ -144,12 +144,12 @@
 | **当天日更** | `npm run digest:prepare -- YYYY-MM-DD`（`digest:api` 为等价别名）；见 [日更步骤](SKILL.md#1-日更) |
 | **开跑前体检与探源** | `npm run doctor -- --offline`（加 `--network` 探 arXiv）、`npm run config:check`、`npm run source:probe -- --date YYYY-MM-DD`、`npm run llm:accounts`、`npm run llm:accounts:quota -- sync` |
 | **进度监控与记分卡** | `npm run digest:status -- --date YYYY-MM-DD --watch`、`npm run digest:scorecard -- --date YYYY-MM-DD` |
-| **失败诊断与补丁清单** | `npm run recover -- --date YYYY-MM-DD`、`npm run manifest:new -- --spec SPEC.json`、`npm run table:check -- --draft FILE` |
+| **失败诊断与恢复清单** | `npm run recover -- --date YYYY-MM-DD`、`npm run fact-feedback:new`、`npm run reader-retry:new`、`npm run manifest:new -- --spec SPEC.json`、`npm run table:check -- --draft FILE` |
 | **上线核验与收尾** | `npm run verify:web -- --date DATE --deploy OID`、`npm run publish:finish -- --date DATE` |
 | **改动后全仓验收** | `npm run verify`（固定 Hugo 0.160.1 + 语法 + JS/Python 单测 + `docs:check` + `validate:data`） |
 
 <details>
-<summary>更多维护与可选命令（会议、历史、重发布、存储压缩、播客）</summary>
+<summary>更多维护与可选命令（会议、历史、重发布、存储压缩、播客与定向测试）</summary>
 
 | 场景 | 命令与说明 |
 |---|---|
@@ -159,7 +159,8 @@
 | **已发布日批仅更新呈现** | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`，随后 `blog:review` → `blog:push` |
 | **早批次抓取见证登记** | `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD` |
 | **影响面预检与误报核对** | `npm run impact -- --git`、`npm run review:overrides -- --date DATE --file F.json` |
-| **锁状态、文档与数据校验** | `npm run locks`、`npm run docs:check`、`npm run validate:data` |
+| **锁状态、文档与索引校验** | `npm run locks`、`npm run docs:check`、`npm run scripts:index:check`、`npm run validate:data` |
+| **定向单测与客户端测试** | `npm run test:python`、`npm run test:client:macos`、`npm run test:client:android` |
 | **存储诊断与账本压缩** | `npm run papers:compact`、`npm run storage:pdf-dedupe`、`npm run storage:report`、`npm run storage:prune` |
 | **可选工具：分数校准 / 每日播客** | `npm run digest:calibrate -- --dry-run`、`npm run podcast:generate -- --date YYYY-MM-DD --dry-run` |
 

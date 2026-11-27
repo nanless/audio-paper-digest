@@ -14,13 +14,13 @@
   <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1"><img src="https://img.shields.io/badge/Client-v1.5.1_(Build_25)-b85a34?style=flat-square" alt="Client v1.5.1" /></a>
   <img src="https://img.shields.io/badge/macOS-15%2B_Apple_Silicon-182120?style=flat-square" alt="macOS 15+" />
   <img src="https://img.shields.io/badge/Android-9%2B_(4_ABIs)-182120?style=flat-square" alt="Android 9+" />
-  <img src="https://img.shields.io/badge/Archive-9%2C300%2B_Guides_(8%2C650%2B_Papers)-1f8a82?style=flat-square" alt="9,300+ Guides (8,650+ Papers)" />
+  <img src="https://img.shields.io/badge/Archive-9%2C400%2B_Posts_(8%2C650%2B_Papers)-1f8a82?style=flat-square" alt="9,400+ Posts (8,650+ Papers)" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2c5e3b?style=flat-square" alt="MIT License" /></a>
 </p>
 
 Dozens of new speech, music, acoustics, and Audio LLM papers arrive on arXiv and top venues every week—skimming abstracts hides critical trade-offs, while reading every full PDF eats your entire morning. **Audio Research Workbench (`音频研究工作台`)** breaks that workflow into three isolated open-source layers where every metric, equation, and original figure traces back to sealed source bytes:
 
-- **Public Knowledge Portal ([Audio Research Portal / 音频研究门户](https://nanless.github.io/audio-research-portal/))**: Built with **Studio Monograph 2.0**, hosting **9,300+ verified Chinese paper guides (8,650+ unique papers)**, daily digests, 19 venue collections, and 8 audio SOTA domain hubs with `⌘K` search, zoomable figure inspection, sortable tables, and one-click Obsidian / BibTeX / RIS export.
+- **Public Knowledge Portal ([Audio Research Portal / 音频研究门户](https://nanless.github.io/audio-research-portal/))**: Built with **Studio Monograph 2.0**, hosting **9,400+ archived Chinese posts (including 9,200+ paper guides across 8,650+ verified papers)**, daily digests, 19 venue collections, and 8 audio SOTA domain hubs with `⌘K` search, zoomable figure inspection, sortable tables, and one-click Obsidian / BibTeX / RIS export.
 - **Native Desktop & Mobile Workbenches (macOS & Android 1.5.x)**: Subscribe read-only to portal snapshots and daily audio podcasts for side-by-side PDF reading, offline multi-word search, opt-in personal LLM study, Zotero archiving, and one-click bidirectional WebDAV sync.
 - **Content Production Engine (this repo)**: Runs an LLM/API pipeline by default—handling fetch deduplication, screening, four-file source sealing, deep analysis, eight-dimension scoring, nine-facet classification, and long-form Chinese guides (**Reader** in code)—and pushes only after a strict three-layer review gate.
 
@@ -60,7 +60,7 @@ Dozens of new speech, music, acoustics, and Audio LLM papers arrive on arXiv and
 
 | What you want to do | Where to start |
 |---|---|
-| Read 9,300+ verified guides & 8 SOTA hubs in your browser | Open the **[Audio Research Portal](https://nanless.github.io/audio-research-portal/)** · tools & export in [reading tools](docs/blog-reading-tools.md) (Chinese) |
+| Read 9,400+ archived guides & 8 SOTA hubs in your browser | Open the **[Audio Research Portal](https://nanless.github.io/audio-research-portal/)** · tools & export in [reading tools](docs/blog-reading-tools.md) (Chinese) |
 | Read side-by-side with PDFs & archive to Zotero on Mac | Follow the **[Mac Guide](apps/macos/README.en.md)** (Apple silicon, macOS 15+, no `.env` needed) |
 | Read offline & listen to daily podcasts on Android | Follow the **[Android Guide](apps/android/README.en.md)** (Android 9+, all 4 ABIs) |
 | Understand how sources, engine, portal & apps fit together | Read the **[Project Walkthrough](docs/project-guide.md)** (Chinese) |
@@ -78,7 +78,7 @@ Production, publishing, and personal reading stay isolated: this repository push
 
 | Capability | Audio Research Portal (Web) | macOS Workbench (1.5.x) | Android Workbench (1.5.x) |
 |---|:---:|:---:|:---:|
-| 9,300+ guides, 400-concept taxonomy & score/OSS filters | Instant browse + `⌘K` palette | Offline snapshots + NFKC search | Offline snapshots + idle preload |
+| 9,400+ posts, 400-concept taxonomy & score/OSS filters | Instant browse + `⌘K` palette | Offline snapshots + NFKC search | Offline snapshots + idle preload |
 | Guide + side-by-side PDF with physical page anchors | Direct source links | AppKit + PDFKit split view | Phone 1-col / Tablet 2-col |
 | Daily Audio Podcast (chapters, `0.75×–2.0×`) | Web podcast player | `AVAudioPlayer` + SHA cache | `MediaPlayer` + SHA cache |
 | Typography & figure/table UX (Studio Monograph) | 1×–6× lightbox / sortable tables | Strict allowlist sanitizer | Material 3 compact sanitizer |
@@ -134,12 +134,12 @@ Replace example dates, IDs, and paths with real values before running:
 | **Run today's daily digest** | `npm run digest:prepare -- YYYY-MM-DD` (`digest:api` alias); [daily procedure](SKILL.md#1-日更) |
 | **Diagnostics & source probes** | `npm run doctor -- --offline` (`--network` probes arXiv), `npm run config:check`, `npm run source:probe -- --date YYYY-MM-DD`, `npm run llm:accounts`, `npm run llm:accounts:quota -- sync` |
 | **Live progress & stage scorecard** | `npm run digest:status -- --date YYYY-MM-DD --watch`, `npm run digest:scorecard -- --date YYYY-MM-DD` |
-| **Diagnose failures & build patches** | `npm run recover -- --date YYYY-MM-DD`, `npm run manifest:new -- --spec SPEC.json`, `npm run table:check -- --draft FILE` |
+| **Diagnose failures & build recovery manifests** | `npm run recover -- --date YYYY-MM-DD`, `npm run fact-feedback:new`, `npm run reader-retry:new`, `npm run manifest:new -- --spec SPEC.json`, `npm run table:check -- --draft FILE` |
 | **Live site verification & closeout** | `npm run verify:web -- --date DATE --deploy OID`, `npm run publish:finish -- --date DATE` |
 | **Full local verification suite** | `npm run verify` (pinned Hugo 0.160.1 + syntax + JS/Python suites + `docs:check` + `validate:data`) |
 
 <details>
-<summary>More maintenance & optional CLIs (conferences, history, republish, storage, podcast)</summary>
+<summary>More maintenance & optional CLIs (conferences, history, republish, storage, podcast, targeted tests)</summary>
 
 | Task | Command & notes |
 |---|---|
@@ -149,7 +149,8 @@ Replace example dates, IDs, and paths with real values before running:
 | **Republish a daily presentation** | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`, then `blog:review` → `blog:push` |
 | **Register earlier fetch witness** | `npm run fetch:witness:prepare -- --date YYYY-MM-DD --source-date YYYY-MM-DD` |
 | **Impact check & review overrides** | `npm run impact -- --git`, `npm run review:overrides -- --date DATE --file F.json` |
-| **Locks, docs & data integrity** | `npm run locks`, `npm run docs:check`, `npm run validate:data` |
+| **Locks, docs, index & data integrity** | `npm run locks`, `npm run docs:check`, `npm run scripts:index:check`, `npm run validate:data` |
+| **Targeted Python & client test suites** | `npm run test:python`, `npm run test:client:macos`, `npm run test:client:android` |
 | **Ledger compaction & PDF dedupe** | `npm run papers:compact`, `npm run storage:pdf-dedupe`, `npm run storage:report`, `npm run storage:prune` |
 | **Opt-in CLIs: calibration / podcast** | `npm run digest:calibrate -- --dry-run`, `npm run podcast:generate -- --date YYYY-MM-DD --dry-run` |
 

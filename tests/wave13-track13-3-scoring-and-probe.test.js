@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { runPythonJson } = require('./helpers/run-python-json.js');
 
 const scoring = require('../scripts/lib/scoring-rubric.js');
 const scoringContract = require('../scripts/lib/scoring-audit-contract.js');
@@ -176,8 +177,8 @@ describe('Wave 13 Track 13.3: Scoring v2.1 prompt, rubric metadata, and reason-b
         assert.equal(scoring.formatDocumentTypeWeightsSummary(''), '');
 
         const docTypes = [...Object.keys(scoring.SPEC.documentTypes), '未知类型', ''];
-        const pyOut = execFileSync('bash', [
-            path.join(ROOT, 'scripts/python-runtime.sh'), '-c',
+        const pyData = runPythonJson([
+            '-c',
             `import json, sys; sys.path.insert(0, 'scripts'); import scoring_rubric as sr
 types = json.loads(sys.stdin.read())
 print(json.dumps({
@@ -186,8 +187,7 @@ print(json.dumps({
     'redLineIds': [r['id'] for r in sr.DOMAIN_RED_LINES],
     'summaries': {dt: sr.format_document_type_weights_summary(dt) for dt in types}
 }, ensure_ascii=False))`
-        ], { cwd: ROOT, input: JSON.stringify(docTypes), encoding: 'utf8' });
-        const pyData = JSON.parse(pyOut);
+        ], docTypes, { cwd: ROOT });
         assert.equal(pyData.profile, scoring.CALIBRATION_PROFILE);
         assert.deepEqual(pyData.anchorScores, scoring.CALIBRATION_ANCHORS.map(a => a.score));
         assert.deepEqual(pyData.redLineIds, scoring.DOMAIN_RED_LINES.map(r => r.id));

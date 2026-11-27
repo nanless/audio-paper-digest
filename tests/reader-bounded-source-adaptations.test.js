@@ -2,7 +2,7 @@
 process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { runPythonJson } = require('./helpers/run-python-json.js');
 const display = require('../scripts/lib/reader-source-display').normalizeReaderSourceDisplayArtifacts;
 const units = require('../scripts/lib/reader-source-table-column-units');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -32,9 +32,8 @@ test('bounded explicit source-cell projection preserves values, order and unknow
 test('publisher replays exactly the same bounded source projections', () => {
     const file = path.resolve(__dirname, '../scripts/publish-to-blog.py');
     const code = `import ast,json,re,unicodedata,sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(sys.argv[1]).resolve().parent))\ns=ast.parse(open(sys.argv[1]).read())\nkeep={'_normalize_api_reader_explicit_symbol_projection','_normalize_api_reader_display_artifacts'}\nexec(compile(ast.Module(body=[n for n in s.body if isinstance(n,ast.FunctionDef) and n.name in keep],type_ignores=[]),sys.argv[1],'exec'))\nprint(json.dumps([_normalize_api_reader_display_artifacts(v) for v in json.load(sys.stdin)],ensure_ascii=False))`;
-    const result = execFileSync('bash', [path.resolve(__dirname, '../scripts/python-runtime.sh'), '-c', code, file],
-        { input: JSON.stringify(cases.map(([raw]) => raw)), encoding: 'utf8' });
-    assert.deepEqual(JSON.parse(result), cases.map(([, expected]) => expected));
+    const result = runPythonJson(['-c', code, file], cases.map(([raw]) => raw));
+    assert.deepEqual(result, cases.map(([, expected]) => expected));
 });
 
 // Constructed structural fixture, separate from the optional original paid run.
@@ -108,11 +107,10 @@ test('publisher agrees on constructed DOM unit positive and negative cases', () 
     updateCell(samples[1].table, 0, 2, 'Accuracy'); samples[2].tables.push(structuredClone(samples[2].table));
     samples[3].rendered.rows[0][2] = '999';
     const code = `import json,sys,importlib.util\nsys.path.insert(0,sys.argv[1]+'/scripts')\ns=importlib.util.spec_from_file_location('p',sys.argv[1]+'/scripts/publish-to-blog.py');p=importlib.util.module_from_spec(s);s.loader.exec_module(p)\nprint(json.dumps([sorted(p._reader_dom_table_unit_coverage(x['rendered'],x['quotes'],x['tables'])) for x in json.load(sys.stdin)]))`;
-    const output = execFileSync('bash', [path.resolve(__dirname, '../scripts/python-runtime.sh'), '-c', code, path.resolve(__dirname, '..')],
-        { input: JSON.stringify(samples), encoding: 'utf8' });
+    const output = runPythonJson(['-c', code, path.resolve(__dirname, '..')], samples);
     const expected = samples.map(f => units.coverageFromTables(f.rendered, f.quotes, f.tables)
         .map(x => [x.row, x.column, x.value, x.unit]).sort((a, b) => a[0] - b[0] || a[1] - b[1]));
-    assert.deepEqual(JSON.parse(output), expected);
+    assert.deepEqual(output, expected);
 });
 test('split leaf columns from separate original tables cannot compose one percent table', () => {
     const f = splitLeafCrossTableFixture();

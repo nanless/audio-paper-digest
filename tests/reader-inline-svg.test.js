@@ -169,6 +169,36 @@ test('伪造code、浏览器缺失、超时和子进程错误保持阻断', asyn
     }
 });
 
+function makeMinimalPng(width, height) {
+    const buf = Buffer.alloc(33);
+    Buffer.from('89504e470d0a1a0a', 'hex').copy(buf, 0);
+    buf.writeUInt32BE(13, 8);
+    buf.write('IHDR', 12, 'ascii');
+    buf.writeUInt32BE(width, 16);
+    buf.writeUInt32BE(height, 20);
+    buf[24] = 8; // bit depth
+    buf[25] = 6; // RGBA
+    return buf;
+}
+
+function makeMockSpawn(result, onSpawn) {
+    return (cmd, args, opts) => {
+        if (typeof onSpawn === 'function') onSpawn(cmd, args, opts);
+        const child = new EventEmitter();
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        child.stdin = new PassThrough();
+        child.kill = () => true;
+        child.stdin.once('finish', () => queueMicrotask(() => {
+            child.stdout.end(result.stdout || '');
+            child.stderr.end(result.stderr || '');
+            if (result.error) child.emit('error', result.error);
+            child.emit('close', result.code);
+        }));
+        return child;
+    };
+}
+
 test('正常日更材料化只省略已鉴别的源依赖，环境错误仍原样传播', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'inline-svg-unavailable-'));
     const previous = Config.FILES.dailyFreshSourceRunsDir;
@@ -195,9 +225,19 @@ test('正常日更材料化只省略已鉴别的源依赖，环境错误仍原�
     const snapshot = () => Object.fromEntries(fs.readdirSync(directory).map(name => [name, sha(fs.readFileSync(path.join(directory, name)))]));
     const before = snapshot();
     const figure = { ordinal: 1, url: renderer.inlineSvgSourceDescriptor(input, id).url };
-    const figures = [figure, {ordinal:2,url:renderer.inlineSvgSourceDescriptor(intact,id).url}];
+    const figures = [figure, { ordinal: 2, url: renderer.inlineSvgSourceDescriptor(intact, id).url }];
+    // 真实 Chromium 渲染断言位于 tests/python/test_reader_inline_svg.py；
+    // JS 套件只验证封存来源省略分流与 PNG 输出校验，避免在无浏览器 JS 分片触发 Chromium。
+    const realRender = renderer.renderOfficialInlineSvg;
+    const intactPng = makeMinimalPng(480, 240);
+    t.mock.method(renderer, 'renderOfficialInlineSvg', (res, deps) =>
+        res?.inlineSvgSha256 === intact.inlineSvgSha256
+            ? realRender(res, { ...deps, spawn: makeMockSpawn({ code: 0, stdout: intactPng }) })
+            : realRender(res, deps)
+    );
     const rendered = await daily.ephemeralReaderFigures(id, figures, plan);
-    assert.deepEqual(rendered.map(item=>item.ordinal), [2]);
+    assert.deepEqual(rendered.map(item => item.ordinal), [2]);
+    assert.deepEqual(rendered[0].rawBytes, intactPng);
     assert.equal(sha(rendered[0].rawBytes), rendered[0].assetSha256);
     assert.equal(rendered[0].inlineSvgSourceSha256, intact.inlineSvgSha256);
     assert.deepEqual(snapshot(), before);
@@ -220,6 +260,8 @@ test('v2 质量拒绝精确透传 raw_latex_leak_in_svg 与 foreign_object_text_
         + '</svg>'
     );
 
+    // 真实 Playwright 浏览器检测（exit 65 / 精确 stderr JSON）已迁至 tests/python/test_reader_inline_svg.py；
+    // 这里核验 JS 包装器传递 --hidpi/--deterministic-hidpi 并精确透传子进程 65 错误契约。
     for (const [input, expectedReason] of [
         [rawLatexInput, 'raw_latex_leak_in_svg'],
         [overlapInput, 'foreign_object_text_overlap']
@@ -229,20 +271,20 @@ test('v2 质量拒绝精确透传 raw_latex_leak_in_svg 与 foreign_object_text_
             code: 'unsupported_dependency',
             reason: expectedReason
         });
-        const child = spawnSync('bash', [
-            path.join(projectRoot, 'scripts/python-runtime.sh'),
-            path.join(projectRoot, 'scripts/reader_inline_svg.py'),
-            '--deterministic-hidpi'
-        ], { cwd: projectRoot, input: input.inlineSvg, encoding: 'utf8', timeout: 30000 });
-        assert.equal(child.error, undefined);
-        assert.equal(child.status, 65, `${expectedReason}: stderr=${child.stderr}`);
-        assert.equal(child.stdout, '');
-        assert.equal(child.stderr.trim(), expectedJson);
-        await assert.rejects(renderer.renderOfficialInlineSvg(input), error =>
-            error.code === 'READER_INLINE_SVG_UNSUPPORTED_DEPENDENCY'
-            && error.unsupportedDependencyReason === expectedReason
-            && renderer.isUnsupportedDependencyFailure(error)
-            && deep.isPermanentApiReaderFigureFailure(error));
+        const observedArgs = [];
+        await assert.rejects(
+            renderer.renderOfficialInlineSvg(input, {
+                spawn: makeMockSpawn({ code: 65, stdout: '', stderr: expectedJson + '\n' }, (_cmd, args) => observedArgs.push(args))
+            }),
+            error =>
+                error.code === 'READER_INLINE_SVG_UNSUPPORTED_DEPENDENCY'
+                && error.unsupportedDependencyReason === expectedReason
+                && renderer.isUnsupportedDependencyFailure(error)
+                && deep.isPermanentApiReaderFigureFailure(error)
+        );
+        assert.equal(observedArgs.length, 1);
+        assert.ok(observedArgs[0].includes('--hidpi'));
+        assert.ok(observedArgs[0].includes('--deterministic-hidpi'));
     }
 
     // Subprocess env must strip API keys & proxy credentials while keeping Playwright/Python runtime vars

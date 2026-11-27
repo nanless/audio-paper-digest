@@ -118,3 +118,54 @@ test('checkVersionClaims 拦截带分号/逗号括号的旧构建号与已发布
     assert.deepStrictEqual(lines, [1, 2, 3]);
     fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('ROOT_DOCS 纳入客户端双语 README 与 prompts/README.md，且按最近 package.json 与测试语境核验', () => {
+    for (const expected of [
+        'apps/macos/README.md',
+        'apps/macos/README.en.md',
+        'apps/android/README.md',
+        'apps/android/README.en.md',
+        'prompts/README.md'
+    ]) {
+        assert.ok(docs.ROOT_DOCS.includes(expected), `ROOT_DOCS 缺少 ${expected}`);
+    }
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-subpkg-'));
+    fs.mkdirSync(path.join(root, 'apps', 'macos', 'Tests'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'apps', 'android', 'Tests'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { 'root-only': 'echo 1' } }));
+    fs.writeFileSync(path.join(root, 'apps', 'macos', 'package.json'), JSON.stringify({ scripts: { build: 'bash build.sh' } }));
+    fs.writeFileSync(path.join(root, 'apps', 'macos', 'Tests', 'UI.test.cjs'), 'process.env.PD_MAC_BROWSER;\n');
+    fs.writeFileSync(path.join(root, 'apps', 'android', 'Tests', 'Tables.test.cjs'), 'process.env.PD_ANDROID_ONLY_TEST;\n');
+    fs.writeFileSync(path.join(root, 'tests', 'backend.test.js'), 'process.env.PD_BACKEND_ONLY_TEST;\n');
+    fs.writeFileSync(path.join(root, 'apps', 'macos', 'README.md'), [
+        '执行 npm run build 与 npm run root-only',
+        '界面测试支持 PD_MAC_BROWSER 与 PD_UNKNOWN_FLAG',
+        '日常运行不涉及 PD_MAC_BROWSER',
+        '测试语境不得跨端引用 PD_ANDROID_ONLY_TEST 或后端 PD_BACKEND_ONLY_TEST'
+    ].join('\n'));
+    fs.writeFileSync(path.join(root, 'apps', 'android', 'README.md'), [
+        '测试语境支持 PD_ANDROID_ONLY_TEST，但拒绝 PD_MAC_BROWSER 与 PD_BACKEND_ONLY_TEST'
+    ].join('\n'));
+    const missing = docs.checkDocs(['apps/macos/README.md'], { 'root-only': 'echo 1' }, root);
+    assert.deepStrictEqual(missing, [{ file: 'apps/macos/README.md', command: 'root-only' }]);
+    const macEnvIssues = docs.checkEnvNames(['apps/macos/README.md'], root, new Set());
+    assert.deepStrictEqual(
+        macEnvIssues.map(item => [item.line, item.message.match(/PD_[A-Z0-9_]+/)[0]]),
+        [
+            [2, 'PD_UNKNOWN_FLAG'],
+            [3, 'PD_MAC_BROWSER'],
+            [4, 'PD_ANDROID_ONLY_TEST'],
+            [4, 'PD_BACKEND_ONLY_TEST']
+        ]
+    );
+    const androidEnvIssues = docs.checkEnvNames(['apps/android/README.md'], root, new Set());
+    assert.deepStrictEqual(
+        androidEnvIssues.map(item => [item.line, item.message.match(/PD_[A-Z0-9_]+/)[0]]),
+        [
+            [1, 'PD_MAC_BROWSER'],
+            [1, 'PD_BACKEND_ONLY_TEST']
+        ]
+    );
+    fs.rmSync(root, { recursive: true, force: true });
+});

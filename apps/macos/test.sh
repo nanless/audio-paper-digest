@@ -31,6 +31,64 @@ for known in "${cjs_suites[@]}"; do
     exit 1
   fi
 done
+# 同步检查 Tests/*.test.cjs 与 Tests/*.test.py 覆盖：所有文件必须直接在本脚本执行，
+# 或作为已登记的嵌套辅助脚本被已运行 Swift 套件显式调用（目前仅 ZoteroNoteTitleContract.test.cjs）。
+nested_cjs_helpers=(ZoteroNoteTitleContract.test.cjs)
+# 剥离整行与行尾 # 注释（保留单双引号内文本），并仅认可真实 node/bash 执行行，
+# 避免前置守卫的 grep 或行内注释造成覆盖误放行。
+active_test_sh="$(awk '
+  BEGIN { sq = sprintf("%c", 39) }
+  {
+    in_s = 0; in_d = 0; esc = 0; out = ""
+    for (i = 1; i <= length($0); i++) {
+      c = substr($0, i, 1)
+      if (esc) { out = out c; esc = 0; continue }
+      if (!in_s && c == "\\") { out = out c; esc = 1; continue }
+      if (!in_d && c == sq) { in_s = !in_s; out = out c; continue }
+      if (!in_s && c == "\"") { in_d = !in_d; out = out c; continue }
+      if (!in_s && !in_d && c == "#") {
+        prev = (i == 1) ? " " : substr($0, i - 1, 1)
+        if (prev == " " || prev == "\t") break
+      }
+      out = out c
+    }
+    print out
+  }
+' "$app_root/test.sh")"
+escape_ere() {
+  printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\&/g'
+}
+shopt -s nullglob
+for cjs_file in "$app_root"/Tests/*.test.cjs; do
+  cjs_name="$(basename "$cjs_file")"
+  escaped_name="$(escape_ere "$cjs_name")"
+  if grep -Eq "^[[:space:]]*([A-Z0-9_]+=([^[:space:]\"']+|\"[^\"]*\"|'[^']*')[[:space:]]+)*(node|bash)[[:space:]].*Tests/${escaped_name}([\"'[:space:]]|$)" <<< "$active_test_sh"; then
+    continue
+  fi
+  nested_known=0
+  for helper in "${nested_cjs_helpers[@]}"; do
+    if [[ "$cjs_name" == "$helper" ]]; then nested_known=1; break; fi
+  done
+  if [[ "$nested_known" -ne 1 ]]; then
+    echo "CJS 测试未接入：Tests/${cjs_name} 未在 $app_root/test.sh 中调用，也不在 nested_cjs_helpers 例外中。" >&2
+    exit 1
+  fi
+done
+for py_file in "$app_root"/Tests/*.test.py; do
+  py_name="$(basename "$py_file")"
+  escaped_name="$(escape_ere "$py_name")"
+  if ! grep -Eq "^[[:space:]]*([A-Z0-9_]+=([^[:space:]\"']+|\"[^\"]*\"|'[^']*')[[:space:]]+)*(node|bash)[[:space:]].*Tests/${escaped_name}([\"'[:space:]]|$)" <<< "$active_test_sh"; then
+    echo "Python 测试未接入：Tests/${py_name} 未在 $app_root/test.sh 中调用。" >&2
+    exit 1
+  fi
+done
+shopt -u nullglob
+for helper in "${nested_cjs_helpers[@]}"; do
+  if [[ ! -f "$app_root/Tests/$helper" ]] || ! grep -Fq "$helper" "$app_root/Tests/ZoteroServiceTests.swift" 2>/dev/null; then
+    echo "嵌套 CJS 例外失效：Tests/${helper} 缺失或未被 ZoteroServiceTests.swift 引用；请同步 test.sh。" >&2
+    exit 1
+  fi
+done
 bash "$repo_root/scripts/python-runtime.sh" "$repo_root/apps/generate-client-protocols.py" --check
 test_work="$(mktemp -d "${TMPDIR:-/tmp}/paperdigest-tests.XXXXXX")"
 compile_pids=()
@@ -131,7 +189,8 @@ node "$app_root/Tests/StartupResume.test.cjs"
 node "$app_root/Tests/SettingsUI.test.cjs"
 node "$app_root/Tests/WorkbenchSetup.test.cjs"
 node "$app_root/Tests/ReducedMotion.test.cjs"
-node "$app_root/../android/Tests/DocumentTables.test.cjs"
+mkdir -p "$test_work/android-document-tables"
+PD_DOCUMENT_TABLE_OUTPUT="$test_work/android-document-tables" node "$app_root/../android/Tests/DocumentTables.test.cjs"
 node "$app_root/Tests/CloudUI.test.cjs"
 node "$app_root/Tests/NoteConflictUI.test.cjs"
 node "$app_root/Tests/ZoteroUI.test.cjs"

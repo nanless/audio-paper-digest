@@ -11,32 +11,67 @@ internal data class ConferenceVenue(val key: String, val label: String)
 internal data class ScoreTierInfo(val key: String, val label: String)
 
 private val CONFERENCE_VENUE_NAMES = mapOf(
-    "interspeech" to "INTERSPEECH",
+    // Audio, speech & music
     "icassp" to "ICASSP",
-    "iclr" to "ICLR",
-    "icml" to "ICML",
-    "neurips" to "NeurIPS",
-    "acl" to "ACL",
-    "emnlp" to "EMNLP",
-    "naacl" to "NAACL",
-    "eacl" to "EACL",
-    "cvpr" to "CVPR",
-    "aaai" to "AAAI",
+    "interspeech" to "Interspeech",
+    "speech_prosody" to "Speech Prosody",
+    "speech-prosody" to "Speech Prosody",
+    "speechprosody" to "Speech Prosody",
+    "waspaa" to "WASPAA",
+    "asru" to "ASRU",
+    "slt" to "SLT",
+    "ismir" to "ISMIR",
+    "dcase" to "DCASE",
+    "taslp" to "TASLP",
+    "ieee_acm_taslp" to "TASLP",
+    "ieee-acm-taslp" to "TASLP",
+    "ieeeacmtaslp" to "TASLP",
     "dafx" to "DAFx",
     "eusipco" to "EUSIPCO",
-    "speechprosody" to "SpeechProsody",
     "nime" to "NIME",
     "odyssey" to "Odyssey",
     "icmc" to "ICMC",
     "jep" to "JEP",
     "iwslt" to "IWSLT",
     "chime" to "CHiME",
+    "spl" to "SPL",
+    // ML, NLP & AI
+    "neurips" to "NeurIPS",
+    "nips" to "NeurIPS",
+    "icml" to "ICML",
+    "iclr" to "ICLR",
+    "acl" to "ACL",
+    "emnlp" to "EMNLP",
+    "naacl" to "NAACL",
+    "eacl" to "EACL",
+    "lrec" to "LREC",
+    "coling" to "COLING",
+    "aaai" to "AAAI",
+    "ijcai" to "IJCAI",
     "uai" to "UAI",
     "aistats" to "AISTATS",
-    "waspaa" to "WASPAA",
-    "asru" to "ASRU",
-    "slt" to "SLT",
-    "ismir" to "ISMIR",
+    "kdd" to "KDD",
+    "www" to "WWW",
+    "jmlr" to "JMLR",
+    "tmlr" to "TMLR",
+    "tacl" to "TACL",
+    // Vision, multimedia, HCI, robotics & systems
+    "cvpr" to "CVPR",
+    "iccv" to "ICCV",
+    "eccv" to "ECCV",
+    "acmmm" to "ACM MM",
+    "acm_mm" to "ACM MM",
+    "acm-mm" to "ACM MM",
+    "mm" to "ACM MM",
+    "siggraph" to "SIGGRAPH",
+    "chi" to "CHI",
+    "ubicomp" to "UbiComp",
+    "mobicom" to "MobiCom",
+    "mobisys" to "MobiSys",
+    "sensys" to "SenSys",
+    "icra" to "ICRA",
+    "iros" to "IROS",
+    "corl" to "CoRL",
 )
 private val VENUE_TOKEN_REGEX = Regex("^[a-z0-9][a-z0-9._-]{0,63}$")
 private val YEAR_REGEX = Regex("^(19|20)\\d{2}$")
@@ -65,7 +100,12 @@ internal fun parseConferenceVenue(paperId: String): ConferenceVenue? {
     val rawVenue = parts[1].trim().lowercase(Locale.ROOT)
     val rawYear = parts[2].trim()
     if (!VENUE_TOKEN_REGEX.matches(rawVenue) || !YEAR_REGEX.matches(rawYear)) return null
-    val display = CONFERENCE_VENUE_NAMES[rawVenue] ?: rawVenue.uppercase(Locale.ROOT)
+    val normalizedVenue = rawVenue.replace('-', '_')
+    val compactVenue = normalizedVenue.replace("_", "")
+    val display = CONFERENCE_VENUE_NAMES[rawVenue]
+        ?: CONFERENCE_VENUE_NAMES[normalizedVenue]
+        ?: CONFERENCE_VENUE_NAMES[compactVenue]
+        ?: rawVenue.uppercase(Locale.ROOT)
     return ConferenceVenue(key = "conference:$rawVenue:$rawYear", label = "$display $rawYear")
 }
 

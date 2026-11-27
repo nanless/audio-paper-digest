@@ -617,7 +617,7 @@ if (require.main === module) {
         process.exit(1);
     }
     if (parsed.ids.length === 0) {
-        console.error('❌ 用法: node scripts/reanalyze-selected.js [--natural-resource-prose] [--fact-feedback-file <path>] <arxivId1> [arxivId2] ...');
+        console.error('❌ 用法: node scripts/reanalyze-selected.js [--natural-resource-prose] [--fact-feedback-file <path>] [--reader-fact-feedback-file <path>] [--core-summary-fact-feedback-file <path>] <arxivId1> [arxivId2] ...');
         process.exit(1);
     }
 

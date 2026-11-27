@@ -78,11 +78,11 @@ jobs:
           bash scripts/python-runtime.sh -m pip check
 
       - name: 安装论文图渲染所需浏览器
-        if: matrix.partition.suite != 'static'
+        if: matrix.partition.suite == 'python'
         run: bash scripts/python-runtime.sh -m playwright install --with-deps chromium
 
       - name: 安装中日韩字体
-        if: matrix.partition.suite != 'static'
+        if: matrix.partition.suite == 'python'
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends fonts-noto-cjk
@@ -211,11 +211,14 @@ jobs:
             yes | "$cli/sdkmanager" --licenses >/dev/null 2>&1 || true
           fi
 
-      - name: 安装 katex（Gradle 资产步骤依赖）
+      - name: 安装 katex 与 Playwright 浏览器（Gradle 资产与表格布局测试依赖）
         # :app:testDebugUnitTest 的任务图包含 :app:prepareDebugPublishedAssets，
-        # 它无条件从 apps/macos/node_modules/katex 复制文件；无需安装根项目依赖。
+        # 它无条件从 apps/macos/node_modules/katex 复制文件；
+        # apps/android/Tests/DocumentTables.test.cjs 复用 apps/macos/node_modules/playwright。
         working-directory: apps/macos
-        run: npm ci
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
 
       - name: 运行 Android 非设备合约与资产测试
         run: |
@@ -229,7 +232,28 @@ jobs:
           for script in "${scripts[@]}"; do
             bash scripts/python-runtime.sh "$script"
           done
-          node --test apps/android/AssetsChannel.test.mjs
+          cjs_scripts=()
+          while IFS= read -r script; do
+            test -e "$script"
+            cjs_scripts+=("$script")
+          done < <(find apps/android/Tests -maxdepth 1 -type f -name '*.test.cjs' | LC_ALL=C sort)
+          test "${#cjs_scripts[@]}" -ge 1
+          doc_table_output="$(mktemp -d "${TMPDIR:-/tmp}/android-document-tables.XXXXXX")"
+          trap 'rm -rf "$doc_table_output"' EXIT
+          for script in "${cjs_scripts[@]}"; do
+            out_dir="$doc_table_output/$(basename "$script" .cjs)"
+            mkdir -p "$out_dir"
+            PD_DOCUMENT_TABLE_OUTPUT="$out_dir" node "$script"
+          done
+          mjs_scripts=()
+          while IFS= read -r script; do
+            test -e "$script"
+            mjs_scripts+=("$script")
+          done < <(find apps/android apps/android/Tests -maxdepth 1 -type f -name '*.test.mjs' | LC_ALL=C sort)
+          test "${#mjs_scripts[@]}" -ge 1
+          for script in "${mjs_scripts[@]}"; do
+            node --test "$script"
+          done
 
       - name: 运行 Android 客户端单元测试与 Lint
         working-directory: apps/android

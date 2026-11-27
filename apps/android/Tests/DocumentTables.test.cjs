@@ -20,8 +20,7 @@ function head(scheme){
  const palette=JSON.parse(paletteLiteral.replaceAll('${css(background)}',colors.background).replaceAll('${css(foreground!!)}',colors.foreground).replaceAll('${css(link!!)}',colors.link).replaceAll('${css(link)}',colors.link));
  return JSON.parse(literal.replace('${escape(title)}','Published table layout').replace('${paletteCSS}',palette));
 }
-fs.mkdirSync(path.join(mac,'.qa'),{recursive:true});
-const output=process.env.PD_DOCUMENT_TABLE_OUTPUT||fs.mkdtempSync(path.join(mac,'.qa/document-tables-'));
+const output=process.env.PD_DOCUMENT_TABLE_OUTPUT||(()=>{fs.mkdirSync(path.join(mac,'.qa'),{recursive:true});return fs.mkdtempSync(path.join(mac,'.qa/document-tables-'));})();
 fs.mkdirSync(output,{recursive:true});assert.equal(fs.existsSync(path.join(output,'result.json')),false);
 const results=[];let browser;
 (async()=>{try{

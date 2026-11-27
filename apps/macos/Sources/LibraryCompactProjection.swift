@@ -5,32 +5,67 @@ extension LibraryService {
     static let maxResourceBadgesBytes = 8 * 1024 * 1024
 
     private static let conferenceVenueDisplayNames: [String: String] = [
-        "interspeech": "INTERSPEECH",
+        // Audio, speech & music
         "icassp": "ICASSP",
-        "iclr": "ICLR",
-        "icml": "ICML",
-        "neurips": "NeurIPS",
-        "acl": "ACL",
-        "emnlp": "EMNLP",
-        "naacl": "NAACL",
-        "eacl": "EACL",
-        "cvpr": "CVPR",
-        "aaai": "AAAI",
+        "interspeech": "Interspeech",
+        "speech_prosody": "Speech Prosody",
+        "speech-prosody": "Speech Prosody",
+        "speechprosody": "Speech Prosody",
+        "waspaa": "WASPAA",
+        "asru": "ASRU",
+        "slt": "SLT",
+        "ismir": "ISMIR",
+        "dcase": "DCASE",
+        "taslp": "TASLP",
+        "ieee_acm_taslp": "TASLP",
+        "ieee-acm-taslp": "TASLP",
+        "ieeeacmtaslp": "TASLP",
         "dafx": "DAFx",
         "eusipco": "EUSIPCO",
-        "speechprosody": "SpeechProsody",
         "nime": "NIME",
         "odyssey": "Odyssey",
         "icmc": "ICMC",
         "jep": "JEP",
         "iwslt": "IWSLT",
         "chime": "CHiME",
+        "spl": "SPL",
+        // ML, NLP & AI
+        "neurips": "NeurIPS",
+        "nips": "NeurIPS",
+        "icml": "ICML",
+        "iclr": "ICLR",
+        "acl": "ACL",
+        "emnlp": "EMNLP",
+        "naacl": "NAACL",
+        "eacl": "EACL",
+        "lrec": "LREC",
+        "coling": "COLING",
+        "aaai": "AAAI",
+        "ijcai": "IJCAI",
         "uai": "UAI",
         "aistats": "AISTATS",
-        "waspaa": "WASPAA",
-        "asru": "ASRU",
-        "slt": "SLT",
-        "ismir": "ISMIR"
+        "kdd": "KDD",
+        "www": "WWW",
+        "jmlr": "JMLR",
+        "tmlr": "TMLR",
+        "tacl": "TACL",
+        // Vision, multimedia, HCI, robotics & systems
+        "cvpr": "CVPR",
+        "iccv": "ICCV",
+        "eccv": "ECCV",
+        "acmmm": "ACM MM",
+        "acm_mm": "ACM MM",
+        "acm-mm": "ACM MM",
+        "mm": "ACM MM",
+        "siggraph": "SIGGRAPH",
+        "chi": "CHI",
+        "ubicomp": "UbiComp",
+        "mobicom": "MobiCom",
+        "mobisys": "MobiSys",
+        "sensys": "SenSys",
+        "icra": "ICRA",
+        "iros": "IROS",
+        "corl": "CoRL"
     ]
 
     /// Offline deterministic parser for `conference:<venue>:<year>...` paper IDs.
@@ -42,10 +77,15 @@ extension LibraryService {
         let rawYear = String(parts[2]).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawVenue.isEmpty,
               rawVenue.range(of: #"\A[a-z0-9][a-z0-9._-]{0,63}\z"#, options: .regularExpression) != nil,
-              rawYear.range(of: #"\A(19|20)\d{2}\z"#, options: .regularExpression) != nil else {
+              rawYear.range(of: #"\A(19|20)[0-9]{2}\z"#, options: .regularExpression) != nil else {
             return nil
         }
-        let display = conferenceVenueDisplayNames[rawVenue] ?? rawVenue.uppercased()
+        let normalizedVenue = rawVenue.replacingOccurrences(of: "-", with: "_")
+        let compactVenue = normalizedVenue.replacingOccurrences(of: "_", with: "")
+        let display = conferenceVenueDisplayNames[rawVenue]
+            ?? conferenceVenueDisplayNames[normalizedVenue]
+            ?? conferenceVenueDisplayNames[compactVenue]
+            ?? rawVenue.uppercased()
         return (key: "conference:\(rawVenue):\(rawYear)", label: "\(display) \(rawYear)")
     }
 

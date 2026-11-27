@@ -8,7 +8,10 @@ const ROOT = path.resolve(__dirname, '..');
 const ROOT_DOCS = [
     'README.md', 'README.en.md', 'AGENTS.md', 'SKILL.md',
     'scripts/README.md', 'scripts/README.en.md', 'scripts/INDEX.md',
-    'manual/README.md', 'manual/README.en.md'
+    'manual/README.md', 'manual/README.en.md',
+    'apps/macos/README.md', 'apps/macos/README.en.md',
+    'apps/android/README.md', 'apps/android/README.en.md',
+    'prompts/README.md'
 ];
 const MARKDOWN_DIRS = ['docs', 'skills'];
 const COMMAND = /npm run ([a-z][a-z0-9:_-]*)/g;
@@ -47,12 +50,35 @@ function markdownFiles(root = ROOT) {
     return files;
 }
 
-function checkDocs(files, scripts) {
-    const known = new Set(Object.keys(scripts || {}));
+function resolveNearestPackageScripts(absFile, fallbackScripts, root = ROOT) {
+    const resolvedRoot = path.resolve(root);
+    let directory = path.dirname(path.resolve(absFile));
+    if (directory !== resolvedRoot && !directory.startsWith(resolvedRoot + path.sep)) {
+        return fallbackScripts || {};
+    }
+    while (true) {
+        const manifest = path.join(directory, 'package.json');
+        if (fs.existsSync(manifest)) {
+            if (directory === resolvedRoot) return fallbackScripts || {};
+            return JSON.parse(fs.readFileSync(manifest, 'utf8')).scripts || {};
+        }
+        if (directory === resolvedRoot) return fallbackScripts || {};
+        directory = path.dirname(directory);
+    }
+}
+
+function checkDocs(files, scripts, root = ROOT) {
     const missing = [];
+    const scriptsCache = new Map();
     for (const file of files) {
-        if (!fs.existsSync(path.resolve(ROOT, file))) throw new Error(`文档不存在：${file}`);
-        const text = fs.readFileSync(path.resolve(ROOT, file), 'utf8');
+        const absFile = path.resolve(root, file);
+        if (!fs.existsSync(absFile)) throw new Error(`文档不存在：${file}`);
+        const dir = path.dirname(absFile);
+        if (!scriptsCache.has(dir)) {
+            scriptsCache.set(dir, new Set(Object.keys(resolveNearestPackageScripts(absFile, scripts, root))));
+        }
+        const known = scriptsCache.get(dir);
+        const text = fs.readFileSync(absFile, 'utf8');
         for (const match of text.matchAll(COMMAND)) {
             if (!known.has(match[1])) missing.push({ file, command: match[1] });
         }
@@ -376,22 +402,47 @@ function collectEnvNames(root = ROOT) {
 function checkEnvNames(files, root = ROOT, known = collectEnvNames(root), testKnown = null) {
     const issues = [];
     let resolvedTestKnown = testKnown;
+    const clientTestKnownCache = new Map();
     const getTestKnown = () => {
         if (resolvedTestKnown === null) {
-            resolvedTestKnown = collectEnvNamesFromDirs(root, ['tests'], { excludeSchemaAndClientTests: false });
+            resolvedTestKnown = collectEnvNamesFromDirs(
+                root,
+                ['tests', 'apps/macos/Tests', 'apps/android/Tests'],
+                { excludeSchemaAndClientTests: false }
+            );
         }
         return resolvedTestKnown;
+    };
+    const getClientTestKnown = clientDir => {
+        if (!clientTestKnownCache.has(clientDir)) {
+            clientTestKnownCache.set(
+                clientDir,
+                collectEnvNamesFromDirs(
+                    root,
+                    [`${clientDir}/Tests`],
+                    { excludeSchemaAndClientTests: false }
+                )
+            );
+        }
+        return clientTestKnownCache.get(clientDir);
     };
     for (const file of files) {
         const normalizedFile = String(file).split(path.sep).join('/');
         const isTestChecklist = TEST_ENV_DOC_ALLOWLIST.has(normalizedFile);
+        const isClientReadme = /^apps\/[^/]+\/README(?:\.en)?\.md$/.test(normalizedFile);
+        const clientDir = isClientReadme ? normalizedFile.replace(/\/README(?:\.en)?\.md$/, '') : null;
         const text = fs.readFileSync(path.resolve(root, file), 'utf8');
         text.split('\n').forEach((line, index) => {
-            const allowTestVars = isTestChecklist || /\btests\/[A-Za-z0-9_./-]+\.(?:test\.)?(?:js|py)\b/.test(line);
+            const allowTestVars = isTestChecklist
+                || /\b(?:tests|apps\/[^/\s]+\/Tests)\/[A-Za-z0-9_./-]+\.(?:test\.)?(?:c?js|mjs|py|swift|kt)\b/.test(line)
+                || (isClientReadme && /(?:测试|\btests?\b)/i.test(line));
+            const scopedTestKnown = allowTestVars
+                ? (isClientReadme ? getClientTestKnown(clientDir) : getTestKnown())
+                : null;
             for (const match of line.matchAll(ENV_NAME)) {
                 if (match[0].endsWith('_')) continue;
                 if (known.has(match[0])) continue;
-                if (allowTestVars && getTestKnown().has(match[0])) continue;
+                if (scopedTestKnown && scopedTestKnown.has(match[0])) continue;
                 issues.push({ file, line: index + 1, message: `环境变量 ${match[0]} 在生产代码里不存在` });
             }
         });
@@ -489,6 +540,7 @@ function main(argv = process.argv.slice(2)) {
 
 module.exports = {
     MAX_AGENTS_BYTES,
+    ROOT_DOCS,
     checkDocs, checkVersionClaims, checkVersionLists, main, markdownFiles, readVersionSources,
     githubSlug, extractAnchors,
     checkLinks, checkRegistration, checkForbidden, checkEnvNames, collectEnvNames,

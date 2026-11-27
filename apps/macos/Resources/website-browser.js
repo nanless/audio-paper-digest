@@ -6,13 +6,69 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const fold = value => String(value ?? '').normalize('NFKC').normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase();
 const idOf = paper => paper.paperID || paper.id;
 
-const VENUE_LABELS = {
-  interspeech: 'INTERSPEECH', icassp: 'ICASSP', iclr: 'ICLR', icml: 'ICML', neurips: 'NeurIPS',
-  acl: 'ACL', emnlp: 'EMNLP', naacl: 'NAACL', eacl: 'EACL', cvpr: 'CVPR', aaai: 'AAAI',
-  dafx: 'DAFx', eusipco: 'EUSIPCO', speechprosody: 'SpeechProsody', nime: 'NIME', odyssey: 'Odyssey',
-  icmc: 'ICMC', jep: 'JEP', iwslt: 'IWSLT', chime: 'CHiME', uai: 'UAI', aistats: 'AISTATS',
-  waspaa: 'WASPAA', asru: 'ASRU', slt: 'SLT', ismir: 'ISMIR'
-};
+const VENUE_LABELS = Object.assign(Object.create(null), {
+  // Audio, speech & music
+  icassp: 'ICASSP',
+  interspeech: 'Interspeech',
+  speech_prosody: 'Speech Prosody',
+  'speech-prosody': 'Speech Prosody',
+  speechprosody: 'Speech Prosody',
+  waspaa: 'WASPAA',
+  asru: 'ASRU',
+  slt: 'SLT',
+  ismir: 'ISMIR',
+  dcase: 'DCASE',
+  taslp: 'TASLP',
+  ieee_acm_taslp: 'TASLP',
+  'ieee-acm-taslp': 'TASLP',
+  ieeeacmtaslp: 'TASLP',
+  dafx: 'DAFx',
+  eusipco: 'EUSIPCO',
+  nime: 'NIME',
+  odyssey: 'Odyssey',
+  icmc: 'ICMC',
+  jep: 'JEP',
+  iwslt: 'IWSLT',
+  chime: 'CHiME',
+  spl: 'SPL',
+  // ML, NLP & AI
+  neurips: 'NeurIPS',
+  nips: 'NeurIPS',
+  icml: 'ICML',
+  iclr: 'ICLR',
+  acl: 'ACL',
+  emnlp: 'EMNLP',
+  naacl: 'NAACL',
+  eacl: 'EACL',
+  lrec: 'LREC',
+  coling: 'COLING',
+  aaai: 'AAAI',
+  ijcai: 'IJCAI',
+  uai: 'UAI',
+  aistats: 'AISTATS',
+  kdd: 'KDD',
+  www: 'WWW',
+  jmlr: 'JMLR',
+  tmlr: 'TMLR',
+  tacl: 'TACL',
+  // Vision, multimedia, HCI, robotics & systems
+  cvpr: 'CVPR',
+  iccv: 'ICCV',
+  eccv: 'ECCV',
+  acmmm: 'ACM MM',
+  acm_mm: 'ACM MM',
+  'acm-mm': 'ACM MM',
+  mm: 'ACM MM',
+  siggraph: 'SIGGRAPH',
+  chi: 'CHI',
+  ubicomp: 'UbiComp',
+  mobicom: 'MobiCom',
+  mobisys: 'MobiSys',
+  sensys: 'SenSys',
+  icra: 'ICRA',
+  iros: 'IROS',
+  corl: 'CoRL',
+});
 
 export function parseConferenceVenue(paperId) {
   const raw = String(paperId ?? '');
@@ -22,7 +78,15 @@ export function parseConferenceVenue(paperId) {
   const venue = parts[1].trim().toLowerCase();
   const year = parts[2].trim();
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(venue) || !/^(?:19|20)\d{2}$/.test(year)) return null;
-  const display = Object.hasOwn(VENUE_LABELS, venue) ? VENUE_LABELS[venue] : venue.toUpperCase();
+  const normalizedVenue = venue.replace(/-/g, '_');
+  const compactVenue = normalizedVenue.replace(/_/g, '');
+  const display = Object.hasOwn(VENUE_LABELS, venue)
+    ? VENUE_LABELS[venue]
+    : Object.hasOwn(VENUE_LABELS, normalizedVenue)
+      ? VENUE_LABELS[normalizedVenue]
+      : Object.hasOwn(VENUE_LABELS, compactVenue)
+        ? VENUE_LABELS[compactVenue]
+        : venue.toUpperCase();
   return {key: `conference:${venue}:${year}`, venue, year: Number(year), label: `${display} ${year}`};
 }
 

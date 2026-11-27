@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { spawnPythonJson } = require('./helpers/run-python-json.js');
 const tagCatalogApi = require('../scripts/lib/tag-catalog.js');
 const api = require('../scripts/lib/tag-catalog-change.js');
 
@@ -765,11 +765,11 @@ test('面对同一份固定数据，Node 与 Python 的词表升级检查结论�
         "    rows.append({'name': item['name'], 'result': result, 'destructiveReasonsHash': _destructive_reasons_hash(detail), 'eligibility': _acknowledgement_eligibility(detail)})",
         "print('CROSS_END_REASONS:' + json.dumps(rows, ensure_ascii=False, sort_keys=True))"
     ].join('\n');
-    const run = spawnSync('bash', [
-        path.join(PROJECT_ROOT, 'scripts/python-runtime.sh'), '-c', pythonProgram,
-        path.join(PROJECT_ROOT, 'tests/python/registry_upgrade_cross_end.py')
-    ], { cwd: PROJECT_ROOT, encoding: 'utf8', timeout: 180000,
-        input: JSON.stringify(classificationInputs) });
+    const run = spawnPythonJson(
+        ['-c', pythonProgram, path.join(PROJECT_ROOT, 'tests/python/registry_upgrade_cross_end.py')],
+        classificationInputs,
+        { cwd: PROJECT_ROOT, timeout: 180000 }
+    );
     assert.equal(run.status, 0, `Python 测试程序运行失败:\n${run.stderr}`);
     const lines = String(run.stdout).split(/\r?\n/);
     const resultLines = lines.filter(text => text.startsWith('CROSS_END_RESULT:'));

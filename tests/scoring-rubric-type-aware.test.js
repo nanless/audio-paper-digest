@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { runPythonJson } = require('./helpers/run-python-json.js');
 
 const scoring = require('../scripts/lib/scoring-rubric.js');
 const scoringContract = require('../scripts/lib/scoring-audit-contract.js');
@@ -85,14 +85,13 @@ test('type-aware-v2 权重和为 100%、精确整数千分位总分与 Python �
         assert.equal(jsRes.rankBucket, expectedBucket);
     }
     // Cross-language Python exact parity on all 5 vectors
-    const pyOut = execFileSync('bash', [
-        path.join(ROOT, 'scripts/python-runtime.sh'), '-c',
+    const pyResults = runPythonJson([
+        '-c',
         `import json, sys; sys.path.insert(0, 'scripts'); import scoring_rubric as sr
 vectors = json.loads(sys.stdin.read())
 out = [sr.calculate_weighted_total(dt, sc) for dt, sc in vectors]
 print(json.dumps(out, ensure_ascii=False))`
-    ], { cwd: ROOT, input: JSON.stringify(vectors.map(([dt, sc]) => [dt, sc])), encoding: 'utf8' });
-    const pyResults = JSON.parse(pyOut);
+    ], vectors.map(([dt, sc]) => [dt, sc]), { cwd: ROOT });
     vectors.forEach(([docType, scores], i) => {
         const jsRes = scoring.calculateWeightedTotal(docType, scores);
         assert.deepEqual(pyResults[i], jsRes, `Python/JS 计算在向量 ${i} (${docType}) 必须逐位一致`);
@@ -266,8 +265,8 @@ test('v2 开源资源核验：数据集类按 dataset 给高分、理论研究�
     assert.equal(scoring.isUnifiedRubric('type-aware-v2'), true);
     assert.equal(scoring.isLegacyRubric('type-aware-v1'), true);
 
-    const pyCheck = execFileSync('bash', [
-        path.join(ROOT, 'scripts/python-runtime.sh'), '-c',
+    const pyParsed = runPythonJson([
+        '-c',
         `import json, sys; sys.path.insert(0, 'scripts')
 import utils, publish_common as pc, paper_reader_presentation as prp
 text = sys.stdin.read()
@@ -276,8 +275,7 @@ validated = pc.validate_publish_parsed(parsed, 'test', require_reason_dimensions
 line = prp.reader_score_line(validated)
 assert '/10' in line and '/1.5' not in line, line
 print(json.dumps({'score': validated['score'], 'rankBucket': validated['rankBucket'], 'rubric': validated['scoringRubricVersion'], 'line': line}, ensure_ascii=False))`
-    ], { cwd: ROOT, input: applied, encoding: 'utf8' });
-    const pyParsed = JSON.parse(pyCheck);
+    ], applied, { cwd: ROOT, rawInput: true });
     assert.equal(pyParsed.score, jsParsed.score);
     assert.equal(pyParsed.rankBucket, jsParsed.rankBucket);
     assert.equal(pyParsed.rubric, 'type-aware');

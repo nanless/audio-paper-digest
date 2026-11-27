@@ -142,9 +142,68 @@ async function run() {
   const browserMod = await import('file://' + path.join(resources, 'website-browser.js'));
   const parsedVenue = browserMod.parseConferenceVenue('conference:interspeech:2026:asr-42');
   assert.equal(parsedVenue.key, 'conference:interspeech:2026');
-  assert.equal(parsedVenue.label, 'INTERSPEECH 2026');
+  assert.equal(parsedVenue.label, 'Interspeech 2026');
   assert.equal(parsedVenue.venue, 'interspeech');
   assert.equal(parsedVenue.year, 2026);
+  // Canonical venue display parity & separator/case normalization (matching Swift/Kotlin/Portal)
+  const venueParityCases = [
+    ['conference:INTERSPEECH:2026:paper-02', 'Interspeech 2026'],
+    ['conference:icassp:2026:999', 'ICASSP 2026'],
+    ['conference:speech_prosody:2026:sp1', 'Speech Prosody 2026'],
+    ['conference:speech-prosody:2026:sp2', 'Speech Prosody 2026'],
+    ['conference:speechprosody:2026:sp3', 'Speech Prosody 2026'],
+    ['conference:Speech-Prosody:2026:sp4', 'Speech Prosody 2026'],
+    ['conference:waspaa:2025:w1', 'WASPAA 2025'],
+    ['conference:asru:2025:a1', 'ASRU 2025'],
+    ['conference:slt:2026:s1', 'SLT 2026'],
+    ['conference:ismir:2026:i1', 'ISMIR 2026'],
+    ['conference:dcase:2026:d1', 'DCASE 2026'],
+    ['conference:taslp:2026:t1', 'TASLP 2026'],
+    ['conference:ieee_acm_taslp:2026:t2', 'TASLP 2026'],
+    ['conference:ieee-acm-taslp:2026:t3', 'TASLP 2026'],
+    ['conference:ieee-acm_taslp:2026:t4', 'TASLP 2026'],
+    ['conference:neurips:2025:abc', 'NeurIPS 2025'],
+    ['conference:nips:2024:n1', 'NeurIPS 2024'],
+    ['conference:icml:2026:m1', 'ICML 2026'],
+    ['conference:iclr:2026:l1', 'ICLR 2026'],
+    ['conference:acl:2026:acl1', 'ACL 2026'],
+    ['conference:emnlp:2026:e1', 'EMNLP 2026'],
+    ['conference:naacl:2026:na1', 'NAACL 2026'],
+    ['conference:aaai:2026:aa1', 'AAAI 2026'],
+    ['conference:ijcai:2026:ij1', 'IJCAI 2026'],
+    ['conference:cvpr:2026:cv1', 'CVPR 2026'],
+    ['conference:iccv:2025:ic1', 'ICCV 2025'],
+    ['conference:eccv:2026:ec1', 'ECCV 2026'],
+    ['conference:acmmm:2026:mm1', 'ACM MM 2026'],
+    ['conference:acm_mm:2026:mm2', 'ACM MM 2026'],
+    ['conference:acm-mm:2026:mm3', 'ACM MM 2026'],
+    ['conference:mm:2026:mm4', 'ACM MM 2026'],
+    ['conference:siggraph:2026:sg1', 'SIGGRAPH 2026'],
+    ['conference:chi:2026:ch1', 'CHI 2026'],
+    ['conference:ubicomp:2026:ub1', 'UbiComp 2026'],
+    ['conference:mobicom:2026:mc1', 'MobiCom 2026'],
+    ['conference:mobisys:2026:ms1', 'MobiSys 2026'],
+    ['conference:sensys:2026:sn1', 'SenSys 2026'],
+    ['conference:odyssey:2026:od1', 'Odyssey 2026'],
+    ['conference:lrec:2026:lr1', 'LREC 2026'],
+    ['conference:coling:2026:co1', 'COLING 2026'],
+    ['conference:eacl:2026:ea1', 'EACL 2026'],
+    ['conference:kdd:2026:kd1', 'KDD 2026'],
+    ['conference:www:2026:ww1', 'WWW 2026'],
+    ['conference:icra:2026:ir1', 'ICRA 2026'],
+    ['conference:iros:2026:io1', 'IROS 2026'],
+    ['conference:corl:2026:cl1', 'CoRL 2026'],
+    ['conference:jmlr:2026:jm1', 'JMLR 2026'],
+    ['conference:tmlr:2026:tm1', 'TMLR 2026'],
+    ['conference:tacl:2026:ta1', 'TACL 2026'],
+    ['conference:spl:2026:sp5', 'SPL 2026'],
+    ['conference:dafx:2026:df1', 'DAFx 2026'],
+    ['conference:chime:2026:cm1', 'CHiME 2026'],
+    ['conference:custom_venue:2026:u1', 'CUSTOM_VENUE 2026'],
+  ];
+  for (const [paperId, expectedLabel] of venueParityCases) {
+    assert.equal(browserMod.parseConferenceVenue(paperId)?.label, expectedLabel, `Venue parity for ${paperId}`);
+  }
   // #11: prototype-chain defense
   assert.equal(browserMod.parseConferenceVenue('conference:constructor:2026:1').label, 'CONSTRUCTOR 2026');
   assert.equal(browserMod.resolvePaperResources({id: 'toString'}, {resourceBadges: {}}).pills.length, 0);
@@ -223,10 +282,10 @@ async function run() {
     await page1.click('#library-filter-toggle');
     await page1.waitForSelector('#library-venue');
     const venueOptions = await page1.locator('#library-venue option').allTextContents();
-    assert.ok(venueOptions.some(t => t.includes('INTERSPEECH 2026')), `Venue dropdown populated: ${venueOptions.join(', ')}`);
+    assert.ok(venueOptions.some(t => t.includes('Interspeech 2026')), `Venue dropdown populated: ${venueOptions.join(', ')}`);
     await page1.selectOption('#library-venue', 'conference:interspeech:2026');
     await page1.waitForTimeout(100);
-    assert.equal(await page1.locator('#paper-rows tr[data-library-row]').count(), 1, 'Conference venue filter leaves 1 INTERSPEECH paper');
+    assert.equal(await page1.locator('#paper-rows tr[data-library-row]').count(), 1, 'Conference venue filter leaves 1 Interspeech paper');
     await page1.selectOption('#library-venue', '');
 
     await page1.click('.library-score-preset[data-score-preset="8"]');

@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawnPythonJson } = require('./helpers/run-python-json.js');
 const predicate = require('../scripts/lib/scoring-stability.js').scoringStabilityIsResolved;
 const vectors = require('./fixtures/scoring-stability-cases.json');
 
@@ -122,13 +122,13 @@ test('本地确定性评分不能凭执行类型、原API共识或伪凭证绕�
 
 test('Python 与 Node 读取同一固定向量并给出完全相同的严格判断', () => {
     const root = path.resolve(__dirname, '..');
-    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', `
+    const result = spawnPythonJson(['-c', `
 import json, sys
 sys.path.insert(0, 'scripts')
 from scoring_stability import scoring_stability_is_resolved
 cases = json.load(sys.stdin)
 print(json.dumps([scoring_stability_is_resolved(item['stage']) for item in cases]))
-`], { cwd: root, input: JSON.stringify(vectors), encoding: 'utf8', timeout: 30000 });
+`], vectors, { cwd: root, timeout: 30000 });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), vectors.map(item => predicate(item.stage)));
 });
@@ -183,9 +183,9 @@ test('新共识证明按真实格式指纹跨语言读取，错误指纹和混�
         { version: 1 }].map(change => ({ ...stage, stabilityResolution: { ...result.resolution, ...change } }))];
     const expected = [true, false, false, false];
     assert.deepEqual(variants.map(predicate), expected);
-    const resultPython = spawnSync('bash', ['scripts/python-runtime.sh', '-c',
-        'import json,sys;sys.path.insert(0,"scripts");from scoring_stability import scoring_stability_is_resolved;print(json.dumps([scoring_stability_is_resolved(s) for s in json.load(sys.stdin)]))'], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(variants), encoding: 'utf8' });
+    const resultPython = spawnPythonJson(['-c',
+        'import json,sys;sys.path.insert(0,"scripts");from scoring_stability import scoring_stability_is_resolved;print(json.dumps([scoring_stability_is_resolved(s) for s in json.load(sys.stdin)]))'],
+        variants, { cwd: path.resolve(__dirname, '..') });
     assert.equal(resultPython.status, 0, resultPython.stderr);
     assert.deepEqual(JSON.parse(resultPython.stdout), expected);
 });

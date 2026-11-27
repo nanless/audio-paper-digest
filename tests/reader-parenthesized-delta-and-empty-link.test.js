@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const { runPythonJson } = require('./helpers/run-python-json.js');
 
 const Config = require('../scripts/config');
 const daily = require('../scripts/lib/daily-fresh-source-plan');
@@ -193,12 +194,10 @@ out = {
 sys.stdout.write(json.dumps(out, ensure_ascii=False))
 `;
     const b3Guards = B3_NEGATIVE_CASES.map(([raw]) => raw);
-    const py = JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', probe, projectRoot], {
+    const py = runPythonJson(['-c', probe, projectRoot], { cell: cellInputs, display: displayInputs, pairs, b3Guards }, {
         cwd: projectRoot,
-        input: JSON.stringify({ cell: cellInputs, display: displayInputs, pairs, b3Guards }),
-        encoding: 'utf8',
         env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
-    }));
+    });
     assert.deepEqual(py.cell, cellInputs.map(v => projectReaderCellTexDisplay(v)));
     assert.deepEqual(py.mathjax, displayInputs.map(v => collapseParenthesizedSignedDoubleWrite(v)));
     assert.deepEqual(py.display, displayInputs.map(v => normalizeReaderSourceDisplayArtifacts(v)));
@@ -609,16 +608,14 @@ test('LaTeXML booktabs rule cell prefix projection stays symmetric and 2nd-order
     }
     const allInputs = [...positives.map(([r]) => r), ...negatives];
     const projectRoot = path.resolve(__dirname, '..');
-    const pyResults = JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', `import sys, json
+    const pyResults = runPythonJson(['-c', `import sys, json
 sys.path.insert(0, 'tests/python')
 from test_publish_to_blog import publish_to_blog as publish
 items = json.load(sys.stdin)
-print(json.dumps([publish._project_reader_cell_tex_display(x) for x in items]))`], {
+print(json.dumps([publish._project_reader_cell_tex_display(x) for x in items]))`], allInputs, {
         cwd: projectRoot,
-        input: JSON.stringify(allInputs),
-        encoding: 'utf8',
         env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
-    }).trim());
+    });
     allInputs.forEach((raw, idx) => {
         assert.equal(projectReaderCellTexDisplay(raw), pyResults[idx], `Node vs Python mismatch for ${JSON.stringify(raw)}`);
     });
@@ -643,16 +640,14 @@ test('TeX 单元格局部重复折叠使用真实词元起点边界（修复假�
         assert.equal(projectReaderCellTexDisplay(out), out, `JS idempotence for ${JSON.stringify(raw)}`);
     }
     const projectRoot = path.resolve(__dirname, '..');
-    const pyResults = JSON.parse(execFileSync('bash', [path.join(projectRoot, 'scripts/python-runtime.sh'), '-c', `import sys, json
+    const pyResults = runPythonJson(['-c', `import sys, json
 sys.path.insert(0, 'scripts')
 import blog_formula_tex_display as py_tex
 items = json.load(sys.stdin)
-print(json.dumps([py_tex._project_reader_cell_tex_display(x) for x in items], ensure_ascii=False))`], {
+print(json.dumps([py_tex._project_reader_cell_tex_display(x) for x in items], ensure_ascii=False))`], cases.map(([raw]) => raw), {
         cwd: projectRoot,
-        input: JSON.stringify(cases.map(([raw]) => raw)),
-        encoding: 'utf8',
         env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' },
-    }).trim());
+    });
     cases.forEach(([raw, expected], idx) => {
         assert.equal(pyResults[idx], expected, `Python mismatch for ${JSON.stringify(raw)}`);
         assert.equal(projectReaderCellTexDisplay(raw), pyResults[idx], `Node vs Python drift for ${JSON.stringify(raw)}`);

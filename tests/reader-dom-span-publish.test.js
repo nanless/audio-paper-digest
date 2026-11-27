@@ -17,7 +17,7 @@ async function fixture(t){
  paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256=artifacts.payloadSha256;const stage=paper.analysisManifest.stages.apiReaderArticle;Object.assign(stage,{formulaBindingCount:0,structuredArtifactsSha256:artifacts.payloadSha256,qualityMetrics:parsed.qualityMetrics,sourceBindingsSha256:parsed.plan.sourceBindingsSha256,articleSha256:repair.shaText(parsed.article),planSha256:daily.stableHash(parsed.plan)});paper.apiReaderArticleSha256=stage.articleSha256;paper.apiReaderPlanSha256=stage.planSha256;
  return{paper,source,plan,table,artifacts,root,prepared};
 }
-const { execFileSync } = require('node:child_process');
+const { runPythonJson } = require('./helpers/run-python-json.js');
 function pythonPublisher(f, paper = f.paper) {
     const project = path.resolve(__dirname, '..');
     const code = `import sys,json
@@ -38,9 +38,8 @@ try:
 except Exception as e:
  print(json.dumps({'verified':False,'error':str(e)}))
 `;
-    return JSON.parse(execFileSync('bash', [path.join(project,'scripts/python-runtime.sh'), '-c', code],
-        { cwd: project, input: JSON.stringify({ paper, runs: path.dirname(f.plan.runDir) }), encoding: 'utf8',
-            env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS:'1' } }).trim());
+    return runPythonJson(['-c', code], { paper, runs: path.dirname(f.plan.runDir) },
+        { cwd: project, env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' } });
 }
 test('正常Node parser的HTML全幅分类空白投影通过Python同一来源资格且原字节不变', async t => {
  const f=await fixture(t), before=JSON.stringify(f.paper);
@@ -122,7 +121,7 @@ test('Python最终页面投影折叠同义TeX双写后仍通过HTML全幅分类�
  paper.apiReaderPlanSha256 = stage.planSha256;
 
  const project = path.resolve(__dirname, '..');
- const checkPage = renderedOverride => JSON.parse(execFileSync('bash', [path.join(project, 'scripts/python-runtime.sh'), '-c', `import sys,json
+ const checkPage = renderedOverride => runPythonJson(['-c', `import sys,json
 from pathlib import Path
 sys.path.insert(0,'tests/python')
 from test_publish_to_blog import publish_to_blog as publish
@@ -135,12 +134,9 @@ try:
  publish._validate_api_reader_source_bindings(p, rendered)
  print(json.dumps({'issue':None,'rendered':projected}))
 except Exception as e:
- print(json.dumps({'issue':str(e),'rendered':projected}))`], {
-  cwd: project,
-  input: JSON.stringify({ paper, runs: path.dirname(plan.runDir), override: renderedOverride || null }),
-  encoding: 'utf8',
-  env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' }
- }).trim());
+ print(json.dumps({'issue':str(e),'rendered':projected}))`],
+  { paper, runs: path.dirname(plan.runDir), override: renderedOverride || null },
+  { cwd: project, env: { ...process.env, VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' } });
 
  const ok = checkPage(null);
  assert.equal(ok.issue, null, ok.issue || '');

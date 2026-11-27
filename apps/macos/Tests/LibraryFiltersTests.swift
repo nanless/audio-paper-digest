@@ -75,15 +75,74 @@ private actor FiltersFixtureTransport {
     }
 
     static func main() async throws {
-        // 1. Offline deterministic conference venue parsing
+        // 1. Offline deterministic conference venue parsing & canonical display parity
         let interspeech = LibraryService.parseConferenceVenue("conference:interspeech:2026:paper-01")
-        try check(interspeech?.key == "conference:interspeech:2026" && interspeech?.label == "INTERSPEECH 2026", "parses INTERSPEECH 2026")
+        try check(interspeech?.key == "conference:interspeech:2026" && interspeech?.label == "Interspeech 2026", "parses Interspeech 2026")
+        let venueParityCases: [(String, String)] = [
+            ("conference:INTERSPEECH:2026:paper-02", "Interspeech 2026"),
+            ("conference:icassp:2026:999", "ICASSP 2026"),
+            ("conference:speech_prosody:2026:sp1", "Speech Prosody 2026"),
+            ("conference:speech-prosody:2026:sp2", "Speech Prosody 2026"),
+            ("conference:speechprosody:2026:sp3", "Speech Prosody 2026"),
+            ("conference:Speech-Prosody:2026:sp4", "Speech Prosody 2026"),
+            ("conference:waspaa:2025:w1", "WASPAA 2025"),
+            ("conference:asru:2025:a1", "ASRU 2025"),
+            ("conference:slt:2026:s1", "SLT 2026"),
+            ("conference:ismir:2026:i1", "ISMIR 2026"),
+            ("conference:dcase:2026:d1", "DCASE 2026"),
+            ("conference:taslp:2026:t1", "TASLP 2026"),
+            ("conference:ieee_acm_taslp:2026:t2", "TASLP 2026"),
+            ("conference:ieee-acm-taslp:2026:t3", "TASLP 2026"),
+            ("conference:ieee-acm_taslp:2026:t4", "TASLP 2026"),
+            ("conference:neurips:2025:abc", "NeurIPS 2025"),
+            ("conference:nips:2024:n1", "NeurIPS 2024"),
+            ("conference:icml:2026:m1", "ICML 2026"),
+            ("conference:iclr:2026:l1", "ICLR 2026"),
+            ("conference:acl:2026:acl1", "ACL 2026"),
+            ("conference:emnlp:2026:e1", "EMNLP 2026"),
+            ("conference:naacl:2026:na1", "NAACL 2026"),
+            ("conference:aaai:2026:aa1", "AAAI 2026"),
+            ("conference:ijcai:2026:ij1", "IJCAI 2026"),
+            ("conference:cvpr:2026:cv1", "CVPR 2026"),
+            ("conference:iccv:2025:ic1", "ICCV 2025"),
+            ("conference:eccv:2026:ec1", "ECCV 2026"),
+            ("conference:acmmm:2026:mm1", "ACM MM 2026"),
+            ("conference:acm_mm:2026:mm2", "ACM MM 2026"),
+            ("conference:acm-mm:2026:mm3", "ACM MM 2026"),
+            ("conference:mm:2026:mm4", "ACM MM 2026"),
+            ("conference:siggraph:2026:sg1", "SIGGRAPH 2026"),
+            ("conference:chi:2026:ch1", "CHI 2026"),
+            ("conference:ubicomp:2026:ub1", "UbiComp 2026"),
+            ("conference:mobicom:2026:mc1", "MobiCom 2026"),
+            ("conference:mobisys:2026:ms1", "MobiSys 2026"),
+            ("conference:sensys:2026:sn1", "SenSys 2026"),
+            ("conference:odyssey:2026:od1", "Odyssey 2026"),
+            ("conference:lrec:2026:lr1", "LREC 2026"),
+            ("conference:coling:2026:co1", "COLING 2026"),
+            ("conference:eacl:2026:ea1", "EACL 2026"),
+            ("conference:kdd:2026:kd1", "KDD 2026"),
+            ("conference:www:2026:ww1", "WWW 2026"),
+            ("conference:icra:2026:ir1", "ICRA 2026"),
+            ("conference:iros:2026:io1", "IROS 2026"),
+            ("conference:corl:2026:cl1", "CoRL 2026"),
+            ("conference:jmlr:2026:jm1", "JMLR 2026"),
+            ("conference:tmlr:2026:tm1", "TMLR 2026"),
+            ("conference:tacl:2026:ta1", "TACL 2026"),
+            ("conference:spl:2026:sp5", "SPL 2026"),
+            ("conference:dafx:2026:df1", "DAFx 2026"),
+            ("conference:chime:2026:cm1", "CHiME 2026"),
+            ("conference:custom_venue:2026:u1", "CUSTOM_VENUE 2026")
+        ]
+        for (paperID, expectedLabel) in venueParityCases {
+            let parsed = LibraryService.parseConferenceVenue(paperID)
+            try check(parsed?.label == expectedLabel, "parses \(paperID) as \(expectedLabel) (got \(parsed?.label ?? "nil"))")
+        }
         let neurips = LibraryService.parseConferenceVenue("conference:neurips:2025:abc")
         try check(neurips?.key == "conference:neurips:2025" && neurips?.label == "NeurIPS 2025", "parses NeurIPS 2025")
-        let icassp = LibraryService.parseConferenceVenue("conference:icassp:2026:999")
-        try check(icassp?.label == "ICASSP 2026", "parses ICASSP 2026")
         try check(LibraryService.parseConferenceVenue("arxiv:2611.00001") == nil, "arxiv paper has no conference venue")
         try check(LibraryService.parseConferenceVenue("conference:bad:notayear:1") == nil, "rejects invalid year")
+        try check(LibraryService.parseConferenceVenue("conference:icassp:20٢٦:1") == nil, "rejects non-ASCII Unicode digits in year")
+        try check(LibraryService.parseConferenceVenue("conference:icassp:20２６:1") == nil, "rejects fullwidth digits in year")
 
         // 2. Build catalog fixture with varied scores, venues, authors, and Tier 1 artifact concepts
         let rows: [[String: Any]] = [
@@ -201,13 +260,13 @@ private actor FiltersFixtureTransport {
         let relMatches = await service.matchingPapers(query: "TTS", source: nil, minimumScore: nil, sort: .relevance)
         try check(relMatches.count == 2 && relMatches[0].id == "arxiv:2611.00001", "relevance sort ranks title match before tag-only match")
 
-        // Multi-token search including parsed conference venue label ("INTERSPEECH 2026")
+        // Multi-token search including parsed conference venue label ("Interspeech 2026")
         let venueQueryMatches = await service.matchingPapers(query: "interspeech carol", source: nil, minimumScore: nil, sort: .date)
         try check(venueQueryMatches.map(\.id) == ["conference:interspeech:2026:asr-42"], "search includes parsed conference venue label")
 
         // 4. Conference venue filter
         let interspeechOnly = await service.matchingPapers(query: "", source: nil, minimumScore: nil, sort: .date, conferenceVenue: "conference:interspeech:2026")
-        try check(interspeechOnly.map(\.id) == ["conference:interspeech:2026:asr-42"], "conferenceVenue filter isolates INTERSPEECH 2026")
+        try check(interspeechOnly.map(\.id) == ["conference:interspeech:2026:asr-42"], "conferenceVenue filter isolates Interspeech 2026")
 
         // 5. Score tier quick presets (scoredOnly & thresholds 8.0 / 7.0 / 6.0)
         let scoredOnly = await service.matchingPapers(query: "", source: nil, minimumScore: nil, sort: .score, scoredOnly: true)

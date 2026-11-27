@@ -164,7 +164,7 @@ test('新身份写完整实际头，规范编号保持一致而身份摘要绑�
 });
 
 test('现用身份的实际头、身份摘要与完整记录摘要在两种语言中一致', () => {
-    const { execFileSync } = require('node:child_process');
+    const { runPythonJson } = require('./helpers/run-python-json.js');
     const fields = vectors.vectors.map(vector => {
         const value = structuredClone(vector.record);
         delete value.contract;
@@ -174,10 +174,10 @@ test('现用身份的实际头、身份摘要与完整记录摘要在两种语�
         const record = identity.createIdentity(value);
         return { record, identitySha256: identity.identitySha256(record), recordSha256: identity.recordSha256(record) };
     });
-    const text = execFileSync('bash', ['scripts/python-runtime.sh', '-c',
-        'import json,sys;sys.path.insert(0,"scripts");import paper_identity as p;records=[p.create_identity(v) for v in json.load(sys.stdin)];print(json.dumps([{"record":v,"identitySha256":p.identity_sha256(v),"recordSha256":p.record_sha256(v)} for v in records],ensure_ascii=False))'], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(fields), encoding: 'utf8' });
-    assert.deepEqual(JSON.parse(text), expected);
+    const parsed = runPythonJson(['-c',
+        'import json,sys;sys.path.insert(0,"scripts");import paper_identity as p;records=[p.create_identity(v) for v in json.load(sys.stdin)];print(json.dumps([{"record":v,"identitySha256":p.identity_sha256(v),"recordSha256":p.record_sha256(v)} for v in records],ensure_ascii=False))'],
+        fields, { cwd: path.resolve(__dirname, '..') });
+    assert.deepEqual(parsed, expected);
 });
 
 test('编号、会议短名和摘要均不接受末尾换行', () => {

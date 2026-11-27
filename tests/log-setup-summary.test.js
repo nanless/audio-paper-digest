@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
+const { spawnPythonJson } = require('./helpers/run-python-json.js');
 
 const { writeStageSummary, setupScriptLogging } = require('../scripts/log-setup.js');
 
@@ -624,10 +625,10 @@ describe('阶段摘要日志', () => {
                         ? scenario.now.toISOString()
                         : scenario.now
                 };
-                const run = spawnSync(
-                    'bash',
-                    ['scripts/python-runtime.sh', '-c', pythonCode, pythonDir],
-                    { cwd: ROOT, env: process.env, encoding: 'utf8', input: JSON.stringify(payload), timeout: 60000 }
+                const run = spawnPythonJson(
+                    ['-c', pythonCode, pythonDir],
+                    payload,
+                    { cwd: ROOT, env: process.env, timeout: 60000 }
                 );
                 if (run.error || (run.status !== 0 && /未安装|运行时检查失败/.test(run.stderr || ''))) {
                     return t.skip(`Python 运行时不可用: ${run.error ? run.error.message : run.stderr}`);

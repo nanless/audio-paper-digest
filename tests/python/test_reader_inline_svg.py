@@ -2,11 +2,14 @@
 import hashlib
 import json
 from pathlib import Path
+import struct
+import subprocess
 import sys
 import unittest
 import xml.etree.ElementTree as ET
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts'))
 import reader_inline_svg as renderer
 
 
@@ -307,6 +310,116 @@ class ReaderInlineSvgDependencyTest(unittest.TestCase):
             with self.assertRaises(renderer.UnsupportedSvgDependency):
                 replay_mod.replay_saved_inline_svg_pixels(raw, '0' * 64, contract=renderer.CONTRACT)
         self.assertEqual(calls, 1)
+
+    def test_intact_inline_svg_renders_real_hidpi_and_1x_png_without_mutating_source(self):
+        raw = (
+            b'<svg id="intact" width="160" height="80" viewBox="0 0 160 80">'
+            b'<rect width="100" height="60" fill="blue"/>'
+            b'<text x="10" y="30">Original 42</text></svg>'
+        )
+        before_sha = hashlib.sha256(raw).hexdigest()
+        png_hi = renderer.render_svg(raw, hidpi=True, deterministic_hidpi=True)
+        self.assertTrue(png_hi.startswith(b'\x89PNG\r\n\x1a\n'))
+        hi_w, hi_h = struct.unpack('>II', png_hi[16:24])
+        self.assertEqual((hi_w, hi_h), (480, 240))
+        png_1x = renderer.render_svg(raw, hidpi=False, deterministic_hidpi=True)
+        self.assertTrue(png_1x.startswith(b'\x89PNG\r\n\x1a\n'))
+        w1, h1 = struct.unpack('>II', png_1x[16:24])
+        self.assertEqual((w1, h1), (160, 80))
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), before_sha)
+
+    def test_v2_quality_rejects_raw_latex_leak_and_foreign_object_overlap_in_browser_and_cli(self):
+        raw_latex_svg = (
+            b'<svg id="latex-leak" width="180" height="80" viewBox="0 0 180 80">'
+            b'<rect width="180" height="80" fill="white"/>'
+            b'<text x="10" y="40">\\scriptsize leaked label</text></svg>'
+        )
+        overlap_svg = (
+            b'<svg id="fo-overlap" width="220" height="100" viewBox="0 0 220 100">'
+            b'<foreignObject x="10" y="10" width="120" height="40">'
+            b'<div xmlns="http://www.w3.org/1999/xhtml">First block text</div></foreignObject>'
+            b'<foreignObject x="12" y="12" width="120" height="40">'
+            b'<div xmlns="http://www.w3.org/1999/xhtml">Second overlapping text</div></foreignObject>'
+            b'</svg>'
+        )
+        for raw, expected_reason in (
+            (raw_latex_svg, 'raw_latex_leak_in_svg'),
+            (overlap_svg, 'foreign_object_text_overlap'),
+        ):
+            with self.subTest(reason=expected_reason):
+                with self.assertRaises(renderer.UnsupportedSvgDependency) as raised:
+                    renderer.render_svg(raw, deterministic_hidpi=True)
+                self.assertEqual(raised.exception.reason, expected_reason)
+
+                expected_json = json.dumps({
+                    'contract': 'reader-inline-svg-error-v1',
+                    'code': 'unsupported_dependency',
+                    'reason': expected_reason,
+                }, separators=(',', ':'))
+                child = subprocess.run(
+                    [sys.executable, str(ROOT / 'scripts' / 'reader_inline_svg.py'), '--hidpi', '--deterministic-hidpi'],
+                    cwd=str(ROOT),
+                    input=raw,
+                    capture_output=True,
+                    timeout=30,
+                )
+                self.assertEqual(child.returncode, 65, f'{expected_reason}: stderr={child.stderr!r}')
+                self.assertEqual(child.stdout, b'')
+                self.assertEqual(child.stderr.decode('utf-8').strip(), expected_json)
+
+    def test_html_named_entities_and_mathml_render_real_png_with_bound_source_bytes(self):
+        body = (
+            '<foreignObject width="160" height="80">'
+            '<div xmlns="http://www.w3.org/1999/xhtml">'
+            '<a href="#figure" title="label">A&nbsp;&lambda;</a>'
+            '<math><mo minsize="1" maxsize="2" lspace="0" rspace="0">&rarr;</mo></math>'
+            '</div></foreignObject>'
+        )
+        inline_svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" id="figure" width="160" height="80" '
+            'viewBox="0 0 160 80">' + body + '</svg>'
+        )
+        raw = inline_svg.encode('utf-8')
+        raw_sha = hashlib.sha256(raw).hexdigest()
+        descriptor = renderer.source_descriptor({
+            'kind': 'inline_svg',
+            'mediaType': 'image/svg+xml',
+            'inlineSvg': inline_svg,
+            'inlineSvgBytes': len(raw),
+            'inlineSvgSha256': raw_sha,
+        }, '2610.90001v1')
+        self.assertEqual(descriptor['inlineSvgSourceSha256'], raw_sha)
+
+        png_hi = renderer.render_svg(raw, hidpi=True, deterministic_hidpi=True)
+        self.assertTrue(png_hi.startswith(b'\x89PNG\r\n\x1a\n'))
+        self.assertEqual(struct.unpack('>II', png_hi[16:24]), (480, 240))
+
+        png_1x = renderer.render_svg(raw, hidpi=False, deterministic_hidpi=True)
+        self.assertTrue(png_1x.startswith(b'\x89PNG\r\n\x1a\n'))
+        self.assertEqual(struct.unpack('>II', png_1x[16:24]), (160, 80))
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), raw_sha)
+
+    def test_overflow_visible_negative_coords_preserve_full_painted_bounds_and_reject_oversize(self):
+        overflow_svg = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" id="figure" width="160" height="80" '
+            b'overflow="visible" viewBox="0 0 160 80">'
+            b'<rect x="-10" y="-5" width="190" height="100" fill="black"/></svg>'
+        )
+        png_hi = renderer.render_svg(overflow_svg, hidpi=True, deterministic_hidpi=True)
+        self.assertTrue(png_hi.startswith(b'\x89PNG\r\n\x1a\n'))
+        self.assertEqual(struct.unpack('>II', png_hi[16:24]), (570, 300))
+
+        png_1x = renderer.render_svg(overflow_svg, hidpi=False, deterministic_hidpi=True)
+        self.assertTrue(png_1x.startswith(b'\x89PNG\r\n\x1a\n'))
+        self.assertEqual(struct.unpack('>II', png_1x[16:24]), (190, 100))
+
+        oversize_svg = (
+            b'<svg xmlns="http://www.w3.org/2000/svg" id="figure" width="160" height="80" '
+            b'viewBox="0 0 160 80"><rect x="-10" y="0" width="5000" height="10"/></svg>'
+        )
+        with self.assertRaisesRegex(ValueError, '实际绘制范围超过受控上限') as raised:
+            renderer.render_svg(oversize_svg, hidpi=True, deterministic_hidpi=True)
+        self.assertNotIsInstance(raised.exception, renderer.UnsupportedSvgDependency)
 
 
 if __name__ == '__main__':

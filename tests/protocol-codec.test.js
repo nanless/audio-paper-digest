@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { runPythonJson } = require('./helpers/run-python-json.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const { createCodec, canonical, readCatalogs } = require('../scripts/lib/protocol-codec');
@@ -54,8 +55,7 @@ test('未知、近似和跨族标签拒绝；调用方不能改写登记或覆�
 test('Node 与 Python 对同一声明、历史头和结构指纹给出相同结果', () => {
     const codec = createCodec(catalogs);
     const code = 'import json,sys;sys.path.insert(0,"scripts");from protocol_codec import Codec;c=Codec(json.load(sys.stdin));print(json.dumps({"record":c.record("example-record",{"paperId":"new"}),"header":c.record_header("example-record-v1","example-record"),"format":c.format("example-record-v1","example-record")},ensure_ascii=False))';
-    const result = JSON.parse(execFileSync('bash', ['scripts/python-runtime.sh', '-c', code], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(catalogs), encoding: 'utf8' }));
+    const result = runPythonJson(['-c', code], catalogs, { cwd: path.resolve(__dirname, '..') });
     assert.deepEqual(result, { record: codec.record('example-record', { paperId: 'new' }), header: codec.recordHeader('example-record-v1', 'example-record'), format: 'unbound' });
     assert.throws(() => canonical({ amount: 1.5 }));
     assert.throws(() => canonical({ text: '\ud800' }));
@@ -122,8 +122,7 @@ test('稳定名称的旧结构按已登记原指纹读取，不能猜结构或�
     wrong[0].protocols[0].historical.at(-1).schema.fields.push('forged');
     assert.throws(() => createCodec(wrong), /原结构声明/);
     const code = 'import json,sys;sys.path.insert(0,"scripts");from protocol_codec import Codec;v=json.load(sys.stdin);c=Codec(v["catalogs"]);h=v["header"];print(json.dumps({"old":c.has_valid_header(h,"example-record"),"current":c.is_current_header(h,"example-record"),"header":c.record_header(h["contract"],"example-record",h["schemaFingerprint"]),"format":c.format(h["contract"],"example-record",h["schemaFingerprint"])}))';
-    const result = JSON.parse(execFileSync('bash', ['scripts/python-runtime.sh', '-c', code], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify({ catalogs: next, header: oldHeader }), encoding: 'utf8' }));
+    const result = runPythonJson(['-c', code], { catalogs: next, header: oldHeader }, { cwd: path.resolve(__dirname, '..') });
     assert.deepEqual(result, { old: true, current: false, header: oldHeader, format: 'source-bound' });
 });
 
@@ -142,16 +141,15 @@ test('无字符串标签的历史整数头仍精确识别，布尔值与字符�
 
 test('名称和语义标识不接受结尾换行，两种语言都不能构造带旧头的新记录', () => {
     const code = 'import json,sys;sys.path.insert(0,"scripts");from protocol_codec import Codec;c=Codec(json.load(sys.stdin));c.record("example-record",{"policyVersion":1})';
-    assert.throws(() => execFileSync('bash', ['scripts/python-runtime.sh', '-c', code], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(catalogs), stdio: ['pipe', 'pipe', 'pipe'] }));
+    assert.throws(() => runPythonJson(['-c', code], catalogs, { cwd: path.resolve(__dirname, '..'), parseJson: false }));
     for (const field of ['name', 'currentVariant']) {
         for (const suffix of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
             const malformed = structuredClone(catalogs);
             malformed[0].protocols[0][field] += suffix;
             assert.throws(() => createCodec(malformed));
-            assert.throws(() => execFileSync('bash', ['scripts/python-runtime.sh', '-c',
-                'import json,sys;sys.path.insert(0,"scripts");from protocol_codec import Codec;Codec(json.load(sys.stdin))'], {
-                cwd: path.resolve(__dirname, '..'), input: JSON.stringify(malformed), stdio: ['pipe', 'pipe', 'pipe'] }));
+            assert.throws(() => runPythonJson(['-c',
+                'import json,sys;sys.path.insert(0,"scripts");from protocol_codec import Codec;Codec(json.load(sys.stdin))'],
+                malformed, { cwd: path.resolve(__dirname, '..'), parseJson: false }));
         }
     }
 });
@@ -171,8 +169,8 @@ test('已登记头枚举包含同名原指纹，副本不改变登记且不接�
     headers[0].schemaFingerprint = '0'.repeat(64);
     assert.notEqual(codec.registeredHeaders('example-record')[0].schemaFingerprint, headers[0].schemaFingerprint);
     assert.throws(() => codec.registeredHeaders('unregistered-record'));
-    const result = JSON.parse(execFileSync('bash', ['scripts/python-runtime.sh', '-c',
-        'import json,sys;sys.path.insert(0,"scripts");from protocol_codec import Codec;c=Codec(json.load(sys.stdin));print(json.dumps(c.registered_headers("example-record")))'], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(rows), encoding: 'utf8' }));
+    const result = runPythonJson(['-c',
+        'import json,sys;sys.path.insert(0,"scripts");from protocol_codec import Codec;c=Codec(json.load(sys.stdin));print(json.dumps(c.registered_headers("example-record")))'],
+        rows, { cwd: path.resolve(__dirname, '..') });
     assert.deepEqual(result, codec.registeredHeaders('example-record'));
 });

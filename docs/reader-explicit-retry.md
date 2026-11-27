@@ -97,6 +97,16 @@ Reader 保存资格与发布校验对术语采用同一窄显示规则：完整�
 
 合法 JSON、已有正文和局部补丁不使用这项处理，摘录也不能作为成功稿采纳。新请求仍受原全文及响应余额限制，源码变化沿正常实现迁移保留旧身份、次数与费用；提示词仍超限时继续停止。
 
+日更中可直接用辅助命令按当前封存四来源与失败候选自动生成并校验重试清单（默认 0600 原子写入 `data/runtime/reader-retry-manifests/`，不调用模型）：
+
+```bash
+# 先 --dry-run 核验资格与预算，再去掉 --dry-run 落盘
+npm run reader-retry:new -- --paper 2611.12345 --mode auto --budget 320000 --dry-run
+npm run reader-retry:new -- --all-failed --mode auto
+```
+
+`--mode` 支持 `auto`（默认：尚无显式轮时生成首轮 `base`，已有显式轮时生成父轮续轮 `local`）、`base`、`local` 与 `full`；`--budget` 支持 `80000` 或 `320000`（默认 `320000`）；首轮完整再生加 `--full`（须满足 `complete_failed_draft_no_progress` 证明）。生成后按提示执行：
+
 ```bash
 npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/reader-rounds.json --refresh-reader-diagnostics
 ```
@@ -441,11 +451,23 @@ PDF 表中同名方法可按原 `Dim` 输入维度列定位，但须完整保留
 
 旧父反馈的上游恢复在进入分析前必须已有真实完整主分析检查点。恢复期间，原主文、摘要、评分、标签及 Reader 之外的阶段都受保护（图片下载阶段、图片清单与图片叙述合同属于同一次纠错的合法产物，不在此列）；保存回调同时检查原对象和传入检查点，发现变化须在写盘前拒绝并还原内存和回调。缺检查点或来源不符应保留失败，不能先删除原阶段再报错。错误前的真实快照仅可通过对应的来源绑定、完整父稿 CAS 恢复入口取回，不能手填完成状态。
 
-程序入口 `reanalyzeSelected(ids, options)` 可通过 `readerFeedbackFiles` 指定新的 Reader 专用事实包。它与 `feedbackFiles` 中原主文反馈并存，不能与独立核心反馈混用，也不能启动新的全阶段主文重写。每篇反馈均在论文锁内重新核验当前正文、四份封存来源和原阶段证明。原主文、核心摘要、评分及全阶段身份沿用真实原包；只有 Reader 使用新反馈、输入指纹和完成证明。
+程序入口 `reanalyzeSelected(ids, options)` 可通过 `readerFeedbackFiles` 指定新的 Reader 专用事实包，命令行对应 `npm run reanalyze:selected -- --reader-fact-feedback-file <path> <arxivId...>`（独立核心摘要反馈对应 `--core-summary-fact-feedback-file <path>`，两者均可重复传入）。它与 `feedbackFiles`（`--fact-feedback-file`）中原主文反馈并存，不能与独立核心反馈混用，也不能启动新的全阶段主文重写。每篇反馈均在论文锁内重新核验当前正文、四份封存来源和原阶段证明。原主文、核心摘要、评分及全阶段身份沿用真实原包；只有 Reader 使用新反馈、输入指纹和完成证明。
 
-这条路径适用于主文已完成而 Reader 尚未完成的论文，不要求伪造一份已签名 Reader。Reader 按正常生成及失败候选预算运行，真实输入变化时保存新的独立候选，旧输入候选、计数和费用记录保留。它不是清除旧次数的实现迁移，也不是命令行已提供的新参数。新反馈不能遗漏原有 Reader 事实约束，不能授权主文、摘要、评分或标签模型请求。
+这条路径适用于主文已完成而 Reader 尚未完成的论文，不要求伪造一份已签名 Reader。Reader 按正常生成及失败候选预算运行，真实输入变化时保存新的独立候选，旧输入候选、计数和费用记录保留。它不是清除旧次数的实现迁移；新反馈不能遗漏原有 Reader 事实约束，也不能授权主文、摘要、评分或标签模型请求。
 
-已正常完成并完整签名的 Reader 只需修正少量正文原句时，程序入口 `batch.main({ factFeedbackFiles: [readerOnlyFeedbackFile], readerFactLocalRevision: true })` 可显式选择已有的单句局部协议。
+日更中可用辅助命令 `npm run fact-feedback:new` 根据当前分析结果与封存四来源自动生成经 `validateFeedback` 校验的 `daily-bound-fact-review-v1` 反馈文件（0600 原子写入 `data/runtime/fact-feedbacks/`，支持 `--from-review-failure [PATH]` 自动提取审查错误描述、受拒原句与来源引文，详见[故障排查实操速查](troubleshooting.md#13-事实反馈重试清单与发布传输排障速查)）。
+
+已正常完成并完整签名的 Reader 只需修正少量正文原句时，命令行可直接通过 `npm run batch` 启用单句局部修订（等价于程序入口 `batch.main({ factFeedbackFiles: [readerOnlyFeedbackFile], readerFactLocalRevision: true })` 或 `readerFactLocalAuto: true`）：
+
+```bash
+# 强制单句局部修订（仅接受严格 Reader-only 反馈，不满足条件即阻断）
+npm run batch -- --fact-feedback-file /absolute/path/fact-feedback.json --reader-fact-local
+
+# 自动预检模式：先只读检查 6 项条件，全部通过走单句局部修订，否则保守回退正常 Reader 恢复
+npm run batch -- --fact-feedback-file /absolute/path/fact-feedback.json --reader-fact-local=auto
+```
+
+`--reader-fact-local` 与 `--reader-fact-local=auto` 不能同时使用。自动模式的 6 项只读预检依次核对：严格 Reader-only 反馈、未混用人工/签名清单或新付费轮或自定义分析器、`rejectedReaderClaims` 非空、父稿分析完整且已完整签名、具备可复核局部种子（`hasReviewedReaderFactLocalSeed`），以及全部受拒原句均被 1–8 个允许修改的既有节点完整覆盖。
 
 此模式仅接受严格 Reader-only 来源反馈，不混用人工清单、新付费轮或自定义分析器，也不处理未给反馈的其它失败项；仍由公共批次、论文锁、来源恢复器和正常保存负责。真实核心父包保持 `coreSummaryRepair` 身份，新 Reader 子包通过公共 Reader 范围核验，局部目标及证据读取子包，原核心、评分和费用证明不变。
 
