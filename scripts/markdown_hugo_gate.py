@@ -6,12 +6,7 @@
 import html
 from html.parser import HTMLParser
 import re
-import sys
 from pathlib import Path
-
-MANUAL_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / 'manual' / 'scripts'
-if str(MANUAL_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(MANUAL_SCRIPTS_DIR))
 
 from publish_common import (
     MANUAL_DEPTH_FACT_COVERAGE_CONTRACT,
@@ -25,7 +20,7 @@ from publish_common import (
     parse_markdown_images,
     extract_markdown_tables,
 )
-from tutorial_payload_verifier import (
+from tutorial_payload_verifier_core import (
     FRESH_AUTHORING_CONTRACT,
     MANUAL_TUTORIAL_PAYLOAD_CONTRACT,
     TUTORIAL_FORMAT_CONTRACT,

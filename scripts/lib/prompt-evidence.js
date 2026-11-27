@@ -33,7 +33,7 @@ function loadIndex(root) {
     const signature = [stat.dev, stat.ino, stat.nlink, stat.size, stat.mtimeNs, stat.ctimeNs].join(':');
     const cached = indexCache.get(filename);
     if (cached?.signature === signature) return cached.index;
-    const { strictJson } = require('./publication-file-primitives');
+    const { strictJson } = require('./strict-json');
     const bytes = readPlain(filename);
     const index = strictJson(bytes, 'Git Prompt evidence index');
     const protocol = require('./protocol-codec.js');

@@ -41,9 +41,8 @@ const IMPLEMENTATION_ALLOWANCE_FIELDS = new Set(['repairImplementationSha256', '
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
     'readerRecoveryEpochSha256']);
-const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const { hashDraft, shaText } = require('./reader-draft-hash.js');
 const compiledReaderFactIssues = new WeakMap();
-const shaText = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 // 表格单元格的显示形态：与 renderReaderTableSelection / renderReaderCompleteTable
 // 渲染时用的是同一个管线（先 projectReaderCellTexDisplay，再
 // normalizeReaderSourceDisplayArtifacts，见 reader-tables.js 的 readerTableCellDisplay）。
@@ -4516,7 +4515,7 @@ const READER_VERSION_METADATA_KIND = 'replace_reader_version_4_with_3_v1';
 function buildReaderVersionMetadataRepairContext(raw) {
     if (typeof raw !== 'string' || Buffer.byteLength(raw) > MAX_FILE_BYTES) return null;
     try {
-        const members = readTopLevelMembers(raw), value = require('./publication-file-primitives').strictJson(Buffer.from(raw), 'Reader version raw');
+        const members = readTopLevelMembers(raw), value = require('./strict-json').strictJson(Buffer.from(raw), 'Reader version raw');
         if (members.length !== ROOT_FIELDS.length || !ROOT_FIELDS.every(name => members.some(member => member.name === name))
             || value.version !== 4 || typeof value.readerTitle !== 'string' || !value.readerTitle.trim()
             || typeof value.oneSentenceThesis !== 'string' || !value.oneSentenceThesis.trim()
@@ -4537,7 +4536,7 @@ function buildReaderVersionMetadataRepairContext(raw) {
 }
 function parseReaderVersionMetadataPatch(raw) {
     if (typeof raw !== 'string' || Buffer.byteLength(raw) > 4096) throw new Error('Reader 版本补丁必须是完整的小型 JSON 对象');
-    const members = readTopLevelMembers(raw), value = require('./publication-file-primitives').strictJson(Buffer.from(raw), 'Reader version ACK');
+    const members = readTopLevelMembers(raw), value = require('./strict-json').strictJson(Buffer.from(raw), 'Reader version ACK');
     assertSafeJson(value);
     for (const [name,literal] of [['version','1'],['fromVersion','4'],['toVersion','3']]) {
         const span = members.find(item => item.name === name);

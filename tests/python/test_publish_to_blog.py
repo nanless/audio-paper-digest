@@ -8527,7 +8527,9 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertNotEqual(first, dependency_changed)
         dependency_names = {Path(call.args[0]).name for call in digest.call_args_list}
         self.assertIn('sealed_tutorial_preview.py', dependency_names)
-        self.assertIn('tutorial_payload_verifier.py', dependency_names)
+        self.assertIn('tutorial_payload_verifier_core.py', dependency_names)
+        self.assertIn('blog_core_summary_verifier.py', dependency_names)
+        self.assertIn('publish_manual_legacy.py', dependency_names)
         self.assertIn('markdown_hugo_gate.py', dependency_names)
         self.assertIn('tag_stage_record.py', dependency_names)
         self.assertIn('tag_presentation.py', dependency_names)
@@ -8793,7 +8795,10 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertIn('llm_account_pool.py', dependency_names)
         self.assertIn('markdown_hugo_gate.py', dependency_names)
         self.assertIn('tag_stage_record.py', dependency_names)
-        self.assertIn('tutorial_payload_verifier.py', dependency_names)
+        self.assertIn('tutorial_payload_verifier_core.py', dependency_names)
+        self.assertIn('blog_core_summary_verifier.py', dependency_names)
+        self.assertIn('publish_llm_client.py', dependency_names)
+        self.assertIn('publish_manual_legacy.py', dependency_names)
 
         current = publish_to_blog.generation_template_fingerprint()
         publish_to_blog.validate_current_generation_template({

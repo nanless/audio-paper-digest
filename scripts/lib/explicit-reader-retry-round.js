@@ -6,6 +6,11 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const grantScope = new AsyncLocalStorage();
 const requestScope = new AsyncLocalStorage();
 const codec = require('./protocol-codec');
+const { hashDraft, shaBytes: hash } = require('./reader-draft-hash.js');
+const { limitsForDraftFormat } = require('./reader-contract.js');
+const proofReadScope = require('./reader-proof-read-scope.js');
+const { matchesRelocatedRepoPath } = require('./repo-rename-path.js');
+const { registerPhysicalRequestConsumer } = require('./physical-request-hook.js');
 const CONTRACT = 'reader-explicit-paid-retry-round';
 const LOCAL_REPAIR_CONTRACT = 'reader-explicit-parent-local-repair';
 const parentRecovery = require('./reader-parent-recovery');
@@ -14,16 +19,7 @@ const isLocalGrant = value => codec.hasValidHeader(value, LOCAL_REPAIR_CONTRACT)
 const isParentGrant = value => codec.hasValidHeader(value, parentRecovery.CONTRACT);
 const childGrantTags = [LOCAL_REPAIR_CONTRACT, parentRecovery.CONTRACT]
     .flatMap(name => codec.registeredHeaders(name).map(header => header.contract));
-const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const idOf = paper => String(paper.arxivId || paper.paperId || '').replace(/v\d+$/, '');
-// 循环依赖中的半成品导出不能固定；只记住已加载完成的模块引用。
-const moduleReferences = new Map();
-function useModule(id) {
-    if (moduleReferences.has(id)) return moduleReferences.get(id);
-    const value = require(id);
-    if (require.cache[require.resolve(id)]?.loaded) moduleReferences.set(id, value);
-    return value;
-}
 function assertGrant(grant) {
     const local = isLocalGrant(grant);
     const recovery = isParentGrant(grant);
@@ -53,9 +49,9 @@ function assertGrant(grant) {
 }
 function assertFirstFullRegeneration(grant, payload) {
     if (grant.fullRegenerationReason === undefined) return;
-    const actual = parentRecovery.fullReason(payload), repair = useModule('./reader-repair');
+    const actual = parentRecovery.fullReason(payload);
     if (!isBaseRound(grant) || actual?.code !== 'complete_failed_draft_no_progress'
-        || repair.hashDraft(actual) !== repair.hashDraft(grant.fullRegenerationReason)) {
+        || hashDraft(actual) !== hashDraft(grant.fullRegenerationReason)) {
         throw new Error('Reader 首轮完整再生原因与真实原失败稿不匹配');
     }
 }
@@ -84,7 +80,7 @@ function assertLocalRepairParent(directory, grant, currentPayload, currentIdenti
             throw localRepairError('局部修复必须对应同篇、同批和同来源的原付费轮');
         }
         const root = path.dirname(parentFile);
-        const indexedSibling = useModule('./reader-proof-read-scope').findReaderReceiptSibling(root, grant.parentRoundId, grant.roundId,
+        const indexedSibling = proofReadScope.findReaderReceiptSibling(root, grant.parentRoundId, grant.roundId,
             childGrantTags, { privateFile: false });
         if (indexedSibling === true) throw localRepairError('同一父轮已授权另一局部修复轮');
         if (indexedSibling === undefined) {
@@ -97,11 +93,11 @@ function assertLocalRepairParent(directory, grant, currentPayload, currentIdenti
             }
         }
         if (currentPayload) {
-            const repair = useModule('./reader-repair');
+            const repair = require('./reader-repair');
             const draft = repair.parseRecoveryDraft(currentPayload.draft) || repair.parseRecoveryDraft(currentPayload.rawDraft);
             if (currentPayload.explicitReaderRetryRound?.roundId !== grant.parentRoundId
                 || currentPayload.status !== 'failed'
-                || !draft || draft.sections.length < repair.limitsForDraftFormat(draft).minimumSections
+                || !draft || draft.sections.length < limitsForDraftFormat(draft).minimumSections
                 || draft.sections.some(section => !section || ['kind', 'heading', 'body'].some(key =>
                     typeof section[key] !== 'string' || !section[key].trim()))) {
                 throw localRepairError('局部修复只接受父轮已保存的完整失败稿');
@@ -123,7 +119,7 @@ function withExplicitLocalRepairRound(paper, grant, callback) {
     return withExplicitRound(paper, grant, callback);
 }
 function readOwner(paper) {
-    const engine = useModule('../analysis-engine');
+    const engine = require('../analysis-engine');
     const owner = JSON.parse(fs.readFileSync(path.join(engine.getPaperAnalysisLockPath(paper) + '.lock', 'owner.json')));
     if (owner.pid !== process.pid || typeof owner.token !== 'string') throw new Error('明确 Reader 新轮必须持有规范论文锁');
     return owner;
@@ -133,7 +129,7 @@ function assertScopeLock(scope) {
 }
 function assertRoundSource(paper, grant) {
     assertGrant(grant);
-    const fresh = useModule('./fresh-analysis-context');
+    const fresh = require('./fresh-analysis-context');
     if (!fresh.isDailyFreshSourceScope()) throw new Error('明确 Reader 新轮只允许完整封存日更来源');
     fresh.assertFreshPaper(paper);
     const context = fresh.getFreshAnalysisContext();
@@ -171,7 +167,7 @@ function atomic(file, value) {
 // This only recognizes the normal saved stop; it neither repairs the response
 // nor grants authority outside the existing source/lock/CAS and budget checks.
 function exhaustedInitialFullWithoutLocalDraft(payload, paper) {
-    const repair = useModule('./reader-repair');
+    const repair = require('./reader-repair');
     if (payload?.status !== 'failed' || payload.explicitReaderRetryRound
         || payload.attempts !== 2 || payload.fullAttempts !== 2 || payload.draft !== null
         || payload.noProgress !== 0 || payload.validationFailureStreak !== 1
@@ -266,7 +262,7 @@ function beginExplicitRound(directory, identity, recovered, paper) {
     if (!scope) {
         const root = path.join(directory, 'explicit-retry-rounds');
         if (!fs.existsSync(root)) return null;
-        const identityHash = useModule('./reader-repair').hashDraft(identity);
+        const identityHash = hashDraft(identity);
         const matching = fs.readdirSync(root).filter(n => /^[a-f0-9-]{36}\.json$/.test(n))
             .map(n => JSON.parse(fs.readFileSync(path.join(root, n))))
             .filter(receipt => receipt.grant?.identitySha256 === identityHash);
@@ -294,26 +290,27 @@ function beginExplicitRound(directory, identity, recovered, paper) {
             () => beginExplicitRound(directory, identity, recovered, paper)) : null;
     }
     assertScopeLock(scope);
-    const repair = useModule('./reader-repair');
-    useModule('./fresh-analysis-context').freshReaderAttemptsDirectory(directory);
+    const repair = require('./reader-repair');
+    const freshContext = require('./fresh-analysis-context');
+    freshContext.freshReaderAttemptsDirectory(directory);
     const grant = scope.grant;
     if (idOf(paper) !== grant.paperId) {
         throw retryInputError('READER_RETRY_PAPER_MISMATCH', '长文重试许可对应另一篇论文，不能开始新一轮。');
     }
-    const currentSourceIdentity = useModule('./fresh-analysis-context').freshAnalysisIdentity(paper.arxivId);
-    if (repair.hashDraft(identity.freshAnalysis) !== repair.hashDraft(currentSourceIdentity)) {
+    const currentSourceIdentity = freshContext.freshAnalysisIdentity(paper.arxivId);
+    if (hashDraft(identity.freshAnalysis) !== hashDraft(currentSourceIdentity)) {
         throw new Error('Reader 当前输入身份缺少完整封存来源证明');
     }
-    if (repair.hashDraft(identity) !== grant.identitySha256) {
+    if (hashDraft(identity) !== grant.identitySha256) {
         throw retryInputError('READER_RETRY_INPUT_MISMATCH', '长文当前输入与重试许可不一致，不能沿用许可开始新一轮。');
     }
-    if (useModule('../analysis-engine').isSuccessfulAnalysisRecord(paper)) {
+    if (require('../analysis-engine').isSuccessfulAnalysisRecord(paper)) {
         throw retryInputError('READER_RETRY_ALREADY_COMPLETE', '论文已经完成分析，不能按失败稿开始长文重试。');
     }
     const loc = paths(directory, grant.roundId);
     let receipt = fs.existsSync(loc.receipt) ? JSON.parse(fs.readFileSync(loc.receipt)) : null;
     if (receipt && (!isBaseRound(receipt) || JSON.stringify(receipt.grant) !== JSON.stringify(grant))) throw new Error('同一新轮编号授权不能变化');
-    const activeFile = path.join(directory, `${repair.hashDraft(identity)}.json`);
+    const activeFile = path.join(directory, `${hashDraft(identity)}.json`);
     // 只恢复同一次已授权事务，不再次开一轮。
     if (receipt?.status === 'active') {
         if (recovered?.explicitReaderRetryRound?.roundId !== grant.roundId) throw new Error('已消费新轮的当前记录缺失');
@@ -344,13 +341,13 @@ function beginExplicitRound(directory, identity, recovered, paper) {
             || (originalStat.mode & 0o777) !== 0o600) throw new Error('Reader 原记录不是安全普通文件');
         const bytes = fs.readFileSync(originalLocation);
         const original = JSON.parse(bytes);
-        if (hash(bytes) !== grant.envelopeSha256 || repair.hashDraft(original.identity) !== grant.originalIdentitySha256
-            || repair.hashDraft(original.payload) !== grant.payloadSha256) throw new Error('Reader 原稿 SHA 已变化');
-        const ignored = useModule('./reader-recovery-revision').ALLOWED_FIELDS;
+        if (hash(bytes) !== grant.envelopeSha256 || hashDraft(original.identity) !== grant.originalIdentitySha256
+            || hashDraft(original.payload) !== grant.payloadSha256) throw new Error('Reader 原稿 SHA 已变化');
+        const ignored = require('./reader-recovery-revision').ALLOWED_FIELDS;
         const semantic = value => Object.fromEntries(Object.entries(value).filter(([key]) => !ignored.includes(key)));
         if (original.identity.readerRecoveryEpochSha256 !== identity.readerRecoveryEpochSha256
-            || repair.hashDraft(semantic(original.identity)) !== repair.hashDraft(semantic(identity))
-            || repair.hashDraft(original.identity.freshAnalysis) !== repair.hashDraft(currentSourceIdentity)) {
+            || hashDraft(semantic(original.identity)) !== hashDraft(semantic(identity))
+            || hashDraft(original.identity.freshAnalysis) !== hashDraft(currentSourceIdentity)) {
             throw new Error('Reader 完整实际输入已变化，不能沿用旧失败稿授权');
         }
         if (old.attempts !== original.payload.attempts || old.fullAttempts !== original.payload.fullAttempts) {
@@ -378,8 +375,8 @@ function beginExplicitRound(directory, identity, recovered, paper) {
     const bytes = fs.readFileSync(loc.archived);
     if (hash(bytes) !== grant.envelopeSha256) throw new Error('明确新轮原稿归档 SHA 不一致');
     const oldEnvelope = JSON.parse(bytes);
-    if (repair.hashDraft(oldEnvelope.identity) !== grant.originalIdentitySha256
-        || repair.hashDraft(oldEnvelope.payload) !== grant.payloadSha256) throw new Error('明确新轮原证明不一致');
+    if (hashDraft(oldEnvelope.identity) !== grant.originalIdentitySha256
+        || hashDraft(oldEnvelope.payload) !== grant.payloadSha256) throw new Error('明确新轮原证明不一致');
     if (fs.existsSync(activeFile) && hash(fs.readFileSync(activeFile)) !== receipt.currentEnvelopeSha256) {
         const active = repair.loadFailedCandidate(directory, identity);
         if (active?.explicitReaderRetryRound?.roundId !== grant.roundId) throw new Error('新轮安装前已有另一候选');
@@ -403,10 +400,10 @@ function beginExplicitRound(directory, identity, recovered, paper) {
             explicitReaderRetryRound: { ...codec.recordHeader(receipt.contract, CONTRACT, receipt.schemaFingerprint), roundId: grant.roundId, receiptFile: loc.receipt,
                 maxResponses: grant.maxResponses, maxFullResponses: grant.maxFullResponses,
                 ...(grant.fullRegenerationReason !== undefined
-                    ? { fullRegenerationReasonSha256: repair.hashDraft(grant.fullRegenerationReason) }
+                    ? { fullRegenerationReasonSha256: hashDraft(grant.fullRegenerationReason) }
                     : isParentGrant(grant) && grant.mode === 'full'
                     && grant.recoveryReason.code === 'complete_failed_draft_no_progress'
-                    ? { fullRegenerationReasonSha256: repair.hashDraft(grant.recoveryReason) } : {}) } };
+                    ? { fullRegenerationReasonSha256: hashDraft(grant.recoveryReason) } : {}) } };
         repair.saveFailedCandidate(directory, identity, next);
     }
     receipt.status = 'active';
@@ -426,30 +423,29 @@ function assertRequestLedger(receipt) {
     }
 }
 function readMigrationEnvelope(filename) {
-    const checked = useModule('./reader-proof-read-scope').readReaderProofJson(filename, {
+    const checked = proofReadScope.readReaderProofJson(filename, {
         unsafeMessage: 'Reader 新轮实现恢复的原文件不安全'
     });
     return { bytes: checked.bytes, envelope: checked.value };
 }
 
 function sameRoundIdentityAfterPublicMigration(directory, identity, payload, receipt) {
-    const repair = useModule('./reader-repair');
-    const revision = useModule('./reader-recovery-revision');
-    const equal = (a, b) => repair.hashDraft(a) === repair.hashDraft(b);
+    const revision = require('./reader-recovery-revision');
+    const equal = (a, b) => hashDraft(a) === hashDraft(b);
     const unchangedInput = value => Object.fromEntries(Object.entries(value)
         .filter(([key]) => !revision.ALLOWED_FIELDS.includes(key)));
     let current = identity;
     let currentPayload = payload;
     const visited = new Set();
-    while (repair.hashDraft(current) !== receipt.grant.identitySha256) {
-        const currentHash = repair.hashDraft(current);
+    while (hashDraft(current) !== receipt.grant.identitySha256) {
+        const currentHash = hashDraft(current);
         if (visited.has(currentHash)) throw new Error('Reader 新轮实现恢复记录出现循环');
         visited.add(currentHash);
         const matching = (currentPayload.readerRecoveryRevisions || []).filter(audit => audit.toIdentitySha256 === currentHash);
         if (matching.length !== 1) throw new Error('Reader 新轮缺少唯一的公共实现恢复记录');
         const audit = matching[0];
         const archivePattern = new RegExp(`^${audit.fromIdentitySha256}\\.migrated-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$`);
-        if (!require('./protocol-codec').hasValidHeader(audit, revision.CONTRACT) || audit.scope !== 'fresh-run'
+        if (!codec.hasValidHeader(audit, revision.CONTRACT) || audit.scope !== 'fresh-run'
             || audit.runId !== receipt.grant.runId || audit.paperId !== identity.paperId
             || !/^[a-f0-9]{64}$/.test(audit.fromIdentitySha256 || '')
             || !archivePattern.test(audit.archivedName || '')) throw new Error('Reader 新轮实现恢复来源记录不符合要求');
@@ -463,8 +459,8 @@ function sameRoundIdentityAfterPublicMigration(directory, identity, payload, rec
         const changedFields = [...new Set([...Object.keys(old.identity), ...Object.keys(current)])]
             .filter(key => !equal(old.identity[key] ?? null, current[key] ?? null)).sort();
         if (hash(original.bytes) !== audit.oldEnvelopeSha256
-            || repair.hashDraft(old.identity) !== audit.fromIdentitySha256
-            || old.payloadSha256 !== audit.oldPayloadSha256 || repair.hashDraft(old.payload) !== audit.oldPayloadSha256
+            || hashDraft(old.identity) !== audit.fromIdentitySha256
+            || old.payloadSha256 !== audit.oldPayloadSha256 || hashDraft(old.payload) !== audit.oldPayloadSha256
             || !equal(changedFields, [...audit.changedFields].sort()) || !changedFields.length
             || changedFields.some(field => !revision.ALLOWED_FIELDS.includes(field))
             || old.identity.readerRecoveryEpochSha256 !== current.readerRecoveryEpochSha256
@@ -500,18 +496,16 @@ function validatePersistedRound(directory, identity, payload) {
         || payload.attempts > proof.maxResponses || payload.fullAttempts > proof.maxFullResponses) throw new Error('明确 Reader 新轮正文预算或证明不合法');
     const expected = path.join(directory, 'explicit-retry-rounds', `${proof.roundId}.json`);
     const expectedArchived = path.join(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`);
-    const { matchesRelocatedRepoPath } = useModule('./repo-rename-path');
     if (!matchesRelocatedRepoPath(proof.receiptFile, expected)) throw new Error('Reader 新轮证明路径不合法');
     for (const file of [expected, expectedArchived]) {
         const stat = fs.lstatSync(file);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Reader 新轮原稿或证明不是安全普通文件');
     }
-    const scopedReader = useModule('./reader-proof-read-scope');
-    const receipt = scopedReader.readReaderProofJson(expected, { privateFile: false }).value;
+    const receipt = proofReadScope.readReaderProofJson(expected, { privateFile: false }).value;
     if (!isBaseRound(receipt) || receipt.contract !== proof.contract
         || receipt.schemaFingerprint !== proof.schemaFingerprint) throw new Error('Reader 新轮原证明格式与回执不一致');
     if (!matchesRelocatedRepoPath(receipt.archivedFile, expectedArchived)) throw new Error('Reader 新轮原档路径不合法');
-    const originalRecord = scopedReader.readReaderProofJson(expectedArchived, { privateFile: false,
+    const originalRecord = proofReadScope.readReaderProofJson(expectedArchived, { privateFile: false,
         expectedSha256: receipt.grant.envelopeSha256,
         shaMismatchMessage: 'Reader 新轮原稿或实际请求预算证明不一致' });
     if (originalRecord.sha256 !== receipt.grant.envelopeSha256) throw new Error('Reader 新轮原稿或实际请求预算证明不一致');
@@ -532,23 +526,23 @@ function validatePersistedRound(directory, identity, payload) {
     if (proof.maxResponses !== receipt.grant.maxResponses || proof.maxFullResponses !== receipt.grant.maxFullResponses)
         throw new Error('Reader 保存次数与授权预算不匹配');
     const regenerationReason = receipt.grant.fullRegenerationReason !== undefined
-        ? useModule('./reader-repair').hashDraft(receipt.grant.fullRegenerationReason)
+        ? hashDraft(receipt.grant.fullRegenerationReason)
         : isParentGrant(receipt.grant) && receipt.grant.mode === 'full'
         && receipt.grant.recoveryReason.code === 'complete_failed_draft_no_progress'
-        ? useModule('./reader-repair').hashDraft(receipt.grant.recoveryReason) : undefined;
+        ? hashDraft(receipt.grant.recoveryReason) : undefined;
     if (proof.fullRegenerationReasonSha256 !== regenerationReason)
         throw new Error('Reader 完整无进展再生原因与已核验父账不匹配');
     if (!['prepared', 'active'].includes(receipt.status)
         || !matchesRelocatedRepoPath(receipt.archivedFile, expectedArchived)
         || receipt.grant.roundId !== proof.roundId
-        || (useModule('./reader-repair').hashDraft(identity) !== receipt.grant.identitySha256
+        || (hashDraft(identity) !== receipt.grant.identitySha256
             && !sameRoundIdentityAfterPublicMigration(directory, identity, payload, receipt))
         || hash(fs.readFileSync(expectedArchived)) !== receipt.grant.envelopeSha256
         || !Number.isSafeInteger(receipt.physicalRequests) || receipt.physicalRequests < 0 || receipt.physicalRequests > receipt.grant.maxPhysicalRequests
         || !Number.isSafeInteger(receipt.reservedOutputTokens) || receipt.reservedOutputTokens < 0 || receipt.reservedOutputTokens > receipt.grant.maxReservedOutputTokens) {
         throw new Error('Reader 新轮身份、原稿或实际请求预算证明不一致');
     }
-    useModule('./reader-transport-continuation').validate(directory, receipt, identity, payload);
+    require('./reader-transport-continuation').validate(directory, receipt, identity, payload);
 }
 // 旧首次装轮代码可能丢失仍在原档中的完整稿。只恢复同一已付轮的正文，不装新预算。
 function restoreExplicitRoundOriginalDraft(directory, identity, payload, paper) {
@@ -561,11 +555,11 @@ function restoreExplicitRoundOriginalDraft(directory, identity, payload, paper) 
     }
 }
 function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, paper) {
-    const repair = useModule('./reader-repair');
+    const repair = require('./reader-repair');
     if (!payload?.explicitReaderRetryRound || payload.status !== 'failed'
         || payload.draft !== null || !['', '无'].includes(String(payload.rawDraft || '').trim())
         || payload.attempts !== 0 || payload.fullAttempts !== 0
-        || useModule('../analysis-engine').isSuccessfulAnalysisRecord(paper)) return payload;
+        || require('../analysis-engine').isSuccessfulAnalysisRecord(paper)) return payload;
     validatePersistedRound(directory, identity, payload);
     const receiptFile = paths(directory, payload.explicitReaderRetryRound.roundId).receipt;
     const checkedReceipt = readMigrationEnvelope(receiptFile);
@@ -575,36 +569,37 @@ function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, 
         || !receipt.requests.length || receipt.requests.some(request => request.stage !== 'apiReaderArticle')) return payload;
     const source = readMigrationEnvelope(paths(directory, payload.explicitReaderRetryRound.roundId).archived);
     const original = source.envelope;
-    const allowedFields = useModule('./reader-recovery-revision').ALLOWED_FIELDS;
+    const allowedFields = require('./reader-recovery-revision').ALLOWED_FIELDS;
     const semantic = value => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !allowedFields.includes(key)));
-    if (repair.hashDraft(semantic(original.identity)) !== repair.hashDraft(semantic(identity))
+    if (hashDraft(semantic(original.identity)) !== hashDraft(semantic(identity))
         || original.identity.readerRecoveryEpochSha256 !== identity.readerRecoveryEpochSha256
-        || repair.hashDraft(original.identity.readerJsonRequestPolicy ?? null) !== repair.hashDraft(identity.readerJsonRequestPolicy ?? null)) {
+        || hashDraft(original.identity.readerJsonRequestPolicy ?? null) !== hashDraft(identity.readerJsonRequestPolicy ?? null)) {
         throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的封存来源、实际输入或恢复epoch已变化');
     }
     const draft = repair.parseRecoveryDraft(original.payload?.draft) || repair.parseRecoveryDraft(original.payload?.rawDraft);
-    if (!draft || draft.sections.length < repair.limitsForDraftFormat(draft).minimumSections || draft.sections.some(section => !section
+    if (!draft || draft.sections.length < limitsForDraftFormat(draft).minimumSections || draft.sections.some(section => !section
         || ['kind', 'heading', 'body'].some(key => typeof section[key] !== 'string' || !section[key].trim()))) return payload;
     // 恢复已有稿件不安装新轮；实际长文输入已在上方逐项核验。
     // 主文中的评分和资源可达状态可以更新，但四份来源、论文锁和原调用账仍须完全一致。
     const owner = assertRoundSource(paper, receipt.grant);
-    useModule('./fresh-analysis-context').freshReaderAttemptsDirectory(directory);
-    const currentSourceIdentity = useModule('./fresh-analysis-context').freshAnalysisIdentity(paper.arxivId);
-    if (repair.hashDraft(identity.freshAnalysis) !== repair.hashDraft(currentSourceIdentity)) {
+    const freshContext = require('./fresh-analysis-context');
+    freshContext.freshReaderAttemptsDirectory(directory);
+    const currentSourceIdentity = freshContext.freshAnalysisIdentity(paper.arxivId);
+    if (hashDraft(identity.freshAnalysis) !== hashDraft(currentSourceIdentity)) {
         throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复缺少当前封存来源证明');
     }
-    const currentFile = path.join(directory, `${repair.hashDraft(identity)}.json`);
+    const currentFile = path.join(directory, `${hashDraft(identity)}.json`);
     const current = readMigrationEnvelope(currentFile);
-    if (repair.hashDraft(current.envelope.identity) !== repair.hashDraft(identity)
-        || current.envelope.payloadSha256 !== repair.hashDraft(current.envelope.payload)
-        || repair.hashDraft(current.envelope.payload) !== repair.hashDraft(payload)
+    if (hashDraft(current.envelope.identity) !== hashDraft(identity)
+        || current.envelope.payloadSha256 !== hashDraft(current.envelope.payload)
+        || hashDraft(current.envelope.payload) !== hashDraft(payload)
         || hash(source.bytes) !== receipt.grant.envelopeSha256
-        || repair.hashDraft(original.payload) !== receipt.grant.payloadSha256
-        || repair.hashDraft(original.identity) !== receipt.grant.originalIdentitySha256
+        || hashDraft(original.payload) !== receipt.grant.payloadSha256
+        || hashDraft(original.identity) !== receipt.grant.originalIdentitySha256
         || hash(fs.readFileSync(receiptFile)) !== hash(checkedReceipt.bytes)) {
         throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的当前候选、原档或付费账已变化');
     }
-    const archivedName = `${repair.hashDraft(identity)}.round-original-restoration-${hash(current.bytes)}.json`;
+    const archivedName = `${hashDraft(identity)}.round-original-restoration-${hash(current.bytes)}.json`;
     const archivedFile = path.join(directory, archivedName);
     if (fs.existsSync(archivedFile)) {
         if (hash(readMigrationEnvelope(archivedFile).bytes) !== hash(current.bytes)) {
@@ -620,11 +615,11 @@ function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, 
         validationFailureSignature: '', validationFailureStreak: 0,
         readerOriginalDraftRestorations: [...(payload.readerOriginalDraftRestorations || []), {
             contract: 'reader-explicit-round-original-draft-restoration-v1', restoredAt: new Date().toISOString(),
-            roundId: receipt.grant.roundId, currentIdentitySha256: repair.hashDraft(identity),
+            roundId: receipt.grant.roundId, currentIdentitySha256: hashDraft(identity),
             placeholderArchiveName: archivedName, placeholderEnvelopeSha256: hash(current.bytes),
-            placeholderPayloadSha256: repair.hashDraft(payload), originalEnvelopeSha256: hash(source.bytes),
-            originalPayloadSha256: repair.hashDraft(original.payload), originalDraftSha256: repair.hashDraft(draft),
-            originalIdentitySha256: repair.hashDraft(original.identity), parentReceiptSha256: hash(checkedReceipt.bytes),
+            placeholderPayloadSha256: hashDraft(payload), originalEnvelopeSha256: hash(source.bytes),
+            originalPayloadSha256: hashDraft(original.payload), originalDraftSha256: hashDraft(draft),
+            originalIdentitySha256: hashDraft(original.identity), parentReceiptSha256: hash(checkedReceipt.bytes),
             preservedAttempts: payload.attempts, preservedFullAttempts: payload.fullAttempts,
             preservedPhysicalRequests: receipt.physicalRequests,
             preservedReservedOutputTokens: receipt.reservedOutputTokens,
@@ -667,7 +662,7 @@ function consumePhysicalRequest(body, options) {
         }
     }
     const tokens = body.max_tokens ?? body.max_output_tokens;
-    if (useModule('./reader-transport-continuation').consume({
+    if (require('./reader-transport-continuation').consume({
         directory: path.dirname(path.dirname(scope.proof.receiptFile)),
         parent: receipt, paper: scope.paper, body, options
     })) return;
@@ -692,7 +687,7 @@ function hasPreparedOrScopedRound(directory, identity) {
     if (grantScope.getStore()) return true;
     const root = path.join(directory, 'explicit-retry-rounds');
     if (!fs.existsSync(root)) return false;
-    const expected = useModule('./reader-repair').hashDraft(identity);
+    const expected = hashDraft(identity);
     try {
         for (const name of fs.readdirSync(root)) {
             if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
@@ -710,3 +705,6 @@ function hasPreparedOrScopedRound(directory, identity) {
 module.exports = { hasPreparedOrScopedRound, isBaseRound, isLocalGrant, CONTRACT, LOCAL_REPAIR_CONTRACT, PARENT_RECOVERY_CONTRACT: parentRecovery.CONTRACT, withExplicitLocalRepairRound, assertGrant, withExplicitRound, beginExplicitRound,
     withPhysicalBudget, consumePhysicalRequest, validatePersistedRound, restoreExplicitRoundOriginalDraft,
     sameRoundIdentityAfterPublicMigration, exhaustedInitialFullWithoutLocalDraft };
+
+// 向无依赖叶钩子注册实际请求消费回调（动态派发至 module.exports.consumePhysicalRequest，兼容测试桩化）。
+registerPhysicalRequestConsumer((body, options) => module.exports.consumePhysicalRequest(body, options));

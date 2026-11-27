@@ -11,6 +11,10 @@ NUMBERED = re.compile(r'(?:^|[-.])v\d+(?:$|[-.])')
 RESERVED = {'contract', 'schemaFingerprint', 'version', 'schemaVersion', 'policyVersion', '__proto__'}
 
 
+def _reject_non_finite_constant(token):
+    raise ValueError(f'协议 JSON 不允许非有限数值常量：{token}')
+
+
 def canonical(value):
     def check(item):
         if item is None or type(item) is bool:
@@ -33,7 +37,7 @@ def canonical(value):
             return
         raise ValueError('协议声明只能包含 JSON 值，数值必须是安全整数')
     check(value)
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
 
 
 class Codec:
@@ -54,8 +58,8 @@ class Codec:
                     raise ValueError('协议名、当前结构或历史登记不正确或重复')
                 fp = self._fingerprint(name, variant, source['currentSchema'])
                 current = {'tag': name, 'variant': variant, 'fp': fp,
-                           'header': json.dumps({'contract': name, 'schemaFingerprint': fp}, ensure_ascii=False),
-                           'schema': json.dumps(source['currentSchema'], ensure_ascii=False)}
+                           'header': json.dumps({'contract': name, 'schemaFingerprint': fp}, ensure_ascii=False, allow_nan=False),
+                           'schema': json.dumps(source['currentSchema'], ensure_ascii=False, allow_nan=False)}
                 tags, history = {name: {fp: current}}, []
                 for item in source['historical']:
                     if type(item) is not dict or set(item) not in ({'tag', 'variant'}, {'tag', 'variant', 'header'}, {'tag', 'variant', 'header', 'schema'}) \
@@ -79,8 +83,8 @@ class Codec:
                     if old_fp in group:
                         raise ValueError('同一协议标签和结构指纹不能重复登记')
                     descriptor = {'tag': item['tag'], 'variant': item['variant'], 'fp': old_fp,
-                                  'header': json.dumps(header, ensure_ascii=False),
-                                  'schema': json.dumps(item['schema'], ensure_ascii=False) if 'schema' in item else None}
+                                  'header': json.dumps(header, ensure_ascii=False, allow_nan=False),
+                                  'schema': json.dumps(item['schema'], ensure_ascii=False, allow_nan=False) if 'schema' in item else None}
                     group[old_fp] = descriptor
                     history.append(descriptor)
                 self._entries[name] = {'current': current, 'tags': tags, 'history': history}
@@ -227,7 +231,14 @@ def read_catalogs(directory=DIRECTORY):
                     raise ValueError(f'协议目录中出现重复字段：{key}')
                 value[key] = item
             return value
-        result.append(json.loads(filename.read_text(encoding='utf-8'), object_pairs_hook=unique_fields))
+        raw_bytes = filename.read_bytes()
+        if raw_bytes.startswith(b'\xef\xbb\xbf'):
+            raise ValueError('协议目录不能带 UTF-8 BOM')
+        result.append(json.loads(
+            raw_bytes.decode('utf-8'),
+            object_pairs_hook=unique_fields,
+            parse_constant=_reject_non_finite_constant,
+        ))
     return result
 
 

@@ -17,7 +17,113 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_BLOG_BASE_PATH = '/audio-research-portal'
+RUNTIME_PATHS_FILE = PROJECT_ROOT / "config" / "runtime-paths.json"
+
+_FALLBACK_RUNTIME_PATHS = {
+    "dirs": {
+        "data": "data",
+        "current": "data/current",
+        "archive": "data/archive",
+        "runtime": "data/runtime",
+        "logs": "logs",
+    },
+    "currentFiles": {
+        "papers": "papers.json",
+        "rawCandidates": "raw-candidates.json",
+        "fetchCheckpoint": "fetch-checkpoint.json",
+        "filterDecisions": "filter-decisions.json",
+        "filteredPapers": "filtered-papers.json",
+        "deepAnalysisResult": "deep-analysis-result.json",
+        "analyzed": "analyzed.json",
+    },
+    "currentDirs": {
+        "manualV6Production": "manual-v6",
+        "visualSummaryManifests": "visual-summary-manifests",
+        "digestCoverManifests": "digest-cover-manifests",
+        "analysisWaivers": "analysis-waivers",
+        "postPublishVisualWaivers": "post-publish-visual-waivers",
+        "digestRunReports": "digest-run-reports",
+        "blogReviewCheckpoints": "blog-review-checkpoints",
+        "blogRepublications": "blog-republications",
+        "blogPublicationActivations": "blog-publication-activations",
+        "imageCache": "image-cache",
+    },
+    "runtimeEntries": {
+        "llmAccountPoolState": "llm-account-pool.json",
+        "llmUsage": "llm-usage",
+        "llmUsageDaily": "llm-usage-daily",
+        "llmResponseRecovery": "llm-response-recovery",
+        "freshRewrites": "fresh-rewrites",
+        "dailyFreshSourceRuns": "daily-fresh-source-runs",
+        "dailyScoringRefreshRecovery": "daily-scoring-refresh-recovery",
+        "dailyRenderObservations": "daily-render-observations",
+        "dailyDeploymentObservations": "daily-deployment-observations",
+        "dailyRepublications": "daily-republications",
+        "dailyPodcast": "daily-podcast",
+        "historicalPageInventories": "historical-page-inventories",
+        "conferenceStagingSources": "conference-staging-sources",
+    },
+    "projectEntries": {
+        "tagCatalogFile": "config/tag-catalog.json",
+        "tagCatalogHistoryDir": "config/tag-catalog-history",
+        "tagExplorerAssets": "web/tag-explorer",
+    },
+    "blogRelativePaths": {
+        "defaultBasePath": "/audio-research-portal",
+        "contentPosts": "content/posts",
+        "researcherSidecarRoot": "static/data/papers",
+    },
+}
+
+
+def _validate_relative_runtime_path(value, label):
+    if not isinstance(value, str) or not value or "\0" in value or "\\" in value or value.startswith("/"):
+        raise ValueError(f"config/runtime-paths.json 字段 {label} 必须为非空相对路径")
+    parts = value.split("/")
+    if any(not part or part in (".", "..") for part in parts):
+        raise ValueError(f"config/runtime-paths.json 字段 {label} 包含非法路径段: {value}")
+    return value
+
+
+def load_runtime_paths_spec(spec_path=RUNTIME_PATHS_FILE):
+    target = Path(spec_path)
+    try:
+        parsed = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {section: dict(entries) for section, entries in _FALLBACK_RUNTIME_PATHS.items()}
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"无法读取或解析共享路径配置 {target}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"共享路径配置 {target} 必须是 JSON 对象")
+    validated = {}
+    for section, required_entries in _FALLBACK_RUNTIME_PATHS.items():
+        raw_section = parsed.get(section)
+        if not isinstance(raw_section, dict):
+            raise ValueError(f"共享路径配置 {target} 缺少对象字段 {section}")
+        section_copy = {}
+        for key in required_entries:
+            if key not in raw_section:
+                raise ValueError(f"共享路径配置 {target} 缺少 {section}.{key}")
+            value = raw_section[key]
+            if section == "blogRelativePaths" and key == "defaultBasePath":
+                if not isinstance(value, str):
+                    raise ValueError(f"共享路径配置 {target} 字段 {section}.{key} 必须是字符串")
+                section_copy[key] = value
+            else:
+                section_copy[key] = _validate_relative_runtime_path(value, f"{section}.{key}")
+        for key, value in raw_section.items():
+            if key not in section_copy:
+                section_copy[key] = _validate_relative_runtime_path(value, f"{section}.{key}")
+        validated[section] = section_copy
+    return validated
+
+
+def _join_relative(root, relative_path):
+    return Path(root).joinpath(*str(relative_path).split("/"))
+
+
+RUNTIME_PATHS = load_runtime_paths_spec()
+DEFAULT_BLOG_BASE_PATH = RUNTIME_PATHS["blogRelativePaths"]["defaultBasePath"]
 
 
 def resolve_blog_base_path(value=None):
@@ -34,46 +140,54 @@ def resolve_blog_base_path(value=None):
     return normalized
 
 
-DATA_DIR = PROJECT_ROOT / "data"
-CURRENT_DIR = DATA_DIR / "current"
-ARCHIVE_DIR = DATA_DIR / "archive"
-LOGS_DIR = PROJECT_ROOT / "logs"
-LLM_ACCOUNT_POOL_STATE_FILE = DATA_DIR / "runtime" / "llm-account-pool.json"
-LLM_USAGE_DIR = DATA_DIR / "runtime" / "llm-usage"
-LLM_RESPONSE_RECOVERY_DIR = DATA_DIR / "runtime" / "llm-response-recovery"
-FRESH_REWRITE_RUNS_DIR = DATA_DIR / "runtime" / "fresh-rewrites"
-DAILY_FRESH_SOURCE_RUNS_DIR = DATA_DIR / "runtime" / "daily-fresh-source-runs"
-DAILY_SCORING_REFRESH_RECOVERY_DIR = DATA_DIR / "runtime" / "daily-scoring-refresh-recovery"
-DAILY_RENDER_OBSERVATIONS_DIR = DATA_DIR / "runtime" / "daily-render-observations"
-DAILY_DEPLOYMENT_OBSERVATIONS_DIR = DATA_DIR / "runtime" / "daily-deployment-observations"
-DAILY_REPUBLICATION_RUNS_DIR = DATA_DIR / "runtime" / "daily-republications"
-DAILY_REPUBLICATION_MARKER_DIRNAME = 'blog-republications'
-HISTORICAL_PAGE_INVENTORY_DIR = DATA_DIR / "runtime" / "historical-page-inventories"
-CONFERENCE_STAGING_SOURCE_DIR = DATA_DIR / "runtime" / "conference-staging-sources"
-PUBLICATION_ACTIVATION_DIRNAME = 'blog-publication-activations'
+DATA_DIR = _join_relative(PROJECT_ROOT, RUNTIME_PATHS["dirs"]["data"])
+CURRENT_DIR = _join_relative(PROJECT_ROOT, RUNTIME_PATHS["dirs"]["current"])
+ARCHIVE_DIR = _join_relative(PROJECT_ROOT, RUNTIME_PATHS["dirs"]["archive"])
+RUNTIME_DIR = _join_relative(PROJECT_ROOT, RUNTIME_PATHS["dirs"]["runtime"])
+LOGS_DIR = _join_relative(PROJECT_ROOT, RUNTIME_PATHS["dirs"]["logs"])
+LLM_ACCOUNT_POOL_STATE_FILE = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["llmAccountPoolState"])
+LLM_USAGE_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["llmUsage"])
+LLM_USAGE_DAILY_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["llmUsageDaily"])
+LLM_RESPONSE_RECOVERY_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["llmResponseRecovery"])
+FRESH_REWRITE_RUNS_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["freshRewrites"])
+DAILY_FRESH_SOURCE_RUNS_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["dailyFreshSourceRuns"])
+DAILY_SCORING_REFRESH_RECOVERY_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["dailyScoringRefreshRecovery"])
+DAILY_RENDER_OBSERVATIONS_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["dailyRenderObservations"])
+DAILY_DEPLOYMENT_OBSERVATIONS_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["dailyDeploymentObservations"])
+DAILY_REPUBLICATION_RUNS_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["dailyRepublications"])
+DAILY_PODCAST_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["dailyPodcast"])
+DAILY_REPUBLICATION_MARKER_DIRNAME = RUNTIME_PATHS["currentDirs"]["blogRepublications"]
+HISTORICAL_PAGE_INVENTORY_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["historicalPageInventories"])
+CONFERENCE_STAGING_SOURCE_DIR = _join_relative(RUNTIME_DIR, RUNTIME_PATHS["runtimeEntries"]["conferenceStagingSources"])
+PUBLICATION_ACTIVATION_DIRNAME = RUNTIME_PATHS["currentDirs"]["blogPublicationActivations"]
+BLOG_REVIEW_CHECKPOINTS_DIR = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentDirs"]["blogReviewCheckpoints"])
 # 相对仓库根目录的 Hugo 发布根。发布器只把它拼到已经校验过的
 # 博客仓库或事务暂存根上。
-RESEARCHER_SIDECAR_RELATIVE_ROOT = Path("static") / "data" / "papers"
+RESEARCHER_SIDECAR_RELATIVE_ROOT = Path(*RUNTIME_PATHS["blogRelativePaths"]["researcherSidecarRoot"].split("/"))
 
-PAPERS_FILE = CURRENT_DIR / "papers.json"
-PAPERS_LEGACY_FILE = DATA_DIR / "papers.json"
-RAW_CANDIDATES_FILE = CURRENT_DIR / "raw-candidates.json"
-FILTER_DECISIONS_FILE = CURRENT_DIR / "filter-decisions.json"
-FILTERED_PAPERS_FILE = CURRENT_DIR / "filtered-papers.json"
-DEEP_ANALYSIS_RESULT_FILE = CURRENT_DIR / "deep-analysis-result.json"
-DEEP_ANALYSIS_RESULT_LEGACY_FILE = DATA_DIR / "deep-analysis-result.json"
+PAPERS_FILE = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentFiles"]["papers"])
+PAPERS_LEGACY_FILE = _join_relative(DATA_DIR, RUNTIME_PATHS["currentFiles"]["papers"])
+RAW_CANDIDATES_FILE = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentFiles"]["rawCandidates"])
+FETCH_CHECKPOINT_FILE = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentFiles"]["fetchCheckpoint"])
+FILTER_DECISIONS_FILE = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentFiles"]["filterDecisions"])
+FILTERED_PAPERS_FILE = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentFiles"]["filteredPapers"])
+DEEP_ANALYSIS_RESULT_FILE = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentFiles"]["deepAnalysisResult"])
+DEEP_ANALYSIS_RESULT_LEGACY_FILE = _join_relative(DATA_DIR, RUNTIME_PATHS["currentFiles"]["deepAnalysisResult"])
 # 正式 Manual v6 流程证据按日期隔离存放在这里。发布器读取的仍是上面
 # 的标准文件；那个文件引用的 spec-v6 / records-v4 证据，持久来源在
 # 这个根目录。
-MANUAL_V6_PRODUCTION_DIR = CURRENT_DIR / "manual-v6"
-VISUAL_SUMMARY_MANIFEST_DIR = CURRENT_DIR / "visual-summary-manifests"
+MANUAL_V6_PRODUCTION_DIR = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentDirs"]["manualV6Production"])
+VISUAL_SUMMARY_MANIFEST_DIR = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentDirs"]["visualSummaryManifests"])
 # 发布后视觉资产按批次日期直接归档。调用方必须继续拼接
 # <date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
 VISUAL_SUMMARY_ASSET_DIR = ARCHIVE_DIR
-DIGEST_COVER_MANIFEST_DIR = CURRENT_DIR / "digest-cover-manifests"
+DIGEST_COVER_MANIFEST_DIR = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentDirs"]["digestCoverManifests"])
 DIGEST_COVER_ASSET_DIR = ARCHIVE_DIR
-ANALYZED_FILE = CURRENT_DIR / "analyzed.json"
-ANALYZED_LEGACY_FILE = DATA_DIR / "analyzed.json"
+ANALYSIS_WAIVER_DIR = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentDirs"]["analysisWaivers"])
+POST_PUBLISH_VISUAL_WAIVER_DIR = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentDirs"]["postPublishVisualWaivers"])
+DIGEST_RUN_REPORT_DIR = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentDirs"]["digestRunReports"])
+ANALYZED_FILE = _join_relative(CURRENT_DIR, RUNTIME_PATHS["currentFiles"]["analyzed"])
+ANALYZED_LEGACY_FILE = _join_relative(DATA_DIR, RUNTIME_PATHS["currentFiles"]["analyzed"])
 
 
 def resolve_deep_analysis_result_path(current_path=DEEP_ANALYSIS_RESULT_FILE, legacy_path=DEEP_ANALYSIS_RESULT_LEGACY_FILE):
@@ -134,7 +248,7 @@ def resolve_deep_analysis_result_for_date(
                 ) from exc
         if papers and dates == {target_date}:
             return current
-    archived = Path(archive_dir) / target_date / "deep-analysis-result.json"
+    archived = Path(archive_dir) / target_date / RUNTIME_PATHS["currentFiles"]["deepAnalysisResult"]
     if archived.is_file():
         return archived
     return current

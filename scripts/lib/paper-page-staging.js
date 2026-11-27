@@ -14,7 +14,7 @@ const RENDERER_ENTRY_FILES = Object.freeze([
     'scripts/historical-page-render.py', 'scripts/blog_entry_loader.py', 'scripts/publish-to-blog.py',
     'scripts/publish_common.py', 'scripts/path_config.py', 'scripts/project_env.py',
     'scripts/utils.py', 'scripts/analysis_sections.py', 'scripts/tag_stage_record.py',
-    'manual/scripts/tutorial_payload_verifier.py', 'scripts/markdown_hugo_gate.py',
+    'scripts/tutorial_payload_verifier_core.py', 'scripts/markdown_hugo_gate.py',
     'manual/scripts/sealed_tutorial_preview.py', 'config/tag-catalog.json',
     'config/tag-display-policy.json', 'config/publish-image-exclusions.json'
 ]);

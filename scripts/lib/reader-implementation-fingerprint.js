@@ -14,6 +14,8 @@ const shaText = value => crypto.createHash('sha256').update(String(value)).diges
 
 const PARSER_CORE_FILES = Object.freeze([
     'deep-analyzer.js',
+    'lib/deep-arxiv-source-fetch.js',
+    'lib/deep-primary-sections.js',
     'lib/scoring-audit-contract.js',
     'lib/scoring-rubric.js',
     '../config/scoring-rubric.json',
@@ -24,6 +26,7 @@ const PARSER_CORE_FILES = Object.freeze([
     'lib/reader-source-evidence-binding.js',
     'lib/reader-prose-normalization.js',
     'analysis-contract.js',
+    'lib/analysis-contract-paper-exemptions.js',
     'lib/experiment-source-setting-axes.js',
     'utils.js',
     'lib/llm-usage.js',
@@ -53,6 +56,8 @@ const PARSER_CORE_FILES = Object.freeze([
     '../config/protocols/reader.json',
     '../config/protocols/reader-retry.json',
     'lib/reader-compatible-candidate-replay.js',
+    'lib/physical-request-hook.js',
+    'lib/reader-draft-hash.js',
     'lib/explicit-reader-retry-round.js',
     'lib/reader-transport-continuation.js',
     'lib/reader-parent-recovery.js',

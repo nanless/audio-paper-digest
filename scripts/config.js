@@ -4,6 +4,7 @@
  * 部分参数可通过下方列出的环境变量调整。
  */
 
+const fs = require('fs');
 const path = require('path');
 const { loadProjectEnv } = require('./env-loader.js');
 
@@ -14,14 +15,197 @@ const { loadProjectEnv } = require('./env-loader.js');
 loadProjectEnv();
 
 // ═══════════════════════════════════════════════════════
-// 基础路径
+// 基础路径（从共享 SSOT config/runtime-paths.json 加载）
 // ═══════════════════════════════════════════════════════
 
 const PROJECT_ROOT = path.join(__dirname, '..');
-const DATA_DIR = path.join(PROJECT_ROOT, 'data');
-const CURRENT_DIR = path.join(DATA_DIR, 'current');
-const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
-const LOGS_DIR = path.join(PROJECT_ROOT, 'logs');
+const RUNTIME_PATHS_FILE = path.join(PROJECT_ROOT, 'config', 'runtime-paths.json');
+
+const FALLBACK_RUNTIME_PATHS = Object.freeze({
+    dirs: Object.freeze({
+        data: 'data',
+        current: 'data/current',
+        archive: 'data/archive',
+        runtime: 'data/runtime',
+        logs: 'logs'
+    }),
+    currentFiles: Object.freeze({
+        papers: 'papers.json',
+        rawCandidates: 'raw-candidates.json',
+        fetchCheckpoint: 'fetch-checkpoint.json',
+        filterDecisions: 'filter-decisions.json',
+        filteredPapers: 'filtered-papers.json',
+        deepAnalysisResult: 'deep-analysis-result.json',
+        analyzed: 'analyzed.json'
+    }),
+    currentDirs: Object.freeze({
+        manualV6Production: 'manual-v6',
+        visualSummaryManifests: 'visual-summary-manifests',
+        digestCoverManifests: 'digest-cover-manifests',
+        analysisWaivers: 'analysis-waivers',
+        postPublishVisualWaivers: 'post-publish-visual-waivers',
+        digestRunReports: 'digest-run-reports',
+        blogReviewCheckpoints: 'blog-review-checkpoints',
+        blogRepublications: 'blog-republications',
+        blogPublicationActivations: 'blog-publication-activations',
+        imageCache: 'image-cache'
+    }),
+    runtimeEntries: Object.freeze({
+        tagPreview: 'tag-preview',
+        tagRecordUpdateReports: 'tag-record-update-reports',
+        llmAccountPoolState: 'llm-account-pool.json',
+        llmUsage: 'llm-usage',
+        llmUsageDaily: 'llm-usage-daily',
+        llmResponseRecovery: 'llm-response-recovery',
+        freshRewrites: 'fresh-rewrites',
+        dailyFreshSourceRuns: 'daily-fresh-source-runs',
+        dailyScoringRefreshRecovery: 'daily-scoring-refresh-recovery',
+        dailyRenderObservations: 'daily-render-observations',
+        dailyDeploymentObservations: 'daily-deployment-observations',
+        dailyRepublications: 'daily-republications',
+        dailyPodcast: 'daily-podcast',
+        freshArxivFetchedSources: 'fetched-arxiv-sources',
+        historicalArxivPublicationMetadata: 'historical-arxiv-publication-metadata',
+        historicalArxivFreshFailureHandoffs: 'historical-arxiv-fresh-failure-handoffs',
+        officialConferenceAcquisitions: 'official-conference-acquisitions',
+        conferenceSourceLedgers: 'conference-ledgers',
+        conferenceSourceCache: 'conference-sources',
+        conferenceDiscoveryCatalogs: 'conference-discovery-catalogs',
+        conferenceDiscoveryReports: 'conference-discovery-reports',
+        conferenceFilterSpecs: 'conference-filter-specs',
+        conferenceFilters: 'conference-filters',
+        conferenceFilterEvidenceRuns: 'conference-filter-evidence-runs',
+        conferenceStagingSpecs: 'conference-staging-specs',
+        conferenceStagingSources: 'conference-staging-sources',
+        conferenceStaging: 'conference-staging',
+        conferenceRuns: 'conference-runs',
+        conferenceAnalysis: 'conference-analysis-executions',
+        conferenceRecoveryGrants: 'conference-recovery-grants',
+        conferencePageStaging: 'conference-page-staging',
+        conferenceAggregates: 'conference-aggregates',
+        conferenceProcesses: 'conference-processes',
+        conferenceQueues: 'conference-queues',
+        conferencePublications: 'conference-publications',
+        historicalPageInventories: 'historical-page-inventories',
+        historicalDirectRewriteInputCatalog: 'direct-local-inputs',
+        historicalConferencePageProjections: 'historical-conference-page-projections',
+        historicalDirectRewritePlans: 'historical-direct-rewrite-plans',
+        historicalDirectRewriteUnprojectedReports: 'historical-direct-rewrite-unprojected-reports',
+        historicalDirectRewriteRegistries: 'historical-direct-rewrite-registries',
+        historicalDirectRewriteExecutions: 'historical-direct-rewrite-executions',
+        historicalDirectRewriteStaging: 'historical-direct-rewrite-staging',
+        historicalDirectAggregateProjections: 'historical-direct-aggregate-projections',
+        historicalDirectAggregates: 'historical-direct-aggregates',
+        historicalDirectTagSupplements: 'historical-direct-tag-supplements',
+        historicalSourceTagAssignments: 'historical-source-tag-classifications',
+        historicalSourceIdentitySupplements: 'historical-source-identity-supplements',
+        historicalDirectPublications: 'historical-direct-publications',
+        historicalDirectVisualDispositions: 'historical-direct-visual-dispositions',
+        pageSourceCrosswalks: 'page-source-crosswalks',
+        historicalArxivBatches: 'historical-arxiv-batches',
+        historicalLocalCrawlIdentities: 'historical-local-crawl-identities',
+        historicalLocalCrawlSnapshots: 'historical-local-crawl-identity-snapshots',
+        historicalArchiveCrawlIdentities: 'historical-archive-crawl-identities',
+        historicalConferenceCrawlIdentities: 'historical-conference-crawl-identities',
+        historicalConferenceLocalSources: 'historical-conference-local-sources',
+        historicalIcmlFreshPdfRoot: 'historical-icml-pdf-sources',
+        historicalOpenreviewPdfRoot: 'historical-icml-pdf-sources',
+        historicalOpenreviewPdfSources: 'historical-openreview-pdf-sources',
+        historicalIcmlAlternatePdfSources: 'historical-icml-alternate-pdf-sources',
+        historicalTagAssignments: 'historical-tag-assignments',
+        legacyHistoricalTagAssignments: 'historical-taxonomy-assignments',
+        historicalPageStaging: 'historical-page-staging',
+        historicalDailyAggregates: 'historical-daily-aggregates',
+        historicalAnalysisSchedulers: 'historical-analysis-schedulers',
+        historicalPostprocessSchedulers: 'historical-postprocess-schedulers',
+        paperSourceAuthorities: 'paper-source-authorities',
+        apiReaderAttempts: 'reader-attempts',
+        analysisRepairAttempts: 'analysis-repair-attempts',
+        analysisBatchReports: 'analysis-batch-reports'
+    }),
+    projectEntries: Object.freeze({
+        tagCatalogFile: 'config/tag-catalog.json',
+        tagCatalogHistoryDir: 'config/tag-catalog-history',
+        tagExplorerAssets: 'web/tag-explorer'
+    }),
+    blogRelativePaths: Object.freeze({
+        defaultBasePath: '/audio-research-portal',
+        contentPosts: 'content/posts',
+        researcherSidecarRoot: 'static/data/papers'
+    })
+});
+
+function validateRelativeRuntimePath(value, label) {
+    if (typeof value !== 'string' || !value || value.includes('\0') || value.includes('\\') || value.startsWith('/')) {
+        throw new Error(`config/runtime-paths.json 字段 ${label} 必须为非空相对路径`);
+    }
+    const parts = value.split('/');
+    if (parts.some(part => !part || part === '.' || part === '..')) {
+        throw new Error(`config/runtime-paths.json 字段 ${label} 包含非法路径段: ${value}`);
+    }
+    return value;
+}
+
+function loadRuntimePathsSpec(specPath = RUNTIME_PATHS_FILE) {
+    let parsed;
+    try {
+        parsed = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+    } catch (error) {
+        if (error && error.code === 'ENOENT') {
+            return FALLBACK_RUNTIME_PATHS;
+        }
+        throw new Error(`无法读取或解析共享路径配置 ${specPath}: ${error.message}`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`共享路径配置 ${specPath} 必须是 JSON 对象`);
+    }
+    const validated = {};
+    for (const [section, defaults] of Object.entries(FALLBACK_RUNTIME_PATHS)) {
+        const rawSection = parsed[section];
+        if (!rawSection || typeof rawSection !== 'object' || Array.isArray(rawSection)) {
+            throw new Error(`共享路径配置 ${specPath} 缺少对象字段 ${section}`);
+        }
+        const sectionCopy = {};
+        for (const key of Object.keys(defaults)) {
+            if (!Object.prototype.hasOwnProperty.call(rawSection, key)) {
+                throw new Error(`共享路径配置 ${specPath} 缺少 ${section}.${key}`);
+            }
+            const value = rawSection[key];
+            if (section === 'blogRelativePaths' && key === 'defaultBasePath') {
+                if (typeof value !== 'string') {
+                    throw new Error(`共享路径配置 ${specPath} 字段 ${section}.${key} 必须是字符串`);
+                }
+                sectionCopy[key] = value;
+            } else {
+                sectionCopy[key] = validateRelativeRuntimePath(value, `${section}.${key}`);
+            }
+        }
+        for (const [key, value] of Object.entries(rawSection)) {
+            if (!Object.prototype.hasOwnProperty.call(sectionCopy, key)) {
+                const validatedValue = validateRelativeRuntimePath(value, `${section}.${key}`);
+                Object.defineProperty(sectionCopy, key, {
+                    value: validatedValue,
+                    enumerable: true,
+                    writable: true,
+                    configurable: true
+                });
+            }
+        }
+        validated[section] = Object.freeze(sectionCopy);
+    }
+    return Object.freeze(validated);
+}
+
+function joinRelativeSegments(root, relativePath) {
+    return path.join(root, ...String(relativePath).split('/'));
+}
+
+const RUNTIME_PATHS = loadRuntimePathsSpec();
+const DATA_DIR = joinRelativeSegments(PROJECT_ROOT, RUNTIME_PATHS.dirs.data);
+const CURRENT_DIR = joinRelativeSegments(PROJECT_ROOT, RUNTIME_PATHS.dirs.current);
+const ARCHIVE_DIR = joinRelativeSegments(PROJECT_ROOT, RUNTIME_PATHS.dirs.archive);
+const RUNTIME_DIR = joinRelativeSegments(PROJECT_ROOT, RUNTIME_PATHS.dirs.runtime);
+const LOGS_DIR = joinRelativeSegments(PROJECT_ROOT, RUNTIME_PATHS.dirs.logs);
 
 function expandHome(p) {
     if (!p) return p;
@@ -187,130 +371,136 @@ const HUGGINGFACE_CONFIG = {
 // ═══════════════════════════════════════════════════════
 
 const FILES = {
-    tagCatalogFile: path.join(PROJECT_ROOT, 'config', 'tag-catalog.json'),
+    tagCatalogFile: joinRelativeSegments(PROJECT_ROOT, RUNTIME_PATHS.projectEntries.tagCatalogFile),
     // 保存升级前词表的原始字节，文件名使用这些字节的 SHA。
     // 核验标签记录的词表升级时，必须按保存的 SHA 取得旧词表；找不到就拒绝继续。
-    tagCatalogHistoryDir: path.join(PROJECT_ROOT, 'config', 'tag-catalog-history'),
-    tagPreviewDir: path.join(DATA_DIR, 'runtime', 'tag-preview'),
-    tagRecordUpdateReportDir: path.join(DATA_DIR, 'runtime', 'tag-record-update-reports'),
-    tagExplorerAssets: path.join(PROJECT_ROOT, 'web', 'tag-explorer'),
+    tagCatalogHistoryDir: joinRelativeSegments(PROJECT_ROOT, RUNTIME_PATHS.projectEntries.tagCatalogHistoryDir),
+    tagPreviewDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.tagPreview),
+    tagRecordUpdateReportDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.tagRecordUpdateReports),
+    tagExplorerAssets: joinRelativeSegments(PROJECT_ROOT, RUNTIME_PATHS.projectEntries.tagExplorerAssets),
     // 模型供应商的账号状态由 Node 和 Python 共用，跨日期保留。
     // 放在 runtime/，避免随 current/ 的日批次文件一起归档。
-    llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
-    llmUsageDir: path.join(DATA_DIR, 'runtime', 'llm-usage'),
-    llmResponseRecoveryDir: path.join(DATA_DIR, 'runtime', 'llm-response-recovery'),
-    freshRewriteRunsDir: path.join(DATA_DIR, 'runtime', 'fresh-rewrites'),
+    llmAccountPoolState: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.llmAccountPoolState),
+    llmUsageDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.llmUsage),
+    llmUsageDailyDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.llmUsageDaily),
+    llmResponseRecoveryDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.llmResponseRecovery),
+    freshRewriteRunsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.freshRewrites),
     // 默认日更 API 路线有自己的一套已封存四文件来源：
     // source.txt、source.pdf、source-runtime.json 和 source-manifest.json。
     // 放在 current/ 之外，归档轮转就不会丢掉某次日更分析实际用的那份封存包，
     // 也把它们和历史 fresh-rewrite 发布区分开。
-    dailyFreshSourceRunsDir: path.join(DATA_DIR, 'runtime', 'daily-fresh-source-runs'),
-    dailyScoringRefreshRecoveryDir: path.join(DATA_DIR, 'runtime', 'daily-scoring-refresh-recovery'),
+    dailyFreshSourceRunsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.dailyFreshSourceRuns),
+    dailyScoringRefreshRecoveryDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.dailyScoringRefreshRecovery),
+    dailyRenderObservationsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.dailyRenderObservations),
+    dailyDeploymentObservationsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.dailyDeploymentObservations),
+    dailyRepublicationRunsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.dailyRepublications),
+    dailyPodcastDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.dailyPodcast),
     // 每一代 arXiv 重写都重新取一套官方四文件：source.txt、source.pdf、
     // source-runtime.json 和 source-manifest.json。
     // 图片只属于当次运行的临时证据，从不做长期缓存。
-    freshArxivFetchedSourcesDir: path.join(DATA_DIR, 'runtime', 'fetched-arxiv-sources'),
+    freshArxivFetchedSourcesDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.freshArxivFetchedSources),
     // 历史 arXiv 直接发布计划使用的官方 Atom 元数据附属文件。
     // 这些文件绑定对应的重新抓取来源，不改动来源本身；
     // 从纯文本解析出的信息只用于诊断。
-    historicalArxivPublicationMetadataDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-publication-metadata'),
+    historicalArxivPublicationMetadataDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalArxivPublicationMetadata),
     // 保存 arXiv 重新抓取失败记录和当时固定的页面、链接对应关系，
     // 供后续页面与来源对照任务读取。这里不保存该任务的运行状态，
     // 也不改变页面所属论文。
-    historicalArxivFreshFailureHandoffDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-fresh-failure-handoffs'),
+    historicalArxivFreshFailureHandoffDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalArxivFreshFailureHandoffs),
     // 会议 PDF 和它们的来源台账是运行时的私有输入。它们与 current/ 隔离，
     // 这样没导完的数据不会影响当天的生产批次。
-    officialConferenceAcquisitionDir: path.join(DATA_DIR, 'runtime', 'official-conference-acquisitions'),
-    conferenceSourceLedgerDir: path.join(DATA_DIR, 'runtime', 'conference-ledgers'),
-    conferenceSourceCacheDir: path.join(DATA_DIR, 'runtime', 'conference-sources'),
-    conferenceDiscoveryCatalogDir: path.join(DATA_DIR, 'runtime', 'conference-discovery-catalogs'),
-    conferenceDiscoveryReportDir: path.join(DATA_DIR, 'runtime', 'conference-discovery-reports'),
-    conferenceFilterSpecsDir: path.join(DATA_DIR, 'runtime', 'conference-filter-specs'),
-    conferenceFiltersDir: path.join(DATA_DIR, 'runtime', 'conference-filters'),
-    conferenceFilterEvidenceRunsDir: path.join(DATA_DIR, 'runtime', 'conference-filter-evidence-runs'),
-    conferenceStagingSpecsDir: path.join(DATA_DIR, 'runtime', 'conference-staging-specs'),
-    conferenceStagingSourceDir: path.join(DATA_DIR, 'runtime', 'conference-staging-sources'),
-    conferenceStagingDir: path.join(DATA_DIR, 'runtime', 'conference-staging'),
-    conferenceRunsDir: path.join(DATA_DIR, 'runtime', 'conference-runs'),
-    conferenceAnalysisDir: path.join(DATA_DIR, 'runtime', 'conference-analysis-executions'),
-    conferenceRecoveryGrantDir: path.join(DATA_DIR, 'runtime', 'conference-recovery-grants'),
-    conferencePageStagingDir: path.join(DATA_DIR, 'runtime', 'conference-page-staging'),
-    conferenceAggregateDir: path.join(DATA_DIR, 'runtime', 'conference-aggregates'),
-    conferenceProcessDir: path.join(DATA_DIR, 'runtime', 'conference-processes'),
-    conferenceQueueDir: path.join(DATA_DIR, 'runtime', 'conference-queues'),
-    conferencePublicationDir: path.join(DATA_DIR, 'runtime', 'conference-publications'),
-    historicalPageInventoryDir: path.join(DATA_DIR, 'runtime', 'historical-page-inventories'),
+    officialConferenceAcquisitionDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.officialConferenceAcquisitions),
+    conferenceSourceLedgerDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceSourceLedgers),
+    conferenceSourceCacheDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceSourceCache),
+    conferenceDiscoveryCatalogDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceDiscoveryCatalogs),
+    conferenceDiscoveryReportDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceDiscoveryReports),
+    conferenceFilterSpecsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceFilterSpecs),
+    conferenceFiltersDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceFilters),
+    conferenceFilterEvidenceRunsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceFilterEvidenceRuns),
+    conferenceStagingSpecsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceStagingSpecs),
+    conferenceStagingSourceDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceStagingSources),
+    conferenceStagingDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceStaging),
+    conferenceRunsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceRuns),
+    conferenceAnalysisDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceAnalysis),
+    conferenceRecoveryGrantDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceRecoveryGrants),
+    conferencePageStagingDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferencePageStaging),
+    conferenceAggregateDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceAggregates),
+    conferenceProcessDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceProcesses),
+    conferenceQueueDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferenceQueues),
+    conferencePublicationDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.conferencePublications),
+    historicalPageInventoryDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalPageInventories),
     // 历史重写用的确定性本地直接输入目录。它记录保留的爬虫/PDF 指针和哈希，
     // 不放博客正文。历史直接输入目录只有这一个配置根。
-    historicalDirectRewriteInputCatalogDir: path.join(DATA_DIR, 'runtime', 'direct-local-inputs'),
+    historicalDirectRewriteInputCatalogDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectRewriteInputCatalog),
     // 冻结的本地留存标题映射和正式直接重写队列。它们与旧 crosswalk 状态无关。
-    historicalConferencePageProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-conference-page-projections'),
-    historicalDirectRewritePlanDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-plans'),
-    historicalDirectRewriteUnprojectedReportDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-unprojected-reports'),
+    historicalConferencePageProjectionDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalConferencePageProjections),
+    historicalDirectRewritePlanDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectRewritePlans),
+    historicalDirectRewriteUnprojectedReportDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectRewriteUnprojectedReports),
     // 仅使用论文来源的直接执行流程所保存的状态和中间文件。它们与旧的 fresh-rewrites 分开，
     // 从不含图片资源。
-    historicalDirectRewriteRegistryDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-registries'),
-    historicalDirectRewriteExecutionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-executions'),
-    historicalDirectRewriteStagingDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-staging'),
-    historicalDirectAggregateProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregate-projections'),
-    historicalDirectAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregates'),
-    historicalDirectTagSupplementDir: path.join(DATA_DIR, 'runtime', 'historical-direct-tag-supplements'),
-    historicalSourceTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-source-tag-classifications'),
-    historicalSourceIdentitySupplementDir: path.join(DATA_DIR, 'runtime', 'historical-source-identity-supplements'),
+    historicalDirectRewriteRegistryDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectRewriteRegistries),
+    historicalDirectRewriteExecutionDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectRewriteExecutions),
+    historicalDirectRewriteStagingDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectRewriteStaging),
+    historicalDirectAggregateProjectionDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectAggregateProjections),
+    historicalDirectAggregateDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectAggregates),
+    historicalDirectTagSupplementDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectTagSupplements),
+    historicalSourceTagAssignmentDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalSourceTagAssignments),
+    historicalSourceIdentitySupplementDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalSourceIdentitySupplements),
     // 全历史发布凭证刻意与旧 crosswalk 发布原型、日更 schema-v3 状态隔离。
-    historicalDirectPublicationDir: path.join(DATA_DIR, 'runtime', 'historical-direct-publications'),
-    historicalDirectVisualDispositionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-visual-dispositions'),
-    pageSourceCrosswalkDir: path.join(DATA_DIR, 'runtime', 'page-source-crosswalks'),
-    historicalArxivBatchDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-batches'),
+    historicalDirectPublicationDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectPublications),
+    historicalDirectVisualDispositionDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDirectVisualDispositions),
+    pageSourceCrosswalkDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.pageSourceCrosswalks),
+    historicalArxivBatchDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalArxivBatches),
     // 从保留的本地爬虫快照推出的纯身份依据。它们不能当作论文全文依据，
     // 也不能当分析来源。
-    historicalLocalCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identities'),
-    historicalLocalCrawlSnapshotDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identity-snapshots'),
+    historicalLocalCrawlIdentityDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalLocalCrawlIdentities),
+    historicalLocalCrawlSnapshotDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalLocalCrawlSnapshots),
     // 沿用旧名字是为了在再次读取归档时保持现有五组归档依据的分配，
     // 以及这些文件固定的位置。
-    historicalArchiveCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-archive-crawl-identities'),
-    historicalConferenceCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-conference-crawl-identities'),
+    historicalArchiveCrawlIdentityDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalArchiveCrawlIdentities),
+    historicalConferenceCrawlIdentityDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalConferenceCrawlIdentities),
     // 本地会议来源清单只是仅来源重写输入。它们不含历史页面材料，
     // 也不含 crosswalk 归属。
-    historicalConferenceLocalSourcesDir: path.join(DATA_DIR, 'runtime', 'historical-conference-local-sources'),
+    historicalConferenceLocalSourcesDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalConferenceLocalSources),
     // 新的 OpenReview PDF 写到 ICML 本地来源收集器本来就期望的 forum-ID
     // 位置；凭证仍隔离在 runtime/。
-    historicalIcmlFreshPdfRoot: path.join(DATA_DIR, 'runtime', 'historical-icml-pdf-sources'),
-    historicalOpenreviewPdfRoot: path.join(DATA_DIR, 'runtime', 'historical-icml-pdf-sources'),
-    historicalOpenreviewPdfSourceDir: path.join(DATA_DIR, 'runtime', 'historical-openreview-pdf-sources'),
-    historicalIcmlAlternatePdfSourceDir: path.join(DATA_DIR, 'runtime', 'historical-icml-alternate-pdf-sources'),
-    historicalTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-tag-assignments'),
-    legacyHistoricalTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-taxonomy-assignments'),
-    historicalPageStagingDir: path.join(DATA_DIR, 'runtime', 'historical-page-staging'),
-    historicalDailyAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-daily-aggregates'),
-    historicalAnalysisSchedulerDir: path.join(DATA_DIR, 'runtime', 'historical-analysis-schedulers'),
-    historicalPostprocessSchedulerDir: path.join(DATA_DIR, 'runtime', 'historical-postprocess-schedulers'),
+    historicalIcmlFreshPdfRoot: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalIcmlFreshPdfRoot),
+    historicalOpenreviewPdfRoot: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalOpenreviewPdfRoot),
+    historicalOpenreviewPdfSourceDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalOpenreviewPdfSources),
+    historicalIcmlAlternatePdfSourceDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalIcmlAlternatePdfSources),
+    historicalTagAssignmentDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalTagAssignments),
+    legacyHistoricalTagAssignmentDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.legacyHistoricalTagAssignments),
+    historicalPageStagingDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalPageStaging),
+    historicalDailyAggregateDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalDailyAggregates),
+    historicalAnalysisSchedulerDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalAnalysisSchedulers),
+    historicalPostprocessSchedulerDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.historicalPostprocessSchedulers),
     // 历史页面 crosswalk 使用的官方来源请求/快照/全文/凭证包，不可更改。
     // 绝不和日更 current/ 一起归档。
-    paperSourceAuthorityDir: path.join(DATA_DIR, 'runtime', 'paper-source-authorities'),
-    apiReaderAttemptsDir: path.join(DATA_DIR, 'runtime', 'reader-attempts'),
-    analysisRepairAttemptsDir: path.join(DATA_DIR, 'runtime', 'analysis-repair-attempts'),
-    analysisBatchReportsDir: path.join(DATA_DIR, 'runtime', 'analysis-batch-reports'),
-    papers: path.join(CURRENT_DIR, 'papers.json'),
-    papersLegacy: path.join(DATA_DIR, 'papers.json'),
-    rawCandidates: path.join(CURRENT_DIR, 'raw-candidates.json'),
-    fetchCheckpoint: path.join(CURRENT_DIR, 'fetch-checkpoint.json'),
-    filterDecisions: path.join(CURRENT_DIR, 'filter-decisions.json'),
-    filteredPapers: path.join(CURRENT_DIR, 'filtered-papers.json'),
-    deepAnalysisResult: path.join(CURRENT_DIR, 'deep-analysis-result.json'),
-    deepAnalysisResultLegacy: path.join(DATA_DIR, 'deep-analysis-result.json'),
-    visualSummaryManifestDir: path.join(CURRENT_DIR, 'visual-summary-manifests'),
+    paperSourceAuthorityDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.paperSourceAuthorities),
+    apiReaderAttemptsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.apiReaderAttempts),
+    analysisRepairAttemptsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.analysisRepairAttempts),
+    analysisBatchReportsDir: joinRelativeSegments(RUNTIME_DIR, RUNTIME_PATHS.runtimeEntries.analysisBatchReports),
+    papers: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentFiles.papers),
+    papersLegacy: joinRelativeSegments(DATA_DIR, RUNTIME_PATHS.currentFiles.papers),
+    rawCandidates: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentFiles.rawCandidates),
+    fetchCheckpoint: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentFiles.fetchCheckpoint),
+    filterDecisions: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentFiles.filterDecisions),
+    filteredPapers: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentFiles.filteredPapers),
+    deepAnalysisResult: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentFiles.deepAnalysisResult),
+    deepAnalysisResultLegacy: joinRelativeSegments(DATA_DIR, RUNTIME_PATHS.currentFiles.deepAnalysisResult),
+    visualSummaryManifestDir: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentDirs.visualSummaryManifests),
     // 退役成图的原归档路径，仅供只读核验已有文件。
     visualSummaryAssetDir: ARCHIVE_DIR,
-    digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
+    digestCoverManifestDir: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentDirs.digestCoverManifests),
     // 对某次已封存日更分析的显式人工决定。豁免绑定当时 current 中的分析结果及相关文件，
     // 从不修改分析结果本身。
-    analysisWaiverDir: path.join(CURRENT_DIR, 'analysis-waivers'),
-    postPublishVisualWaiverDir: path.join(CURRENT_DIR, 'post-publish-visual-waivers'),
-    digestRunReportDir: path.join(CURRENT_DIR, 'digest-run-reports'),
+    analysisWaiverDir: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentDirs.analysisWaivers),
+    postPublishVisualWaiverDir: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentDirs.postPublishVisualWaivers),
+    digestRunReportDir: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentDirs.digestRunReports),
+    blogReviewCheckpointsDir: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentDirs.blogReviewCheckpoints),
     digestCoverAssetDir: ARCHIVE_DIR,
-    analyzed: path.join(CURRENT_DIR, 'analyzed.json'),
-    analyzedLegacy: path.join(DATA_DIR, 'analyzed.json')
+    analyzed: joinRelativeSegments(CURRENT_DIR, RUNTIME_PATHS.currentFiles.analyzed),
+    analyzedLegacy: joinRelativeSegments(DATA_DIR, RUNTIME_PATHS.currentFiles.analyzed)
 };
 
 // ═══════════════════════════════════════════════════════
@@ -346,7 +536,7 @@ const HISTORICAL_CONFERENCE_CONFIG = {
         || path.join(require('os').homedir(), 'code/github_repos/iclr2026-paper-scraper'))
 };
 
-const DEFAULT_BLOG_BASE_PATH = '/audio-research-portal';
+const DEFAULT_BLOG_BASE_PATH = RUNTIME_PATHS.blogRelativePaths.defaultBasePath;
 
 function resolveBlogBasePath(value = process.env.PAPER_DIGEST_BLOG_BASE_PATH) {
     const raw = value === undefined ? DEFAULT_BLOG_BASE_PATH : value;
@@ -366,7 +556,7 @@ function resolveBlogBasePath(value = process.env.PAPER_DIGEST_BLOG_BASE_PATH) {
 
 const PUBLISH_CONFIG = {
     blogRepo: BLOG_REPO,
-    contentDir: path.join(BLOG_REPO, 'content', 'posts'),
+    contentDir: joinRelativeSegments(BLOG_REPO, RUNTIME_PATHS.blogRelativePaths.contentPosts),
     basePath: resolveBlogBasePath(process.env.PAPER_DIGEST_BLOG_BASE_PATH)
 };
 
@@ -644,9 +834,13 @@ applyEnvOverrides();
 
 module.exports = {
     PROJECT_ROOT,
+    RUNTIME_PATHS_FILE,
+    RUNTIME_PATHS,
+    loadRuntimePathsSpec,
     DATA_DIR,
     CURRENT_DIR,
     ARCHIVE_DIR,
+    RUNTIME_DIR,
     LOGS_DIR,
 
     BASE_ARXIV_CATEGORIES,

@@ -3,7 +3,7 @@
 本文件由 `node scripts/generate-scripts-index.js` 根据 `scripts/` 目录自动生成，列出全部受版本控制的 `.js` 与 `.py` 运行时文件。
 架构分工与常用入口见 [脚本指南](README.md)（[English](README.en.md)）；旧记录兼容与独立人工审查位于 `manual/scripts/`。
 
-总计：**478** 个运行时文件（顶层 Node 93 · 顶层 Python 98 · `lib/` 内部库 287）。
+总计：**489** 个运行时文件（顶层 Node 93 · 顶层 Python 102 · `lib/` 内部库 294）。
 
 ## 顶层 Node 入口与共享模块（93）
 
@@ -103,13 +103,14 @@
 | `waive-post-publish-visuals.js` | 按用户持续要求，登记本次发布不生成图片。 |
 | `workspace-role.js` | Node 流程入口或共享模块 |
 
-## 顶层 Python 入口与共享模块（98）
+## 顶层 Python 入口与共享模块（102）
 
 | 文件 | 职责摘要 |
 |---|---|
 | `analysis_quality_format.py` | Select the original or current quality rules without changing the source record. |
 | `analysis_sections.py` | 识别论文评价的章节标题，兼容旧标题而不改写原文。 |
 | `arxiv_tex_extract.py` | Safe arXiv /e-print/<id> TeX source archive unpacker and AST extractor. |
+| `blog_core_summary_verifier.py` | 详细核心摘要（含全景导读）语义、来源数值核对与 Node 只读重放核验模块。 |
 | `blog_entry_loader.py` | 以共享实现模块的方式加载 publish-to-blog.py。 |
 | `blog_formula_tex_display.py` | 展示公式 CommonMark/GFM 切分、Markdown 表格提取与表格单元格 TeX 显示投影。 |
 | `blog_git_publication.py` | 博客 Git 发布事务、索引与提交树精确字节校验、回滚快照与远端 OID 验证。 |
@@ -172,6 +173,8 @@
 | `publication_activation.py` | 将旧发布状态文件归档，让新的正式分析结果能重新生成和发布；中断后可恢复。 |
 | `publication_local_replay.py` | Private, invocation-local transport evidence for read-only publication workers. |
 | `publish_common.py` | Audio Research Workbench 发布公共模块 (Python) |
+| `publish_llm_client.py` | 发布阶段 LLM HTTP/SSE 客户端、账号池调度与分级推理封装（从 publish_common.py 拆出）。 |
+| `publish_manual_legacy.py` | 已退役 Manual v4/v5/v6 历史记录只读核验与兼容校验（从 publish_common.py 拆出）。 |
 | `publish_node_replay_client.py` | Thread-safe persistent Node JSON-RPC client for read-only publication replay CLIs. |
 | `publish-conference.py` | 把一个已完成的会议流程作为独立的博客增量发布出去。 |
 | `publish-to-blog.py` | Python 流程脚本或共享模块 |
@@ -204,14 +207,16 @@
 | `tag_paths.py` | 集中定义标签词表和私有预览的路径。 |
 | `tag_presentation.py` | 只将实际命中的受控标签投影为分类路径，不为论文追加上位标签。 |
 | `tag_stage_record.py` | 识别标签阶段的保存格式，返回原记录及其哈希绑定字段。 |
+| `tutorial_payload_verifier_core.py` | 核验 Manual v5 教程正文及其引用的真实文件；缺少必需记录或检查不一致时拒绝使用。 |
 | `utils.py` | Audio Research Workbench 公共工具模块 (Python) |
 
-## 内部支撑库（`scripts/lib/`）（287）
+## 内部支撑库（`scripts/lib/`）（294）
 
 | 文件 | 职责摘要 |
 |---|---|
 | `lib/active-time-budget.js` | Shared active-time accounting; long stalls may be system suspend or local event-loop blockage. |
 | `lib/analysis-batch-report.js` | Node 内部共享支撑模块 |
+| `lib/analysis-contract-paper-exemptions.js` | 隔离区：单篇论文历史回归豁免规则（Quarantined Single-Paper Exemptions）。 |
 | `lib/analysis-failure-rounds.js` | Node 内部共享支撑模块 |
 | `lib/analysis-quality-format.js` | Node 内部共享支撑模块 |
 | `lib/analysis-section-titles.js` | 新分析使用“论文评价”。旧标题只用于识别保存的正文，不改写原文。 |
@@ -296,6 +301,8 @@
 | `lib/daily-source-format.js` | Node 内部共享支撑模块 |
 | `lib/daily-source-skip.js` | 日更入选后，若某篇论文的官方 PDF 在全部候选地址上都返回 404，这篇论文在当前批次 |
 | `lib/daily-xml-file-stdin.js` | Private transport for the daily XML validators. A finite regular-file fd |
+| `lib/deep-arxiv-source-fetch.js` | arXiv 官方 HTML / PDF / 原文抓取、内容限流与响应清理辅助模块（非 Reader 解析路径）。 |
+| `lib/deep-primary-sections.js` | 主分析 13 章节 Markdown 解析、结构归一化、方法详述检查、 |
 | `lib/digest-live-status.js` | 只读合成一屏的日更运行状态。 |
 | `lib/direct-rewrite-analysis-context.js` | 历史直改的运行器传入的来源对象，要么来自刚抓取的 arXiv generation，要么来自 |
 | `lib/empty-daily-batch.js` | 零候选空日只由抓取阶段 `--allow-empty-daily` 显式放行，并由生成清单里的 |
@@ -306,6 +313,7 @@
 | `lib/experiment-source-setting-axes.js` | Categorical-axis recognition only. This never validates metric values, |
 | `lib/explicit-reader-retry-round.js` | Node 内部共享支撑模块 |
 | `lib/fetch-scheduler.js` | Node 内部共享支撑模块 |
+| `lib/file-lock.js` | Strict zero-dependency leaf module for hardened directory-based file locks (${filePath}.lock). |
 | `lib/filter-decision.js` | Shared decision semantics. Preserve actual saved outputs and retryable fallbacks. |
 | `lib/filter-input-contract.js` | Node 内部共享支撑模块 |
 | `lib/filter-prompt.js` | Adapters prepare their own source fields; this layer neither normalizes input |
@@ -362,8 +370,10 @@
 | `lib/paper-identity.js` | 跨运行时的论文身份记录，论文可能来自 arXiv 或会议论文集。 |
 | `lib/paper-page-staging.js` | 日更发布器的历史路径适配：只接收已经核验的当前分析，不加载旧 crosswalk/标签/调度流程。 |
 | `lib/paper-source-authority.js` | 把一张历史页面归到唯一论文身份上，只依据来源文件，且结果可长期复算。加载时 |
+| `lib/papers-backup.js` | Leaf module for atomic, gzip-verified papers.json backups. |
 | `lib/pdf-layout.js` | 所有只处理 PDF 的路线共用这一套实现。PyMuPDF 通过项目固定的 Python 运行时 |
 | `lib/pending-fact-feedback.js` | A pending correction is an obligation, never publishability or request credit. |
+| `lib/physical-request-hook.js` | Leaf hook decoupling scripts/utils.js from scripts/lib/explicit-reader-retry-round.js. |
 | `lib/podcast-github-release.js` | Node 内部共享支撑模块 |
 | `lib/post-publication-policy.js` | Node 内部共享支撑模块 |
 | `lib/primary-fact-local-repair.js` | Node 内部共享支撑模块 |
@@ -399,6 +409,7 @@
 | `lib/reader-diagnostic-format.js` | Node 内部共享支撑模块 |
 | `lib/reader-dom-span-projection.js` | Node 内部共享支撑模块 |
 | `lib/reader-dom-span-replay-cli.js` | Publisher replay: local sealed source and actual article only, no model/network. |
+| `lib/reader-draft-hash.js` | Strict leaf module for Reader draft/payload/text SHA-256 hashing. |
 | `lib/reader-draft-order.js` | Node 内部共享支撑模块 |
 | `lib/reader-fact-pre-request-recovery.js` | Node 内部共享支撑模块 |
 | `lib/reader-fact-table-claim-location.js` | Node 内部共享支撑模块 |

@@ -145,6 +145,10 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
         if (['scripts/lib/original-file-evidence' + '.js', 'scripts/original_file_evidence' + '.py'].includes(filename)) {
             add('config/original-file-evidence.json', true);
         }
+        if (filename === 'scripts/config' + '.js'
+            || filename === 'scripts/path_config' + '.py') {
+            add('config/runtime-paths.json', true);
+        }
         if (filename === 'scripts/lib/public-network-policy' + '.js'
             || filename === 'scripts/public_network_policy' + '.py') {
             add('config/public-network-policy.json', true);

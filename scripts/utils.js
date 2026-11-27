@@ -1359,7 +1359,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
             response = await withRequestDeadline(
                 () => {
                     require('./lib/analysis-stop-control').assertMayStartRequest();
-                    require('./lib/explicit-reader-retry-round').consumePhysicalRequest(bodyObj, options);
+                    require('./lib/physical-request-hook.js').consumePhysicalRequest(bodyObj, options);
                     pendingRequest = require('./lib/llm-pending-request').beginPendingLlmRequest({
                         protocol: resolveRequestProtocol(endpoint, model, options), model, request: bodyObj,
                         context: options.usageContext
@@ -2387,8 +2387,8 @@ function createProxyDispatcher(proxyUrl) {
  * @returns {Object} { backedUp: boolean, backupPath?: string, message: string }
  */
 function backupPapersJson(...args) {
-    // 延迟 require 避免 utils <-> digest-status 初始化环；保留历史公共 API。
-    return require('./digest-status.js').backupPapersJson(...args);
+    // 委托至独立叶模块 papers-backup.js，彻底消除 utils <-> digest-status 环依赖，同时保留历史公共 API。
+    return require('./lib/papers-backup.js').backupPapersJson(...args);
 }
 
 // ═══════════════════════════════════════════════════════

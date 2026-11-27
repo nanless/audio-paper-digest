@@ -404,7 +404,7 @@ const BLOG_REVIEW_ENTRIES = Object.freeze([
     'scripts/publish-to-blog.py', 'scripts/review-blog.py', 'scripts/generate-blog.py',
     'scripts/publish_common.py', 'scripts/paper_reader_presentation.py',
     'scripts/markdown_hugo_gate.py', 'scripts/lib/workflow-implementation-files-cli.js',
-    'manual/scripts/manual-review-blog.py', 'manual/scripts/tutorial_payload_verifier.py',
+    'manual/scripts/manual-review-blog.py', 'scripts/tutorial_payload_verifier_core.py',
     'scripts/publish-conference.py', 'scripts/historical-direct-review.py',
     'scripts/lib/historical-direct-publication.js'
 ]);

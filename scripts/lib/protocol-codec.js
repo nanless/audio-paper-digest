@@ -149,11 +149,29 @@ function createCodec(catalogs) {
         hasValidHeader, isCurrentHeader, historicalHeader, registeredHeaders, record, historicalContract });
 }
 
-function readCatalogs(directory = DIRECTORY) {
+function catalogPaths(directory = DIRECTORY) {
     if (fs.realpathSync(directory) !== directory) throw new Error('协议目录不能经过符号链接');
-    return fs.readdirSync(directory).filter(name => /^[a-z][a-z0-9-]*\.json$/.test(name)).sort().map(name => {
-        const filename = path.join(directory, name), stat = fs.lstatSync(filename);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 4 * 1024 * 1024) throw new Error('协议目录要求有界普通文件');
+    return fs.readdirSync(directory)
+        .filter(name => /^[a-z][a-z0-9-]*\.json$/.test(name))
+        .sort()
+        .map(name => {
+            const filename = path.join(directory, name);
+            const stat = fs.lstatSync(filename);
+            if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 4 * 1024 * 1024) {
+                throw new Error('协议目录要求有界普通文件');
+            }
+            return filename;
+        });
+}
+
+function serverCatalogPaths(directory = DIRECTORY) {
+    // Publication/scientific dependencies exclude schemas used only inside native apps.
+    // Public client formats stay in clients.json; shared server tag formats stay in tags.json.
+    return catalogPaths(directory).filter(filename => !path.basename(filename).startsWith('clients-'));
+}
+
+function readCatalogs(directory = DIRECTORY) {
+    return catalogPaths(directory).map(filename => {
         const bytes = fs.readFileSync(filename);
         if (bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) throw new Error('协议目录不能带 UTF-8 BOM');
         return strictJson(bytes, '协议目录');
@@ -162,6 +180,6 @@ function readCatalogs(directory = DIRECTORY) {
 
 let shared;
 function codec() { if (!shared) shared = createCodec(readCatalogs()); return shared; }
-module.exports = { createCodec, canonical, readCatalogs,
+module.exports = { createCodec, canonical, catalogPaths, serverCatalogPaths, readCatalogs,
     ...Object.fromEntries(['contract', 'isContract', 'format', 'identityDomain', 'declaredSchema', 'schemaFingerprint', 'recordHeader', 'hasValidHeader', 'isCurrentHeader', 'historicalHeader', 'registeredHeaders', 'record', 'historicalContract']
         .map(name => [name, (...args) => codec()[name](...args)])) };

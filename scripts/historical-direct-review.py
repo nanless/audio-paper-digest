@@ -220,6 +220,8 @@ def _is_summary_page(staged_repo, page):
         return True
     if re.fullmatch(r'conference-[a-z0-9-]+\.md', basename):
         return True
+    if not staged_repo:
+        return False
     try:
         raw = (Path(staged_repo) / relative).read_bytes()
         head = raw[:4096].decode('utf-8', errors='ignore')

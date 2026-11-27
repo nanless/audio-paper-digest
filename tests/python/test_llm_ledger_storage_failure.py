@@ -17,6 +17,11 @@ import publish_common
 
 
 class LedgerStorageFailureTests(unittest.TestCase):
+    def setUp(self):
+        env_patch = mock.patch.dict(os.environ, {'PD_LLM_USAGE_SHARD_BY_DATE': '0'})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+
     def open_request(self, directory, opener, **kwargs):
         return publish_common._open_publish_json_with_account_pool(
             api_url='https://example.invalid/v1/chat/completions', endpoint='https://example.invalid/v1',

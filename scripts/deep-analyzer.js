@@ -325,38 +325,56 @@ const IMAGE_CACHE_DIR = path.join(CURRENT_DIR, 'image-cache');
 // 比丢掉整份草稿便宜。
 const API_READER_TRANSPORT_MAX_RETRIES = 2;
 
-function getArxivFetchDispatcher() {
-    require('./lib/conference-reader-operator-correction').assertMayAccessNetwork();
-    require('./lib/conference-source-resource-correction').assertMayAccessNetwork();
-    const proxyUrl = detectHttpConnectProxyUrl();
-    if (!proxyUrl) {
-        const error = new Error('arXiv 全文、PDF 与图片抓取必须通过当前项目 .env 中 HTTPS_PROXY/HTTP_PROXY 配置 HTTP CONNECT 代理，拒绝直连或仅使用 SOCKS ALL_PROXY');
-        error.code = 'PROXY_CONFIG_ERROR';
-        throw error;
-    }
-    try {
-        return createProxyDispatcher(proxyUrl);
-    } catch (error) {
-        error.code = 'PROXY_CONFIG_ERROR';
-        throw error;
-    }
-}
+const deepArxivSourceFetch = require('./lib/deep-arxiv-source-fetch.js');
+const {
+    ARXIV_PDF_TRANSIENT_CODES,
+    getArxivFetchDispatcher,
+    classifyArxivSourceFailure,
+    safeImageLabel,
+    parseContentLength,
+    normalizeImageMime,
+    sniffImageMime,
+    isAllowedImageMime,
+    readResponseBufferWithLimit,
+    isRetryableImageStatus,
+    fetchArxivTextDetailed,
+    fetchArxivTextDetailedUncached,
+    fetchArxivTextDetailedOriginal,
+    extractArxivPdfTextDetailedFromBytes,
+    fetchArxivHtmlTextDetailedUncached,
+    fetchArxivText,
+    arxivPdfTransportFailure,
+    fetchArxivPdfUncached,
+    fetchArxivImageUrls
+} = deepArxivSourceFetch;
 
-/**
- * 清理 gap-fill（审校重写）输出中的前缀废话
- * 确保输出直接从 ## 评分 开始
- * 如果找不到 ## 评分，返回 null 表示格式不正确
- */
-function cleanGapFillPrefix(text) {
-    if (!text) return null;
-    // 找到独立的 "## 评分" 标题；不能误命中 "## 评分理由"
-    const scoreMatch = text.match(/(^|\n)##\s*评分\s*(?:\n|$)/);
-    if (scoreMatch) {
-        return text.substring(scoreMatch.index + scoreMatch[1].length).trim();
-    }
-    // 如果没有 ## 评分，返回 null（格式不正确，调用方应回退到原始分析）
-    return null;
-}
+const deepPrimarySections = require('./lib/deep-primary-sections.js');
+const {
+    cleanGapFillPrefix,
+    contractRejectedError,
+    recoveryFailureStatus,
+    replaceOrInsertRequiredSection,
+    normalizeUnexpectedTopLevelHeadings,
+    normalizeMachineEnum,
+    inferDocumentTypeFromAnalysis,
+    normalizeAnalysisStructure,
+    getCoreSummaryDetailIssue,
+    sectionExteriorBytes,
+    replaceSectionBodyExact,
+    replaceMachinePrimaryTagFields,
+    getRepairableAnalysisStructureIssues,
+    extractMethodSection,
+    countChineseChars,
+    isMethodSectionDetailed,
+    hasMarkdownTable,
+    findTableOmissionMarker,
+    hasOmissionMarkers,
+    extractResultsSection,
+    sourceTextLikelyHasTables,
+    hasExplicitTableReference,
+    getExperimentTableRepairIssue,
+    analysisNeedsExperimentTableRepair
+} = deepPrimarySections;
 
 const publicResourceProbe = require('./lib/public-resource-probe.js');
 const {
@@ -8368,12 +8386,6 @@ function invalidateSourceBoundImageRecovery(paper) {
     delete paper.allImageUrls;
 }
 
-function classifyArxivSourceFailure(htmlAvailability, pdfHadTransientFailure) {
-    return htmlAvailability === 'transient_failure' || pdfHadTransientFailure
-        ? 'transient'
-        : 'permanent';
-}
-
 function discardInvalidImageSupplement(preImageAnalysis, imageManifest, imageResult, reason) {
     imageManifest.selected = [];
     imageManifest.supplement = {
@@ -10149,461 +10161,11 @@ async function callModel(messages, maxTokens = 8000, options = {}) {
 
 const cheerio = require('cheerio');
 
-function safeImageLabel(url) {
-    const value = String(url || '');
-    if (!value) return '<empty>';
-    if (value.startsWith('data:')) {
-        const mime = value.match(/^data:([^;,]+)/)?.[1] || 'data-uri';
-        return `${mime};base64,<omitted>`;
-    }
-    try {
-        const parsed = new URL(value);
-        const name = parsed.pathname.split('/').filter(Boolean).pop() || parsed.hostname;
-        return name.length > 120 ? `${name.slice(0, 117)}...` : name;
-    } catch {
-        return value.length > 120 ? `${value.slice(0, 117)}...` : value;
-    }
-}
-
-function parseContentLength(value) {
-    if (!value) return null;
-    const n = Number.parseInt(value, 10);
-    return Number.isFinite(n) && n >= 0 ? n : null;
-}
-
-function normalizeImageMime(contentType) {
-    if (!contentType) return '';
-    return String(contentType).split(';')[0].trim().toLowerCase();
-}
-
-function sniffImageMime(buffer) {
-    if (!buffer || buffer.length < 12) return '';
-    if (
-        buffer[0] === 0x89 &&
-        buffer[1] === 0x50 &&
-        buffer[2] === 0x4e &&
-        buffer[3] === 0x47 &&
-        buffer[4] === 0x0d &&
-        buffer[5] === 0x0a &&
-        buffer[6] === 0x1a &&
-        buffer[7] === 0x0a
-    ) {
-        return 'image/png';
-    }
-    if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-        return 'image/jpeg';
-    }
-    if (
-        buffer.toString('ascii', 0, 4) === 'RIFF' &&
-        buffer.toString('ascii', 8, 12) === 'WEBP'
-    ) {
-        return 'image/webp';
-    }
-    return '';
-}
-
-function isAllowedImageMime(mime) {
-    return mime === 'image/png' || mime === 'image/jpeg' || mime === 'image/webp';
-}
-
-async function readResponseBufferWithLimit(response, maxBytes) {
-    if (!response.body || typeof response.body.getReader !== 'function') {
-        const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        if (maxBytes > 0 && buffer.byteLength > maxBytes) {
-            const error = new Error(`response body ${(buffer.byteLength / 1024 / 1024).toFixed(1)}MB exceeds limit`);
-            error.code = 'RESPONSE_TOO_LARGE';
-            throw error;
-        }
-        return buffer;
-    }
-
-    const reader = response.body.getReader();
-    const chunks = [];
-    let total = 0;
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = Buffer.from(value);
-            total += chunk.byteLength;
-            if (maxBytes > 0 && total > maxBytes) {
-                try {
-                    await reader.cancel();
-                } catch (e) {
-                    // 忽略取消导致的错误
-                }
-                const error = new Error(`response body ${(total / 1024 / 1024).toFixed(1)}MB exceeds limit`);
-                error.code = 'RESPONSE_TOO_LARGE';
-                throw error;
-            }
-            chunks.push(chunk);
-        }
-    } finally {
-        if (reader.releaseLock) {
-            reader.releaseLock();
-        }
-    }
-    return Buffer.concat(chunks, total);
-}
-
 const { parseArxivReaderAuthors, resolveApiReaderAuthors, bindApiReaderAuthorIdentity,
     canRetainAuthorSourceHtml, retainAuthorSourceHtml, extractAuthorHeaderHtml,
     retainAuthorSourceHeaderHtml, resolveVerifiedReaderAuthors,
     preferredConferenceAuthorParserVersion }
     = require('./lib/reader-author-parser.js');
-
-/**
- * 从 arxiv HTML 获取全文文本（使用 cheerio 结构化解析）
- * 带重试机制，避免因并发限流偶发失败
- */
-async function fetchArxivTextDetailed(arxivId) {
-    return require('./lib/fresh-analysis-context.js').fetchFreshSource(arxivId, fetchArxivTextDetailedOriginal);
-}
-
-// 建立来源权威时，即使在 fresh-analysis 的 AsyncLocalStorage 作用域里被调用，也必须
-// 证明真的现场抓过官方来源。普通分析仍用上面那个会看缓存的函数。
-async function fetchArxivTextDetailedUncached(arxivId) {
-    return fetchArxivTextDetailedOriginal(arxivId);
-}
-
-async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
-    const { sharedArxivOriginGate } = require('./lib/arxiv-origin-gate.js');
-    const maxRetries = 6;
-    const warnings = [];
-    let htmlAvailability = 'transient_failure';
-    let htmlAttempts = 0;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        htmlAttempts = attempt;
-        let shouldRetryHtml = false;
-        const attemptStatuses = [];
-        for (const htmlId of getArxivHtmlIds(arxivId)) {
-            const url = `https://arxiv.org/html/${htmlId}`;
-            try {
-                const response = await sharedArxivOriginGate.run(() => fetch(url, {
-                    headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-                    signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
-                    dispatcher: getArxivFetchDispatcher()
-                }));
-
-                if (response.status === 429) {
-                    shouldRetryHtml = true;
-                    attemptStatuses.push(`${htmlId}:429`);
-                    const baseWait = Math.min(Math.pow(2, attempt) * 8000, 120000);
-                    const gateWait = sharedArxivOriginGate.recordRateLimitResponse(response.headers, baseWait);
-                    const jitter = Math.floor(Math.random() * 5000);
-                    const waitTime = Math.max(baseWait, gateWait) + jitter;
-                    console.log(`    [deep] fetchArxivText ${arxivId} 被限流，等待 ${(waitTime/1000).toFixed(1)}s 后重试 (${attempt}/${maxRetries})`);
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
-                    break;
-                }
-
-                if (response.ok) {
-                    const html = await response.text();
-                    const imageInfos = parseArxivImageInfosFromHtml(html, htmlId, arxivId);
-                    const structuredArtifacts = parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId);
-                    const $ = cheerio.load(html);
-                    const readerAuthors = retainAuthorSourceHeaderHtml(parseArxivReaderAuthors($), html);
-                    prepareArxivHtmlBodyDom($);
-                    const content = extractArxivHtmlContentFromPreparedDom($);
-                    const boundStructuredArtifacts = bindStructuredArtifactsToText(structuredArtifacts, content);
-
-                    const assessment = assessArxivHtmlFullText($, content, FULL_TEXT_MIN_CHARS_FOR_FULL);
-                    if (!assessment.valid) {
-                        warnings.push(
-                            `HTML ${htmlId}: ${assessment.reason} `
-                            + `(chars=${assessment.chars}, paragraphs=${assessment.paragraphCount}, `
-                            + `sections=${assessment.sectionCount}, markers=${assessment.markerCount})`
-                        );
-                        console.log(
-                            `    [deep] fetchArxivText ${htmlId} 正文健康检查失败 `
-                            + `| reason=${assessment.reason} | chars=${assessment.chars} `
-                            + `| paragraphs=${assessment.paragraphCount} | sections=${assessment.sectionCount} `
-                            + `| markers=${assessment.markerCount}，继续 fallback`
-                        );
-                        continue;
-                    }
-                    return {
-                        text: content,
-                        title: String($('meta[name="citation_title"]').first().attr('content')
-                            || $('.ltx_title').first().text() || '').replace(/\s+/g, ' ').trim(),
-                        source: 'html',
-                        sourceId: htmlId,
-                        imageInfos,
-                        structuredArtifacts: boundStructuredArtifacts,
-                        readerAuthors,
-                        htmlAvailability: 'available',
-                        htmlAttempts,
-                        warnings
-                    };
-                }
-                if (response.status === 403) {
-                    sharedArxivOriginGate.recordRateLimitResponse(response.headers, Math.min(attempt * 8000, 60000));
-                }
-                console.log(`    [deep] fetchArxivText ${htmlId} HTTP ${response.status}`);
-                attemptStatuses.push(`${htmlId}:${response.status}`);
-                if (!isStableArxivHtmlMiss(response.status)) {
-                    shouldRetryHtml = true;
-                }
-            } catch (e) {
-                if (/必须通过当前项目 .*代理|拒绝直连/.test(e.message)) throw e;
-                shouldRetryHtml = true;
-                attemptStatuses.push(`${htmlId}:${e.name || 'error'}`);
-                console.log(`    [deep] fetchArxivText ${htmlId} error: ${e.message}`);
-                continue;
-            }
-        }
-        if (attemptStatuses.length > 0) warnings.push(`HTML attempt ${attempt}: ${attemptStatuses.join(', ')}`);
-        if (!shouldRetryHtml) {
-            htmlAvailability = 'permanent_miss';
-            console.log(`    [deep] fetchArxivText ${arxivId} HTML 永久不可用 | attempts=${htmlAttempts} | ${attemptStatuses.join(', ')}`);
-            break;
-        }
-        if (attempt < maxRetries) {
-            const baseDelay = attempt * 3000;
-            const jitter = Math.floor(Math.random() * 3000);
-            const delay = baseDelay + jitter;
-            console.log(`    [deep] fetchArxivText ${arxivId} retry ${attempt}/${maxRetries} after ${delay}ms`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
-    }
-    if (options.allowPdfFallback === false) {
-        // 重新抓取来源的流程自行下载 PDF；此处仅返回 HTML 获取情况。
-        // 文本提取使用该流程待核验和保存的那份 PDF，避免重复下载。
-        return {
-            text: '', source: 'unavailable', sourceId: '', imageInfos: [], structuredArtifacts: null,
-            htmlAvailability, htmlAttempts, warnings,
-            failureClass: classifyArxivSourceFailure(htmlAvailability, false), failureError: ''
-        };
-    }
-    console.log(`    [deep] fetchArxivText ${arxivId} 转入 PDF fallback | html_status=${htmlAvailability} | attempts=${htmlAttempts}`);
-
-    // HTML 不可用时，下载 PDF 并提取文本。
-    let pdfHadTransientFailure = false;
-    let lastTransientFailure = '';
-    for (const pdfId of getArxivHtmlIds(arxivId)) {
-        const pdfUrl = `https://arxiv.org/pdf/${pdfId}.pdf`;
-        try {
-            const pdfResponse = await sharedArxivOriginGate.run(() => fetch(pdfUrl, {
-                headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-                signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
-                dispatcher: getArxivFetchDispatcher()
-            }));
-            if (!pdfResponse.ok) {
-                if (pdfResponse.status === 429 || pdfResponse.status === 403) {
-                    sharedArxivOriginGate.recordRateLimitResponse(pdfResponse.headers, 8000);
-                }
-                console.log(`    [deep] PDF ${pdfUrl} HTTP ${pdfResponse.status}`);
-                warnings.push(`PDF ${pdfId}: HTTP ${pdfResponse.status}`);
-                if (isRetryableImageStatus(pdfResponse.status)) {
-                    pdfHadTransientFailure = true;
-                    lastTransientFailure = `PDF ${pdfId}: HTTP ${pdfResponse.status}`;
-                }
-                continue;
-            }
-            const contentType = String(pdfResponse.headers.get('content-type') || '').toLowerCase();
-            if (contentType && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
-                warnings.push(`PDF ${pdfId}: Content-Type ${contentType}`);
-                continue;
-            }
-            const buffer = await readResponseBufferWithLimit(pdfResponse, ARXIV_PDF_MAX_BYTES);
-            if (buffer.length < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
-                warnings.push(`PDF ${pdfId}: 文件头无效`);
-                continue;
-            }
-            const layout = await pdfLayout.extractPdfLayoutFromBytes(buffer);
-            if (layout?.text) {
-                const rawPdfText = String(layout.text);
-                const structuredArtifacts = buildPdfStructuredArtifactsFromBytes(
-                    rawPdfText, buffer, pdfId, layout.visualAudit
-                );
-                const text = rawPdfText
-                    .replace(/\n\s*\n/g, '\n')
-                    .replace(/[ \t]+/g, ' ')
-                    .trim();
-                const boundStructuredArtifacts = bindStructuredArtifactsToText(structuredArtifacts, text);
-                if (text.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
-                    warnings.push(`PDF ${pdfId}: 提取正文过短 (${text.length} chars)`);
-                    continue;
-                }
-                warnings.push(`PDF ${pdfId}: PyMuPDF 视觉审计 ${layout.visualAudit.pages.length} 页、${layout.visualAudit.tableCandidates.length} 个表格候选、${layout.visualAudit.formulaCandidates.length} 个公式候选、${layout.visualAudit.figureCandidates.length} 个 Figure 标题候选；公式无原始 TeX，表格未自动转为可发布结构。`);
-                console.log(`    [deep] PDF fallback success for ${arxivId}, extracted ${text.length} chars with PyMuPDF visual audit`);
-                return {
-                    text,
-                    source: 'pdf',
-                    sourceId: pdfId,
-                    imageInfos: [],
-                    structuredArtifacts: boundStructuredArtifacts,
-                    htmlAvailability,
-                    htmlAttempts,
-                    warnings
-                };
-            }
-        } catch (e) {
-            if (/必须通过当前项目 .*代理|拒绝直连/.test(e.message)) throw e;
-            pdfHadTransientFailure = true;
-            lastTransientFailure = `PDF ${pdfId}: ${e.message}`;
-            console.log(`    [deep] PDF fallback ${pdfUrl} error: ${e.message}`);
-            warnings.push(`PDF ${pdfId}: ${e.message}`);
-        }
-    }
-    console.log(`    [deep] fetchArxivText ${arxivId} PDF fallback also failed`);
-    const failureClass = classifyArxivSourceFailure(htmlAvailability, pdfHadTransientFailure);
-    return {
-        text: '',
-        source: 'unavailable',
-        sourceId: '',
-        imageInfos: [],
-        structuredArtifacts: null,
-        htmlAvailability,
-        htmlAttempts,
-        warnings,
-        failureClass,
-        failureError: failureClass === 'transient'
-            ? (lastTransientFailure || `arXiv ${arxivId} 全文抓取瞬时失败`)
-            : ''
-    };
-}
-
-// 来源保存流程传入已保存的官方 PDF 字节；此函数不联网下载其他文件。
-async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options = {}) {
-    const normalized = String(arxivId || '').trim().replace(/v\d+$/i, '');
-    if (!/^\d{4}\.\d{4,5}$/.test(normalized)) throw new Error('arXiv PDF extraction requires a normalized modern arXiv ID');
-    const bytes = Buffer.from(rawBytes || []);
-    if (bytes.length < 5 || bytes.length > ARXIV_PDF_MAX_BYTES || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
-        throw new Error(`arXiv PDF ${normalized} bytes are invalid for fallback extraction`);
-    }
-    const layout = await pdfLayout.extractPdfLayoutFromBytes(bytes);
-    const rawPdfText = String(layout?.text || '');
-    const structuredArtifacts = buildPdfStructuredArtifactsFromBytes(
-        rawPdfText, bytes, normalized, layout.visualAudit
-    );
-    const text = rawPdfText.replace(/\n\s*\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
-    if (text.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
-        throw new Error(`arXiv PDF ${normalized} fallback text is too short (${text.length} chars)`);
-    }
-    return {
-        text, source: 'pdf', sourceId: normalized, imageInfos: [],
-        structuredArtifacts: bindStructuredArtifactsToText(structuredArtifacts, text),
-        htmlAvailability: options.htmlAvailability || 'unavailable',
-        htmlAttempts: Number.isSafeInteger(options.htmlAttempts) ? options.htmlAttempts : 0,
-        warnings: [
-            ...(Array.isArray(options.warnings) ? options.warnings.slice() : []),
-            `PDF ${normalized}: PyMuPDF 视觉审计 ${layout.visualAudit.pages.length} 页、${layout.visualAudit.tableCandidates.length} 个表格候选、${layout.visualAudit.formulaCandidates.length} 个公式候选、${layout.visualAudit.figureCandidates.length} 个 Figure 标题候选；公式无原始 TeX，表格未自动转为可发布结构。`
-        ]
-    };
-}
-
-async function fetchArxivHtmlTextDetailedUncached(arxivId) {
-    return fetchArxivTextDetailedOriginal(arxivId, { allowPdfFallback: false });
-}
-
-async function fetchArxivText(arxivId) {
-    return (await fetchArxivTextDetailed(arxivId)).text;
-}
-
-const ARXIV_PDF_TRANSIENT_CODES = new Set([
-    'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'EAI_AGAIN',
-    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET',
-    'ARXIV_REQUEST_DEADLINE_EXCEEDED', 'ARXIV_REQUEST_SOCKET_TIMEOUT'
-]);
-
-function arxivPdfTransportFailure(error, candidate, phase) {
-    const details = [error, error?.cause, error?.cause?.cause];
-    const transient = details.find(item => item?.name === 'TimeoutError' || ARXIV_PDF_TRANSIENT_CODES.has(item?.code));
-    const reason = transient?.name === 'TimeoutError' ? 'TIMEOUT' : transient?.code;
-    const code = reason || details.find(item => typeof item?.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(item.code))?.code
-        || 'ARXIV_PDF_FETCH_FAILED';
-    const failure = new Error(`arXiv PDF ${candidate} ${phase} failed [${code}]`, { cause: error });
-    failure.code = code;
-    return { failure, transient: Boolean(transient) };
-}
-
-// 历史全新重写的来源采集总会留下原始官方 PDF，HTML 路径正常时也一样。这里刻意绕过
-// 普通的全新来源缓存，用和上面全文抓取器相同的、强制走 arXiv CONNECT 的 dispatcher。
-async function fetchArxivPdfUncached(arxivId, options = {}) {
-    const normalized = String(arxivId || '').trim().replace(/v\d+$/i, '');
-    if (!/^\d{4}\.\d{4,5}$/.test(normalized)) {
-        throw new Error('arXiv PDF fetch requires a normalized modern arXiv ID');
-    }
-    const preferred = String(options.preferredSourceId || '').trim();
-    if (preferred && (!/^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/.test(preferred)
-        || preferred.replace(/v\d+$/i, '') !== normalized)) {
-        throw new Error('arXiv PDF preferred source ID belongs to another paper or is malformed');
-    }
-    const candidates = [...new Set([normalized, preferred, ...getArxivHtmlIds(normalized)].filter(Boolean))];
-    const fetchImpl = options.fetchImpl || fetch;
-    const pause = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
-    const { sharedArxivOriginGate } = require('./lib/arxiv-origin-gate.js');
-    const useGate = !options.fetchImpl;
-    let currentPdfStatus = null;
-    let retryAvailable = true;
-    for (const candidate of candidates) {
-        const requestedUrl = `https://arxiv.org/pdf/${candidate}.pdf`;
-        const dispatcher = options.dispatcher || getArxivFetchDispatcher();
-        let httpRetriesLeft = 4;
-        while (true) {
-            let phase = 'request';
-            let response, bytes;
-            try {
-                const doFetch = () => fetchImpl(requestedUrl, {
-                    headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-                    signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
-                    dispatcher
-                });
-                response = useGate ? await sharedArxivOriginGate.run(doFetch, pause) : await doFetch();
-                phase = 'response';
-                if (response.ok) {
-                    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
-                    if (contentType && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
-                        try { await response.body?.cancel(); } catch (_) {}
-                        throw new Error(`arXiv PDF ${candidate} returned unexpected Content-Type ${contentType}`);
-                    }
-                    phase = 'body';
-                    bytes = await readResponseBufferWithLimit(response, ARXIV_PDF_MAX_BYTES);
-                } else {
-                    try { await response.body?.cancel(); } catch (_) {}
-                }
-            } catch (error) {
-                if (phase === 'response' || error?.code === 'RESPONSE_TOO_LARGE') throw error;
-                const { failure, transient } = arxivPdfTransportFailure(error, candidate, phase);
-                if (!retryAvailable || !transient) throw failure;
-                retryAvailable = false;
-                console.log(`    [deep] ${failure.message}，同一官方 PDF 地址重试一次`);
-                await pause(750);
-                continue;
-            }
-            if (!response.ok) {
-                if (candidate === normalized) currentPdfStatus = response.status;
-                if (response.status === 404) break;
-                if ((useGate || options.retryHttpStatus === true)
-                    && (response.status === 429 || response.status === 403 || response.status >= 500)
-                    && httpRetriesLeft > 0) {
-                    httpRetriesLeft -= 1;
-                    const fallbackWait = Math.min(60000, (5 - httpRetriesLeft) * 6000);
-                    const waitMs = useGate
-                        ? sharedArxivOriginGate.recordRateLimitResponse(response.headers, fallbackWait)
-                        : fallbackWait;
-                    console.log(`    [deep] arXiv PDF ${candidate} 返回 HTTP ${response.status}，冷却 ${(waitMs / 1000).toFixed(1)}s 后重试`);
-                    await pause(waitMs);
-                    continue;
-                }
-                throw new Error(`arXiv PDF ${candidate} download failed: HTTP ${response.status}`);
-            }
-            if (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
-                throw new Error(`arXiv PDF ${candidate} returned an invalid PDF header`);
-            }
-            const actualUrl = String(response.url || requestedUrl);
-            return { bytes, url: actualUrl, sourceId: candidate, fetchedAt: new Date().toISOString(),
-                currentPdfUnavailable: candidate !== normalized, currentPdfStatus };
-        }
-    }
-    const error = new Error(`arXiv PDF ${normalized} download failed: HTTP ${currentPdfStatus || 404}`);
-    error.code = 'ARXIV_PDF_NOT_FOUND';
-    error.status = 404;
-    error.arxivId = normalized;
-    throw error;
-}
 
 // 历史全新重写的图片证据有意不走 data/current/image-cache。生命周期归调用方，落在操作
 // 系统临时目录里，当前这次 Reader 调用结束之后必须删掉。
@@ -10637,92 +10199,6 @@ async function fetchArxivFigureBytesUncached(rawUrl) {
     const raw = await readResponseBufferWithLimit(response, IMAGE_MAX_BYTES);
     const trusted = prepareTrustedArxivFigureBuffer(raw, response.headers.get('content-type') || '');
     return { bytes: trusted.buffer, mediaType: trusted.mediaType };
-}
-
-/**
- * 从 arxiv HTML 获取图片信息列表（含 URL 和 caption）
- * 使用 cheerio 解析 <figure> 元素，提取图片 URL 和 figcaption 文本
- * 带重试机制，避免因并发限流偶发失败
- */
-
-async function fetchArxivImageUrls(arxivId, options = {}) {
-    if (options.htmlAvailability === 'permanent_miss') {
-        console.log(`    [deep] fetchArxivImageUrls ${arxivId} 跳过 | reason=html_permanent_miss`);
-        return [];
-    }
-    const maxRetries = Number.isInteger(options.maxRetries) && options.maxRetries > 0
-        ? options.maxRetries
-        : 6;
-    const fetchImpl = options.fetchImpl || fetch;
-    const dispatcher = Object.prototype.hasOwnProperty.call(options, 'dispatcher')
-        ? options.dispatcher
-        : getArxivFetchDispatcher();
-    const { sharedArxivOriginGate } = require('./lib/arxiv-origin-gate.js');
-    const useGate = !options.fetchImpl;
-    let lastFailure = '';
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        let shouldRetry = false;
-        let alreadyWaitedRateLimit = false;
-        const statuses = [];
-        for (const htmlId of getArxivHtmlIds(arxivId)) {
-            const url = `https://arxiv.org/html/${htmlId}`;
-            try {
-                const doFetch = () => fetchImpl(url, {
-                    headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-                    signal: AbortSignal.timeout(ARXIV_FETCH_TIMEOUT_MS),
-                    dispatcher
-                });
-                const response = useGate ? await sharedArxivOriginGate.run(doFetch) : await doFetch();
-
-                if (response.status === 429 || response.status === 403) {
-                    try { await response.body?.cancel(); } catch (_) {}
-                    shouldRetry = true;
-                    alreadyWaitedRateLimit = true;
-                    statuses.push(`${htmlId}:${response.status}`);
-                    const baseWait = Math.min(Math.pow(2, attempt) * 8000, 120000);
-                    const jitter = Math.floor(Math.random() * 5000);
-                    const waitTime = useGate
-                        ? sharedArxivOriginGate.recordRateLimitResponse(response.headers, baseWait + jitter)
-                        : (baseWait + jitter);
-                    console.log(`    [deep] fetchArxivImageUrls ${arxivId} 被限流 (${response.status})，等待 ${(waitTime/1000).toFixed(1)}s 后重试 (${attempt}/${maxRetries})`);
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
-                    break;
-                }
-
-                if (!response.ok) {
-                    try { await response.body?.cancel(); } catch (_) {}
-                    statuses.push(`${htmlId}:${response.status}`);
-                    if (!isStableArxivHtmlMiss(response.status)) shouldRetry = true;
-                    continue;
-                }
-
-                const html = await response.text();
-                return parseArxivImageInfosFromHtml(html, htmlId, arxivId);
-            } catch (e) {
-                if (e.code === 'PROXY_CONFIG_ERROR') throw e;
-                shouldRetry = true;
-                statuses.push(`${htmlId}:${e.name || 'error'}`);
-                lastFailure = e.message;
-                console.log(`    [deep] fetchArxivImageUrls ${htmlId} error: ${e.message}`);
-                continue;
-            }
-        }
-        if (!shouldRetry) {
-            console.log(`    [deep] fetchArxivImageUrls ${arxivId} 永久不可用 | attempts=${attempt} | ${statuses.join(', ')}`);
-            return [];
-        }
-        if (attempt < maxRetries && !alreadyWaitedRateLimit) {
-            const baseDelay = attempt * 3000;
-            const jitter = Math.floor(Math.random() * 3000);
-            const delay = baseDelay + jitter;
-            console.log(`    [deep] fetchArxivImageUrls ${arxivId} retry ${attempt}/${maxRetries} after ${delay}ms`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
-    }
-    console.log(`    [deep] fetchArxivImageUrls ${arxivId} failed after ${maxRetries} retries`);
-    const error = new Error(`arXiv 图片发现在 ${maxRetries} 次尝试后仍失败${lastFailure ? `: ${lastFailure}` : ''}`);
-    error.code = 'ARXIV_IMAGE_DISCOVERY_TRANSIENT_FAILURE';
-    throw error;
 }
 
 /**
@@ -10776,10 +10252,6 @@ async function writeCachedImage(imageUrl, buffer, mime) {
     } catch (e) {
         await Promise.allSettled([fs.promises.unlink(dataTemp), fs.promises.unlink(metaTemp)]);
     }
-}
-
-function isRetryableImageStatus(status) {
-    return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
 const imageDownloadPromises = new Map();
@@ -14413,226 +13885,6 @@ async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvide
     return revised;
 }
 
-function replaceOrInsertRequiredSection(analysis, title, content) {
-    if (normalizeAnalysisSectionTitle(title) === PAPER_EVALUATION_TITLE) {
-        const issue = getPaperEvaluationHeadingIssue(analysis);
-        if (issue) throw contractRejectedError(issue);
-    }
-    if (findSectionBounds(analysis, title)) return mergeSectionByTitle(analysis, title, content);
-    const index = REQUIRED_ANALYSIS_SECTIONS.indexOf(normalizeAnalysisSectionTitle(title));
-    const following = REQUIRED_ANALYSIS_SECTIONS.slice(index + 1);
-    for (const nextTitle of following) {
-        const next = new RegExp(`(^|\\n)##\\s*(?:${analysisSectionTitlePattern(nextTitle)})[：:\\s]*\\n`, 'm').exec(analysis);
-        if (next) {
-            const insertAt = next.index + next[1].length;
-            return `${analysis.slice(0, insertAt)}## ${title}\n${content.trim()}\n\n${analysis.slice(insertAt)}`;
-        }
-    }
-    return `${analysis.trim()}\n\n## ${title}\n${content.trim()}`;
-}
-
-function normalizeUnexpectedTopLevelHeadings(analysis) {
-    return String(analysis || '').replace(/^##\s*([^\n]+?)\s*$/gm, (line, rawTitle) => {
-        const cleanTitle = rawTitle.replace(/^#+\s*/, '').replace(/[：:]\s*$/, '').trim();
-        // 旧评价标题只用于读取，不改写，也不能降级后隐藏重复章节。
-        if (normalizeAnalysisSectionTitle(cleanTitle) === PAPER_EVALUATION_TITLE) return line;
-        return REQUIRED_ANALYSIS_SECTIONS.includes(cleanTitle)
-            ? `## ${cleanTitle}`
-            : `### ${cleanTitle}`;
-    });
-}
-
-function normalizeMachineEnum(value, allowed, fallback) {
-    const text = String(value || '').trim();
-    if (allowed.includes(text)) return text;
-    if (/^(?:是|有|已|提供|声称)/.test(text)) return allowed.includes('是') ? '是' : fallback;
-    if (/^(?:否|无|未提供|不提供|没有|未开源)/.test(text)) return allowed.includes('否') ? '否' : fallback;
-    if (/未说明|未知|不明确|未提及|待确认/.test(text)) return allowed.includes('未说明') ? '未说明' : fallback;
-    return fallback;
-}
-
-function inferDocumentTypeFromAnalysis(analysis) {
-    const text = String(analysis || '');
-    if (/(?:综述|survey|systematic review|literature review)/i.test(text)) return '综述';
-    if (/(?:技术报告|technical report|系统报告)/i.test(text)) return '系统技术报告';
-    if (/(?:模型报告|model report|model card)/i.test(text)) return '模型报告';
-    if (/(?:提出|发布|构建|介绍|创建|开源).{0,24}(?:数据集|基准)|\b(?:new|novel|release[sd]?|introduc(?:e[sd]?|ing)|construct(?:ed|ion)?)[ -]+(?:dataset|benchmark)\b|\b(?:dataset|benchmark)[ -]+(?:release|construction|introduction)\b/i.test(text)) {
-        return '数据集与基准';
-    }
-    if (/(?:理论研究|定理|证明|theorem|proof)/i.test(text)) return '理论研究';
-    return '方法研究';
-}
-
-function normalizeAnalysisStructure(analysis) {
-    let updated = capExperimentTableMetricColumns(
-        normalizeExperimentTableNumericFormatting(
-            normalizeUnexpectedTopLevelHeadings(analysis)
-        )
-    );
-    const originalMachine = extractSectionByTitle(updated, '机器摘要');
-    if (!originalMachine) return updated;
-
-    const aliases = {
-        '文档类型': 'document_type', '分档': 'rank_bucket', '置信度': 'confidence',
-        '主任务标签': 'primary_task_tag', '主方法标签': 'primary_method_tag',
-        '是否SOTA': 'sota_claim', '是否开源代码': 'has_code',
-        '是否开源模型': 'has_model', '是否开源数据': 'has_dataset'
-    };
-    const scoringRubric = require('./lib/scoring-rubric');
-    const values = {};
-    let declaredRubricVersion = '';
-    for (const rawLine of originalMachine.split('\n')) {
-        const match = rawLine.trim().replace(/^(?:[-*+]\s*)/, '').match(/^([^:：]+?)\s*[:：]\s*(.*?)$/);
-        if (!match) continue;
-        const rawKey = match[1].trim().replace(/^(?:\*\*|__|`)([\s\S]*?)(?:\*\*|__|`)$/, '$1').trim();
-        const key = aliases[rawKey] || rawKey;
-        if (key === 'rubric_version' && !declaredRubricVersion) {
-            const candidate = match[2].trim();
-            if (scoringRubric.SUPPORTED_SCORING_RUBRIC_VERSIONS.includes(candidate)) {
-                declaredRubricVersion = candidate;
-            }
-            continue;
-        }
-        if (REQUIRED_MACHINE_SUMMARY_KEYS.includes(key) && values[key] === undefined) {
-            values[key] = match[2].trim();
-        }
-    }
-
-    const parsedBefore = parseAnalysis(updated) || {};
-    const effectiveRubricVersion = declaredRubricVersion
-        || (scoringRubric.isUnifiedRubric(parsedBefore.scoringRubricVersion || parsedBefore.machineSummary?.rubricVersion)
-            ? scoringRubric.CURRENT_SCORING_RUBRIC
-            : scoringRubric.LEGACY_SCORING_RUBRIC);
-    const isUnifiedRubric = scoringRubric.isUnifiedRubric(effectiveRubricVersion);
-    const scoreFallbacks = {
-        innovation: parsedBefore.innovationScore,
-        technical_rigor: parsedBefore.technicalRigorScore,
-        experimental_sufficiency: parsedBefore.experimentalSufficiencyScore,
-        clarity: parsedBefore.clarityScore,
-        impact: parsedBefore.impactScore,
-        open_source: parsedBefore.openSourceScore,
-        reproducibility: parsedBefore.reproducibilityScore,
-        engineering_score: parsedBefore.engineeringScore
-    };
-    for (const [key, fallback] of Object.entries(scoreFallbacks)) {
-        if (parsedBefore.scoreValidation?.valid && fallback !== undefined && fallback !== '') {
-            // 解析结果通过评分校验且该分项有值时，使用解析结果覆盖机器摘要中的分数。
-            // 这样可以纠正两处不一致的记录，也避免结构修复反复处理同一分数问题；
-            // open_source 仍按下方的固定取值检查。
-            values[key] = fallback;
-        } else if (!values[key] && fallback !== undefined && fallback !== '') {
-            values[key] = fallback;
-        }
-    }
-    const documentTypes = ['方法研究', '系统技术报告', '模型报告', '数据集与基准', '综述', '理论研究', '应用研究'];
-    const documentAliases = {
-        '技术报告': '系统技术报告', 'Tech Report': '系统技术报告', 'tech report': '系统技术报告',
-        '白皮书': '系统技术报告', '模型卡': '模型报告', '数据集': '数据集与基准'
-    };
-    const documentCandidate = documentAliases[values.document_type] || values.document_type;
-    values.document_type = documentTypes.includes(documentCandidate)
-        ? documentCandidate
-        : (documentTypes.includes(parsedBefore.documentType)
-            ? parsedBefore.documentType
-            : inferDocumentTypeFromAnalysis(updated));
-    values.rank_bucket = normalizeMachineEnum(
-        parsedBefore.rankBucket || values.rank_bucket,
-        ['前10%', '前25%', '前50%', '后50%'],
-        ''
-    );
-    values.confidence = normalizeMachineEnum(
-        values.confidence || parsedBefore.confidence,
-        ['高', '中', '低'],
-        ''
-    );
-    const scoreMaxima = isUnifiedRubric
-        ? { innovation: 10, technical_rigor: 10, experimental_sufficiency: 10, clarity: 10,
-            impact: 10, open_source: 10, reproducibility: 10, engineering_score: 10 }
-        : { innovation: 2, technical_rigor: 1.5, experimental_sufficiency: 1.5, clarity: 1,
-            impact: 1.5, open_source: 1.5, reproducibility: 0.5, engineering_score: 1.5 };
-    const openAnchors = isUnifiedRubric ? scoringRubric.UNIFIED_OPEN_SOURCE_ANCHORS : [0, 0.2, 0.5, 1, 1.2, 1.5];
-    for (const [key, maximum] of Object.entries(scoreMaxima)) {
-        const rawValue = values[key];
-        const numeric = Number(rawValue);
-        const anchors = key === 'open_source' ? openAnchors : null;
-        values[key] = rawValue !== '' && Number.isFinite(numeric) && numeric >= 0 && numeric <= maximum
-            && (!anchors || anchors.includes(numeric))
-            ? numeric.toFixed(1)
-            : '';
-    }
-    // 模型可能遗漏 open_source 行。上方已经尝试复用解析分项，并检查了机器摘要中的取值；
-    // 这里仍为空时就填入 0.0，保证结构完整，而不凭缺少记录增加开源分。
-    if (!values.open_source) {
-        values.open_source = '0.0';
-    }
-    values.sota_claim = normalizeMachineEnum(values.sota_claim || parsedBefore.sotaClaim, ['是', '否', '未说明'], '未说明');
-    values.has_code = normalizeMachineEnum(values.has_code || parsedBefore.hasCode, ['是', '否', '未说明'], '未说明');
-    values.has_model = normalizeMachineEnum(values.has_model || parsedBefore.hasModel, ['是', '否', '未说明'], '未说明');
-    values.has_dataset = normalizeMachineEnum(values.has_dataset || parsedBefore.hasDataset, ['是', '否', '未说明'], '未说明');
-
-    // 机器摘要中已有的主标签先保留。解析结果通过标签校验时，用解析出的主任务和主方法
-    // 覆盖这些值；否则保留机器摘要中的非空值，只给空缺补待处理标记。
-    // 这里不从正文猜选标签，也不保证保留下来的标签已经合规。结构修复结束后，
-    // 独立标签阶段依据当前词表核验，必要时按原文证据局部修复。
-    if (parsedBefore.tagValidation?.valid) {
-        values.primary_task_tag = parsedBefore.primaryTaskTag;
-        values.primary_method_tag = parsedBefore.primaryMethodTag;
-    }
-    values.primary_task_tag = values.primary_task_tag || '#待选择主任务';
-    values.primary_method_tag = values.primary_method_tag || '#待选择主方法';
-    if (!findSectionBounds(updated, '标签')) {
-        updated = replaceOrInsertRequiredSection(updated, '标签', [
-            '#待选择主任务 #待选择主方法 #待选择补充标签',
-            '主任务标签: #待选择主任务',
-            '主方法标签: #待选择主方法',
-            '补充标签: #待选择补充标签'
-        ].join('\n'));
-    }
-    const emittedUnifiedRubric = scoringRubric.isUnifiedRubric(declaredRubricVersion)
-        ? declaredRubricVersion
-        : scoringRubric.CURRENT_SCORING_RUBRIC;
-    const machineLines = [
-        ...(isUnifiedRubric ? [`rubric_version: ${emittedUnifiedRubric}`] : []),
-        ...REQUIRED_MACHINE_SUMMARY_KEYS.map(key => `${key}: ${values[key]}`)
-    ];
-    updated = mergeSectionByTitle(updated, '机器摘要', machineLines.join('\n'));
-    return updated;
-}
-
-function getCoreSummaryDetailIssue(analysis, options = {}) {
-    return validateCoreSummarySemanticContract(analysis, options);
-}
-
-function sectionExteriorBytes(analysis, title) {
-    const bounds = findSectionBounds(analysis, title);
-    if (!bounds) throw contractRejectedError(`局部修复找不到 ## ${title}`);
-    return `${analysis.slice(0, bounds.contentStart)}\u0000${analysis.slice(bounds.end)}`;
-}
-
-function replaceSectionBodyExact(analysis, title, content) {
-    const bounds = findSectionBounds(analysis, title);
-    if (!bounds) throw contractRejectedError(`修复标签时找不到 ## ${title} 章节。`);
-    return `${analysis.slice(0, bounds.contentStart)}${String(content).trim()}${analysis.slice(bounds.end)}`;
-}
-
-function replaceMachinePrimaryTagFields(analysis, taskTag, methodTag) {
-    const bounds = findSectionBounds(analysis, '机器摘要');
-    if (!bounds) throw contractRejectedError('修复标签时找不到 ## 机器摘要章节。');
-    let body = analysis.slice(bounds.contentStart, bounds.end);
-    for (const [key, value] of [
-        ['primary_task_tag', taskTag],
-        ['primary_method_tag', methodTag]
-    ]) {
-        const pattern = new RegExp(`^${key}\\s*[:：]\\s*.*$`, 'gm');
-        const matches = body.match(pattern) || [];
-        if (matches.length !== 1) {
-            throw contractRejectedError(`修复标签时，机器摘要中的 ${key} 字段必须恰好出现一次。`);
-        }
-        body = body.replace(pattern, () => `${key}: ${value}`);
-    }
-    return `${analysis.slice(0, bounds.contentStart)}${body}${analysis.slice(bounds.end)}`;
-}
-
 function parseTagRepairResult(raw) {
     const text = String(raw || '').trim();
     if (!text.startsWith('{') || !text.endsWith('}')) {
@@ -15186,16 +14438,6 @@ async function repairMissingAnalysisSections(
     throw exhausted;
 }
 
-function contractRejectedError(message) {
-    const error = new Error(message);
-    error.code = 'CONTRACT_REJECTED';
-    return error;
-}
-
-function recoveryFailureStatus(error) {
-    return error?.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure';
-}
-
 async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, options = {}) {
     const enforceCyrillicProseGarble = options.enforceCyrillicProseGarble !== false;
     const enforceTableCommentaryAlignment = options.enforceTableCommentaryAlignment !== false;
@@ -15256,118 +14498,6 @@ async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, o
     return { analysis, methodRepaired };
 }
 
-function getRepairableAnalysisStructureIssues(analysis, options = {}) {
-    const issues = [];
-    if (options.requireCurrentEvaluationTitle === true) {
-        const issue = getCurrentPaperEvaluationHeadingIssue(analysis);
-        if (issue) issues.push(issue);
-    }
-    const missing = getMissingRequiredSections(analysis);
-    if (missing.length > 0) issues.push(`缺少必要章节: ${missing.join('/')}`);
-    const duplicate = getDuplicateRequiredSections(analysis);
-    if (duplicate.length > 0) issues.push(`必要章节重复: ${duplicate.join('/')}`);
-    const topLevelIssue = validateTopLevelSectionContract(analysis);
-    if (topLevelIssue) issues.push(`一级章节: ${topLevelIssue}`);
-    const editorialLeakageIssue = validateAnalysisEditorialLeakageContract(analysis, {
-        sourceText: options.sourceText,
-        enforceCyrillicProseGarble: options.enforceCyrillicProseGarble === true
-    });
-    if (editorialLeakageIssue) issues.push(`模型编辑/自检批注: ${editorialLeakageIssue}`);
-    const parsed = parseAnalysis(analysis);
-    const machineIssue = validateMachineSummaryContract(analysis, parsed, { checkScoringConsistency: false });
-    if (machineIssue) issues.push(`机器摘要: ${machineIssue}`);
-    // 本函数仍通过机器摘要检查主任务和主方法的格式，包括键是否存在、只出现一次、
-    // 值不为空，以及是否写成单个 #标签。它不把词表语义校验结果或标签选择问题
-    // 列为整篇结构修复的问题；这些问题由结构修复后的独立标签阶段处理，
-    // 必要时按原文证据局部修复，避免让模型只为修改分类选择而重写全文。
-    const tableIssue = validateExperimentTableContract(analysis, {
-        contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
-        documentType: parsed?.documentType,
-        sourceText: options.sourceText,
-        enforceTableCommentaryAlignment: options.enforceTableCommentaryAlignment === true
-    });
-    if (tableIssue) issues.push(`实验表格: ${tableIssue}`);
-    // 结构修复必须在评分审计之前兜住最终契约要求的叙事正文长度。
-    // 否则标题齐全但正文仍是 `TD` / 编辑指令等占位内容时，评分审计只会
-    // 反复改写评分，永远无法修复真正位于上游的核心摘要或方法/结果章节。
-    if (!parsed?.architecture || parsed.architecture.trim().length < 80) {
-        issues.push(`方法概述内容不足: ${parsed?.architecture?.trim().length || 0}/80 字符`);
-    }
-    const resultMinimumChars = ['综述', '理论研究'].includes(parsed?.documentType) ? 20 : 50;
-    if (!parsed?.results || parsed.results.trim().length < resultMinimumChars) {
-        issues.push(`实验或验证内容不足: ${parsed?.results?.trim().length || 0}/${resultMinimumChars} 字符`);
-    }
-    return issues;
-}
-
-/**
- * 从分析文本中提取方法概述和架构部分
- */
-function extractMethodSection(analysis) {
-    return extractSectionByTitle(analysis, '方法概述和架构', ['核心创新点', '实验结果', '细节详述', '评分理由']);
-}
-
-/**
- * 计算文本中的中文字符数量（含中文标点）
- */
-function countChineseChars(text) {
-    if (!text) return 0;
-    const matches = text.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g);
-    return matches ? matches.length : 0;
-}
-
-/**
- * 检查方法概述部分是否足够详细
- */
-function isMethodSectionDetailed(text) {
-    if (!text) return false;
-
-    // 1. 中文字符数检查（与 prompt 中的 600 中文字符要求对齐）
-    const chineseCount = countChineseChars(text);
-    if (chineseCount < 600) {
-        console.log(`    [deep] 🔍 方法概述中文字符数不足: ${chineseCount} < 600`);
-        return false;
-    }
-
-    // 2. 检查是否有"空泛表述"（只列名称不解释）
-    const vaguePatterns = [
-        /详见原文/,
-        /论文描述了详细架构/,
-        /详细方法见/,
-        /具体实现请参考/,
-    ];
-    if (vaguePatterns.some(p => p.test(text))) {
-        console.log(`    [deep] 🔍 方法概述检测到空泛表述`);
-        return false;
-    }
-
-    // 3. 检查是否提及关键要素（至少包含一些结构词）
-    const structuralKeywords = ['输入', '输出', '流程', '组件', '模块', '阶段', '结构', '网络', '模型'];
-    const hasStructure = structuralKeywords.some(kw => text.includes(kw));
-    if (!hasStructure) {
-        console.log(`    [deep] 🔍 方法概述缺少结构性描述`);
-        return false;
-    }
-
-    // 4. 检查段落数（至少 3 个段落，说明有分层组织）
-    const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 20);
-    if (paragraphs.length < 3) {
-        console.log(`    [deep] 🔍 方法概述段落数不足: ${paragraphs.length} < 3`);
-        return false;
-    }
-
-    return true;
-}
-
-/**
- * 检查实验结果部分是否包含 Markdown 表格
- */
-function hasMarkdownTable(text) {
-    if (!text) return false;
-    // 标准 Markdown 表格：至少有一行表头 |...| 和一行分隔符 |---|---|
-    return /\n\|[^\n]+\|\n\|[\-\s:|]+\|/.test('\n' + text);
-}
-
 /**
  * 检查并修复方法概述部分不够详细的问题。
  * 如果检测到方法概述字数不足、过于空泛或缺少关键要素，触发补充调用。
@@ -15403,104 +14533,6 @@ async function checkAndFixMethodSection(paper, analysis, sourceText, preparedEvi
 
     // 将补充的方法概述合并回原分析
     return mergeSectionByTitle(analysis, '方法概述和架构', normalizedFixedSection);
-}
-
-/**
- * 检查文本中是否包含表格省略标记（命中时返回具体标记，否则返回 null）
- */
-function findTableOmissionMarker(text, { hasTable = hasMarkdownTable(text) } = {}) {
-    if (!text) return null;
-    const explicitMarkers = [
-        '此处省略',
-        '其余省略',
-        '部分省略',
-        '略去其余',
-        '其余略',
-        '表格略',
-        '数据略',
-        '表格数据与论文一致',
-        '详见原文表',
-        '见原文表',
-        '详见原文',
-        '详见论文',
-        '表格详见',
-        '数据详见',
-        '详见原表'
-    ];
-    for (const marker of explicitMarkers) {
-        if (text.includes(marker)) return marker;
-    }
-    const tableOmissionRe = /(?:表格|数据|其余|部分|中间|后续|完整(?:结果|表格|数据))(?:均|已|被|在此|暂)?(?<![不未无没非])省略|(?<![不未无没非])省略(?:其余|部分|了?(?:其余|部分|完整)?(?:表格|数据|行|列|结果|细节|多项))/;
-    const regexMatch = text.match(tableOmissionRe);
-    if (regexMatch) return regexMatch[0];
-    if (!hasTable) {
-        const missingTableCitationMarkers = ['详见表', '（见表', '(见表'];
-        for (const marker of missingTableCitationMarkers) {
-            if (text.includes(marker)) return marker;
-        }
-    }
-    return null;
-}
-
-/**
- * 检查文本中是否包含表格省略标记
- */
-function hasOmissionMarkers(text, options) {
-    return Boolean(findTableOmissionMarker(text, options));
-}
-
-/**
- * 从分析文本中提取实验结果部分
- */
-function extractResultsSection(analysis) {
-    return extractSectionByTitle(analysis, '实验结果', ['细节详述', '评分理由', '局限与问题', '开源详情']);
-}
-
-function sourceTextLikelyHasTables(text) {
-    if (!text) return false;
-    return hasExplicitTableReference(text)
-        || /\\begin\{tabular\}|<table[\s>]/i.test(text)
-        || /\n\s*\|[^\n]+\|\s*\n\s*\|[\-\s:|]+\|/.test(text);
-}
-
-function hasExplicitTableReference(text) {
-    if (!text) return false;
-    return /\b(?:table|tbl)\.?\s*(?:[a-z]?\d+|[ivxlcdm]+)\b|表\s*[（(]?\s*(?:\d+|[一二三四五六七八九十百零]+)\s*[)）]?/i.test(text);
-}
-
-function getExperimentTableRepairIssue(analysis, textForAnalysis) {
-    const resultsSection = extractResultsSection(analysis);
-    if (!resultsSection) return null;
-    const hasTable = hasMarkdownTable(resultsSection);
-    const omissionMarker = findTableOmissionMarker(resultsSection, { hasTable });
-    const hasTableReference = hasExplicitTableReference(resultsSection);
-    const sourceHasTables = sourceTextLikelyHasTables(textForAnalysis);
-
-    // 明确写出来「缺表」的说法一律修。只是在原文某处检测到表格还不够：主分析可能已经
-    // 在正文里给出了相关数字证据，硬要再叫一次 LLM 去复现无关的原文表格，会白白烧掉
-    // 大量输入输出 token。除此之外，只有分析自己引用了某张表、且原文也确实有这张表时，
-    // 补表才算有理由。
-    const depthIssue = validateExperimentTableContract(analysis, {
-        contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
-        documentType: parseAnalysis(analysis)?.documentType,
-        sourceText: textForAnalysis,
-        enforceTableCommentaryAlignment: true
-    });
-    const reasons = [];
-    if (omissionMarker) {
-        reasons.push(`实验结果包含表格省略或外引占位标记“${omissionMarker}”，请补齐完整 Markdown 实验表格并移除省略占位表述`);
-    }
-    if (depthIssue) {
-        reasons.push(depthIssue);
-    }
-    if (!hasTable && hasTableReference && sourceHasTables) {
-        reasons.push('实验结果正文引用了论文表格且原文包含实验表格，但当前未嵌入可读 Markdown 实验表格');
-    }
-    return reasons.length > 0 ? reasons.join('；') : null;
-}
-
-function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
-    return Boolean(getExperimentTableRepairIssue(analysis, textForAnalysis));
 }
 
 /**
