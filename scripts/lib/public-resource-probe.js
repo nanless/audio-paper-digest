@@ -3767,6 +3767,7 @@ function applyApiReaderResourceAvailability(analysis, identity) {
         throw new Error('同步资源状态需要符合格式的资源核验记录；记录缺失时，不能按空资源列表处理。');
     }
     let updated = String(analysis || '');
+    const preservedCoreSummary = extractSectionByTitle(updated, '核心摘要');
     const acceptedUrls = new Set((identity?.resources || [])
         .map(item => item.originalUrl).filter(Boolean));
     const acceptedCanonUrls = new Set((identity?.resources || [])
@@ -3778,6 +3779,9 @@ function applyApiReaderResourceAvailability(analysis, identity) {
                 '未找到论文原文或已验证 Demo 中的精确链接'
             );
         }
+    }
+    if (preservedCoreSummary && extractSectionByTitle(updated, '核心摘要') !== preservedCoreSummary) {
+        updated = mergeSectionByTitle(updated, '核心摘要', preservedCoreSummary);
     }
     // 清理被 extractApiReaderResourceCandidates 丢弃的泛商业/媒体根域名，保持正文与 resources 一致。
     // 仅在「开源详情」节按完整 URL token 原子替换，绝不破坏同主机上的完整具体路径（如 /watch?v=...）。

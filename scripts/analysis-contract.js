@@ -2084,11 +2084,15 @@ function validateCoreSummarySourceGroundedClaims(summary, sourceText) {
             /([±+-]|(?<![0-9]))(\.\d{1,16}|\d{1,16}\.\d{1,16}|\d{1,16})(\d{1,16}\.\d{1,16}|\.\d{1,16}|\d{1,16})(?:\\!|\s)*(?:\\pm|±)(?:\\!|\s)*\2(?![0-9]|\.\d)/gu,
             '$1$2 $3 ± $2'
         );
+        const subscriptStdSplit = normalized.replace(
+            /(?<![A-Za-z0-9.])(\d{1,12}\.\d{1,4})(0\.\d{1,4})(?![0-9]|\.\d)/gu,
+            '$1 ± $2'
+        );
         const texSpaced = normalized
             .replace(/\\[,;!:]/gu, ' ')
             .replace(/\\[A-Za-z]+/gu, ' ')
             .replace(/[{}]/gu, ' ');
-        return [normalized, deduped, sandwichSplit, texSpaced];
+        return [normalized, deduped, sandwichSplit, subscriptStdSplit, texSpaced];
     };
     const exactTokens = new Set();
     const percentTokens = new Set();
@@ -2241,8 +2245,8 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     if (!problemKeywordPattern.test(contentBody) && !concretePurpose && !hasConcreteCompressionPurpose(contentBody) && !hasConcreteAcousticSimulationPurpose(contentBody, sourceText)) {
         issues.push('缺少任务问题、输入输出或实际难点');
     }
-    const chain = contentBody.match(/(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件|分(?:\d+|[一二三四五六七八九十]+)步)/g) || [];
-    const roles = contentBody.match(/(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|计算|平滑|展平|丢弃)/g) || [];
+    const chain = contentBody.match(/(?:第一|第二|第三|第四|首先|其次|然后|随后|随即|接着|最后|先|再|阶段|步骤|模块|组件|分(?:\d+|[一二三四五六七八九十]+)步)/g) || [];
+    const roles = contentBody.match(/(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|计算|建立|锚定|量化|平滑|展平|丢弃)/g) || [];
     const tierRoleStages = new Set([...contentBody.matchAll(
         /(?<![A-Za-z0-9_])Tier[-‐‑‒–—]([LMH])(?![A-Za-z0-9_])[^；。！？!?\n]{0,120}(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|打分|匹配|投票|检索|推理|判决|路由)/gi
     )].map(match => match[1].toUpperCase()));

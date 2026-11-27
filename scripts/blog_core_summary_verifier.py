@@ -730,10 +730,14 @@ def _validate_core_summary_source_grounded_claims(summary, source_text):
             r'([±+-]|(?<![0-9]))(\.\d{1,16}|\d{1,16}\.\d{1,16}|\d{1,16})(\d{1,16}\.\d{1,16}|\.\d{1,16}|\d{1,16})(?:\\!|\s)*(?:\\pm|±)(?:\\!|\s)*\2(?![0-9]|\.\d)',
             r'\1\2 \3 ± \2', normalized,
         )
+        subscript_std_split = re.sub(
+            r'(?<![A-Za-z0-9.])(\d{1,12}\.\d{1,4})(0\.\d{1,4})(?![0-9]|\.\d)',
+            r'\1 ± \2', normalized,
+        )
         tex_spaced = re.sub(r'\\[,;!:]', ' ', normalized)
         tex_spaced = re.sub(r'\\[A-Za-z]+', ' ', tex_spaced)
         tex_spaced = re.sub(r'[{}]', ' ', tex_spaced)
-        return (normalized, deduped, sandwich_split, tex_spaced)
+        return (normalized, deduped, sandwich_split, subscript_std_split, tex_spaced)
 
     exact_tokens = set()
     percent_tokens = set()
@@ -924,8 +928,8 @@ def _detailed_core_summary_semantic_issue(summary, *, summary_header=None, sourc
     )
     if not re.search(problem_pattern, content_body) and not concrete_purpose:
         issues.append('缺少任务问题、输入输出或实际难点')
-    chain = re.findall(r'(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件)', content_body)
-    roles = re.findall(r'(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|计算|平滑|展平|丢弃)', content_body)
+    chain = re.findall(r'(?:第一|第二|第三|第四|首先|其次|然后|随后|随即|接着|最后|先|再|阶段|步骤|模块|组件)', content_body)
+    roles = re.findall(r'(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|计算|建立|锚定|量化|平滑|展平|丢弃)', content_body)
     tier_role_stages = {
         match.group(1).upper()
         for match in re.finditer(
