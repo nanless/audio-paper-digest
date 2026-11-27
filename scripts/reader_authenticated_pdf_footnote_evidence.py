@@ -12,6 +12,8 @@ import stat
 import sys
 import threading
 import fitz
+fitz.TOOLS.mupdf_display_errors(False)
+fitz.TOOLS.mupdf_display_warnings(False)
 try:
     from pdf_author_extract import PYMUPDF_LOCK
 except ImportError:

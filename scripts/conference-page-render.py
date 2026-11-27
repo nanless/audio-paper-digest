@@ -4354,7 +4354,8 @@ def render_packet(packet):
             if not isinstance(item, dict) or not isinstance(item.get('url'), str) \
                     or not isinstance(item.get('base64'), str) or not re.fullmatch(r'[a-f0-9]{64}', str(item.get('assetSha256') or '')) \
                     or item.get('mediaType') != 'image/png' \
-                    or not re.fullmatch(r'(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?', item['base64']):
+                    or len(item['base64']) % 4 != 0 \
+                    or not re.fullmatch(r'[A-Za-z0-9+/]*={0,2}', item['base64']):
                 raise ValueError('conference Figure asset packet is invalid')
             raw = __import__('base64').b64decode(item['base64'], validate=True)
             if hashlib.sha256(raw).hexdigest() != item['assetSha256'] or item['url'] in asset_by_url:

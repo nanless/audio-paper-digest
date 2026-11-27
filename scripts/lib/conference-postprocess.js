@@ -614,13 +614,14 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
         ? 'static/client/papers' : 'static/data/papers';
     const sidecarRoot = `${sidecarPrefix}/${date}/conference-${sha256(loaded.run.paperId).slice(0, 24)}/`;
     const paper = loaded.analysis.papers[0];
+    const isStrictBase64 = value => typeof value === 'string' && value.length % 4 === 0
+        && /^[A-Za-z0-9+/]*={0,2}$/.test(value);
     const assetFiles = rendered.assets.map((asset, index) => {
         const image = asset && typeof asset.path === 'string'
             && /^static\/images\/conference\/[a-z0-9-]+\/[a-f0-9]{12}\/figure-\d+\.png$/.test(asset.path);
         const sidecarName = asset?.path?.startsWith(sidecarRoot) ? asset.path.slice(sidecarRoot.length) : null;
         const sidecar = sidecarNames.includes(sidecarName);
-        if (!asset || (!image && !sidecar) || typeof asset.base64 !== 'string'
-            || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.base64)) {
+        if (!asset || (!image && !sidecar) || !isStrictBase64(asset.base64)) {
             fail(`conference renderer returned unsafe asset ${index + 1}`);
         }
         if (image && stableHash(loaded.run.capabilities) === stableHash(WEAK)) {

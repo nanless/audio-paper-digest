@@ -16,7 +16,7 @@ import tempfile
 from publication_local_replay import (checked_replay_response, publication_replay_result, publication_replay_scope)
 
 from blog_entry_loader import load_publish_to_blog
-from publish_common import escape_html_like_tags
+from publish_common import escape_html_like_tags, normalize_bold_label_prefix_spacing
 
 SCORE_DIMENSIONS = (
     ('innovationScore', '创新', '2'), ('technicalRigorScore', '技术严谨', '1.5'),
@@ -236,6 +236,7 @@ def resolve_reader_decision_display(publisher, paper, *, plan, resources, parsed
         '音频推测解码 Audio Speculative Decoding',
     )
     # Match paper-page literal-token display without altering signed summary bytes.
+    summary = normalize_bold_label_prefix_spacing(summary)
     summary = escape_html_like_tags(summary)
     return {'summary': summary, 'resourceBlock': resource_block,
             'scoringBlock': scoring_block}

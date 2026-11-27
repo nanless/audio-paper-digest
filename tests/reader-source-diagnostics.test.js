@@ -256,3 +256,23 @@ test('规范的缺失标记不会把明确的两位小数单元格变成取整�
             failures: [{ renderedRow: 1, renderedColumn: 1, missingTokens: ['2%'] }] });
     assert.deepEqual(issue.quoteCandidates, []);
 });
+
+test('增强 PDF 表格使用整数 headerRows 计数时诊断不崩溃并正确识别表头行', () => {
+    const enhanced = table([['Model', 'WER (%)'], ['Baseline', '8.4'], ['Proposed', '5.1']]);
+    enhanced.headerRows = 1;
+    enhanced.bodyRows = 2;
+    const [issue] = diagnose([['Model', 'WER (%)'], ['Proposed', '5.1%']], enhanced,
+        { failures: [{ renderedRow: 1, renderedColumn: 1, missingTokens: ['5.1%'] }] });
+    assert.equal(issue.candidates.length, 1);
+    assert.equal(issue.candidates[0].text, '5.1');
+    assert.equal(issue.candidates[0].sourceRow, 2);
+    assert.equal(issue.candidates[0].columnHeaders[0].text, 'WER (%)');
+    assert.equal(issue.candidates[0].difference, 'percent_in_source_header');
+
+    const [fallback] = diagnose([['模型', '词错率'], ['新方案', '5.1%']], enhanced,
+        { failures: [{ renderedRow: 1, renderedColumn: 1, missingTokens: ['5.1%'] }] });
+    assert.deepEqual(fallback.candidates, []);
+    const [contextIssue] = diagnose([['Model', 'WER (%)'], ['未命名', '5.1%'], ['其他', '8.4']], enhanced,
+        { failures: [{ renderedRow: 1, renderedColumn: 1, missingTokens: ['5.1%'] }] });
+    assert.deepEqual(contextIssue.tableContexts[0].sourceDeclaredHeaderRows, [0]);
+});

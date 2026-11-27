@@ -1717,7 +1717,13 @@ primary_method_tag: #基准测试
         self.assertIn('<details>', fixed)
         self.assertIn('<summary>评分理由</summary>', fixed)
         self.assertIn('</details>', fixed)
-        self.assertIn('`<task>`paper token</task>', fixed)
+        self.assertIn('`<task>`paper token`</task>`', fixed)
+
+    def test_escape_html_like_tags_escapes_non_html_closing_tags_after_alnum_and_keeps_standard_html(self):
+        raw = '训练目标为 `<answer>`X</answer> ，数学记号 2<sup>3</sup> 保持原样。'
+        fixed = escape_html_like_tags(raw)
+        self.assertEqual(fixed, '训练目标为 `<answer>`X`</answer>` ，数学记号 2<sup>3</sup> 保持原样。')
+        self.assertEqual(escape_html_like_tags(fixed), fixed)
 
     def test_escape_html_like_tags_is_idempotent_for_inline_control_tokens(self):
         text = '控制符 `<O>` 与 `<S>` 已经位于行内代码中。'

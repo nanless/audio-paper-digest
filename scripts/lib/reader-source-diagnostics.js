@@ -68,8 +68,17 @@ function tableCell(table, row, column) {
     return cells.length === 1 && sha(cells[0].sourceDomSha256) ? cells[0] : null;
 }
 
+function declaredHeaderRowIndices(table) {
+    if (Array.isArray(table?.headerRows)) return table.headerRows.filter(Number.isInteger);
+    if (Number.isInteger(table?.headerRows) && table.headerRows > 0) {
+        const limit = Array.isArray(table.matrix) ? Math.min(table.headerRows, table.matrix.length) : table.headerRows;
+        return Array.from({ length: limit }, (_item, index) => index);
+    }
+    return [];
+}
+
 function headersFor(table, column) {
-    return (table.headerRows || []).filter(Number.isInteger).flatMap(row => {
+    return declaredHeaderRowIndices(table).flatMap(row => {
         const cell = tableCell(table, row, column);
         return cell ? [{ row, column, text: cell.text }] : [];
     });
@@ -156,7 +165,7 @@ function tableLevelContexts(tables, renderedRows, failures = []) {
         if (!rows.length) return [];
         return [{ sourceTableOrdinal: table.ordinal, caption: String(table.caption || '').slice(0, 400),
             sourceDomSha256: table.sourceDomSha256, sharedAnchors, rows,
-            sourceDeclaredHeaderRows: [...(table.headerRows || [])],
+            sourceDeclaredHeaderRows: declaredHeaderRowIndices(table),
             omittedRows: table.matrix.length - rows.length, rowCorrespondenceConfirmed: false,
             matchBasis: 'at_least_two_english_table_anchors_only' }];
     });
@@ -241,7 +250,7 @@ function diagnoseReaderTableSource({ binding, bindingIndex, sectionIndex, render
             // 也不构成证据。
             for (const table of tables) {
                 for (let sourceRow = 0; sourceRow < table.matrix.length; sourceRow += 1) {
-                    if ((table.headerRows || []).includes(sourceRow)) continue;
+                    if (declaredHeaderRowIndices(table).includes(sourceRow)) continue;
                     const sourceValues = table.matrix[sourceRow];
                     if (!Array.isArray(sourceValues)) continue;
                     const rowMatches = renderedRows[row].some((value, index) => index !== column

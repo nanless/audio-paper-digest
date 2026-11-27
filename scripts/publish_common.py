@@ -5435,6 +5435,23 @@ def escape_html_like_tags(text):
         r'`<\1\2>`',
         text
     )
+    # 紧跟字母/数字的非标准闭合控制标签（例如 `` `<answer>`X</answer> ``）仍会被
+    # Goldmark 原样输出为裸 HTML 闭合标签，导致严格 HTML 嵌套检查失败；保留常见
+    # 行内 HTML 闭合标签，仅转义其余非 HTML 闭合标签。
+    _standard_html_closing_tags = frozenset({
+        'a', 'abbr', 'b', 'cite', 'code', 'del', 'details', 'div', 'em', 'i',
+        'ins', 'kbd', 'mark', 'p', 'q', 'samp', 'small', 'span', 'strong',
+        'sub', 'summary', 'sup', 'u', 'var',
+    })
+    text = re.sub(
+        r'(?<!`)</([A-Za-z][A-Za-z0-9_†-]{0,40})(?![A-Za-z0-9_†-])>',
+        lambda match: (
+            match.group(0)
+            if match.group(1).lower() in _standard_html_closing_tags
+            else f'`</{match.group(1)}>`'
+        ),
+        text,
+    )
     literals = {
         **{f'{marker_prefix}FENCE_{index}_END': fence
            for index, fence in enumerate(protected_fences)},
