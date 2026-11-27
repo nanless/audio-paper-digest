@@ -60,6 +60,7 @@
     "python": {
       "newConferenceDaily": [
         "conference-extract.py",
+        "conference-extraction-replay",
         "conference-page-render.py"
       ],
       "daily": [

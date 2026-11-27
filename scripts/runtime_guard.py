@@ -22,7 +22,7 @@ _DEFAULT_ROLE_CONTRACT_SPEC = {
     'crossRoleValue': '1',
     'commands': {
         'python': {
-            'newConferenceDaily': ['conference-extract.py', 'conference-page-render.py'],
+            'newConferenceDaily': ['conference-extract.py', 'conference-extraction-replay', 'conference-page-render.py'],
             'daily': [
                 'generate-blog.py', 'review-blog.py', 'push-blog.py',
                 'publish-to-blog.py', 'publish-conference.py',

@@ -198,7 +198,7 @@ function makeAclVolumeProvider(id, year, volumeSlug, trackLabel) {
     });
 }
 
-function makeIscaProvider(id, year, dirSlug, defaultTrack) {
+function makeIscaProvider(id, year, dirSlug, defaultTrack, { abstractOnlyIds = [] } = {}) {
     const escaped = dirSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return Object.freeze({
         conference: Object.freeze({ id, year }),
@@ -207,6 +207,7 @@ function makeIscaProvider(id, year, dirSlug, defaultTrack) {
         allowedHosts: Object.freeze(['www.isca-archive.org']),
         recordPath: new RegExp(`^\\/${escaped}\\/(?!(?:index|author_index|committees?|search)\\.html$)[A-Za-z0-9_-]+\\.html$`),
         pdfPath: new RegExp(`^\\/${escaped}\\/[A-Za-z0-9_-]+\\.pdf$`),
+        ...(abstractOnlyIds.length > 0 ? { abstractOnlyIds: Object.freeze([...abstractOnlyIds]) } : {}),
         defaultTrack
     });
 }
@@ -237,7 +238,10 @@ const EXTENDED_PROVIDERS = Object.freeze({
         defaultTrack: 'DCASE 2026'
     }),
     'smc-2026': makeZenodoProvider('smc-2026', 2026, 'smc'),
-    'avsp-2026': makeIscaProvider('avsp-2026', 2026, 'avsp_2026', 'AVSP 2026'),
+    // ISCA AVSP 2026 官方目录中 4 篇为纯摘要报告（记录页无 citation_pdf_url 且官方 .pdf 返回 404），按来源门禁跳过
+    'avsp-2026': makeIscaProvider('avsp-2026', 2026, 'avsp_2026', 'AVSP 2026', {
+        abstractOnlyIds: ['altuntas26_avsp', 'bosker26_avsp', 'martin26_avsp', 'shu26_avsp']
+    }),
     'mlcslm-2026': makeIscaProvider('mlcslm-2026', 2026, 'mlcslm_2026', 'MLCSLM 2026'),
     'wochat-2026': makeIscaProvider('wochat-2026', 2026, 'wochat_2026', 'WOCHAT 2026'),
     'dc-2026': makeIscaProvider('dc-2026', 2026, 'dc_2026', 'ISCA DC 2026'),
@@ -612,7 +616,7 @@ async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs 
         try {
             for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
                 const accept = kind === 'pdf'
-                    ? 'application/pdf'
+                    ? 'application/pdf, application/octet-stream;q=0.9, */*;q=0.8'
                     : (kind === 'api' || kind === 'json-index')
                         ? 'application/json'
                         : 'text/html,application/xhtml+xml';
@@ -1019,6 +1023,7 @@ function parseIscaCatalogHtml(htmlText, provider) {
         const heading = cleanText($card.find('h4').first().text());
         if (/keynote/iu.test(heading)) return;
         const id = path.posix.basename(parsed.pathname, '.html');
+        if (Array.isArray(provider.abstractOnlyIds) && provider.abstractOnlyIds.includes(id)) return;
         const titleNode = $a.find('p').first().clone();
         titleNode.find('.w3-text-theme, br').remove();
         const title = cleanText($a.attr('data-title') || $a.find('.title').text() || titleNode.text() || $a.text());
