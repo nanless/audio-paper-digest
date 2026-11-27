@@ -1164,4 +1164,30 @@ test('v2 会议抽取来源把已核验表格传入 structuredArtifacts.tables �
     assert.equal(details.structuredArtifacts.tables[0].bodyRows, 2);
     assert.equal(details.structuredArtifacts.health.recovered.tables, 1);
     assert.doesNotThrow(() => adapter.validatePersistedSourceDetails(details, paperId));
+    // 正反回归：conferenceWeakReaderCapabilityPolicy 必须接受增强布局的 tables='available'，
+    // 并在篡改表格数组或宣称 tables='available' 但缺完整表格时拒绝。
+    const executionId = '11111111-1111-4111-8111-111111111111';
+    const executionDir = path.join(os.tmpdir(), executionId);
+    const paper = { id: paperId, source: 'conference' };
+    context.withConferenceAnalysisSource({
+        executionId, executionDir, paperId, sourceDetails: details
+    }, () => {
+        assert.equal(context.conferenceWeakReaderCapabilityPolicy(paper, details.structuredArtifacts), null);
+        const tampered = structuredClone(details.structuredArtifacts);
+        tampered.tables = [];
+        assert.throws(
+            () => context.conferenceWeakReaderCapabilityPolicy(paper, tampered),
+            /differs from source details/
+        );
+    });
+    const brokenEmptyTables = structuredClone(details);
+    brokenEmptyTables.structuredArtifacts.tables = [];
+    context.withConferenceAnalysisSource({
+        executionId, executionDir, paperId, sourceDetails: brokenEmptyTables
+    }, () => {
+        assert.throws(
+            () => context.conferenceWeakReaderCapabilityPolicy(paper, brokenEmptyTables.structuredArtifacts),
+            /differs from source details/
+        );
+    });
 });

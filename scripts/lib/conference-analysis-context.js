@@ -142,13 +142,26 @@ function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
     // 可以重新读取并核验的 PDF 来源使用常规 Reader 规则。这个函数继续
     // 检查旧版资料有限的证据能力，但不要给已核验且包含 PDF 插图像素的来源
     // 附加弱策略提示词。PDF 文本永远不是经过核验的原始 TeX。
-    if (details.conferenceCapabilities?.fullText === 'full'
+    const isPdfVisualOnly = details.conferenceCapabilities?.fullText === 'full'
         && details.conferenceCapabilities?.tables === 'unavailable'
         && details.conferenceCapabilities?.formulas === 'unavailable'
-        && details.conferenceCapabilities?.figures === 'available') {
+        && details.conferenceCapabilities?.figures === 'available';
+    const isPdfVisualWithTables = details.conferenceCapabilities?.fullText === 'full'
+        && details.conferenceCapabilities?.tables === 'available'
+        && details.conferenceCapabilities?.formulas === 'unavailable'
+        && details.conferenceCapabilities?.figures === 'available';
+    if (isPdfVisualOnly || isPdfVisualWithTables) {
+        const tablesValid = isPdfVisualWithTables
+            ? (Array.isArray(artifacts?.tables) && artifacts.tables.length > 0
+                && artifacts.tables.every(table => table && typeof table === 'object'
+                    && table.recoveryStatus === 'complete'
+                    && /^[a-f0-9]{64}$/.test(String(table.sourceDomSha256 || ''))
+                    && Array.isArray(table.matrix) && table.matrix.length >= 2
+                    && Array.isArray(table.cells) && table.cells.length >= 4))
+            : (Array.isArray(artifacts?.tables) && artifacts.tables.length === 0);
         if (!artifacts || !codec.hasValidHeader(artifacts, 'conference-reader-pdf-artifacts',
             Object.hasOwn(artifacts, 'contract') ? 'contract' : 'parserVersion')
-            || !Array.isArray(artifacts.tables) || artifacts.tables.length
+            || !tablesValid
             || !Array.isArray(artifacts.formulas) || artifacts.formulas.length
             || stableHash(provided) !== stableHash(artifacts)) {
             throw new Error('Authenticated conference structured Reader artifact differs from source details');

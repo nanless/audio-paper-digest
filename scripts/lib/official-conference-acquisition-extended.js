@@ -318,7 +318,7 @@ const EXTENDED_PROVIDERS = Object.freeze({
         recordPath: /^\/virtual\/2026\/(?:oral|spotlight|poster)\/\d+$/,
         pdfPath: /^\/Conferences\/ECCV2026\/pdfs\/\d+\.pdf$/
     }),
-    'lrec-2026': makeAclVolumeProvider('lrec-2026', 2026, 'lrec-main', 'LREC 2026 Main'),
+    'lrec-2026': makeAclVolumeProvider('lrec-2026', 2026, 'lrec-1', 'LREC 2026 Main'),
     'wacv-2026': Object.freeze({
         conference: Object.freeze({ id: 'wacv-2026', year: 2026 }),
         parser: 'cvf-html',
@@ -659,11 +659,16 @@ async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs 
                     fail(`official ${kind} returned HTTP ${response.status}`);
                 }
                 const contentType = String(response.headers?.get?.('content-type') || '').trim();
-                const okContentType = kind === 'pdf'
-                    ? /^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(contentType)
+                const contentTypeParts = contentType
+                    ? contentType.split(',').map(part => part.trim()).filter(Boolean)
+                    : [];
+                const contentTypeRe = kind === 'pdf'
+                    ? /^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu
                     : (kind === 'api' || kind === 'json-index')
-                        ? /^(?:application\/json|application\/vnd\.zenodo\.v1\+json)(?:\s*;|$)/iu.test(contentType)
-                        : /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/iu.test(contentType);
+                        ? /^(?:application\/json|application\/vnd\.zenodo\.v1\+json)(?:\s*;|$)/iu
+                        : /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/iu;
+                const okContentType = contentTypeParts.length > 0
+                    && contentTypeParts.every(part => contentTypeRe.test(part));
                 if (!okContentType) {
                     await response.body?.cancel?.();
                     fail(`官方 ${kind} 响应 Content-Type 无效：${contentType || '(empty)'}`);

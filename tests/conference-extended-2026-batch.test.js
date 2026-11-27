@@ -369,7 +369,7 @@ test('acl-anthology-html supports live div.d-sm-flex, multi-volume emnlp-2026 & 
         ['impactspeech-2026', '2026.impactspeech-1.3', 'ImpactSpeech 2026'],
         ['nlp4musa-2026', '2026.nlp4musa-1.6', 'NLP4MusA 2026'],
         ['trustaudio-2026', '2026.trustaudio-1.9', 'TrustAudio 2026'],
-        ['lrec-2026', '2026.lrec-main.11', 'LREC 2026 Main'],
+        ['lrec-2026', '2026.lrec-1.11', 'LREC 2026 Main'],
         ['conll-2026', '2026.conll-main.2', 'CoNLL 2026'],
         ['starsem-2026', '2026.starsem-conference.5', '*SEM 2026']
     ]) {
