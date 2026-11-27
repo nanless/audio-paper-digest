@@ -1046,6 +1046,24 @@ function conferenceSourceFromLayout(item, source, pdf, extractedText, pdfVisualA
         ] } };
 }
 
+function bindVerifiedHistoricalArxivAuthorSource({ freshArxivSourceRoot, item, stored, generation,
+    sourceManifestSha256, sourceDetails }) {
+    if (item.route.kind !== 'arxiv-fresh-fetch'
+        || !Buffer.isBuffer(stored?.pdf)
+        || typeof freshArxivSourceRoot !== 'string'
+        || !path.isAbsolute(freshArxivSourceRoot)
+        || !freshArxiv.generationExists(freshArxivSourceRoot, item.route.arxivId, generation)) {
+        return;
+    }
+    require('./fresh-analysis-context.js').prepareVerifiedHistoricalBundleAuthorSource({
+        rootDir: freshArxivSourceRoot,
+        arxivId: item.route.arxivId,
+        generation,
+        sourceManifestSha256,
+        details: sourceDetails
+    });
+}
+
 function replayHistoricalReaderPdfSourceForStaging({ plan, item, sourceDescriptor, executionRoot,
     freshArxivSourceRoot }) {
     let source;
@@ -1067,6 +1085,14 @@ function replayHistoricalReaderPdfSourceForStaging({ plan, item, sourceDescripto
     if (stableHash(compactSourceDescriptor(item.route.kind, source, item)) !== stableHash(sourceDescriptor)) {
         fail('historical PDF cold replay no longer reproduces the original source descriptor');
     }
+    bindVerifiedHistoricalArxivAuthorSource({
+        freshArxivSourceRoot,
+        item,
+        stored: source,
+        generation: sourceDescriptor.generation,
+        sourceManifestSha256: sourceDescriptor.sourceManifestSha256,
+        sourceDetails
+    });
     return { sourceDetails, readerPdfSourceHandle: historicalReaderPdfSource({ plan, item, source,
         sourceDetails, descriptor: sourceDescriptor, freshArxivSourceRoot, executionRoot }) };
 }
@@ -1478,7 +1504,10 @@ function recoverInterruptedRegistryEntry({ registry, plan, item, generation, exe
 
 function requiresHistoricalPdfScope(analysis) {
     return (analysis?.apiReaderPlan?.tableBindings || []).some(binding => binding.authenticatedPdfTableEvidence !== undefined)
-        || (analysis?.apiReaderResources?.resources || []).some(resource => resource?.authenticatedPdfFootnoteEvidence !== undefined);
+        || (analysis?.apiReaderResources?.resources || []).some(resource => resource?.authenticatedPdfFootnoteEvidence !== undefined)
+        || ['conference-pdf-author-pdf-page1', 'conference-pdf-author-pdf-page1-v3'].includes(
+            analysis?.apiReaderAuthors?.identity?.conferencePdfAuthorParser
+        );
 }
 
 function requiresHistoricalSourceScope(analysis) {
@@ -1523,6 +1552,14 @@ async function replayCompletedAnalysisForStaging({ plan, item, active, generatio
                 fail(`${item.paperId} completed analysis source descriptor drifted from sealed bytes`);
             }
             sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
+            bindVerifiedHistoricalArxivAuthorSource({
+                freshArxivSourceRoot,
+                item,
+                stored,
+                generation,
+                sourceManifestSha256: sourceDescriptor.sourceManifestSha256,
+                sourceDetails
+            });
         } else {
             planApi.verifyConferenceWriterInputs(item);
         }
@@ -1571,6 +1608,14 @@ async function replayCompletedAnalysisForStaging({ plan, item, active, generatio
             if (stableHash(compactSourceDescriptor(item.route.kind, source, item)) !== stableHash(sourceDescriptor)) {
                 fail('completed historical PDF source no longer reproduces its original descriptor');
             }
+            bindVerifiedHistoricalArxivAuthorSource({
+                freshArxivSourceRoot,
+                item,
+                stored: source,
+                generation,
+                sourceManifestSha256: sourceDescriptor.sourceManifestSha256,
+                sourceDetails
+            });
             return historicalReaderPdfSource({ plan, item, source, sourceDetails,
                 descriptor: sourceDescriptor, freshArxivSourceRoot, executionRoot });
         });
@@ -1769,6 +1814,14 @@ function replayDirectPageStaging({ plan, item, active, stagingRoot, executionRoo
                 fail(`${item.paperId} 暂存分析的来源描述与封存字节不符`);
             }
             sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
+            bindVerifiedHistoricalArxivAuthorSource({
+                freshArxivSourceRoot,
+                item,
+                stored,
+                generation: active.source.generation,
+                sourceManifestSha256: active.source.sourceManifestSha256,
+                sourceDetails
+            });
         }
         if (requiresHistoricalSourceScope(analysis)) {
             if (!plan || plan.queue?.find(value => value.paperId === item.paperId)?.runId !== item.runId) fail('historical PDF staged replay lacks the real original plan');
@@ -2388,7 +2441,7 @@ module.exports = { REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOVERY_CONTRA
     reconcileLegacyPaperLockReclaimAudits, hasRecoverableAnalysisState, sourcePrerequisiteSnapshot,
     priorPreprintAnalysisDisclosure, extractConferenceSource, ephemeralArxivMaterializer, ephemeralArxivPrimaryImageDownloader,
     withEphemeralConferenceFigures, selectConferenceVisualPages, renderConferencePdfPages,
-    buildDirectSourceRecord, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
+    buildDirectSourceRecord, requiresHistoricalPdfScope, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
     validateInterruptedSourceDescriptor, recoverInterruptedRegistryEntry,
     replayCompletedAnalysisForStaging, replayHistoricalReaderPdfSourceForStaging, resealCompletedAnalysisSurfaceRepair,
     stageDirectExecution, defaultAnalyze, sealedFailureHandoff, runDirectRewrite };

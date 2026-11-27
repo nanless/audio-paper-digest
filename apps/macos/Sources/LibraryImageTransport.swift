@@ -124,7 +124,7 @@ extension LibraryService {
         if let transport {
             let bytes = try await transport(url, limit)
             try Task.checkCancellation()
-            guard bytes.count <= limit else { throw ServiceError.invalid("资料响应超过大小上限。") }
+            guard bytes.count <= limit else { throw ServiceError.responseTooLarge("资料响应超过大小上限。") }
             return bytes
         }
         if url.host?.lowercased() == siteBaseURL.host?.lowercased(), !Self.isOwnedPublishedImage(url) {
@@ -139,10 +139,10 @@ extension LibraryService {
                 try Task.checkCancellation()
                 guard let http = response as? HTTPURLResponse, http.url == url else { throw ServiceError.network("网站响应地址不一致，未覆盖已保存版本。") }
                 guard http.statusCode == 200 else { throw ServiceError.httpStatus(http.statusCode) }
-                guard response.expectedContentLength <= Int64(limit) else { throw ServiceError.invalid("资料响应超过大小上限。") }
+                guard response.expectedContentLength <= Int64(limit) else { throw ServiceError.responseTooLarge("资料响应超过大小上限。") }
                 var data = Data()
                 for try await byte in bytes {
-                    guard data.count < limit else { throw ServiceError.invalid("资料响应超过大小上限。") }
+                    guard data.count < limit else { throw ServiceError.responseTooLarge("资料响应超过大小上限。") }
                     data.append(byte)
                     if data.count % 8192 == 0 { try Task.checkCancellation() }
                 }
@@ -199,7 +199,7 @@ extension LibraryService {
             }
             guard code == 200 else { throw ServiceError.network("官方资源返回HTTP \(code)，没有缓存错误页面。") }
             let data = try Data(contentsOf: output)
-            guard data.count <= limit else { throw ServiceError.invalid("资源超过大小上限。") }
+            guard data.count <= limit else { throw ServiceError.responseTooLarge("资源超过大小上限。") }
             return data
         }
         throw ServiceError.network("官方资源重定向过多。")
@@ -212,7 +212,8 @@ extension LibraryService {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 process.terminationHandler = { finished in
                     if finished.terminationReason == .uncaughtSignal { continuation.resume(throwing: CancellationError()) }
-                    else if finished.terminationStatus != 0 { continuation.resume(throwing: ServiceError.network("资源下载失败或超过限额；未保存不完整文件。")) }
+                    else if finished.terminationStatus == 63 { continuation.resume(throwing: ServiceError.responseTooLarge("资源超过大小上限；未保存不完整文件。")) }
+                    else if finished.terminationStatus != 0 { continuation.resume(throwing: ServiceError.network("资源下载失败；未保存不完整文件。")) }
                     else { continuation.resume() }
                 }
                 do { try cancellation.start(process) } catch { continuation.resume(throwing: error) }

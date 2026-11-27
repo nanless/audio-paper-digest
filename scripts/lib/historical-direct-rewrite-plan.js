@@ -101,6 +101,7 @@ function normalizeInventory(value) {
 function arxivPageProjections(inventory, knownPaperIds, primaryBindings = []) {
     const byPaperId = new Map();
     for (const page of inventory.pages) {
+        if (page.scope?.type === 'conference') continue;
         const hints = page.identityHints;
         if (hints.status !== 'single' || !Array.isArray(hints.candidates) || hints.candidates.length !== 1) continue;
         const hint = hints.candidates[0];
@@ -315,12 +316,14 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
     }
     queue.sort((left, right) => left.paperId.localeCompare(right.paperId));
     unprojectedCatalogEntries.sort((left, right) => left.paperId.localeCompare(right.paperId));
-    const coveredConferencePages = new Set(conferenceArtifact.projections.flatMap(item => item.pages
-        .filter(page => page.scope.type === 'conference').map(page => page.pageKey)));
-    const requiredConferencePages = history.pages.filter(page => page.scope.type === 'conference');
-    if (coveredConferencePages.size !== requiredConferencePages.length
-        || requiredConferencePages.some(page => !coveredConferencePages.has(page.pageKey))) {
-        fail('会议论文与页面对应记录未覆盖全部已保存的会议页面');
+    if (!arxivOnlyCatalog) {
+        const coveredConferencePages = new Set(conferenceArtifact.projections.flatMap(item => item.pages
+            .filter(page => page.scope.type === 'conference').map(page => page.pageKey)));
+        const requiredConferencePages = history.pages.filter(page => page.scope.type === 'conference');
+        if (coveredConferencePages.size !== requiredConferencePages.length
+            || requiredConferencePages.some(page => !coveredConferencePages.has(page.pageKey))) {
+            fail('会议论文与页面对应记录未覆盖全部已保存的会议页面');
+        }
     }
     const projectedPages = queue.flatMap(item => item.pages.map(page => ({ paperId: item.paperId,
         runId: item.runId, route: item.route.kind, ...page }))).sort((left, right) => left.pageKey.localeCompare(right.pageKey));

@@ -30,7 +30,7 @@ private val ARXIV_ID_PATTERN=Regex("(?:[0-9]{4}\\.[0-9]{4,5}|[a-z-]+(?:\\.[A-Z]{
 private val SHA256_PATTERN=Regex("^[a-f0-9]{64}$")
 private val SEARCH_SHARD_PATTERN=Regex("^search-index/part-[0-9]{4,}-[a-f0-9]{12}\\.json$")
 internal val HTML_MATHML_TAGS=("math mrow mi mo mn msup msub msubsup mfrac msqrt mroot mtext mtable mtr mtd mlabeledtr mover munder munderover mstyle mpadded mphantom menclose mmultiscripts mprescripts none merror ms mspace semantics annotation").split(' ').toSet()
-internal val HTML_ALLOWED_TAGS=("div p span a h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tfoot tr th td caption img figure figcaption strong b em i u s sup sub br hr details summary dl dt dd").split(' ').toSet() + HTML_MATHML_TAGS
+internal val HTML_ALLOWED_TAGS=("div p span a h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tfoot tr th td caption img figure figcaption strong b em i u s del ins small kbd abbr cite sup sub br hr details summary dl dt dd").split(' ').toSet() + HTML_MATHML_TAGS
 internal val HTML_ALLOWED_ATTRS=("id class title alt width height colspan rowspan scope display mathvariant xmlns encoding").split(' ').toSet()
 internal val HTML_MATHML_ALLOWED_ATTRS=("display mathvariant encoding stretchy fence separator accent accentunder symmetric movablelimits largeop lspace rspace width height depth voffset minsize maxsize mathsize mathcolor mathbackground displaystyle scriptlevel columnalign rowalign columnspacing rowspacing columnlines rowlines columnspan rowspan equalrows equalcolumns frame framespacing notation linethickness numalign denomalign bevelled form dir id class title xmlns").split(' ').toSet()
 
@@ -1000,9 +1000,9 @@ class CatalogRepository(private val context: Context?, private val personal: Per
         const val SITE = "https://nanless.github.io/audio-research-portal/"
         const val MAX_TOTAL = 64 * 1024 * 1024
         private val CANONICAL_PORTAL_PAGES = listOf(
-            Triple("conferences/", "会议论文集", "全部已收录音频顶会与研讨会论文目录"),
-            Triple("about/", "关于本站", "项目介绍、收录标准与更新说明"),
-            Triple("links/", "研究资源", "音频研究常用网站、工具与论文资源导航"),
+            Triple("about/", "关于与使用方法", "找到值得读的论文，核对原文与证据，使用专题导航、快捷键与引用工具高效精读。"),
+            Triple("conferences/", "会议论文集", "先按会议档次浏览，再按年份与举办月日查找语音、音乐、音频和相关领域研究。"),
+            Triple("links/", "研究资源指南", "按发现论文、核对来源、整理阅读和研究写作的顺序，选择真正能进入日常工作的工具。"),
         )
         private val PROCEEDINGS_MLR_VOLUME = Regex("^v[0-9]+$")
         private val PROCEEDINGS_MLR_SEGMENT = Regex("^[A-Za-z0-9_-]+$")
@@ -1072,6 +1072,9 @@ class CatalogRepository(private val context: Context?, private val personal: Per
         private val OWNED_ICASSP_IMG = Regex("^[0-9]{8}-[0-9]+\\.(?:png|jpg)$")
         private val OWNED_ICLR_IMG = Regex("^[A-Za-z0-9]{10}-[0-9]+\\.(?:png|jpg)$")
         private val TABLE_TEXT_ALIGN_STYLE = Regex("(?i)(?:^|;)\\s*text-align\\s*:\\s*(left|center|right)\\s*(?:;|$)")
+        private val HTML_INTEGER_ATTR = Regex("^-?[0-9]{1,9}$")
+        internal fun extractTableTextAlign(style: String): String? = TABLE_TEXT_ALIGN_STYLE.find(style)?.groupValues?.get(1)?.lowercase()
+        internal fun parseHtmlIntegerAttr(raw: String): String? = raw.trim().takeIf { HTML_INTEGER_ATTR.matches(it) }?.toIntOrNull()?.toString()
 
         fun isOwnedPublishedImage(uri: URI): Boolean {
             if (uri.scheme?.lowercase() != "https" || uri.host == null || uri.userInfo != null || uri.port !in listOf(-1, 443) || uri.query != null || uri.fragment != null) return false
@@ -1226,10 +1229,13 @@ class CatalogRepository(private val context: Context?, private val personal: Per
                                 if (cleanHTTPS(url) == null) child.removeAttr(attr.key) else child.attr(attr.key, url!!)
                             }
                         } else if (name == "style" && tagName in setOf("td", "th")) {
-                            preservedAlign = TABLE_TEXT_ALIGN_STYLE.find(attr.value)?.groupValues?.get(1)?.lowercase()
+                            preservedAlign = extractTableTextAlign(attr.value)
                             child.removeAttr(attr.key)
                         } else if (name == "open" && tagName == "details") {
                             Unit
+                        } else if ((name == "start" && tagName == "ol") || (name == "value" && tagName == "li")) {
+                            val normalized = parseHtmlIntegerAttr(attr.value)
+                            if (normalized == null) child.removeAttr(attr.key) else child.attr(attr.key, normalized)
                         } else if (tagName in HTML_MATHML_TAGS && name in HTML_MATHML_ALLOWED_ATTRS) {
                             val v = attr.value
                             if (v.length > 4096 || v.contains("url(", ignoreCase = true) || v.contains("javascript:", ignoreCase = true)) {

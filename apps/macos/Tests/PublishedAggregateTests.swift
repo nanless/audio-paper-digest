@@ -166,6 +166,108 @@ import Darwin
         let fixtureStore = PublishedAggregateStore(directory: nonPortalDir, siteBase: URL(string: "https://fixture.example/blog/")!)
         let stagedFixture = try fixtureStore.stage(manifest: desktopManifestBytes, validationEpoch: desktopEpoch)
         try check(stagedFixture.aggregateCount == 1 && stagedFixture.records.allSatisfy { $0.kind != .page }, "non-portal fixture siteBase does not inject canonical portal pages")
+
+        // Round-5 P0 cross-platform aggregate-index compatibility tests:
+        // (a) New Android-staged desktop store (pure baseCatalog in aggregate-index + conference -summary/ overview + aggregate-pages-refs) loads & re-stages cleanly on macOS
+        let androidNewDir = FileManager.default.temporaryDirectory.appendingPathComponent("CrossPlatformAndroidNew-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: androidNewDir.appendingPathComponent("desktop-details/catalog", isDirectory: true), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: androidNewDir) }
+        let crossRows: [[String: Any]] = [
+            ["pageType": "paper", "appearanceId": "posts/2026-11-26-cross-paper/", "pageUrl": "posts/2026-11-26-cross-paper/", "paperId": "arxiv:2611.00009", "identityStatus": "verified", "title": "Cross Paper"],
+            ["pageType": "daily", "appearanceId": "posts/2026-11-26-cross-daily/", "pageUrl": "posts/2026-11-26-cross-daily/", "identityStatus": "aggregate-page", "title": "2026-11-26 Daily", "titleZh": "2026-11-26 日报", "summary": "日报", "blogPublishedAt": "2026-11-26", "tagConceptIds": ["task.asr"]],
+            ["pageType": "conference", "appearanceId": "posts/interspeech2026-summary/", "pageUrl": "posts/interspeech2026-summary/", "identityStatus": "aggregate-page", "title": "Interspeech 2026", "titleZh": "Interspeech 2026 汇总", "summary": "会议汇总", "blogPublishedAt": "2026-11-26", "tagConceptIds": [] as [String]]
+        ]
+        let crossShardBytes = try JSONSerialization.data(withJSONObject: crossRows, options: [.sortedKeys])
+        let crossShardSHA = PublishedAggregateReader.sha(crossShardBytes)
+        let crossShardURL = "client/details/catalog/\(crossShardSHA).json"
+        try crossShardBytes.write(to: androidNewDir.appendingPathComponent("desktop-details/catalog/\(crossShardSHA).json"))
+        let crossManifestObj = try ClientProtocols.record("paper-desktop-snapshot", fields: [
+            "recordCount": 3, "paperCount": 1, "appearanceCount": 3,
+            "catalogShards": [["url": crossShardURL, "sha256": crossShardSHA, "bytes": crossShardBytes.count, "recordCount": 3]]
+        ])
+        let crossManifestBytes = try JSONSerialization.data(withJSONObject: crossManifestObj, options: [.sortedKeys])
+        let crossSnapSHA = PublishedAggregateReader.sha(crossManifestBytes)
+        let crossEpoch = UUID().uuidString.lowercased()
+        let baseCrossCatalog = try PublishedAggregateReader.read(manifest: crossManifestBytes, siteBase: PublishedAggregateReader.site) { _ in crossShardBytes }
+        let androidBaseRecords = baseCrossCatalog.records.map { r -> PublishedAggregate in
+            if r.kind == .conference && r.sourceURL.hasSuffix("-summary/") {
+                return PublishedAggregate(id: r.id, kind: r.kind, conferenceScope: "overview", title: r.title, titleZh: r.titleZh, summary: r.summary, rawDate: r.rawDate, displayDate: r.displayDate, categories: r.categories, tags: r.tags, sourceURL: r.sourceURL, source: r.source)
+            }
+            return r
+        }
+        let androidBaseCatalog = PublishedAggregateCatalog(snapshotSHA256: crossSnapSHA, sourceRecordCount: baseCrossCatalog.sourceRecordCount, aggregateCount: androidBaseRecords.count, records: androidBaseRecords)
+        let suppPageRows: [[String: Any]] = [
+            ["pageType": "page", "permalink": "/audio-research-portal/about/", "title": "About Portal", "titleZh": "关于本站", "summary": "说明", "date": "", "categories": [] as [String], "tags": [] as [String]],
+            ["pageType": "page", "permalink": "/audio-research-portal/conferences/", "title": "Conferences", "titleZh": "会议论文集", "summary": "目录", "date": "", "categories": [] as [String], "tags": [] as [String]],
+            ["pageType": "page", "permalink": "/audio-research-portal/links/", "title": "Links", "titleZh": "研究资源", "summary": "链接", "date": "", "categories": [] as [String], "tags": [] as [String]]
+        ]
+        let suppBytes = try JSONSerialization.data(withJSONObject: suppPageRows, options: [.sortedKeys])
+        let suppSHA = PublishedAggregateReader.sha(suppBytes)
+        let suppURL = "client/details/pages/\(suppSHA).json"
+        let suppRefObj: [String: Any] = ["snapshotSHA256": crossSnapSHA, "shardURL": suppURL, "shardSHA256": suppSHA, "shardBytes": suppBytes.count, "recordCount": suppPageRows.count]
+        let suppRefBytes = try JSONSerialization.data(withJSONObject: suppRefObj, options: [.sortedKeys])
+        func writeCrossFiles(in root: URL, sidecarCatalog: PublishedAggregateCatalog, writeRefs: Bool) throws -> (URL, Data) {
+            for sub in ["desktop-details/catalog", "aggregate-manifests", "aggregate-index", "aggregate-activations/\(crossSnapSHA)", "aggregate-pages", "aggregate-pages-refs"] {
+                try FileManager.default.createDirectory(at: root.appendingPathComponent(sub, isDirectory: true), withIntermediateDirectories: true)
+            }
+            try crossShardBytes.write(to: root.appendingPathComponent("desktop-details/catalog/\(crossShardSHA).json"))
+            try crossManifestBytes.write(to: root.appendingPathComponent("aggregate-manifests/\(crossSnapSHA).json"))
+            if writeRefs {
+                try suppBytes.write(to: root.appendingPathComponent("aggregate-pages/\(suppSHA).json"))
+                try suppRefBytes.write(to: root.appendingPathComponent("aggregate-pages-refs/\(crossSnapSHA).json"))
+            }
+            let catalogFields = try JSONSerialization.jsonObject(with: JSONEncoder().encode(sidecarCatalog)) as! [String: Any]
+            let sidecarObj = try ClientProtocols.record("published-aggregate-index", fields: catalogFields)
+            let sidecarBytes = try JSONSerialization.data(withJSONObject: sidecarObj, options: [.sortedKeys])
+            let sidecarURL = root.appendingPathComponent("aggregate-index/\(crossSnapSHA).json")
+            try sidecarBytes.write(to: sidecarURL)
+            let actObj = try ClientProtocols.record("published-aggregate-activation", fields: ["snapshotSHA256": crossSnapSHA, "validationEpoch": crossEpoch, "catalogSHA256": PublishedAggregateReader.sha(sidecarBytes)])
+            try JSONSerialization.data(withJSONObject: actObj, options: [.sortedKeys]).write(to: root.appendingPathComponent("aggregate-activations/\(crossSnapSHA)/\(crossEpoch).json"))
+            return (sidecarURL, sidecarBytes)
+        }
+        _ = try writeCrossFiles(in: androidNewDir, sidecarCatalog: androidBaseCatalog, writeRefs: true)
+        let macOnAndroidNew = PublishedAggregateStore(directory: androidNewDir, siteBase: PublishedAggregateReader.site)
+        let loadedNew = try macOnAndroidNew.load(activeSnapshotSHA256: crossSnapSHA, validationEpoch: crossEpoch)
+        let restagedNew = try macOnAndroidNew.stage(manifest: crossManifestBytes, validationEpoch: UUID().uuidString)
+        try check(loadedNew != nil && loadedNew?.aggregateCount == 5 && restagedNew.aggregateCount == 5, "new Android-staged pure baseCatalog store loads and re-stages cleanly on macOS")
+
+        // (b) Legacy Android v1.5.1 merged aggregate-index + aggregate-pages-refs loads & syncs cleanly on macOS, while tampered aggregate-index fails closed
+        let androidLegacyDir = FileManager.default.temporaryDirectory.appendingPathComponent("CrossPlatformAndroidLegacy-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: androidLegacyDir) }
+        let rowEncoding = ClientProtocols.contract("foundation-sorted-keys-json")
+        let legacyExtraPages: [PublishedAggregate] = try suppPageRows.enumerated().map { idx, row in
+            let url = try PublishedAggregateReader.pageURL(row["permalink"] as! String, siteBase: PublishedAggregateReader.site)
+            let src = PublishedAggregate.Source(manifestSHA256: crossSnapSHA, shardSHA256: suppSHA, shardBytes: suppBytes.count, shardURL: suppURL, rowIndex: idx, normalizedRowSHA256: PublishedAggregateReader.sha(try PublishedAggregateReader.normalizedRow(row)), normalizedRowAlgorithm: rowEncoding)
+            return PublishedAggregate(id: "page:" + URLComponents(url: url, resolvingAgainstBaseURL: false)!.percentEncodedPath, kind: .page, conferenceScope: nil, title: row["title"] as! String, titleZh: row["titleZh"] as! String, summary: row["summary"] as! String, rawDate: "", displayDate: nil, categories: [], tags: [], sourceURL: url.absoluteString, source: src)
+        }
+        let legacyMergedCatalog = PublishedAggregateCatalog(snapshotSHA256: crossSnapSHA, sourceRecordCount: androidBaseCatalog.sourceRecordCount, aggregateCount: androidBaseCatalog.records.count + legacyExtraPages.count, records: (androidBaseCatalog.records + legacyExtraPages).sorted { $0.id < $1.id })
+        let (legacySidecarURL, legacySidecarBytes) = try writeCrossFiles(in: androidLegacyDir, sidecarCatalog: legacyMergedCatalog, writeRefs: true)
+        let macOnAndroidLegacy = PublishedAggregateStore(directory: androidLegacyDir, siteBase: PublishedAggregateReader.site)
+        let loadedLegacy = try macOnAndroidLegacy.withVerifiedReadScope { scoped in
+            try scoped.load(activeSnapshotSHA256: crossSnapSHA, validationEpoch: crossEpoch)
+        }
+        let nextEpoch = UUID().uuidString
+        let restagedLegacy = try macOnAndroidLegacy.stage(manifest: crossManifestBytes, validationEpoch: nextEpoch)
+        try check(loadedLegacy != nil && loadedLegacy?.aggregateCount == 5 && restagedLegacy.aggregateCount == 5 && (try Data(contentsOf: legacySidecarURL)) == legacySidecarBytes, "legacy Android v1.5.1 merged aggregate-index + aggregate-pages-refs loads (in readScope) and re-stages cleanly on macOS without rewriting original sidecar")
+
+        // Negative tamper check 1: tampered aggregate-index fails closed even when valid refs exist
+        var tamperedSidecarObj = try JSONSerialization.jsonObject(with: legacySidecarBytes) as! [String: Any]
+        var tamperedRecords = tamperedSidecarObj["records"] as! [[String: Any]]
+        tamperedRecords[0]["title"] = "Tampered Title"
+        tamperedSidecarObj["records"] = tamperedRecords
+        let tamperedSidecarBytes = try JSONSerialization.data(withJSONObject: tamperedSidecarObj, options: [.sortedKeys])
+        try tamperedSidecarBytes.write(to: legacySidecarURL)
+        let tamperedActObj = try ClientProtocols.record("published-aggregate-activation", fields: ["snapshotSHA256": crossSnapSHA, "validationEpoch": crossEpoch, "catalogSHA256": PublishedAggregateReader.sha(tamperedSidecarBytes)])
+        try JSONSerialization.data(withJSONObject: tamperedActObj, options: [.sortedKeys]).write(to: androidLegacyDir.appendingPathComponent("aggregate-activations/\(crossSnapSHA)/\(crossEpoch).json"))
+        try check(rejects { _ = try macOnAndroidLegacy.load(activeSnapshotSHA256: crossSnapSHA, validationEpoch: crossEpoch) } && rejects { _ = try macOnAndroidLegacy.stage(manifest: crossManifestBytes, validationEpoch: UUID().uuidString) }, "tampered legacy aggregate-index fails closed on both load and stage")
+
+        // Negative tamper check 2: merged aggregate-index WITHOUT aggregate-pages-refs fails closed
+        let noRefsDir = FileManager.default.temporaryDirectory.appendingPathComponent("CrossPlatformNoRefs-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: noRefsDir) }
+        _ = try writeCrossFiles(in: noRefsDir, sidecarCatalog: legacyMergedCatalog, writeRefs: false)
+        let macNoRefs = PublishedAggregateStore(directory: noRefsDir, siteBase: PublishedAggregateReader.site)
+        try check(rejects { _ = try macNoRefs.load(activeSnapshotSHA256: crossSnapSHA, validationEpoch: crossEpoch) }, "extra records in aggregate-index without verified aggregate-pages-refs fail closed")
+
         print("RESULT passed=\(passed) failed=0")
     }
 }

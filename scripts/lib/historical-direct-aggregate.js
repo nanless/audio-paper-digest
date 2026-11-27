@@ -550,14 +550,25 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
         || typeof resource.availability !== 'string' || typeof (resource.finalUrl || resource.originalUrl) !== 'string')) {
         fail(`${item.paperId} Reader resource projection is invalid`);
     }
-    const scoreDimensions = [['创新性', parsed.innovationScore], ['技术严谨性', parsed.technicalRigorScore],
-        ['实验充分性', parsed.experimentalSufficiencyScore], ['清晰度', parsed.clarityScore],
-        ['影响力', parsed.impactScore], ['开源', parsed.openSourceScore], ['可复现性', parsed.reproducibilityScore],
-        ['工程/实践价值', parsed.engineeringScore]].map(([label, value]) => ({ label, value: Number(value) }));
+    const scoringRubric = require('./scoring-rubric.js');
+    const isUnifiedRubric = scoringRubric.isUnifiedRubric(parsed.scoringRubricVersion);
+    const dimDefs = isUnifiedRubric ? [
+        ['创新性', parsed.innovationScore, 10], ['技术严谨性', parsed.technicalRigorScore, 10],
+        ['实验充分性', parsed.experimentalSufficiencyScore, 10], ['清晰度', parsed.clarityScore, 10],
+        ['影响力', parsed.impactScore, 10], ['开源', parsed.openSourceScore, 10],
+        ['可复现性', parsed.reproducibilityScore, 10], ['工程/实践价值', parsed.engineeringScore, 10]
+    ] : [
+        ['创新性', parsed.innovationScore, 2], ['技术严谨性', parsed.technicalRigorScore, 1.5],
+        ['实验充分性', parsed.experimentalSufficiencyScore, 1.5], ['清晰度', parsed.clarityScore, 1],
+        ['影响力', parsed.impactScore, 1.5], ['开源', parsed.openSourceScore, 1.5],
+        ['可复现性', parsed.reproducibilityScore, 0.5], ['工程/实践价值', parsed.engineeringScore, 1.5]
+    ];
+    const scoreDimensions = dimDefs.map(([label, value, max]) => ({ label, value: Number(value), max }));
     if (scoreDimensions.some(dimension => !Number.isFinite(dimension.value))) fail(`${item.paperId} eight-dimensional score is incomplete`);
     return { analysis, analysisFileSha256: loaded.fileSha256, analysisRecordSha256: stableHash(analysis),
         readerArticleSha256: analysis.apiReaderArticleSha256, title: analysis.title.trim(), readerTitle,
-        summary: parsed.summary.trim(), score, documentType, rankBucket, scoreDimensions,
+        summary: parsed.summary.trim(), score, scoringRubricVersion: parsed.scoringRubricVersion || null,
+        documentType, rankBucket, scoreDimensions,
         labels: labels.map(label => label.replace(/^#/, '')).sort(), primaryTaskLabel: parsed.primaryTaskTag.replace(/^#/, ''),
         primaryMethodLabel: parsed.primaryMethodTag.replace(/^#/, ''),
         authors: authors.map(author => ({ name: author.name.trim(), affiliations: author.affiliations.map(value => value.trim()) })),
@@ -661,7 +672,7 @@ function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, sta
         currentRendererImplementationSha256: rendererSha256, members };
 }
 
-function md(value) { return String(value).replace(/([\\`*_[\]<>|])/g, '\\$1').replace(/\s+/g, ' ').trim(); }
+function md(value) { return String(value).replace(/([\\`*_[\]<>|$])/g, '\\$1').replace(/\s+/g, ' ').trim(); }
 function publicHttps(value, label) {
     let url;
     try { url = new URL(value); } catch { fail(`${label} is invalid`); }
@@ -689,14 +700,20 @@ function memberResourceBadges(member) {
 }
 
 function sanitizeAggregateMarkdownForPublish(markdown) {
-    let text = String(markdown || '');
+    const raw = String(markdown || '');
+    const fmMatch = raw.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+    const prefix = fmMatch ? fmMatch[0] : '';
+    let body = fmMatch ? raw.slice(prefix.length) : raw;
     // 清理可能泄漏的内部评分证据锚点
-    text = text.replace(/\[(?:A|SCORING_SOURCE)_[A-Z0-9_/-]+\]/g, '');
+    body = body.replace(/\[(?:A|SCORING_SOURCE)_[A-Z0-9_/-]+\]/g, '');
     // 剥离非代码区块内的裸 <b>/<i>/<u> 内联 HTML 标签
-    text = text.replace(/<(b|i|u)(?:\s+[^>\n]*)?>([^\n]*?)<\/\1>/gi, '$2');
+    body = body.replace(/<(b|i|u)(?:\s+[^>\n]*)?>([^\n]*?)<\/\1>/gi, '$2');
+    // 保护货币美元符号并将残余 $...$ 行内数学转为 \(...\)，避免裸 $ 泄漏进 Hugo 渲染 HTML 门禁
+    const { repairCurrencyDollars, repairDollarMath, repairFormulaDelimiters } = require('./conference-postprocess.js');
+    body = repairFormulaDelimiters(repairDollarMath(repairCurrencyDollars(body)));
     // 规范化多余空行，保持单行尾换行
-    text = text.replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
-    return text;
+    body = body.replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '') + '\n';
+    return prefix + body;
 }
 
 function aggregateSummaryDate(scope, key, members, options = {}) {
@@ -861,12 +878,29 @@ function renderAggregate(scope, key, members, options = {}) {
         const badgeTail = topBadges !== '-' ? ` · 资源 ${topBadges}` : '';
         output += `\n### 🌟 ${isDaily ? '今日精选焦点' : '会议精选焦点'}\n\n`;
         output += `> 🥇 **[${md(top.canonical.readerTitle)}](${topUrl})** · 总分 **${top.canonical.score.toFixed(1)}**/10${metaTail}${badgeTail}\n`;
-        const topDims = (top.canonical.scoreDimensions || [])
-            .filter(d => d && Number.isFinite(d.value))
-            .slice()
-            .sort((a, b) => b.value - a.value)
+        const scoringRubric = require('./scoring-rubric.js');
+        const LEGACY_MAX_BY_LABEL = {
+            '创新性': 2, '创新': 2, '技术严谨性': 1.5, '技术严谨': 1.5,
+            '实验充分性': 1.5, '实验充分': 1.5, '清晰度': 1, '影响力': 1.5,
+            '开源': 1.5, '可复现性': 0.5, '可复现': 0.5, '工程/实践价值': 1.5, '工程/实践': 1.5
+        };
+        const rawDims = (top.canonical.scoreDimensions || [])
+            .filter(d => d && Number.isFinite(d.value));
+        const hasDeclaredRubric = typeof top.canonical.scoringRubricVersion === 'string'
+            && top.canonical.scoringRubricVersion.trim() !== '';
+        const isUnified = hasDeclaredRubric
+            ? scoringRubric.isUnifiedRubric(top.canonical.scoringRubricVersion)
+            : rawDims.some(d => d.max === 10 || d.value > 2);
+        const topDims = rawDims
+            .map(d => {
+                const max = (Number.isFinite(d.max) && d.max > 0)
+                    ? d.max
+                    : (isUnified ? 10 : (LEGACY_MAX_BY_LABEL[d.label] || 10));
+                return { label: d.label, value: d.value, max, ratio: d.value / max };
+            })
+            .sort((a, b) => (b.ratio - a.ratio) || (b.max - a.max))
             .slice(0, 3)
-            .map(d => `${md(d.label)} ${d.value.toFixed(1)}/10`);
+            .map(d => `${md(d.label)} ${isUnified ? d.value.toFixed(1) : d.value}/${d.max}`);
         if (topDims.length) {
             output += `>\n> 突出维度：${topDims.join(' · ')}\n`;
         }

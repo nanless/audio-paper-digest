@@ -33,7 +33,7 @@ class ArxivOriginGate {
     constructor(options = {}) {
         this.maxConcurrency = Number.isInteger(options.maxConcurrency) && options.maxConcurrency >= 1
             ? options.maxConcurrency
-            : resolveMaxConcurrency();
+            : null;
         this.active = 0;
         this.queue = [];
         this.cooldownUntilMs = 0;
@@ -65,7 +65,9 @@ class ArxivOriginGate {
     async acquire(sleepFn = ms => new Promise(resolve => setTimeout(resolve, ms))) {
         let acquired = false;
         while (!acquired) {
-            const limit = this.maxConcurrency || resolveMaxConcurrency();
+            const limit = Number.isInteger(this.maxConcurrency) && this.maxConcurrency >= 1
+                ? this.maxConcurrency
+                : resolveMaxConcurrency();
             if (this.active < limit) {
                 this.active += 1;
                 acquired = true;
@@ -89,7 +91,9 @@ class ArxivOriginGate {
     }
 
     release() {
-        const limit = this.maxConcurrency || resolveMaxConcurrency();
+        const limit = Number.isInteger(this.maxConcurrency) && this.maxConcurrency >= 1
+            ? this.maxConcurrency
+            : resolveMaxConcurrency();
         if (this.active > 0) this.active -= 1;
         while (this.queue.length > 0 && this.active < limit) {
             const next = this.queue.shift();

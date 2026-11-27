@@ -471,6 +471,13 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
         throw new Error(`IndexTTS synthesizer did not write audio manifest: ${audioManifestPath}`);
     }
     const audioManifest = JSON.parse(fs.readFileSync(audioManifestPath, 'utf8'));
+    const requestedFormat = audioBaseExt;
+    if (requestedFormat === 'mp3' && audioManifest.format !== 'mp3') {
+        throw new Error(
+            `Requested MP3 podcast output but synthesizer produced "${audioManifest.format || 'unknown'}" `
+            + '(ffmpeg may be missing or failed). Pass --format wav explicitly only for WAV-only runs.'
+        );
+    }
 
     const chaptersFileName = `${tagPrefix}-${dateStr}.chapters.json`;
     const chaptersUrl = options.chaptersBaseUrl
@@ -488,44 +495,50 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     const feedGeneratedAt = options.generatedAt || publishedAt;
     const requestedRepo = options.repo || env.PD_PODCAST_GITHUB_REPO || DEFAULT_PODCAST_GITHUB_REPO;
 
-    // Pre-validate today's MP3 episode metadata against strict client feed invariants BEFORE uploading
-    // to GitHub Releases so a corrupted MP3 fails fast without stranding a broken remote asset.
-    if (audioManifest.format === 'mp3') {
-        const previewRepo = resolvePodcastGitHubRepo({ repo: requestedRepo, env });
-        const previewTag = buildReleaseTag(dateStr, { tagPrefix, tagGrouping, env });
-        const previewAssetName = validateAssetFileName(
-            audioManifest.audioPath ? path.basename(path.resolve(String(audioManifest.audioPath))) : '',
-            { date: dateStr, tagPrefix, allowedExtensions: ['mp3'] }
-        );
-        const previewAudioUrl = buildReleaseDownloadUrl({
-            repo: previewRepo,
-            tag: previewTag,
-            assetFileName: previewAssetName
-        });
-        const preflightMetadata = buildPodcastEpisodeMetadata({
-            date: dateStr,
-            title: script.title,
-            description,
-            audioUrl: previewAudioUrl,
-            audioBytes: audioManifest.audioBytes,
-            audioSha256: audioManifest.audioSha256,
-            durationSeconds: audioManifest.durationSeconds,
-            mimeType: audioManifest.mimeType,
-            ttsEngine: audioManifest.ttsEngine,
-            chapters: audioManifest.chapters,
-            episodePageUrl: script.digestUrl,
-            chaptersUrl,
-            publishedAt,
-            releaseTag: previewTag,
-            githubRepo: previewRepo,
-            scriptSha256: script.scriptSha256,
-            publishStatus: 'dry-run'
-        });
+    // Load prior episodes and pre-validate both today's episode metadata and full RSS XML
+    // BEFORE uploading to GitHub Releases so corrupt local/prior metadata fails cleanly
+    // without stranding a remote release asset.
+    const priorEpisodes = loadExistingEpisodes(options.episodesDir, dateStr);
+    const previewRepo = resolvePodcastGitHubRepo({ repo: requestedRepo, env });
+    const previewTag = buildReleaseTag(dateStr, { tagPrefix, tagGrouping, env });
+    const previewAssetName = validateAssetFileName(
+        audioManifest.audioPath ? path.basename(path.resolve(String(audioManifest.audioPath))) : '',
+        { date: dateStr, tagPrefix, allowedExtensions: requestedFormat === 'wav' ? ['mp3', 'wav'] : ['mp3'] }
+    );
+    const previewAudioUrl = buildReleaseDownloadUrl({
+        repo: previewRepo,
+        tag: previewTag,
+        assetFileName: previewAssetName
+    });
+    const preflightMetadata = buildPodcastEpisodeMetadata({
+        date: dateStr,
+        title: script.title,
+        description,
+        audioUrl: previewAudioUrl,
+        audioBytes: audioManifest.audioBytes,
+        audioSha256: audioManifest.audioSha256,
+        durationSeconds: audioManifest.durationSeconds,
+        mimeType: audioManifest.mimeType,
+        ttsEngine: audioManifest.ttsEngine,
+        chapters: audioManifest.chapters,
+        episodePageUrl: script.digestUrl,
+        chaptersUrl,
+        publishedAt,
+        releaseTag: previewTag,
+        githubRepo: previewRepo,
+        scriptSha256: script.scriptSha256,
+        publishStatus: 'dry-run'
+    });
+    if (requestedFormat === 'mp3') {
         buildClientPodcastFeedJson([preflightMetadata], {
             generatedAt: feedGeneratedAt,
             skipIncompatible: false
         });
     }
+    buildPodcastRssXml([preflightMetadata, ...priorEpisodes], {
+        feedUrl: options.feedUrl || `${siteRoot}podcast.xml`,
+        link: siteRoot
+    });
 
     const ghEnv = pickAllowedChildEnv(env, GH_ALLOWED_ENV_KEYS);
     const releaseResult = publishPodcastToGitHubRelease({
@@ -535,7 +548,7 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
         repo: requestedRepo,
         tagPrefix,
         tagGrouping,
-        allowWav: audioManifest.format === 'wav',
+        allowWav: requestedFormat === 'wav',
         dryRun: options.dryRun === true,
         localOnly: options.localOnly === true,
         cwd: PROJECT_ROOT,
@@ -573,7 +586,6 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     writeFileAtomic(chaptersPath, `${JSON.stringify(chaptersJson, null, 2)}\n`);
     writeFileAtomic(metadataPath, `${JSON.stringify(episodeMetadata, null, 2)}\n`);
 
-    const priorEpisodes = loadExistingEpisodes(options.episodesDir, dateStr);
     const allEpisodes = [episodeMetadata, ...priorEpisodes];
     const rssXml = buildPodcastRssXml(allEpisodes, {
         feedUrl: options.feedUrl || `${siteRoot}podcast.xml`,
@@ -581,7 +593,7 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     });
     writeFileAtomic(rssPath, rssXml);
 
-    if (audioManifest.format === 'mp3') {
+    if (requestedFormat === 'mp3') {
         buildClientPodcastFeedJson([episodeMetadata], {
             generatedAt: feedGeneratedAt,
             skipIncompatible: false
@@ -591,6 +603,10 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
         generatedAt: feedGeneratedAt,
         skipIncompatible: true
     });
+    if (requestedFormat === 'mp3'
+        && !clientFeed.episodes.some(ep => ep && ep.date === dateStr)) {
+        throw new Error(`Today's MP3 episode (${dateStr}) is missing from generated podcast-feed.json`);
+    }
     writeFileAtomic(clientFeedPath, `${JSON.stringify(clientFeed, null, 2)}\n`);
 
     return {

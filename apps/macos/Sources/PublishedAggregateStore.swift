@@ -120,7 +120,7 @@ struct PublishedAggregateStore {
     private func recordScopedOriginal(_ url:URL,limit:Int,bytes:Data) throws {
         guard let scope=readScope else{return};try scope.requireActive()
         let root=try trustedSystemPath(directory).path+"/"
-        guard url.path.hasPrefix(root),let component=url.path.dropFirst(root.count).split(separator:"/").first,["index","desktop-details","aggregate-manifests","aggregate-index","aggregate-activations"].contains(String(component)) else{return}
+        guard url.path.hasPrefix(root),let component=url.path.dropFirst(root.count).split(separator:"/").first,["index","desktop-details","aggregate-manifests","aggregate-index","aggregate-activations","aggregate-pages-refs","aggregate-pages"].contains(String(component)) else{return}
         let sha=PublishedAggregateReader.sha(bytes)
         var identity=stat();try PublishedAggregateReader.require(lstat(url.path,&identity)==0 && identity.st_mode & S_IFMT == S_IFREG,"汇总原来源文件身份不可核验")
         if let original=scope.originals[url.path] {
@@ -248,6 +248,82 @@ struct PublishedAggregateStore {
         }
         return try child(["index",sha256+".json"])
     }
+    private func androidCompatibleBaseCatalog(_ base:PublishedAggregateCatalog)->PublishedAggregateCatalog {
+        var changed=false
+        let mapped=base.records.map { record -> PublishedAggregate in
+            if record.kind == .conference, record.conferenceScope == nil, record.sourceURL.hasSuffix("-summary/") {
+                changed=true
+                return PublishedAggregate(id:record.id,kind:record.kind,conferenceScope:"overview",title:record.title,titleZh:record.titleZh,summary:record.summary,rawDate:record.rawDate,displayDate:record.displayDate,categories:record.categories,tags:record.tags,sourceURL:record.sourceURL,source:record.source)
+            }
+            return record
+        }
+        return changed ? PublishedAggregateCatalog(snapshotSHA256:base.snapshotSHA256,sourceRecordCount:base.sourceRecordCount,aggregateCount:mapped.count,records:mapped) : base
+    }
+    private func readSupplementalPagesFromRefs(base:PublishedAggregateCatalog)throws->[PublishedAggregate]? {
+        let refFile=try child(["aggregate-pages-refs",base.snapshotSHA256+".json"])
+        guard fm.fileExists(atPath:refFile.path) else { return nil }
+        let refRaw=try read(refFile,limit:64*1024)
+        guard let ref=try JSONSerialization.jsonObject(with:refRaw) as? [String:Any],
+              ref["snapshotSHA256"] as? String == base.snapshotSHA256,
+              let shardURL=ref["shardURL"] as? String,
+              let shardSHA=ref["shardSHA256"] as? String,
+              PublishedAggregateReader.validSHA(shardSHA),
+              shardURL == "client/details/pages/\(shardSHA).json",
+              let rawBytes=ref["shardBytes"] as? NSNumber,
+              CFGetTypeID(rawBytes) != CFBooleanGetTypeID(),
+              rawBytes.doubleValue == Double(rawBytes.intValue),
+              (1...(1024*1024)).contains(rawBytes.intValue) else {
+            throw AggregateFailure.invalid("补充页面索引与目录快照不符")
+        }
+        let shardBytes=rawBytes.intValue
+        let shardRaw=try read(try child(["aggregate-pages",shardSHA+".json"]),limit:shardBytes)
+        try PublishedAggregateReader.require(shardRaw.count==shardBytes && PublishedAggregateReader.sha(shardRaw)==shardSHA && String(data:shardRaw,encoding:.utf8) != nil,"补充页面分片与原清单不符")
+        guard let rows=try JSONSerialization.jsonObject(with:shardRaw) as? [[String:Any]] else {
+            throw AggregateFailure.invalid("补充页面分片格式无效")
+        }
+        let existingIds=Set(base.records.map(\.id))
+        let rowEncoding=ClientProtocols.contract("foundation-sorted-keys-json")
+        var seenPages=Set<String>()
+        var extra:[PublishedAggregate]=[]
+        for (index,row) in rows.enumerated() {
+            try PublishedAggregateReader.require(row["pageType"] as? String == "page","补充目录仅允许网站页面类型")
+            guard let permalink=row["permalink"] as? String else { throw AggregateFailure.invalid("补充目录缺少页面地址") }
+            let url=try PublishedAggregateReader.pageURL(permalink,siteBase:siteBase)
+            try PublishedAggregateReader.require(seenPages.insert(url.absoluteString).inserted,"补充目录页面地址重复")
+            let id="page:"+URLComponents(url:url,resolvingAgainstBaseURL:false)!.percentEncodedPath
+            if existingIds.contains(id) { continue }
+            guard let title=row["title"] as? String, !title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {
+                throw AggregateFailure.invalid("补充目录缺少标题")
+            }
+            let rawTitleZh=row["titleZh"] as? String
+            let titleZh=(rawTitleZh?.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty == false) ? rawTitleZh! : title
+            let summary=row["summary"] as? String ?? ""
+            let rawDate=row["date"] as? String ?? ""
+            let displayDate=rawDate.isEmpty || rawDate.hasPrefix("0001-01-01") ? nil : rawDate
+            let categories=row["categories"] as? [String] ?? []
+            let tags=row["tags"] as? [String] ?? []
+            let source=PublishedAggregate.Source(manifestSHA256:base.snapshotSHA256,shardSHA256:shardSHA,shardBytes:shardBytes,shardURL:shardURL,rowIndex:index,normalizedRowSHA256:PublishedAggregateReader.sha(try PublishedAggregateReader.normalizedRow(row)),normalizedRowAlgorithm:rowEncoding)
+            extra.append(PublishedAggregate(id:id,kind:.page,conferenceScope:nil,title:title,titleZh:titleZh,summary:summary,rawDate:rawDate,displayDate:displayDate,categories:categories,tags:tags,sourceURL:url.absoluteString,source:source))
+        }
+        return extra
+    }
+    private func verifySidecar(_ baseCatalog:PublishedAggregateCatalog, sidecar:URL)throws->Data {
+        let original=try read(sidecar,limit:8*1024*1024)
+        if let matched=try? catalogRecord(baseCatalog,original:original) { return matched }
+        let androidBase=androidCompatibleBaseCatalog(baseCatalog)
+        if androidBase != baseCatalog, let matched=try? catalogRecord(androidBase,original:original) { return matched }
+        // Backwards compatibility for legacy Android v1.4.8–v1.5.1 backups whose aggregate-index
+        // pre-merged verified aggregate-pages-refs/<snapshotSHA>.json records.
+        if let extra=try readSupplementalPagesFromRefs(base:baseCatalog), !extra.isEmpty {
+            let mergedBase=PublishedAggregateCatalog(snapshotSHA256:baseCatalog.snapshotSHA256,sourceRecordCount:baseCatalog.sourceRecordCount,aggregateCount:baseCatalog.records.count+extra.count,records:(baseCatalog.records+extra).sorted{$0.id<$1.id})
+            if let matched=try? catalogRecord(mergedBase,original:original) { return matched }
+            if androidBase != baseCatalog {
+                let mergedAndroid=PublishedAggregateCatalog(snapshotSHA256:androidBase.snapshotSHA256,sourceRecordCount:androidBase.sourceRecordCount,aggregateCount:androidBase.records.count+extra.count,records:(androidBase.records+extra).sorted{$0.id<$1.id})
+                if let matched=try? catalogRecord(mergedAndroid,original:original) { return matched }
+            }
+        }
+        return try catalogRecord(baseCatalog,original:original)
+    }
     /// A sync that already read and parsed every manifest shard may pass them here: staging then
     /// re-verifies bytes, SHA-256, UTF-8 and row counts instead of reading/parsing the shards again.
     /// Without `preparedShards` the original source-read path is unchanged.
@@ -262,7 +338,7 @@ struct PublishedAggregateStore {
         try immutable(manifest,to:child(["aggregate-manifests",catalog.snapshotSHA256+".json"]))
         let sidecar=try child(["aggregate-index",catalog.snapshotSHA256+".json"])
         if !fm.fileExists(atPath:sidecar.path) { try immutable(catalogRecord(catalog),to:sidecar) }
-        let actual=try catalogRecord(catalog,original:read(sidecar,limit:8*1024*1024))
+        let actual=try verifySidecar(catalog,sidecar:sidecar)
         let marker=try child(["aggregate-activations",catalog.snapshotSHA256,identity+".json"])
         let actualSHA=PublishedAggregateReader.sha(actual)
         if fm.fileExists(atPath:marker.path) {
@@ -287,7 +363,7 @@ struct PublishedAggregateStore {
         metrics?.sourceParses += 1
         #endif
         let baseCatalog=try PublishedAggregateReader.read(manifest:raw,siteBase:siteBase){shard in try read(try shardFile(url:shard.url, sha256:shard.sha256),limit:shard.bytes)}
-        let actual=try catalogRecord(baseCatalog,original:read(sidecar,limit:8*1024*1024))
+        let actual=try verifySidecar(baseCatalog,sidecar:sidecar)
         try checkActivation(read(marker,limit:4096),snapshot:activeSnapshotSHA256,epoch:identity,catalogSHA:PublishedAggregateReader.sha(actual))
         let catalog=try PublishedAggregateReader.supplementCanonicalDesktopPages(baseCatalog, manifestRaw: raw, siteBase: siteBase)
         readScope?.catalogs[activeSnapshotSHA256]=catalog;readScope?.activations[activationKey]=catalog

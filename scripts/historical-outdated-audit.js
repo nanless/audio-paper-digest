@@ -17,7 +17,8 @@ const tagRulesApi = require('./lib/tag-rules.js');
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAILY_SUMMARY_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 const DAILY_PAPER_FILE_RE = /^(\d{4}-\d{2}-\d{2})-.+\.md$/;
-const CONFERENCE_PREFIX_RE = /^(icassp|interspeech|icml|neurips|iclr|acl|emnlp|aaai|waspaa|ismir|asru|slt|cvpr)-?\d{4}/i;
+const CONFERENCE_PREFIX_RE = /^(?:conference-[a-z0-9-]+-20\d{2}(?:-|$)|(icassp|interspeech|icml|neurips|iclr|acl|emnlp|aaai|waspaa|ismir|asru|slt|cvpr)-?\d{4})/i;
+const CONFERENCE_SUMMARY_FILE_RE = /^(?:(?:icassp|iclr|icml)\d{4}-(?:summary|task-[^/]+)\.md|conference-[a-z0-9-]+-20\d{2}(?:-task-[^/]+)?\.md)$/i;
 
 const USAGE = [
     '用法: node scripts/historical-outdated-audit.js',
@@ -120,12 +121,16 @@ function classifyPage(relativePath, frontmatter) {
     const basename = path.basename(relativePath);
     const fm = frontmatter || {};
     const pageType = String(fm.paper_digest_page_type || '').trim();
-    const isSummary = pageType === 'index' || DAILY_SUMMARY_FILE_RE.test(basename);
+    const isSummary = pageType === 'index'
+        || pageType === 'conference'
+        || DAILY_SUMMARY_FILE_RE.test(basename)
+        || CONFERENCE_SUMMARY_FILE_RE.test(basename);
     const categories = Array.isArray(fm.categories) ? fm.categories.map(String) : [];
     const directPaperId = typeof fm.paper_digest_direct_paper_id === 'string' ? fm.paper_digest_direct_paper_id : '';
     const paperId = typeof fm.paper_digest_paper_id === 'string' ? fm.paper_digest_paper_id : '';
     const arxivId = typeof fm.paper_digest_arxiv_id === 'string' ? fm.paper_digest_arxiv_id : '';
     const isConference = fm.paper_digest_source_kind === 'conference'
+        || pageType === 'conference'
         || Boolean(fm.paper_digest_conference_id)
         || directPaperId.startsWith('conference:')
         || paperId.startsWith('conference:')
@@ -181,11 +186,18 @@ function evaluatePageOutdatedReasons(record, standards) {
     const acceptedRubrics = Array.isArray(standards.acceptedScoringRubricVersions)
         ? standards.acceptedScoringRubricVersions
         : [standards.scoringRubricVersion];
-    const hasUnifiedRubric = acceptedRubrics.includes(rubricVersion)
-        || scoringRubric.isUnifiedRubric(rubricVersion)
-        || acceptedRubrics.some(v => v && scoringContract.includes(v))
-        || /(?:^|[^\w-])type-aware(?:-v2)?(?:$|[^\w-])/i.test(body)
-        || /八维.*0[–-]10|\/10\s*\|.*\/10\s*\|.*\/10/.test(body);
+    let hasUnifiedRubric = false;
+    if (rubricVersion) {
+        hasUnifiedRubric = acceptedRubrics.includes(rubricVersion)
+            || scoringRubric.isUnifiedRubric(rubricVersion);
+    } else {
+        const escapeRe = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const contractMatches = acceptedRubrics.some(v => v
+            && new RegExp(`(?:^|[^A-Za-z0-9])${escapeRe(v)}(?=$|[^\\w-])`, 'i').test(scoringContract));
+        const bodyRubricMatch = /(?:^|\n)\s*[-*]?\s*评分规则\s*[：:]\s*type-aware(?:-v2)?(?=$|[^\w-])/i.test(body);
+        const bodyScaleMatch = /八维.*0[–-]10|\/10\s*\|.*\/10\s*\|.*\/10/.test(body);
+        hasUnifiedRubric = contractMatches || bodyRubricMatch || bodyScaleMatch;
+    }
     if (!hasUnifiedRubric) {
         reasons.push('missing-type-aware-rubric');
     }
@@ -228,14 +240,16 @@ function buildRecommendedCommands(report) {
         commands.push({
             label: `日更 arXiv 范围重写（${dateHint}，${outdatedDailyPapers.length} 篇）`,
             steps: [
-                'npm run history:inventory -- --apply',
-                'npm run history:inputs -- --apply --arxiv-only --inventory <INVENTORY_JSON> --name scoped-arxiv.json',
+                'npm run history:inventory -- --apply --ledger <LEDGER_NAME.json> --receipt <RECEIPT_NAME.json>',
+                'npm run history:inputs -- --apply --arxiv-only --inventory <INVENTORY_JSON> --blog-root <BLOG_REPO> --name scoped-arxiv.json',
                 'npm run history:plan -- --apply --catalog <CATALOG_JSON> --inventory <INVENTORY_JSON>',
                 `npm run history:sources -- --apply --plan <PLAN_JSON> --queue arxiv${paperIdsArg}`,
                 `npm run history:run -- --apply --plan <PLAN_JSON> --queue arxiv${paperIdsArg}`,
-                ...(dates.length === 1 ? [`npm run history:aggregate -- --apply --plan <PLAN_JSON> --daily ${dates[0]}`] : ['npm run history:aggregate -- --apply --plan <PLAN_JSON>']),
+                ...(dates.length === 1
+                    ? [`npm run history:aggregate -- aggregate --apply --plan-file <PLAN_JSON> --registry-file <REGISTRY_JSON> --projection-file <PROJECTION_JSON> --daily ${dates[0]}`]
+                    : ['npm run history:aggregate -- aggregate --apply --plan-file <PLAN_JSON> --registry-file <REGISTRY_JSON> --projection-file <PROJECTION_JSON> --daily <YYYY-MM-DD>']),
                 `npm run history:publication -- plan --apply --publication-id <UUID> --plan-file <PLAN_JSON> --registry-file <REGISTRY_JSON> --projection-file <PROJECTION_JSON> --waive-visuals${paperIdsArg}`,
-                'npm run history:publication -- generate --apply --publication-id <UUID> --plan-file <PLAN_JSON> --registry-file <REGISTRY_JSON> --projection-file <PROJECTION_JSON> --waive-visuals',
+                `npm run history:publication -- generate --apply --publication-id <UUID> --plan-file <PLAN_JSON> --registry-file <REGISTRY_JSON> --projection-file <PROJECTION_JSON> --waive-visuals${paperIdsArg}`,
                 'npm run history:publication -- review --apply --publication-id <UUID>',
                 'npm run history:publication -- publish --apply --publication-id <UUID>',
                 'npm run verify:web -- --historical-publication-id <UUID> --wait'
@@ -247,9 +261,9 @@ function buildRecommendedCommands(report) {
         commands.push({
             label: `会议历史页面重写（${outdatedConference.length} 页）`,
             steps: [
-                'npm run history:inventory -- --apply',
-                'npm run history:inputs -- --apply --conference-manifest <CONFERENCE_MANIFEST_JSON> --inventory <INVENTORY_JSON> --name scoped-conference.json',
-                'npm run history:plan -- --apply --catalog <CATALOG_JSON> --inventory <INVENTORY_JSON> --conference-projection <PROJECTION_JSON>',
+                'npm run history:inventory -- --apply --ledger <LEDGER_NAME.json> --receipt <RECEIPT_NAME.json>',
+                'npm run history:inputs -- --apply --conference-manifest <CONFERENCE_MANIFEST_JSON> --inventory <INVENTORY_JSON> --blog-root <BLOG_REPO> --name scoped-conference.json',
+                'npm run history:plan -- --apply --catalog <CATALOG_JSON> --inventory <INVENTORY_JSON> --conference-projections <PROJECTION_JSON>',
                 'npm run history:run -- --apply --plan <PLAN_JSON> --queue conference',
                 'npm run history:publication -- plan --apply --publication-id <UUID> --plan-file <PLAN_JSON> --registry-file <REGISTRY_JSON> --projection-file <PROJECTION_JSON> --waive-visuals',
                 'npm run verify:web -- --historical-publication-id <UUID> --wait'
@@ -289,8 +303,13 @@ function auditBlogPosts(options = {}) {
     for (const page of allPages) {
         if (page.scope !== 'daily' || !page.date) continue;
         const entry = dailyByDate.get(page.date) || { date: page.date, summary: null, papers: [] };
-        if (page.kind === 'summary') entry.summary = page;
-        else entry.papers.push(page);
+        if (page.kind === 'summary') {
+            if (DAILY_SUMMARY_FILE_RE.test(path.basename(page.path))) {
+                entry.summary = page;
+            }
+        } else {
+            entry.papers.push(page);
+        }
         dailyByDate.set(page.date, entry);
     }
 

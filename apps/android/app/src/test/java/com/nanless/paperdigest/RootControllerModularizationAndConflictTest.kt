@@ -913,4 +913,89 @@ class RootControllerModularizationAndConflictTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun studyCoordinatorHandlesBackgroundFgsRejectionNonFatallyAndReconcilesTerminalPlatformStudyJobs() = runTest {
+        withIsolatedTempDir { dir ->
+            val research = File(dir, "PaperDigest").apply { mkdirs() }
+            val personal = PersonalStore(research)
+            personal.updateSettings(
+                JSONObject()
+                    .put("endpoint", "https://api.example.invalid/v1")
+                    .put("model", "deepseek-v4.1-flash")
+                    .put("protocol", "chat")
+            )
+            val secrets = MemorySecretStore().apply { save("model.primary", "synthetic-secret") }
+            val studyService = StudyService(personal, { secrets.load("model.primary") })
+            val active = ConcurrentHashMap<String, Job>()
+            val maintenance = Mutex()
+            val finishedWorkIds = mutableSetOf<UUID>()
+            val uiState = MutableStateFlow(UiState())
+            val studyCoordinator = StudyCoordinator(
+                research = research,
+                personal = personal,
+                model = studyService,
+                active = active,
+                maintenance = { maintenance },
+                currentEpoch = { "epoch-1" },
+                requireCurrentEpoch = { require(it == "epoch-1") },
+                currentState = { uiState.value },
+                currentReadingID = { "" },
+                requireReading = { _, _ -> },
+                requireReadingMaterials = {},
+                selectedPaper = { error("Unused") },
+                pdfOutline = { emptyList() },
+                pdfEvidence = { _, _, _ -> PdfEvidence("a".repeat(64), "pdf-range", listOf(1), "text", emptyList()) },
+                enqueueStudyWork = { _, _ -> },
+                onRefresh = {},
+                isPlatformStudyWorkFinished = { workId -> workId != null && workId in finishedWorkIds },
+            )
+
+            // 1. Background FGS rejection inside enterForeground must NOT abort performStudy before transitioning the job out of queued
+            val fgsPrepared = studyCoordinator.prepareStudy("model.check", JSONObject(), ReadingAccess(null, 0L, null, null, 1, ""))
+            val fgsSessionId = fgsPrepared.getString("id")
+            assertEquals("queued", personal.snapshot().getJSONArray("jobs").objects().single { it.optString("id") == fgsSessionId }.getString("status"))
+            var fgsCallbackInvoked = false
+            assertTrue(
+                runCatching {
+                    studyCoordinator.performStudy(fgsSessionId, "epoch-1") {
+                        fgsCallbackInvoked = true
+                        throw IllegalStateException("Simulated Android 12+ ForegroundServiceStartNotAllowedException")
+                    }
+                }.isFailure // fails later on unreachable api.example.invalid transport, NOT skipped before model.run!
+            )
+            assertTrue("enterForeground callback was attempted", fgsCallbackInvoked)
+            val fgsJobAfter = personal.snapshot().getJSONArray("jobs").objects().single { it.optString("id") == fgsSessionId }
+            assertEquals("failed", fgsJobAfter.getString("status"))
+            assertNotNull("Job actually started and transitioned out of queued", fgsJobAfter.optString("startedAt").takeIf { it.isNotBlank() })
+
+            // 2. Reconcile dead/cancelled platform study jobs so restoreWorkspace is never permanently wedged
+            val deadCheck = studyCoordinator.prepareStudy("model.check", JSONObject().put("force", true), ReadingAccess(null, 0L, null, null, 1, ""))
+            val deadCheckId = deadCheck.getString("id")
+            val liveCheck = studyCoordinator.prepareStudy("model.check", JSONObject().put("force", true), ReadingAccess(null, 0L, null, null, 1, ""))
+            val liveCheckId = liveCheck.getString("id")
+            val deadRunId = UUID.randomUUID().toString()
+            personal.upsertJob(
+                JSONObject().put("id", deadRunId).put("kind", "model.run").put("paperID", paperA)
+                    .put("status", "running").put("createdAt", now())
+            )
+            finishedWorkIds += UUID.fromString(deadCheckId)
+            finishedWorkIds += UUID.fromString(deadRunId)
+
+            studyCoordinator.reconcileStudyJobs()
+
+            val jobsById = personal.snapshot().getJSONArray("jobs").objects().associateBy { it.getString("id") }
+            assertEquals("interrupted", jobsById.getValue(deadCheckId).getString("status"))
+            assertEquals("interrupted", jobsById.getValue(deadRunId).getString("status"))
+            assertEquals("queued", jobsById.getValue(liveCheckId).getString("status"))
+            assertEquals("interrupted", personal.session(deadCheckId)?.getString("status"))
+
+            // Once the remaining platform job also terminates, reconciliation clears all queued/running jobs (unblocking backup restore!)
+            finishedWorkIds += UUID.fromString(liveCheckId)
+            studyCoordinator.reconcileStudyJobs()
+            assertTrue(
+                personal.snapshot().getJSONArray("jobs").objects().none { it.optString("status") in listOf("queued", "running") }
+            )
+        }
+    }
 }

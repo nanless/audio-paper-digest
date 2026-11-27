@@ -1052,7 +1052,8 @@ function md(value) {
     // 汇总页标题或标签里的括号是普通文字，不是行内 TeX 分隔符。
     // 换成 HTML 实体渲染结果相同，又能避免写出 `\\(` / `\\)` 这种写法——
     // Markdown 数学检查要把这种写法留给真正的公式。
-    return String(value).replace(/([\\`*_\[\]<>|{}#+.!-])/g, '\\$1')
+    // 同样转义字面 `$`，避免两篇标题中的货币符号拼成伪 TeX 行内公式。
+    return String(value).replace(/([\\`*_\[\]<>|{}#+.!$-])/g, '\\$1')
         .replace(/[()]/g, char => char === '(' ? '&#40;' : '&#41;')
         .replace(/\s+/g, ' ').trim();
 }
@@ -1411,9 +1412,15 @@ function buildAggregateArtifacts({ analysisRoot, aggregateRoot, apply = false, a
         return { hasCode, hasModelOrData, hasDemo, text: icons.length ? icons.join(' ') : '-' };
     };
     const compactLabel = (value, maxChars = 40) => {
-        const clean = md(value).replace(/[。！？；!?;]+/g, '，').replace(/，{2,}/g, '，').replace(/^[ ，,、；;：:]+|[ ，,、；;：:]+$/g, '');
-        if (clean.length <= maxChars) return clean;
-        return `${clean.slice(0, maxChars).replace(/[ ，,、；;：:(-【]+$/, '')}…`;
+        const plain = String(value || '')
+            .replace(/\s+/g, ' ')
+            .replace(/[。！？；!?;]+/g, '，')
+            .replace(/，{2,}/g, '，')
+            .replace(/^[ ，,、；;：:]+|[ ，,、；;：:]+$/g, '');
+        const clipped = plain.length <= maxChars
+            ? plain
+            : `${plain.slice(0, maxChars).replace(/[ ，,、；;：:(\-【]+$/, '')}…`;
+        return md(clipped);
     };
     const badgesByPaperId = new Map(members.map(item => [item.paperId, resourceBadgesFor(item.resources)]));
     const tierMust = members.filter(item => item.score >= 8.0);
@@ -1535,7 +1542,12 @@ function buildAggregateArtifacts({ analysisRoot, aggregateRoot, apply = false, a
         '🔗 **开源资源**', '', readerDisplayByPaperId.get(item.paperId).resourceBlock, '',
         ...item.resources.filter(resource => !readerRecordByPaperId.get(item.paperId)
             .resources.includes(resource)).map(resource => resourceLine(resource, item.paperId)), '', '---', '');
-    const markdown = repairFormulaDelimiters(repairDollarMath(lines.join('\n')));
+    const rawAggregate = lines.join('\n');
+    const fmEnd = rawAggregate.indexOf('\n---\n');
+    const markdown = fmEnd !== -1
+        ? rawAggregate.slice(0, fmEnd + 5)
+            + repairFormulaDelimiters(repairDollarMath(repairCurrencyDollars(rawAggregate.slice(fmEnd + 5))))
+        : repairFormulaDelimiters(repairDollarMath(repairCurrencyDollars(rawAggregate)));
     const selection = stages.map(item => ({ executionId: item.manifest.analysisExecutionId, paperId: item.manifest.paperId,
         analysisSha256: item.manifest.analysisSha256, completionReceiptSha256: item.manifest.completionReceiptSha256,
         sourceSnapshotSha256: item.manifest.sourceSnapshotSha256, pageManifestSha256: item.manifest.manifestSha256,

@@ -176,7 +176,10 @@ class RootController private constructor(
 
     private suspend fun restoreWorkspace(staged: BackupCodec.Staged, admit: () -> Unit) = maintenance.withLock {
         admit()
-        if (installBackground) cloudCoordinator.reconcileCloudTransfers()
+        if (installBackground) {
+            cloudCoordinator.reconcileCloudTransfers()
+            studyCoordinator.reconcileStudyJobs()
+        }
         require(active.isEmpty()) { "请先结束当前任务再恢复完整资料" }
         require(personal.snapshot().getJSONArray("jobs").objects().none { it.optString("status") in listOf("queued", "running") }) {
             "请先停止或完成已排队的任务，再恢复研究资料"
@@ -319,6 +322,11 @@ class RootController private constructor(
             WorkManager.getInstance(context).enqueueUniqueWork("paperdigest-study-$sessionID", ExistingWorkPolicy.KEEP, work)
         },
         onRefresh = ::refresh,
+        isPlatformStudyWorkFinished = { workID ->
+            val manager = WorkManager.getInstance(context)
+            val work = if (workID != null) manager.getWorkInfoByIdFlow(workID).first() else null
+            work == null || work.state.isFinished
+        },
     )
 
     private val pdfCoordinator: PdfOperationCoordinator = PdfOperationCoordinator(
@@ -879,7 +887,10 @@ class RootController private constructor(
             _state.update { it.copy(error = null, notice = null) }
             val result = when (command) {
                 "app.bootstrap" -> {
-                    if (installBackground) maintenance.withLock { cloudCoordinator.reconcileCloudTransfers() }
+                    if (installBackground) maintenance.withLock {
+                        cloudCoordinator.reconcileCloudTransfers()
+                        studyCoordinator.reconcileStudyJobs()
+                    }
                     refresh()
                     val z = zotero.execute("zotero.state", JSONObject())
                     _state.update { it.copy(zotero = zotero.projectCredentialState(z)) }
@@ -1382,8 +1393,11 @@ class RootController private constructor(
         }
     }
 
-    suspend fun performStudy(id: String, workspaceEpoch: String) =
-        studyCoordinator.performStudy(id, workspaceEpoch)
+    suspend fun performStudy(
+        id: String,
+        workspaceEpoch: String,
+        enterForeground: suspend () -> Unit = {},
+    ) = studyCoordinator.performStudy(id, workspaceEpoch, enterForeground)
 
     suspend fun performCloudUpload(
         id: String,

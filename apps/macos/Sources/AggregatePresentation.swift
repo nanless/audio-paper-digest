@@ -183,7 +183,7 @@ extension LibraryService {
             }
             if matchesKnownPage(document.source.responseURL), let fragment = URLComponents(url: url, resolvingAgainstBaseURL: false)?.fragment, !fragment.isEmpty { return .anchor(fragment) }
             if let record = try aggregateCatalog()?.records.first(where: { matchesKnownPage($0.sourceURL) }) { return .aggregate(record.id) }
-            if let paper = list(limit: 10000).first(where: { $0.identityStatus == "verified" && (matchesKnownPage($0.blogURL) || $0.appearances.contains(where:matchesKnownPage)) }) { return .paper(paper.id) }
+            if let paper = snapshot.papers.first(where: { $0.identityStatus == "verified" && (matchesKnownPage($0.blogURL) || $0.appearances.contains(where:matchesKnownPage)) }) { return .paper(paper.id) }
         }
         return .external(url)
     }

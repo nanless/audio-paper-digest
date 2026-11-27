@@ -51,6 +51,13 @@ def _digest(value):
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
+_VALID_WORKFLOWS = frozenset({'daily', 'conference', 'history'})
+
+
+def _valid_workflow(value):
+    return value if isinstance(value, str) and value in _VALID_WORKFLOWS else None
+
+
 def _valid_batch_date(value):
     if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
         return None
@@ -193,6 +200,7 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         outcome = 'completed'
     paper_id = context.get('paperId')
     resolved_batch_date = _valid_batch_date(context.get('batchDate'))
+    resolved_workflow = _valid_workflow(context.get('workflow'))
     return {
         **usage_event_header(), 'kind': 'request', 'eventId': event_id or str(uuid.uuid4()),
         'at': at or _now(), 'runtime': 'python',
@@ -202,6 +210,7 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         'unitId': context.get('unitId') if re.fullmatch(r'[a-f0-9]{64}', str(context.get('unitId') or '')) else None,
         'contentAttempt': _count(context.get('contentAttempt')), 'transportAttempt': _count(context.get('transportAttempt')),
         **({'batchDate': resolved_batch_date} if resolved_batch_date else {}),
+        **({'workflow': resolved_workflow} if resolved_workflow else {}),
         'protocol': _label(protocol), 'model': _label(model), 'outcome': outcome,
         **({'accountId': resolved_account_id} if resolved_account_id else {}),
         'statusCode': _count(status_code), 'errorCode': _label(error_code), 'durationMs': _count(round(duration_ms)),

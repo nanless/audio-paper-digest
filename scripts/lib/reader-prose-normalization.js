@@ -488,19 +488,23 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
     if (reportedNumericFragments.size === 0) return false;
     const selectedTableIndexes = new Set(
         (Array.isArray(candidate.tableBindings) ? candidate.tableBindings : [])
-            .filter(binding => binding && binding.selection)
+            .filter(binding => binding && (binding.selection || binding.completeTable))
             .map(binding => Number(binding.tableIndex))
             .filter(Number.isInteger)
     );
     let tableIndex = 0;
     let changed = false;
+    const maskTokenFor = index => (
+        '\uE220' + [...String(index)].map(d => String.fromCharCode(0xE230 + Number(d))).join('') + '\uE221'
+    );
     for (const section of candidate.sections) {
         if (typeof section?.body !== 'string') continue;
         let previousLine = '';
+        let fence = null;
         const protectedUnicodeRanges = [];
         const unicodeProtectionSurface = section.body.replace(
-            /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[`~]*[ \t]*(?=\n|$)|<!--[\s\S]*?(?:-->|$)|<(code|pre)\b[^>]*>[\s\S]*?<\/\2\s*>|(?<!`)(`{1,2})(?!`)[^\n]*?\3(?!`)|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^\n$]*?(?<!\\)\$/gmi,
-            (literal, _fence, _htmlTag, _ticks, offset) => {
+            /^ {0,3}(?:(`{3,})[^`\n]*\n[\s\S]*?^ {0,3}\1`*|(~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2~*)[ \t]*(?=\n|$)|<!--[\s\S]*?(?:-->|$)|<(code|pre)\b[^>]*>[\s\S]*?<\/\3\s*>|(?<!`)(`{1,2})(?!`)[^\n]*?\4(?!`)|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^\n$]*?(?<!\\)\$|!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)|https?:\/\/[^\s<>()\[\]{}"'，。；：！？、]+/gmi,
+            (literal, _btFence, _tildeFence, _htmlTag, _ticks, offset) => {
                 protectedUnicodeRanges.push([offset, offset + literal.length]);
                 return literal.replace(/[^\n]/g, 'x');
             }
@@ -509,6 +513,18 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
         const next = section.body.split('\n').map(line => {
             const lineStart = bodyOffset;
             bodyOffset += line.length + 1;
+            const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+            if (fence) {
+                if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length
+                    && line.slice(fenceMatch[0].length).trim() === '') fence = null;
+                previousLine = line;
+                return line;
+            }
+            if (fenceMatch && !(fenceMatch[1][0] === '`' && line.slice(fenceMatch[0].length).includes('`'))) {
+                fence = fenceMatch[1];
+                previousLine = line;
+                return line;
+            }
             const trimmed = line.trimStart();
             // compileReaderTableSelections 把 TABLE 标记换成已签名的 PDF 表格之前，
             // 这个标记在绑定流里占着一个位置。这里也要把它算进去，否则后面某个
@@ -522,8 +538,7 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
             const isTableRow = /^\|[^\n]*\|\s*$/.test(trimmed);
             if (isTableRow && !/^\|[^\n]*\|\s*$/.test(previousLine)) tableIndex += 1;
             const editableTable = isTableRow && !selectedTableIndexes.has(tableIndex);
-            if (trimmed.startsWith('>') || trimmed.startsWith('```')
-                || trimmed.startsWith('~~~') || (isTableRow && !editableTable)) {
+            if (trimmed.startsWith('>') || (isTableRow && !editableTable)) {
                 previousLine = line;
                 return line;
             }
@@ -553,10 +568,21 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
                 }
                 return token.replace(/([⁰¹²³⁴⁵⁶⁷⁸⁹])(?=[\p{Script=Han}])/u, '$1 ');
             });
+            const maskedSpans = [];
+            const maskSpan = literal => {
+                const token = maskTokenFor(maskedSpans.length);
+                maskedSpans.push(literal);
+                return token;
+            };
+            let maskedUpdated = updated
+                .replace(/<!--[\s\S]*?(?:-->|$)|<(code|pre)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, maskSpan)
+                .replace(/(?<!`)(`+)(?!`)[^\n]*?\1(?!`)/g, maskSpan)
+                .replace(/\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^\n$]*?(?<!\\)\$/g, maskSpan)
+                .replace(/!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)|https?:\/\/[^\s<>()\[\]{}"'，。；：！？、]+/g, maskSpan);
             for (const numericFragment of reportedNumericFragments) {
-                if (!updated.includes(numericFragment)) continue;
+                if (!maskedUpdated.includes(numericFragment)) continue;
                 const escaped = numericFragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                updated = updated.replace(new RegExp(escaped, 'gu'), (match, offset, whole) => {
+                maskedUpdated = maskedUpdated.replace(new RegExp(escaped, 'gu'), (match, offset, whole) => {
                     let result = match
                         .replace(/([\p{Script=Han}])(?=\d)/gu, '$1 ')
                         .replace(/(\d)(?=[\p{Script=Han}])/gu, '$1 ')
@@ -573,6 +599,10 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
                     return result;
                 });
             }
+            updated = maskedSpans.reduceRight(
+                (value, original, index) => value.split(maskTokenFor(index)).join(original),
+                maskedUpdated
+            );
             previousLine = line;
             return updated;
         }).join('\n');
@@ -585,11 +615,11 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
 // selection 表格是编译器输出，字节已经和 PDF DOM 单元绑定，所以归一化周围文章时只
 // 保护这些表格。source-quote 表格仍可编辑，照常走普通归一化流程。
 function normalizeReaderProsePreservingSelectedTables(
-    article, selectionTableIndexes = [], formatOptions = {}
+    article, selectionTableIndexes = [], formatOptions = {}, quantitativeIssues = []
 ) {
     const selected = new Set((Array.isArray(selectionTableIndexes)
         ? selectionTableIndexes : []).filter(Number.isSafeInteger));
-    if (selected.size === 0) return normalizeReaderProseFormatting(article, [], formatOptions);
+    if (selected.size === 0) return normalizeReaderProseFormatting(article, quantitativeIssues, formatOptions);
     const lines = String(article || '').split('\n');
     const tables = extractMarkdownTables(article);
     const missing = [...selected].filter(index => !tables[index - 1]);
@@ -604,7 +634,7 @@ function normalizeReaderProsePreservingSelectedTables(
         lines.splice(table.startLine, table.endLine - table.startLine + 1, token);
         protectedBlocks.push({ token, block });
     }
-    let normalized = normalizeReaderProseFormatting(lines.join('\n'), [], formatOptions);
+    let normalized = normalizeReaderProseFormatting(lines.join('\n'), quantitativeIssues, formatOptions);
     for (const { token, block } of protectedBlocks) {
         if (normalized.split(token).length !== 2) {
             throw new Error('Reader selection table protected token 丢失');
@@ -1327,7 +1357,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
         (value, original, index) => value.replace(
             `__PD_READER_PROTECTED_${index}__`, () => original
         ),
-        normalizeReaderCurrencyAmounts(normalized)
+        normalizeReaderCurrencyAmounts(normalized, { preserveTableIndexes: [] })
     );
     const restored = protectedChinese.reduceRight(
         (value, original, index) => value.split(chineseTokenFor(index)).join(original),
@@ -1336,13 +1366,54 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
     return adjacentNumeralSurfaces.reduce((value, [token, original]) => value.split(token).join(original), restored);
 }
 
-function normalizeReaderCurrencyAmounts(value) {
+function normalizeReaderCurrencyAmounts(value, options = {}) {
+    const source = String(value || '');
+    if (!source.includes('$')) return source;
+    const protectedSpans = [];
+    const tokenFor = index => (
+        '\uE240' + [...String(index)].map(d => String.fromCharCode(0xE250 + Number(d))).join('') + '\uE241'
+    );
+    const protect = literal => {
+        const token = tokenFor(protectedSpans.length);
+        protectedSpans.push(literal);
+        return token;
+    };
+    let masked = source;
+    if (options && Object.prototype.hasOwnProperty.call(options, 'preserveTableIndexes')) {
+        const preserveSet = new Set(
+            (Array.isArray(options.preserveTableIndexes) ? options.preserveTableIndexes : [])
+                .filter(Number.isSafeInteger)
+        );
+        if (preserveSet.size > 0) {
+            const lines = masked.split('\n');
+            const tables = extractMarkdownTables(masked);
+            for (const tableIndex of [...preserveSet].sort((left, right) => right - left)) {
+                const table = tables[tableIndex - 1];
+                if (!table) continue;
+                const block = lines.slice(table.startLine, table.endLine + 1).join('\n');
+                lines.splice(table.startLine, table.endLine - table.startLine + 1, protect(block));
+            }
+            masked = lines.join('\n');
+        }
+    }
+    masked = masked
+        .replace(/^[ \t]{0,3}(?:(`{3,})[^`\n]*\n[\s\S]*?^[ \t]{0,3}\1`*|(~{3,})[^\n]*\n[\s\S]*?^[ \t]{0,3}\2~*)[ \t]*(?=\n|$)/gm, protect);
+    if (!options || !Object.prototype.hasOwnProperty.call(options, 'preserveTableIndexes')) {
+        masked = masked.replace(/^[ \t]*\|[^\n]*$/gm, protect);
+    }
+    masked = masked
+        .replace(/(?<!`)(`+)(?!`)[^\n]*?\1(?!`)/g, protect)
+        .replace(/\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$|\s)(?:[^$\n]|\\\$)*?(?<!\\|\s)\$(?!\d)/g, protect);
     const replacement = (full, amount, scale = '') => (
         `${amount}${String(scale || '').trim() ? ` ${String(scale).trim()}` : ''} 美元`
     );
-    return String(value || '')
+    const normalized = masked
         .replace(/\\\$(\d+(?:\.\d+)?)(\s*(?:thousand|million|billion))?/gi, replacement)
         .replace(/(?<!\\)\$(\d+(?:\.\d+)?)(\s*(?:thousand|million|billion))?/gi, replacement);
+    return protectedSpans.reduceRight(
+        (text, original, index) => text.split(tokenFor(index)).join(original),
+        normalized
+    );
 }
 
 function separateApiReaderTableBlocks(article) {

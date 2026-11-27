@@ -322,7 +322,7 @@ function projectReaderCellTexDisplayBody(value) {
     // 同一个整数写两遍：3232 → 32。小数点和千位分隔符两侧不算同一段数字
     // （0.7070.707 里的 7070 是 0.707 的尾数接下一份的首位，不是重复），
     // 四位年份 2020 与一位数 55/99 也不能折叠。
-    output = output.replace(/(?<![\d,.])(\d{2,})\1(?![\d,.])/g,
+    output = output.replace(/(?<![A-Za-z0-9_,.])(\d{2,})\1(?![\d,.])/g,
         (whole) => (/^(?:19|20)\d{2}$/.test(whole) ? whole : whole.slice(0, whole.length / 2)));
     if (!output.includes('\\') && !/[_^]\{/.test(output)
         && !/([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])/.test(output)) return output;

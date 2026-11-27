@@ -1633,10 +1633,10 @@ function rewriteApiReaderFigureNarratives(article, figures) {
         if (!existing) {
             throw new Error(`论文图 ${figure.ordinal} 的旧叙事块无法精确定位`);
         }
-        // 保持原文章的图注格式：v4/v5 为「论文图 N：…」，旧契约为「论文图 N。…」。
-        const v4Caption = new RegExp(`论文图\\s+${figure.ordinal}[：:]`).test(existing[0]);
+        // 保持原文章的图注格式：现行结构化契约为「论文图 N：…」，旧契约为「论文图 N。…」。
+        const structuredCaption = new RegExp(`论文图\\s+${figure.ordinal}[：:]`).test(existing[0]);
         const narrative = readerFigureCaptionLine(figure, target,
-            v4Caption
+            structuredCaption
                 ? {
                     editorialProfile: figure.chineseCaption
                         ? require('./lib/reader-record-format').STRUCTURED_EDITORIAL
@@ -2056,8 +2056,8 @@ function validateStructuredFigurePlacement(placement, index, structuredArtifacts
 const WORKFLOW_LEAK_SPEC = JSON.parse(
     fs.readFileSync(path.resolve(__dirname, '../config/workflow-leak-patterns.json'), 'utf8')
 );
-const STRUCTURED_SPEC_FORBIDDEN_HTML_TAGS = new Set(WORKFLOW_LEAK_SPEC.v5SpecForbiddenHtmlTags);
-const STRUCTURED_SPEC_WORKFLOW_LEAK_RE = new RegExp(WORKFLOW_LEAK_SPEC.v5SpecWorkflowLeakPattern, 'i');
+const STRUCTURED_SPEC_FORBIDDEN_HTML_TAGS = new Set(WORKFLOW_LEAK_SPEC.structuredSpecForbiddenHtmlTags);
+const STRUCTURED_SPEC_WORKFLOW_LEAK_RE = new RegExp(WORKFLOW_LEAK_SPEC.structuredSpecWorkflowLeakPattern, 'i');
 
 function hasForbiddenSpecHtmlOrMarkdown(text) {
     if (/[\r\n]/.test(text)) return true;
@@ -2272,6 +2272,10 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     );
     value.sections = compiledTables.sections;
     value.tableBindings = compiledTables.tableBindings;
+    const protectedTableIndexes = [...new Set([
+        ...(Array.isArray(orderedDraft.completeTableIndexes) ? orderedDraft.completeTableIndexes : []),
+        ...(Array.isArray(compiledTables.selectionTableIndexes) ? compiledTables.selectionTableIndexes : [])
+    ])].sort((left, right) => left - right);
     const seenHeadings = new Set();
     for (const [index, section] of value.sections.entries()) {
         assertExactObjectKeys(section, ['kind', 'heading', 'body'], `读者文章 sections[${index}]`);
@@ -2603,7 +2607,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     article = relocateExplicitReaderTableExplanations(ensureApiReaderTableNarratives(
         separateApiReaderTableBlocks(
             normalizeReaderProsePreservingSelectedTables(
-                article, compiledTables.selectionTableIndexes, proseFormatOptions
+                article, protectedTableIndexes, proseFormatOptions
             )
         )
     ));
@@ -2677,10 +2681,14 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
                 || binding.cellBindings.some(cell => cell.sourceRow !== cell.renderedRow
                     || cell.sourceColumn !== cell.renderedColumn)
                 || rows.some((row, ri) => row.some((value, ci) => {
-                    const unescaped = require('./lib/reader-tables').unescapeMarkdownTableCell(value);
+                    const readerTables = require('./lib/reader-tables');
+                    const unescaped = readerTables.unescapeMarkdownTableCell(value);
                     const rawCell = original.matrix[ri][ci];
                     const dispCell = confirmed.displayCell(original, ri, ci);
-                    return value !== rawCell && unescaped !== rawCell && value !== dispCell && unescaped !== dispCell;
+                    const projectedCell = readerTables.readerTableCellDisplay(original, ri, ci);
+                    return value !== rawCell && unescaped !== rawCell
+                        && value !== dispCell && unescaped !== dispCell
+                        && value !== projectedCell && unescaped !== projectedCell;
                 })))) {
                 throw new Error('PDF逐格显示校正只接受原表双写或已确认的完整值，不能修补模型错值或改变坐标');
             }
@@ -2690,14 +2698,15 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         article = restoreReaderSelectedTableBytes(article, pdfDisplayBindings, options.structuredArtifacts);
     }
     const qualityView = () => omitReaderSelectedTablesForProseCheck(
-        article, compiledTables.selectionTableIndexes
+        article, protectedTableIndexes
     );
     const qualityOptions = {
         sourceText: options.sourceText,
         editorialProfile,
         skipTableCommentaryAlignment: true
     };
-    let quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
+    let qualityArticle = qualityView();
+    let quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
     // 概念 bridge 的表层是带计划签名的内容，术语必须逐字节保住，最后的 bridge 重新绑定
     // （findReaderBridgeParagraph）才能对上。数字修复由问题触发，却做的是全局模式替换，
     // 因此会改写术语内部的子串——比如「下一位置预测预训练」里的「一位」被换成「1位」，
@@ -2715,41 +2724,47 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             masked = masked.slice(0, at) + token + masked.slice(at + surface.length);
             swaps.push([token, surface]);
         }
-        const repaired = normalizeReaderProseFormatting(masked, issues, proseFormatOptions);
+        const repaired = normalizeReaderProsePreservingSelectedTables(
+            masked, protectedTableIndexes, proseFormatOptions, issues
+        );
         let restored = repaired;
         for (const [token, surface] of swaps) restored = restored.split(token).join(surface);
         return restored;
     };
+    const surfaceIssueContext = () => (options.legacyNarrativeNumeralReplay === true ? article : qualityArticle);
     const repairableSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
         || (issue.code === 'quantitative_chinese_numeral'
-            && !isAllowedReaderNarrativeNumeralIssue(issue, article, options))
+            && !isAllowedReaderNarrativeNumeralIssue(issue, surfaceIssueContext(), options))
     ));
     if (repairableSurfaceIssues.length > 0) {
         article = withProtectedBridgeSurfaces(article, repairableSurfaceIssues);
-        quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
+        qualityArticle = qualityView();
+        quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
     }
     article = restoreReaderSectionHeadings(article, normalizedSections);
     article = removeDuplicateReaderLongSentences(article);
     article = separateApiReaderTableBlocks(article);
-    quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
+    qualityArticle = qualityView();
+    quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
     const finalSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
         || (issue.code === 'quantitative_chinese_numeral'
-            && !isAllowedReaderNarrativeNumeralIssue(issue, article, options))
+            && !isAllowedReaderNarrativeNumeralIssue(issue, surfaceIssueContext(), options))
     ));
     if (finalSurfaceIssues.length > 0) {
         article = withProtectedBridgeSurfaces(article, finalSurfaceIssues);
-        quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
+        qualityArticle = qualityView();
+        quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
     }
     // 全局数字修复也可能碰到标题里匹配上的短语。最后一次修复做完之后、表格和图绑定去查
     // 这些确切的小节标题之前，把单独归一化过的计划锚点恢复回来。
     article = restoreReaderSectionHeadings(article, normalizedSections);
     article = ensureApiReaderTableNarratives(article);
-    quality = validateReaderEditorialQuality(qualityView(), normalizedSections, qualityOptions);
     // 问题的偏移量描述的是注入之前的样子。注入原始 TeX 会改动后面的偏移，所以那些依赖
     // 上下文的豁免要对着产生诊断的那份确切文本复现，而不是渲染后的公式副本。
-    const qualityArticle = qualityView();
+    qualityArticle = qualityView();
+    quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
     // 文章到这里已经过了所有正文和结构清理。在这个绑定原文之前的最后一道边界上重新绑定
     // 选中的 artifact 表格，后面的归一化就动不了已签名的 PDF 单元字节；直接调绑定的调用
     // 方仍保持严格，拒绝任何乱改。
@@ -2765,7 +2780,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
                 structuredArtifacts: options.structuredArtifacts,
                 sourceText: options.sourceText,
                 sections: normalizedSections,
-                selectionTableIndexes: compiledTables.selectionTableIndexes,
+                selectionTableIndexes: protectedTableIndexes,
                 editorialProfile,
                 allowDeterministicQuoteRepair:
                     options.allowDeterministicQuoteRepair === true,
@@ -3003,8 +3018,18 @@ function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
 function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) {
     const plan = paper?.apiReaderPlan;
     const originalArticle = paper?.apiReaderArticle;
+    const artifactTableIndexes = Array.isArray(plan?.tableBindings)
+        ? plan.tableBindings
+            .map((binding, index) => (binding?.sourceType === 'artifact_table'
+                ? (Number.isSafeInteger(binding.tableIndex) ? binding.tableIndex : index + 1)
+                : null))
+            .filter(Number.isSafeInteger)
+        : null;
     let article = typeof originalArticle === 'string'
-        ? collapseRepeatedReaderBridgeHeadings(normalizeReaderCurrencyAmounts(originalArticle))
+        ? collapseRepeatedReaderBridgeHeadings(normalizeReaderCurrencyAmounts(
+            originalArticle,
+            artifactTableIndexes !== null ? { preserveTableIndexes: artifactTableIndexes } : {}
+        ))
         : originalArticle;
     const stage = analysisManifest?.stages?.apiReaderArticle;
     if (!plan || !Array.isArray(plan.sections) || typeof article !== 'string'
@@ -3037,6 +3062,8 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
                         ? !require('./lib/reader-table-pdf-evidence').savedCellMatches(binding, cell, renderedText)
                         : normalizeReaderSourceCell(renderedText) !== normalizeReaderSourceCell(cell.sourceText)
                             && normalizeReaderSourceCell(unescapedRendered) !== normalizeReaderSourceCell(cell.sourceText)
+                            && normalizeReaderSourceCell(renderedText) !== normalizeReaderSourceCell(require('./lib/reader-source-display').projectReaderCellTexDisplay(cell.sourceText))
+                            && normalizeReaderSourceCell(unescapedRendered) !== normalizeReaderSourceCell(require('./lib/reader-source-display').projectReaderCellTexDisplay(cell.sourceText))
                             && !require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, renderedText)
                             && !require('./lib/reader-dom-span-projection').savedCellMatches(
                                 paper, binding, cell, renderedText, articleTables[index])
@@ -9633,7 +9660,8 @@ function classifyModelRequestError(sourceError, config = DEEP_CONFIG) {
     const transientCodes = new Set([
         'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT',
         'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
-        'REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT'
+        'REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT',
+        'REQUEST_STREAM_IDLE_TIMEOUT', 'PROXY_CONNECT_CLOSED', 'PROXY_CONNECT_TIMEOUT'
     ]);
     if (transientCodes.has(code)) {
         sourceError.retryable = true;
@@ -13637,9 +13665,11 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             const supersededOrdinalCompletion = supersedeOrdinalCompletionBeforeInvalidation(paper, analysisManifest, 'apiReaderArticle');
             delete analysisManifest.stages.apiReaderArticle;
             delete analysisManifest.stages.imageSupplement;
-            delete analysisManifest.contracts.apiReaderArticle;
-            if (supersededOrdinalCompletion) {
-                delete analysisManifest.contracts.readerTargetOrdinalPatch;
+            if (analysisManifest.contracts) {
+                delete analysisManifest.contracts.apiReaderArticle;
+                if (supersededOrdinalCompletion) {
+                    delete analysisManifest.contracts.readerTargetOrdinalPatch;
+                }
             }
             delete paper.apiReaderArticle;
             delete paper.apiReaderPlan;
@@ -13686,9 +13716,11 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             const supersededOrdinalCompletion = supersedeOrdinalCompletionBeforeInvalidation(paper, analysisManifest, 'apiReaderArticle');
             delete analysisManifest.stages.apiReaderArticle;
             delete analysisManifest.stages.imageSupplement;
-            delete analysisManifest.contracts.apiReaderArticle;
-            if (supersededOrdinalCompletion) {
-                delete analysisManifest.contracts.readerTargetOrdinalPatch;
+            if (analysisManifest.contracts) {
+                delete analysisManifest.contracts.apiReaderArticle;
+                if (supersededOrdinalCompletion) {
+                    delete analysisManifest.contracts.readerTargetOrdinalPatch;
+                }
             }
             delete paper.apiReaderArticle;
             delete paper.apiReaderPlan;

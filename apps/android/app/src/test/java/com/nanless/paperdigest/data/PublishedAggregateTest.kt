@@ -104,4 +104,115 @@ class PublishedAggregateTest {
         for(kind in listOf("conference-summary","conference-task","future-summary","DAILY-SUMMARY","daily-summary "))assertTrue(runCatching{legacyRead(legacyVector.replace("daily-summary",kind))}.isFailure)
     }
 
+    @Test fun crossPlatformDesktopAggregateStoreSupportsPureBaseLegacyMergedAndMacRestoredCanonicalPages() {
+        val dir = Files.createTempDirectory("aggregate-xplat-").toFile().canonicalFile
+        try {
+            val rows = JSONArray()
+                .put(JSONObject().put("pageType", "paper").put("appearanceId", "posts/2026-11-26-p1/").put("pageUrl", "posts/2026-11-26-p1/").put("paperId", "arxiv:2611.00001").put("identityStatus", "verified").put("title", "Paper 1"))
+                .put(JSONObject().put("pageType", "daily").put("appearanceId", "posts/2026-11-26-daily/").put("pageUrl", "posts/2026-11-26-daily/").put("identityStatus", "aggregate-page").put("paperId", JSONObject.NULL).put("title", "Daily 26").put("titleZh", "11-26 日报").put("summary", "日报").put("blogPublishedAt", "2026-11-26").put("tagConceptIds", JSONArray().put("task.asr")))
+                .put(JSONObject().put("pageType", "conference").put("appearanceId", "posts/interspeech2026-summary/").put("pageUrl", "posts/interspeech2026-summary/").put("identityStatus", "aggregate-page").put("paperId", JSONObject.NULL).put("title", "Interspeech 2026").put("titleZh", "Interspeech 2026 汇总").put("summary", "会议").put("blogPublishedAt", "2026-11-26").put("tagConceptIds", JSONArray()))
+            val shardBytes = OfflineFoundationJSON.encode(rows)
+            val shardSHA = PublishedAggregateReader.sha(shardBytes)
+            val shardURL = "client/details/catalog/$shardSHA.json"
+            val manifestObj = com.nanless.paperdigest.protocols.ClientProtocols.record("paper-desktop-snapshot")
+                .put("recordCount", 3).put("paperCount", 1).put("appearanceCount", 3)
+                .put("catalogShards", JSONArray().put(JSONObject().put("url", shardURL).put("sha256", shardSHA).put("bytes", shardBytes.size).put("recordCount", 3)))
+            val manifestBytes = OfflineFoundationJSON.encode(manifestObj)
+            val snapSHA = PublishedAggregateReader.sha(manifestBytes)
+            val ep1 = "00000000-0000-0000-0000-000000000101"
+            val ep2 = "00000000-0000-0000-0000-000000000102"
+
+            // (a) macOS-staged store (pure baseCatalog with conferenceScope omitted on -summary/, NO aggregate-pages-refs) loads on Android with /about/, /conferences/, /links/ intact AND re-sync creates refFile cleanly!
+            val macDir = File(dir, "from-macos").apply { mkdirs() }
+            File(macDir, "desktop-details/catalog/$shardSHA.json").apply { parentFile.mkdirs(); writeBytes(shardBytes) }
+            File(macDir, "aggregate-manifests/$snapSHA.json").apply { parentFile.mkdirs(); writeBytes(manifestBytes) }
+            val androidBase = PublishedAggregateReader.read(manifestBytes) { shardBytes }
+            val macBase = PublishedAggregateCatalog(snapSHA, androidBase.sourceRecordCount, androidBase.records.map { if (it.kind == "conference") it.copy(conferenceScope = null) else it })
+            val macSidecarBytes = OfflineFoundationJSON.encode(com.nanless.paperdigest.protocols.ClientProtocols.record("published-aggregate-index", macBase.json()))
+            File(macDir, "aggregate-index/$snapSHA.json").apply { parentFile.mkdirs(); writeBytes(macSidecarBytes) }
+            val macAct = OfflineFoundationJSON.encode(com.nanless.paperdigest.protocols.ClientProtocols.record("published-aggregate-activation").put("snapshotSHA256", snapSHA).put("validationEpoch", ep1).put("catalogSHA256", PublishedAggregateReader.sha(macSidecarBytes)))
+            File(macDir, "aggregate-activations/$snapSHA/$ep1.json").apply { parentFile.mkdirs(); writeBytes(macAct) }
+
+            val androidStoreOnMac = PublishedAggregateStore(macDir)
+            val loadedFromMac = requireNotNull(androidStoreOnMac.load(snapSHA, ep1))
+            assertEquals(5, loadedFromMac.records.size)
+            val macPages = loadedFromMac.records.filter { it.kind == "page" }
+            assertEquals(
+                setOf(
+                    "https://nanless.github.io/audio-research-portal/about/",
+                    "https://nanless.github.io/audio-research-portal/conferences/",
+                    "https://nanless.github.io/audio-research-portal/links/",
+                ),
+                macPages.map { it.sourceURL }.toSet(),
+            )
+            macPages.forEach { p -> assertEquals(p.source.normalizedRowSHA256, PublishedAggregateReader.sha(androidStoreOnMac.originalRow(p))) }
+
+            // Re-syncing on Android with supplementalPages now creates aggregate-pages-refs without conflicting with macOS's pure sidecar!
+            val suppPages = listOf(
+                JSONObject().put("pageType", "page").put("permalink", "/audio-research-portal/about/").put("title", "About Portal").put("titleZh", "关于本站").put("summary", "来自索引的真实简介").put("date", ""),
+                JSONObject().put("pageType", "page").put("permalink", "/audio-research-portal/conferences/").put("title", "Conferences").put("titleZh", "会议论文集").put("summary", "目录").put("date", ""),
+                JSONObject().put("pageType", "page").put("permalink", "/audio-research-portal/links/").put("title", "Links").put("titleZh", "研究资源").put("summary", "资源").put("date", ""),
+            )
+            val resynced = androidStoreOnMac.stage(manifestBytes, ep2, suppPages)
+            assertTrue(File(macDir, "aggregate-pages-refs/$snapSHA.json").isFile)
+            assertTrue(File(macDir, "aggregate-index/$snapSHA.json").readBytes().contentEquals(macSidecarBytes))
+            assertEquals("来自索引的真实简介", resynced.records.first { it.sourceURL.endsWith("/about/") }.summary)
+
+            // (b) Legacy Android v1.5.1 merged aggregate-index + aggregate-pages-refs loads & re-stages cleanly, while tampered aggregate-index fails closed
+            val legacyDir = File(dir, "legacy-android").apply { mkdirs() }
+            File(legacyDir, "desktop-details/catalog/$shardSHA.json").apply { parentFile.mkdirs(); writeBytes(shardBytes) }
+            File(legacyDir, "aggregate-manifests/$snapSHA.json").apply { parentFile.mkdirs(); writeBytes(manifestBytes) }
+            val pageBytes = OfflineFoundationJSON.encode(JSONArray(suppPages))
+            val pageSHA = PublishedAggregateReader.sha(pageBytes)
+            val pageURL = "client/details/pages/$pageSHA.json"
+            File(legacyDir, "aggregate-pages/$pageSHA.json").apply { parentFile.mkdirs(); writeBytes(pageBytes) }
+            val refBytes = OfflineFoundationJSON.encode(JSONObject().put("snapshotSHA256", snapSHA).put("shardURL", pageURL).put("shardSHA256", pageSHA).put("shardBytes", pageBytes.size).put("recordCount", suppPages.size))
+            File(legacyDir, "aggregate-pages-refs/$snapSHA.json").apply { parentFile.mkdirs(); writeBytes(refBytes) }
+            val extra = PublishedAggregateReader.readSupplementalPages(snapSHA, pageURL, pageSHA, pageBytes.size, pageBytes, androidBase.records.mapTo(HashSet()) { it.id })
+            val legacyMerged = PublishedAggregateCatalog(snapSHA, androidBase.sourceRecordCount, (androidBase.records + extra).sortedBy { it.id })
+            val legacySidecar = OfflineFoundationJSON.encode(com.nanless.paperdigest.protocols.ClientProtocols.record("published-aggregate-index", legacyMerged.json()))
+            File(legacyDir, "aggregate-index/$snapSHA.json").apply { parentFile.mkdirs(); writeBytes(legacySidecar) }
+            val legacyAct = OfflineFoundationJSON.encode(com.nanless.paperdigest.protocols.ClientProtocols.record("published-aggregate-activation").put("snapshotSHA256", snapSHA).put("validationEpoch", ep1).put("catalogSHA256", PublishedAggregateReader.sha(legacySidecar)))
+            File(legacyDir, "aggregate-activations/$snapSHA/$ep1.json").apply { parentFile.mkdirs(); writeBytes(legacyAct) }
+
+            val legacyStore = PublishedAggregateStore(legacyDir)
+            assertEquals(5, requireNotNull(legacyStore.load(snapSHA, ep1)).records.size)
+            assertEquals(5, legacyStore.stage(manifestBytes, ep2, suppPages).records.size)
+            assertTrue(File(legacyDir, "aggregate-index/$snapSHA.json").readBytes().contentEquals(legacySidecar))
+
+            // Tampered legacy sidecar fails closed
+            val tamperedJson = JSONObject(PublishedUtf8.decode(legacySidecar))
+            tamperedJson.getJSONArray("records").getJSONObject(0).put("title", "Tampered")
+            val tamperedBytes = OfflineFoundationJSON.encode(tamperedJson)
+            File(legacyDir, "aggregate-index/$snapSHA.json").writeBytes(tamperedBytes)
+            val tamperedAct = OfflineFoundationJSON.encode(com.nanless.paperdigest.protocols.ClientProtocols.record("published-aggregate-activation").put("snapshotSHA256", snapSHA).put("validationEpoch", ep1).put("catalogSHA256", PublishedAggregateReader.sha(tamperedBytes)))
+            File(legacyDir, "aggregate-activations/$snapSHA/$ep1.json").writeBytes(tamperedAct)
+            assertTrue(runCatching { legacyStore.load(snapSHA, ep1) }.isFailure)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test fun aggregateHtmlPreservesSemanticTagsListNumberingAndTableAlignmentWhileStrippingUnsafeMarkup() = fixture { _, store ->
+        val descriptor = store.stage(manifest, epoch).records.first { it.kind == "daily" }
+        val raw = """
+            <html><body><div id="article-body" class="post-content">
+                <p><del>旧条目</del> <ins>新增</ins> <small>说明</small> <kbd>Esc</kbd> <abbr title="Text to Speech">TTS</abbr> <cite>Interspeech 2026</cite></p>
+                <ol start="4"><li value="9">第九项</li><li value="evil">非法值</li></ol>
+                <ol start="1;2"><li value="2">次项</li></ol>
+                <table><thead><tr><th style="text-align: center; color: red">列A</th><th style="text-align: right">列B</th></tr></thead>
+                <tbody><tr><td style="text-align: left">值1</td><td style="background: url(https://evil.example/x.png)">值2</td></tr></tbody></table>
+                <script>evil()</script><p onclick="evil()">正文</p>
+            </div></body></html>
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+        val doc = AggregateHtml.parse(raw, descriptor, descriptor.sourceURL, "2026-11-26T00:00:00Z")
+        val body = doc.getString("bodyHTML")
+        for (token in listOf("<del>旧条目</del>", "<ins>新增</ins>", "<small>说明</small>", "<kbd>Esc</kbd>", "<abbr title=\"Text to Speech\">TTS</abbr>", "<cite>Interspeech 2026</cite>", "<ol start=\"4\">", "<li value=\"9\">", "class=\"ta-center\"", "class=\"ta-right\"", "class=\"ta-left\"")) {
+            assertTrue("Expected $token in $body", body.contains(token))
+        }
+        for (forbidden in listOf("<script", "onclick", "style=", "evil.example", "value=\"evil\"", "start=\"1;2\"")) {
+            assertFalse("Forbidden $forbidden in $body", body.contains(forbidden))
+        }
+    }
+
 }

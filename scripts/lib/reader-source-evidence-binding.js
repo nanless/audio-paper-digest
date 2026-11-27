@@ -917,6 +917,18 @@ function pruneUnsupportedSourceQuoteTable(rendered, quoteCorpus, scientificQuote
     return markdown !== rendered.markdown ? markdown : null;
 }
 
+function artifactCellDisplayMatches(sourceTable, sourceRow, sourceColumn, renderedText) {
+    if (require('./reader-table-pdf-evidence').displayCellMatches(
+        sourceTable, sourceRow, sourceColumn, renderedText, normalizeReaderSourceCell
+    )) return true;
+    const readerTables = require('./reader-tables');
+    const projected = readerTables.readerTableCellDisplay(sourceTable, sourceRow, sourceColumn);
+    const unescaped = readerTables.unescapeMarkdownTableCell(renderedText);
+    return normalizeReaderSourceCell(renderedText) === normalizeReaderSourceCell(projected)
+        || (unescaped !== renderedText
+            && normalizeReaderSourceCell(unescaped) === normalizeReaderSourceCell(projected));
+}
+
 function artifactTableBindingCanReplay(binding, renderedRows, structuredArtifacts) {
     const sourceTable = (structuredArtifacts.tables || []).find(item => (
         item?.ordinal === binding?.sourceTableOrdinal && item?.recoveryStatus === 'complete'
@@ -934,8 +946,8 @@ function artifactTableBindingCanReplay(binding, renderedRows, structuredArtifact
         );
         if (renderedText === undefined || seen.has(key) || !sourceCell
             || !recoverySha256(sourceCell.sourceDomSha256)
-            || !require('./reader-table-pdf-evidence').displayCellMatches(
-                sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn, renderedText, normalizeReaderSourceCell)) return false;
+            || !artifactCellDisplayMatches(
+                sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn, renderedText)) return false;
         seen.add(key);
         return true;
     }) && seen.size === expectedCount;
@@ -1303,7 +1315,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             const pruned = pruneUnsupportedSourceQuoteTable(
                 renderedTables[index], pdfQuotes.length
                     ? [htmlQuotes.join('\n'), ...pdfQuotes] : htmlQuotes.join('\n'),
-                [...htmlQuotes, ...pdfQuotes]
+                [...htmlQuotes, ...selected.pdfQuotes]
             );
             if (!pruned || boundArticle.split(renderedTables[index].markdown).length !== 2) continue;
             const after = extractMarkdownTables(pruned)[0];
@@ -1483,8 +1495,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                     || !recoverySha256(sourceCell.sourceDomSha256)) {
                     throw new Error(`读者文章 tableBindings[${index}] 单元格坐标或 DOM SHA 非法`);
                 }
-                if (!require('./reader-table-pdf-evidence').displayCellMatches(
-                    sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn, renderedText, normalizeReaderSourceCell)) {
+                if (!artifactCellDisplayMatches(
+                    sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn, renderedText)) {
                     throw new Error(
                         `读者文章 tableBindings[${index}] 渲染单元格与原始 cell 不一致: ${key}`
                     );
@@ -2012,8 +2024,9 @@ function normalizeReaderSourceQuotes(candidate, sourceText) {
                     if (unitMatch) {
                         const lineStart = sourceText.lastIndexOf('\n', match.index) + 1;
                         const unitEnd = afterStart + unitMatch.index + unitMatch[0].length;
-                        const span = sourceText.slice(lineStart, unitEnd);
-                        if (span.length >= 12 && sourceText.includes(span)) {
+                        const spanStart = Math.max(lineStart, unitEnd - 4000);
+                        const span = sourceText.slice(spanStart, unitEnd);
+                        if (span.length >= 12 && span.length <= 4000 && sourceText.includes(span)) {
                             const covered = [...targetNumbers].filter(token => (
                                 readerNumericTokens(span).includes(token)
                                 || readerSourceQuoteCoversNumericToken(token, span, true)

@@ -572,10 +572,13 @@ function removeLockDirChecked(lockPath, expectedSnapshot) {
     }
 }
 
+const BOOT_TIME_DRIFT_TOLERANCE_SECONDS = 60;
+
 function minimalSystemProbeEnv() {
     return {
         PATH: process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin',
-        LC_ALL: 'C'
+        LC_ALL: 'C',
+        TZ: 'UTC'
     };
 }
 
@@ -637,7 +640,7 @@ function getCurrentPidStartTime() {
 function localLockOwnerIsAlive(owner) {
     const bootTime = Number.isInteger(owner.bootTime) ? getProcessBootTimeSeconds() : null;
     if (Number.isInteger(owner.bootTime) && bootTime !== null
-        && owner.bootTime !== bootTime) {
+        && Math.abs(bootTime - owner.bootTime) > BOOT_TIME_DRIFT_TOLERANCE_SECONDS) {
         return false;
     }
     try {
@@ -2550,11 +2553,13 @@ function applyLiveUsageSnapshots(apiKeys, endpoint, snapshotsByAccountId, stateF
             nextQuota.snapshotAtMs = nowMs;
             nextQuota.lastLiveSyncAtMs = nowMs;
 
+            const snapFetchedAtMs = isNonNegativeFinite(snap.fetchedAtMs) ? snap.fetchedAtMs : nowMs;
+            const preSyncWindows = isPlainObject(snap._preSyncWindows) ? snap._preSyncWindows : null;
             const nowIso = new Date(nowMs).toISOString();
-            for (const [winKey, winSnap] of [
-                ['monthly', snap.monthly],
-                ['weekly', snap.weekly],
-                ['rolling_5h', snap.rolling]
+            for (const [winKey, winSnap, pctField, resetField] of [
+                ['monthly', snap.monthly, 'monthlyRemainingPct', null],
+                ['weekly', snap.weekly, 'weeklyRemainingPct', 'weeklyResetAtMs'],
+                ['rolling_5h', snap.rolling, 'rolling5hRemainingPct', 'rolling5hResetAtMs']
             ]) {
                 if (winSnap.limited && winSnap.resetsAtMs > nowMs) {
                     nextWindows[winKey] = {
@@ -2565,7 +2570,26 @@ function applyLiveUsageSnapshots(apiKeys, endpoint, snapshotsByAccountId, stateF
                         updatedAt: nowIso
                     };
                 } else if (nextWindows[winKey]) {
-                    delete nextWindows[winKey];
+                    const existingWin = nextWindows[winKey];
+                    const existingUntil = isPlainObject(existingWin) && isNonNegativeFinite(existingWin.blockedUntilMs)
+                        ? existingWin.blockedUntilMs : 0;
+                    const lastExhaustedMs = typeof existingWin?.lastExhaustedAt === 'string'
+                        ? Date.parse(existingWin.lastExhaustedAt) : NaN;
+                    const preWin = preSyncWindows && isPlainObject(preSyncWindows[winKey])
+                        ? preSyncWindows[winKey] : null;
+                    const existedUnchangedBeforeSync = preWin !== null
+                        && preWin.lastExhaustedAt === existingWin.lastExhaustedAt
+                        && preWin.blockedUntilMs === existingWin.blockedUntilMs;
+                    const preserveNewerCooldown = existingUntil > nowMs
+                        && Number.isFinite(lastExhaustedMs)
+                        && (lastExhaustedMs > snapFetchedAtMs
+                            || (lastExhaustedMs === snapFetchedAtMs && !existedUnchangedBeforeSync));
+                    if (preserveNewerCooldown) {
+                        nextQuota[pctField] = 0;
+                        if (resetField) nextQuota[resetField] = existingUntil;
+                    } else {
+                        delete nextWindows[winKey];
+                    }
                 }
             }
 
@@ -2802,13 +2826,14 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
         let fetched;
         try {
             fetched = await Promise.all(targets.map(async target => {
+                const fetchedAtMs = hasExplicitNow ? checkNowMs : Date.now();
                 const outcome = await fetchOpenCodeGoAccountUsage(target.key, endpoint, {
                     ...options,
                     timeoutMs: resolvedTimeoutMs,
                     ...(hasExplicitNow ? { nowMs: checkNowMs } : {}),
                     dispatcher: sharedDispatcher
                 });
-                return { ...target, outcome };
+                return { ...target, fetchedAtMs, outcome };
             }));
         } finally {
             if (sharedDispatcher) {
@@ -2825,7 +2850,12 @@ async function syncOpenCodeGoPoolUsage(apiKeys, endpoint, stateFile, options = {
             const failKey = `${syncKey}|${item.accountId}`;
             if (item.outcome.ok) {
                 const p = item.outcome.parsed;
-                snapshotsByAccountId[item.accountId] = p;
+                const prevWindows = accounts[item.accountId]?.windows;
+                snapshotsByAccountId[item.accountId] = {
+                    ...p,
+                    fetchedAtMs: item.fetchedAtMs,
+                    ...(isPlainObject(prevWindows) ? { _preSyncWindows: prevWindows } : {})
+                };
                 lastLiveSyncFailureAt.delete(failKey);
                 results.push({
                     slot: item.slot,

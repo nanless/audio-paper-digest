@@ -2197,7 +2197,7 @@ function validatePdfPage1AuthorEvidence(evidence, expectedPdfSha256 = null) {
     if (JSON.stringify(Object.keys(evidence).sort()) !== JSON.stringify(expectedKeys)) return false;
     if (!PDF_PAGE1_AUTHOR_CONTRACTS.has(evidence.contract)) return false;
     if (!PDF_PAGE1_AUTHOR_MODES.has(evidence.mode)) return false;
-    if (evidence.mode === 'inline_author_aff' && evidence.contract !== PDF_PAGE1_AUTHOR_CONTRACT_V2) return false;
+    if (evidence.mode === 'inline_author_aff' && evidence.contract === PDF_PAGE1_AUTHOR_CONTRACT_V1) return false;
     if (!recoverySha256(evidence.pdfSha256)) return false;
     if (expectedPdfSha256 && evidence.pdfSha256 !== expectedPdfSha256) return false;
     if (typeof evidence.sourceEvidence !== 'string' || !evidence.sourceEvidence.trim()) return false;

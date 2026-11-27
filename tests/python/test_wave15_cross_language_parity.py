@@ -170,8 +170,8 @@ class CrossLanguageParityWave15Tests(unittest.TestCase):
                 self.assertNotIn(leaked, py_out)
 
         leak_spec = json.loads((ROOT / 'config' / 'workflow-leak-patterns.json').read_text(encoding='utf-8'))
-        self.assertIn('script', leak_spec['v5SpecForbiddenHtmlTags'])
-        self.assertIn('manual_complete', leak_spec['v5SpecWorkflowLeakPattern'])
+        self.assertIn('script', leak_spec['structuredSpecForbiddenHtmlTags'])
+        self.assertIn('manual_complete', leak_spec['structuredSpecWorkflowLeakPattern'])
 
 
 if __name__ == '__main__':

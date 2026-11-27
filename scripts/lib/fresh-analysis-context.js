@@ -47,14 +47,31 @@ function safeDirectory(directory, create = false) {
     return absolute;
 }
 
+const PENDING_HARDLINK_MAX_ATTEMPTS = 50;
+const PENDING_HARDLINK_WAIT_MS = 2;
+const PENDING_HARDLINK_WAIT_ARRAY = new Int32Array(new SharedArrayBuffer(4));
+
 function readBytes(filename) {
-    let fd;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-        const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 64 * 1024 * 1024) throw fail('来源文件不是普通文件、硬链接数量不为 1，或大小超过 64 MiB');
-        return fs.readFileSync(fd);
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
+    // 并发写者在 linkSync -> unlinkSync 发布窗口内可能短暂出现 nlink === 2；
+    // 有界等待其完成临时链接清理，同时对持续 nlink >= 2 或 nlink > 2 仍保持 fail-closed。
+    for (let attempt = 0; ; attempt++) {
+        let fd;
+        try {
+            fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+            const stat = fs.fstatSync(fd);
+            if (stat.isFile() && stat.nlink === 2 && stat.size <= 64 * 1024 * 1024
+                && attempt < PENDING_HARDLINK_MAX_ATTEMPTS - 1) {
+                fs.closeSync(fd);
+                fd = undefined;
+                Atomics.wait(PENDING_HARDLINK_WAIT_ARRAY, 0, 0, PENDING_HARDLINK_WAIT_MS);
+                continue;
+            }
+            if (!stat.isFile() || stat.nlink !== 1 || stat.size > 64 * 1024 * 1024) {
+                throw fail('来源文件不是普通文件、硬链接数量不为 1，或大小超过 64 MiB');
+            }
+            return fs.readFileSync(fd);
+        } finally { if (fd !== undefined) fs.closeSync(fd); }
+    }
 }
 
 function readJson(filename) {
@@ -566,7 +583,10 @@ function writeExact(directory, filename, bytes) {
         // 用硬链接保存最终文件；若目标已被并发创建，不会覆盖它。
         try { fs.linkSync(temporary, target); }
         catch (error) {
-            if (error.code !== 'EEXIST' || !readBytes(target).equals(Buffer.from(bytes))) throw error;
+            if (error.code !== 'EEXIST') throw error;
+            if (!readBytes(target).equals(Buffer.from(bytes))) {
+                throw fail(`fresh 缓存拒绝覆盖不同的字节：${filename}`);
+            }
         }
     } finally {
         if (fd !== undefined) fs.closeSync(fd);

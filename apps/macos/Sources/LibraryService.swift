@@ -5,10 +5,10 @@ import PDFKit
 /// Published-site data and disposable caches. Personal notes and credentials never enter this store.
 actor LibraryService {
     enum ServiceError: LocalizedError {
-        case invalid(String), unavailable(String), network(String), httpStatus(Int), cancelled
+        case invalid(String), unavailable(String), network(String), httpStatus(Int), responseTooLarge(String), cancelled
         var errorDescription: String? {
             switch self {
-            case .invalid(let s), .unavailable(let s), .network(let s): return s
+            case .invalid(let s), .unavailable(let s), .network(let s), .responseTooLarge(let s): return s
             case .httpStatus: return "网站资料暂不可用，未覆盖已保存版本。"
             case .cancelled: return "操作已取消，上一份完整资料库仍然可用。"
             }
@@ -342,6 +342,8 @@ actor LibraryService {
                 snapshot = loaded.snapshot
                 fullTextIndex = loaded.fullTextIndex
                 desktopDetails = loaded.desktopDetails
+                resourceBadgesLoaded = false
+                cachedDemoPaperIDs = nil
                 loadPhase = .ready
                 loadTask = nil
                 loadID = nil
@@ -522,6 +524,8 @@ actor LibraryService {
         try atomicWrite(encoded, to: directory.appendingPathComponent("current.json"))
         snapshot = replacement
         desktopDetails = nil
+        resourceBadgesLoaded = false
+        cachedDemoPaperIDs = nil
         cleanupDesktopDetailsStateFilesAfterLegacyFallback()
         // The replacement catalog is now both persisted and in memory, so an earlier decode
         // failure no longer describes what this service serves: promote it to ready and the
@@ -651,7 +655,7 @@ actor LibraryService {
                 throw ServiceError.invalid(storageErr.localizedDescription)
             } catch let svcErr as ServiceError {
                 switch svcErr {
-                case .invalid, .cancelled:
+                case .invalid, .responseTooLarge, .cancelled:
                     throw svcErr
                 case .httpStatus(let code) where code == 404 || code == 410:
                     throw svcErr
@@ -899,7 +903,7 @@ actor LibraryService {
                     let bytes: Data
                     do { bytes = try await aggregateImageData(slot, limit: min(AggregateResources.maxImageBytes, AggregateResources.maxTotalBytes - total, AggregateResources.maxReferencedBytes - referencedBytes)) }
                     catch is CancellationError { throw CancellationError() }
-                    catch { if !(error is AggregateFailure) { total = AggregateResources.maxTotalBytes }; throw error }
+                    catch ServiceError.responseTooLarge { total = AggregateResources.maxTotalBytes; throw ServiceError.responseTooLarge("页面图片超过安全大小限额") }
                     total += bytes.count
                     guard let mime = Self.aggregateImageMIME(bytes) else { throw AggregateFailure.invalid("原图片字节类型不受支持") }
                     asset = .init(data: bytes, mime: mime)

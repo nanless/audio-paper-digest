@@ -1148,6 +1148,85 @@ function historicalOnlineVerificationPath(txDir) {
     return path.join(txDir, 'online-verification.json');
 }
 
+function validateHistoricalRemoteOid(remote) {
+    if (!remote) return null;
+    const rawCommit = typeof remote.publicationCommit === 'string' ? remote.publicationCommit.trim() : '';
+    const rawVerified = typeof remote.remoteVerifiedOid === 'string' ? remote.remoteVerifiedOid.trim() : '';
+    const validOid = value => /^[0-9a-f]{40}$/i.test(value);
+    if (rawCommit && !validOid(rawCommit)) {
+        throw new Error('历史发布远端凭证的 publicationCommit 不是合法的 40 位提交 OID');
+    }
+    if (rawVerified && !validOid(rawVerified)) {
+        throw new Error('历史发布远端凭证的 remoteVerifiedOid 不是合法的 40 位提交 OID');
+    }
+    if (rawCommit && rawVerified && rawCommit.toLowerCase() !== rawVerified.toLowerCase()) {
+        throw new Error('历史发布远端凭证的 publicationCommit 与 remoteVerifiedOid 不一致');
+    }
+    const resolved = rawVerified || rawCommit;
+    return resolved ? resolved.toLowerCase() : null;
+}
+
+function verifyHistoricalDeployOidBinding({ deployOid, recordedOid, plan, blogRepo, spawnSyncImpl = defaultSpawnSync } = {}) {
+    const candidate = String(deployOid || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(candidate)) {
+        throw new Error('--deploy 必须是 40 位十六进制 OID');
+    }
+    if (!recordedOid) {
+        throw new Error('历史发布缺少远端发布凭证 OID，拒绝用 --deploy 绕过发布绑定');
+    }
+    const recorded = String(recordedOid).toLowerCase();
+    if (candidate === recorded) return candidate;
+    if (typeof blogRepo !== 'string' || !blogRepo.trim() || !fs.existsSync(blogRepo)) {
+        throw new Error(`--deploy OID (${candidate}) 与历史发布远端 OID (${recorded}) 不一致，且缺少可核验祖先提交的博客仓库`);
+    }
+    const gitOpts = { encoding: 'utf8', timeout: 30000 };
+    const ancestry = spawnSyncImpl('git', ['-C', blogRepo, 'merge-base', '--is-ancestor', recorded, candidate], gitOpts);
+    if (!ancestry || ancestry.error || ancestry.status !== 0) {
+        throw new Error(`--deploy OID (${candidate}) 不是历史发布提交 (${recorded}) 的有效后续提交`);
+    }
+    const files = Array.isArray(plan?.files) ? plan.files : [];
+    for (const file of files) {
+        if (!file || typeof file.path !== 'string' || !file.path) continue;
+        if (file.deleted === true || file.operation === 'delete') {
+            const exists = spawnSyncImpl('git', ['-C', blogRepo, 'cat-file', '-e', `${candidate}:${file.path}`], gitOpts);
+            if (exists && !exists.error && exists.status === 0) {
+                throw new Error(`--deploy 提交 (${candidate}) 恢复了历史发布已删除文件：${file.path}`);
+            }
+            continue;
+        }
+        const blob = spawnSyncImpl('git', ['-C', blogRepo, 'cat-file', 'blob', `${candidate}:${file.path}`], {
+            encoding: null,
+            timeout: 30000,
+            maxBuffer: 32 * 1024 * 1024
+        });
+        if (!blob || blob.error || blob.status !== 0) {
+            throw new Error(`--deploy 提交 (${candidate}) 缺少历史发布已审文件：${file.path}`);
+        }
+        const bytes = Buffer.isBuffer(blob.stdout) ? blob.stdout : Buffer.from(String(blob.stdout || ''), 'utf8');
+        const actualSha = crypto.createHash('sha256').update(bytes).digest('hex');
+        if (typeof file.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(file.sha256)) {
+            if (actualSha !== file.sha256.toLowerCase()) {
+                throw new Error(`--deploy 提交 (${candidate}) 修改了历史发布已审页面字节：${file.path}`);
+            }
+        } else {
+            const baseBlob = spawnSyncImpl('git', ['-C', blogRepo, 'cat-file', 'blob', `${recorded}:${file.path}`], {
+                encoding: null,
+                timeout: 30000,
+                maxBuffer: 32 * 1024 * 1024
+            });
+            if (!baseBlob || baseBlob.error || baseBlob.status !== 0) {
+                throw new Error(`无法读取历史发布提交 (${recorded}) 的基准字节：${file.path}`);
+            }
+            const baseBytes = Buffer.isBuffer(baseBlob.stdout) ? baseBlob.stdout : Buffer.from(String(baseBlob.stdout || ''), 'utf8');
+            const baseSha = crypto.createHash('sha256').update(baseBytes).digest('hex');
+            if (actualSha !== baseSha) {
+                throw new Error(`--deploy 提交 (${candidate}) 修改了历史发布已审页面字节：${file.path}`);
+            }
+        }
+    }
+    return candidate;
+}
+
 async function verifyHistoricalPublication(publicationId, options = {}) {
     const env = options.env || readEnv();
     const { txDir, plan, remote } = loadHistoricalPublicationContext(publicationId, options);
@@ -1191,9 +1270,11 @@ async function verifyHistoricalPublication(publicationId, options = {}) {
     const failed = results.filter(item => !item.ok).length + (results.length === 0 ? 1 : 0);
     const ok = results.filter(item => item.ok).length;
     const deploy = options.deploy || null;
-    const deployOid = options.deployOid || remote?.remoteVerifiedOid || remote?.publicationCommit || null;
+    const recordedRemoteOid = validateHistoricalRemoteOid(remote);
+    const deployOid = options.deployOid ? String(options.deployOid).toLowerCase() : recordedRemoteOid;
     const pagesDeployVerified = Boolean(
-        deploy && deploy.available && deploy.status === 'completed'
+        recordedRemoteOid
+        && deploy && deploy.available && deploy.status === 'completed'
         && deploy.conclusion === 'success' && deploy.jobVerified === true
         && (!options.workflowSource || deploy.workflowSourceVerified === true)
     );
@@ -1206,8 +1287,9 @@ async function verifyHistoricalPublication(publicationId, options = {}) {
         verifiedAt: nowIso,
         publicationId,
         planSha256: plan.planSha256 || null,
-        publicationCommit: remote?.publicationCommit || deployOid || null,
-        remoteVerifiedOid: remote?.remoteVerifiedOid || deployOid || null,
+        publicationCommit: remote?.publicationCommit || null,
+        remoteVerifiedOid: recordedRemoteOid,
+        ...(deployOid ? { deployOid } : {}),
         pagesDeployVerified,
         webVerified,
         partial: !pagesDeployVerified || !webVerified,
@@ -1252,10 +1334,19 @@ async function runVerifyWebCli(argv = [], deps = {}) {
     if (options.historicalPublicationId) {
         try {
             const pubRoot = options.publicationRoot || deps.publicationRoot;
-            const { remote } = loadHistoricalPublicationContext(options.historicalPublicationId, {
+            const { plan, remote } = loadHistoricalPublicationContext(options.historicalPublicationId, {
                 publicationRoot: pubRoot
             });
-            const resolvedDeployOid = options.deploy || remote?.remoteVerifiedOid || remote?.publicationCommit || null;
+            const recordedRemoteOid = validateHistoricalRemoteOid(remote);
+            const resolvedDeployOid = options.deploy
+                ? verifyHistoricalDeployOidBinding({
+                    deployOid: options.deploy,
+                    recordedOid: recordedRemoteOid,
+                    plan,
+                    blogRepo: deps.blogRepo || env.PAPER_DIGEST_BLOG_REPO || require('./config.js').PUBLISH_CONFIG.blogRepo,
+                    spawnSyncImpl
+                })
+                : recordedRemoteOid;
             if (options.wait && !resolvedDeployOid) {
                 printError('[verify-web] --wait 需要历史发布远端 OID 或显式 --deploy OID');
                 return 2;
@@ -1542,6 +1633,8 @@ module.exports = {
     verify,
     loadHistoricalPublicationContext,
     historicalOnlineVerificationPath,
+    validateHistoricalRemoteOid,
+    verifyHistoricalDeployOidBinding,
     verifyHistoricalPublication,
     deployRepository,
     parseDeployRuns,

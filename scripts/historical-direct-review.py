@@ -255,6 +255,7 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
             with publish_common.with_llm_usage_context({
                 'stage': 'publish.text',
                 'paperId': page_identity,
+                'workflow': 'history',
             }):
                 return dict(zip(
                     ('passed', 'issues'),
@@ -287,6 +288,7 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
             with publish_common.with_llm_usage_context({
                 'stage': 'publish.figure',
                 'paperId': page_identity,
+                'workflow': 'history',
             }):
                 return dict(zip(
                     ('passed', 'issues'),

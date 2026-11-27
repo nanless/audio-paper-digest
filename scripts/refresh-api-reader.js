@@ -294,7 +294,7 @@ function resolveBatchRefreshIds(options) {
     console.log(
         `📋 读者文章全量刷新，批次日期为 ${options.date}`
         + ` | papers=${papers.length} | pending=${pending.length}`
-        + ` | current_v3=${papers.length - pending.length - skippedProtected}`
+        + ` | current=${papers.length - pending.length - skippedProtected}`
         + (skippedProtected > 0 ? ` | skipped_protected=${skippedProtected}` : '')
         + ` | concurrency=${options.concurrency}`
     );

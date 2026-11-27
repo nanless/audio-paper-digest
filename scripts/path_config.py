@@ -338,11 +338,11 @@ def _lock_snapshot_reclaimable(snapshot, stale_seconds):
     newest = max(snapshot['mtime'], (owner or {}).get('mtime', 0))
     pid = record.get('pid')
     if record.get('hostname') == socket.gethostname() and type(pid) is int and pid > 0:
-        from blog_repository_lock import _boot_time_seconds, _pid_start_time
+        from blog_repository_lock import BOOT_TIME_DRIFT_TOLERANCE_SECONDS, _boot_time_seconds, _pid_start_time
         recorded_boot = record.get('bootTime')
         if type(recorded_boot) is int:
             current_boot = _boot_time_seconds()
-            if current_boot is not None and current_boot != recorded_boot:
+            if current_boot is not None and abs(current_boot - recorded_boot) > BOOT_TIME_DRIFT_TOLERANCE_SECONDS:
                 return True
         try:
             os.kill(pid, 0)

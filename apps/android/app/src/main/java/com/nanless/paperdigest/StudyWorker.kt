@@ -15,10 +15,18 @@ import androidx.work.WorkerParameters
 class StudyWorker(context: Context, parameters: WorkerParameters): CoroutineWorker(context, parameters) {
     override suspend fun doWork(): Result {
         val sessionID = inputData.getString("sessionID") ?: return Result.failure()
+        val workspaceEpoch = inputData.getString("workspaceEpoch") ?: return Result.failure()
         return try {
-            setForeground(notification())
             val controller = (applicationContext as PaperDigestApplication).awaitController()
-            controller.performStudy(sessionID, inputData.getString("workspaceEpoch") ?: return Result.failure())
+            controller.performStudy(sessionID, workspaceEpoch) {
+                try {
+                    setForeground(notification())
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Android 12+ background FGS rejection must not skip study execution or leave job wedged.
+                }
+            }
             Result.success()
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (_: Exception) { Result.failure() }

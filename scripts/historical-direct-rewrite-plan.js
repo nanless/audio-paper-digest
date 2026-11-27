@@ -6,10 +6,10 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const api = require('./lib/historical-direct-rewrite-plan.js');
 
-const USAGE = '--dry-run|--apply --catalog ABSOLUTE.json --inventory ABSOLUTE.json --conference-projections ABSOLUTE.json [--output NAME.json]';
+const USAGE = '--dry-run|--apply --catalog ABSOLUTE.json --inventory ABSOLUTE.json [--conference-projections ABSOLUTE.json] [--output NAME.json]';
 function parseArgs(argv) {
     const [mode, ...rest] = argv; const values = {};
-    if (!['--dry-run', '--apply'].includes(mode) || rest.length < 6 || rest.length > 8 || rest.length % 2) {
+    if (!['--dry-run', '--apply'].includes(mode) || rest.length < 4 || rest.length > 8 || rest.length % 2) {
         throw new Error(`Use ${USAGE}`);
     }
     for (let index = 0; index < rest.length; index += 2) {
@@ -18,11 +18,13 @@ function parseArgs(argv) {
             || !value || Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
         values[flag] = value;
     }
-    if (['--catalog', '--inventory', '--conference-projections'].some(flag => !path.isAbsolute(values[flag] || ''))
+    if (['--catalog', '--inventory'].some(flag => !path.isAbsolute(values[flag] || ''))
+        || (values['--conference-projections'] !== undefined && !path.isAbsolute(values['--conference-projections'] || ''))
         || (values['--output'] !== undefined && !api.SAFE_NAME_RE.test(values['--output']))) throw new Error(`Use ${USAGE}`);
     return { apply: mode === '--apply', catalogFile: path.resolve(values['--catalog']),
         inventoryFile: path.resolve(values['--inventory']),
-        conferenceProjectionFile: path.resolve(values['--conference-projections']),
+        conferenceProjectionFile: values['--conference-projections'] !== undefined
+            ? path.resolve(values['--conference-projections']) : null,
         outputName: values['--output'] || 'direct-rewrite-plan.json' };
 }
 function main(argv = process.argv.slice(2), runtime = {}) {

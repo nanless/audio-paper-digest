@@ -362,6 +362,39 @@ async function run() {
     });
     assert.equal(inPlacePreserved, true, 'Progress tick must patch #podcast-scrubber in place without DOM rebuild');
 
+    // Round-5 P2 (#9): scrubbing flag must reset on mid-drag DOM re-render and on pointercancel
+    const scrubberRecovered = await page2.evaluate(() => {
+      const el1 = document.querySelector('#podcast-scrubber');
+      el1.value = '80';
+      el1.dispatchEvent(new Event('input', {bubbles: true}));
+      // Structural change mid-drag replaces dock.innerHTML
+      window.dispatchEvent(new CustomEvent('podcast.state', {detail: {error: '临时提示', currentTime: 85, duration: 300, isPlaying: true}}));
+      window.dispatchEvent(new CustomEvent('podcast.state', {detail: {error: null, currentTime: 95, duration: 300, isPlaying: true}}));
+      const afterRebuildVal = document.querySelector('#podcast-scrubber').value;
+      const afterRebuildTime = document.querySelector('#podcast-time').textContent;
+      // Now test pointercancel mid-drag
+      const el2 = document.querySelector('#podcast-scrubber');
+      el2.value = '100';
+      el2.dispatchEvent(new Event('input', {bubbles: true}));
+      el2.dispatchEvent(new Event('pointercancel'));
+      window.dispatchEvent(new CustomEvent('podcast.state', {detail: {currentTime: 110, duration: 300, isPlaying: true}}));
+      const afterCancelVal = document.querySelector('#podcast-scrubber').value;
+      const afterCancelTime = document.querySelector('#podcast-time').textContent;
+      return {afterRebuildVal, afterRebuildTime, afterCancelVal, afterCancelTime};
+    });
+    assert.equal(scrubberRecovered.afterRebuildVal, '95', 'Scrubber resumes updating after mid-drag DOM rebuild');
+    assert.ok(scrubberRecovered.afterRebuildTime.includes('01:35'), 'Elapsed time resumes updating after mid-drag DOM rebuild');
+    assert.equal(scrubberRecovered.afterCancelVal, '110', 'Scrubber resumes updating after pointercancel');
+    assert.ok(scrubberRecovered.afterCancelTime.includes('01:50'), 'Elapsed time resumes updating after pointercancel');
+
+    // Round-5 P2 (#11): library.changed refreshes optional signals (resourceBadges + podcast feed with refresh=true)
+    const callsBeforeChanged = await page2.evaluate(() => window.__calls.length);
+    await page2.evaluate(() => window.dispatchEvent(new CustomEvent('library.changed')));
+    await page2.waitForTimeout(120);
+    const callsAfterChanged = await page2.evaluate(n => window.__calls.slice(n), callsBeforeChanged);
+    assert.ok(callsAfterChanged.some(c => c.command === 'library.resourceBadges' && c.payload?.refresh === true), 'library.changed refreshes library.resourceBadges with refresh=true');
+    assert.ok(callsAfterChanged.some(c => c.command === 'podcast.feed' && c.payload?.refresh === true), 'library.changed refreshes podcast.feed with refresh=true');
+
     await page2.click('#podcast-rate-btn');
     await page2.waitForTimeout(80);
     assert.equal((await page2.locator('#podcast-rate-btn').innerText()).trim(), '1.25x');

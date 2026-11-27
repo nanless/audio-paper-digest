@@ -318,7 +318,9 @@ function makeFilterRequestError(message, properties = {}) {
 
 function classifyFilterRequestError(sourceError, context = {}) {
     if (sourceError?.filterClassified && sourceError?.scope !== 'run') return sourceError;
-    const status = Number(sourceError?.status ?? context.status);
+    const status = Number(
+        sourceError?.status ?? sourceError?.statusCode ?? sourceError?.llmResponse?.statusCode ?? context.status
+    );
     const originalCode = String(sourceError?.code || '');
     const message = sanitizeFilterErrorMessage(sourceError?.message || sourceError, context.secrets);
     const common = {
@@ -422,12 +424,13 @@ function classifyFilterRequestError(sourceError, context = {}) {
     const transientCodes = new Set([
         'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT',
         'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
-        'REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT'
+        'REQUEST_DEADLINE_EXCEEDED', 'REQUEST_SOCKET_TIMEOUT',
+        'REQUEST_STREAM_IDLE_TIMEOUT', 'PROXY_CONNECT_CLOSED', 'PROXY_CONNECT_TIMEOUT'
     ]);
     const looksTransient = transientCodes.has(originalCode)
         || /(?:proxy|connect|socket|network|timed?\s*out|timeout|dns|econnreset|econnrefused|eai_again|enotfound)/i.test(message);
     if (looksTransient) {
-        const category = /proxy|connect tunnel|http connect/i.test(message) ? 'proxy' : 'network';
+        const category = /^PROXY_/i.test(originalCode) || /proxy|connect tunnel|http connect/i.test(message) ? 'proxy' : 'network';
         return makeFilterRequestError(message, {
             ...common,
             code: originalCode || (category === 'proxy' ? 'FILTER_PROXY_ERROR' : 'FILTER_NETWORK_ERROR'),
@@ -439,7 +442,12 @@ function classifyFilterRequestError(sourceError, context = {}) {
         });
     }
 
-    if (['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE', 'MODEL_RESPONSE_FAILED'].includes(originalCode)) {
+    if ([
+        'MODEL_OUTPUT_TRUNCATED',
+        'MODEL_OUTPUT_INCOMPLETE',
+        'MODEL_RESPONSE_FAILED',
+        'SSE_TERMINAL_EVENT_MISSING'
+    ].includes(originalCode)) {
         return makeFilterRequestError(message, {
             ...common,
             code: originalCode,

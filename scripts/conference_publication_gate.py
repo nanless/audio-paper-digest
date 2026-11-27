@@ -197,21 +197,35 @@ class Page(HTMLParser):
 
 
 def markdown_tables(body):
-    lines = body.splitlines()
+    lines = str(body or '').splitlines()
     tables = []
     index = 0
-    separator = re.compile(r'\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*')
+    separator = re.compile(r'\s*\|(?:\s*:?-{1,}:?\s*\|)+\s*')
+    fence = None
+    in_fence_line = [False] * len(lines)
+    for pos, raw_line in enumerate(lines):
+        if fence is not None:
+            in_fence_line[pos] = True
+            fence_char, fence_len = fence
+            if re.fullmatch(rf' {{0,3}}{re.escape(fence_char)}{{{fence_len},}}[ \t]*$', raw_line):
+                fence = None
+            continue
+        opened = re.match(r'^ {0,3}(`{3,}|~{3,})([^\r\n]*)$', raw_line)
+        if opened and not (opened.group(1)[0] == '`' and '`' in opened.group(2)):
+            in_fence_line[pos] = True
+            fence = (opened.group(1)[0], len(opened.group(1)))
     while index < len(lines):
         line = lines[index]
-        if index == 0 or not re.fullmatch(separator, line) \
-                or not lines[index - 1].strip().startswith('|'):
+        if (index == 0 or in_fence_line[index] or in_fence_line[index - 1]
+                or not re.fullmatch(separator, line)
+                or not lines[index - 1].strip().startswith('|')):
             index += 1
             continue
         # 找到表头与分隔行之后，把整段连续的竖线行一起读进来。解读稿里
         # 可能在本表首尾放一整行全横线，那是表内数据，不是另一张表的分隔行。
         rows = [lines[index - 1]]
         cursor = index + 1
-        while cursor < len(lines) and lines[cursor].strip().startswith('|'):
+        while cursor < len(lines) and not in_fence_line[cursor] and lines[cursor].strip().startswith('|'):
             rows.append(lines[cursor])
             cursor += 1
         tables.append([cell.strip() for row in rows

@@ -1347,7 +1347,7 @@ def _project_reader_cell_tex_display_body(value):
     # 同一个整数写两遍：3232 → 32。小数点和千位分隔符两侧不算同一段数字
     # （0.7070.707 里的 7070 是 0.707 的尾数接下一份的首位，不是重复），
     # 四位年份 2020 与一位数 55/99 也不能折叠。
-    output = re.sub(r'(?<![\d,.])(\d{2,})\1(?![\d,.])', _fold_reader_duplicate_digits, output)
+    output = re.sub(r'(?<![A-Za-z0-9_,.])(\d{2,})\1(?![\d,.])', _fold_reader_duplicate_digits, output)
     if '\\' not in output and not re.search(r'[_^]\{', output) \
             and not re.search(r'([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])', output):
         return output

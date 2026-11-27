@@ -32,7 +32,7 @@ from conference_publication_figure_view import (matches_relocated_repo_path,
                                                 relocate_path_within_root)
 from publish_common import (run_bounded_llm_tasks, classify_review_failure,
                             unchanged_content_rejection_blocks_retry,
-                            interpret_readonly_text_unit)
+                            interpret_readonly_text_unit, with_llm_usage_context)
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from runtime_guard import require_external_runtime, require_workspace_role
 from conference_publication_gate import (inspect_html, verify_publication_urls, validate_png, fetch_public,
@@ -2104,8 +2104,13 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
             chunk_kwargs = {'required': True, 'chunk_label': f'{index + 1}/{len(chunks)}'}
             if chunk_accepts_source_note and source_figure_note:
                 chunk_kwargs['source_figure_note'] = source_figure_note
-            passed, findings, proposed = interpret_readonly_text_unit(chunk,
-                module._llm_review_post_chunk(chunk, title, **chunk_kwargs))
+            with with_llm_usage_context({
+                'stage': 'publish.text',
+                'paperId': record.get('paperId') or relative,
+                'workflow': 'conference',
+            }):
+                passed, findings, proposed = interpret_readonly_text_unit(chunk,
+                    module._llm_review_post_chunk(chunk, title, **chunk_kwargs))
             if passed is not True or proposed != chunk:
                 raise_content_review_failure(
                     record, digest, protocol, 'text', findings,
@@ -2137,7 +2142,12 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
                     known_images = dict(zero_warning_paper_images)
                 if known_images:
                     img_kwargs['verified_paper_images'] = known_images
-            passed, findings = module.multimodal_review_images(content, title, **img_kwargs)
+            with with_llm_usage_context({
+                'stage': 'publish.figure',
+                'paperId': record.get('paperId') or relative,
+                'workflow': 'conference',
+            }):
+                passed, findings = module.multimodal_review_images(content, title, **img_kwargs)
             if passed is not True:
                 raise_content_review_failure(
                     record, digest, protocol, 'image', findings,
@@ -2670,8 +2680,36 @@ def _is_github_pages_portal_remote(repo):
     return 'github.com' in remote_url and any(slug in remote_url for slug in PORTAL_REPO_RENAME_PAIR)
 
 
+def _non_transient_pages_deploy_issue(metadata):
+    """识别 GitHub Pages 观察元数据中不应继续盲目轮询的永久/限流错误。"""
+    if not isinstance(metadata, dict):
+        return None
+    issues = metadata.get('issues') or []
+    requests = metadata.get('requests') or []
+    http_statuses = {
+        req.get('httpStatus') for req in requests
+        if isinstance(req, dict) and isinstance(req.get('httpStatus'), int)
+    }
+    permanent_reasons = {'workflow_missing', 'source_identity', 'connect_failed', 'tls_failed'}
+    for issue in issues:
+        if isinstance(issue, dict):
+            reason = str(issue.get('reason') or issue.get('code') or '').strip()
+            issue_status = issue.get('httpStatus') if isinstance(issue.get('httpStatus'), int) else issue.get('status')
+        else:
+            reason = str(issue or '').strip()
+            issue_status = None
+        if reason in permanent_reasons:
+            return reason
+        if reason == 'http_status':
+            statuses = http_statuses | ({issue_status} if isinstance(issue_status, int) else set())
+            if statuses & {403, 429}:
+                code = 429 if 429 in statuses else 403
+                return f'http_status:{code}'
+    return None
+
+
 def wait_for_pages_deploy(repo, commit_oid, *, timeout_seconds=None, poll_interval_seconds=None,
-                          collect_metadata=None):
+                          collect_metadata=None, conference_id=None, process_id=None):
     """等待 GitHub Pages 工作流部署完成后再执行线上 URL 验收；本地测试远端自动跳过。"""
     if not _is_github_pages_portal_remote(repo):
         return {'status': 'skipped_non_github_remote', 'commit': commit_oid}
@@ -2682,9 +2720,9 @@ def wait_for_pages_deploy(repo, commit_oid, *, timeout_seconds=None, poll_interv
             timeout_seconds = 600
     if poll_interval_seconds is None:
         try:
-            poll_interval_seconds = max(1, int(os.environ.get('PD_PAGES_DEPLOY_POLL_SECONDS', '10').strip() or '10'))
+            poll_interval_seconds = max(1, int(os.environ.get('PD_PAGES_DEPLOY_POLL_SECONDS', '20').strip() or '20'))
         except ValueError:
-            poll_interval_seconds = 10
+            poll_interval_seconds = 20
     if collect_metadata is None:
         from github_pages_deployment import collect_github_pages_metadata as collect_metadata
     deadline = time.monotonic() + timeout_seconds
@@ -2699,6 +2737,18 @@ def wait_for_pages_deploy(repo, commit_oid, *, timeout_seconds=None, poll_interv
             raise ConferencePublicationError(
                 f'GitHub Pages 部署失败（commit={commit_oid}）：{(metadata or {}).get("issues")}'
             )
+        if outcome not in ('success', 'failure', 'pending'):
+            permanent_reason = _non_transient_pages_deploy_issue(metadata)
+            if permanent_reason:
+                verify_hint = (
+                    f'npm run conference:publish:verify -- --conference-id {conference_id} --process-id {process_id}'
+                    if conference_id and process_id
+                    else 'npm run conference:publish:verify -- --conference-id <CONFERENCE_ID> --process-id <PROCESS_ID>'
+                )
+                raise ConferencePublicationError(
+                    f'GitHub Pages 部署状态检查遇到不可重试错误（{permanent_reason}，commit={commit_oid}）；'
+                    f'远端推送已完成，请稍后运行：{verify_hint}'
+                )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ConferencePublicationError(
@@ -2773,12 +2823,13 @@ def push(conference_id, process_id, *, dry_run=False, wait_deploy=True):
                               generation['remoteIdentitySha256'], f'发布 {conference_id} 会议论文及汇总')
         remote = push_delta(repo, generation['files'], generation['baseHead'],
                             generation['remoteIdentitySha256'], commit)
-        if wait_deploy:
-            wait_for_pages_deploy(repo, commit)
-        accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote)
-        print(json.dumps({'status': 'complete', 'complete': True, 'publicationCommit': commit,
-                          'completionScope': 'mechanical-html+remote-oid+online-urls',
-                          'semanticReview': 'passed', 'visualInspection': 'not_performed'}))
+    # Git 提交、推送与远端 OID 核验均已落定，先释放仓库锁再等待 Pages 部署与线上 URL 验收。
+    if wait_deploy:
+        wait_for_pages_deploy(repo, commit, conference_id=conference_id, process_id=process_id)
+    accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote)
+    print(json.dumps({'status': 'complete', 'complete': True, 'publicationCommit': commit,
+                      'completionScope': 'mechanical-html+remote-oid+online-urls',
+                      'semanticReview': 'passed', 'visualInspection': 'not_performed'}))
 
 
 def main():

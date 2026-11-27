@@ -149,7 +149,7 @@ def _build_two_column_conference_pdf() -> bytes:
         for cx, cell in zip(t2_cols, row):
             p2.insert_text((cx, ry), cell, fontsize=9, fontname="helv")
 
-    # Padding prose so non-whitespace chars >= 5000 for full run_extraction_v2 test
+    # Padding prose so non-whitespace chars >= 5000 for full run_extraction_enhanced test
     y = 350
     for idx in range(38):
         p2.insert_text(

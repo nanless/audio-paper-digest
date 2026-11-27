@@ -2338,8 +2338,8 @@ class DesktopDetailsRepository(
                 }
             }
 
-            // Unwrap harmless structural wrappers (<section>, <article>, <main>, <del>, <ins>, <picture>) before strict allowlist sanitization
-            body.select("section, article, main, del, ins, picture").toList().forEach { wrapper -> wrapper.unwrap() }
+            // Unwrap harmless structural wrappers (<section>, <article>, <main>, <picture>) before strict allowlist sanitization
+            body.select("section, article, main, picture").toList().forEach { wrapper -> wrapper.unwrap() }
             CatalogRepository.sanitizeHtmlFragment(body, blogURL)
 
             val imgOriginalSources = IdentityHashMap<Element, String>()

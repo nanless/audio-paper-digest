@@ -3155,13 +3155,13 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
         def worker(idx: int):
             if idx % 2 == 0:
                 got = pae.extract_pdf_page1_authors_structured(pdf_bytes)
-                return ("v2", got, pae._V3_GUARDS_ENABLED)
+                return ("v2", got, pae._GEOMETRIC_GUARDS_ENABLED)
             got = pae.extract_pdf_page1_authors_geometric(pdf_bytes)
-            return ("v3", got, pae._V3_GUARDS_ENABLED)
+            return ("v3", got, pae._GEOMETRIC_GUARDS_ENABLED)
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(worker, range(32)))
 
         for tag, got, flag_after in results:
             self.assertEqual(got, expected_v2 if tag == "v2" else expected_v3)
-        self.assertFalse(pae._V3_GUARDS_ENABLED)
+        self.assertFalse(pae._GEOMETRIC_GUARDS_ENABLED)

@@ -100,6 +100,40 @@ actor AggregateFixtureTransport {
         let coldAccess=try await cold.aggregateReadAccess(id:"page:/audio-research-portal/ci-daily/"),coldDocument=try await cold.aggregatePresentation(coldAccess)
         for (index,test) in coldCases.enumerated(){try expect(try await cold.aggregateLink(coldAccess,document:coldDocument,index:all.count+index)==test.1,"cold snapshot route \(index) preserves exact but never extends offsite or other-project authority")}
         try expect(coldDocument.source==presented.source,"cold routing keeps the same verified aggregate source")
+        // Round-5 P2 (#10): in-app paper-link resolution must scan snapshot.papers directly without truncating at 10,000 papers
+        let largeDir = root.appendingPathComponent("over-10k")
+        let targetOldURL = base + "papers/oldest-paper-10005/"
+        let largeHTML = Data(("<html><body><div id='article-body' class='post-content'><p>Link to oldest paper: <a href='" + targetOldURL + "'>oldest</a></p></div></body></html>").utf8)
+        let (largeSvc, largeAccess, largeDoc) = try await install(controlledRows, largeHTML, "/audio-research-portal/ci-daily/", "over-10k")
+        let largeCurrent = largeDir.appendingPathComponent("PublishedLibrary/current.json")
+        var largeSnap = try JSONSerialization.jsonObject(with: Data(contentsOf: largeCurrent)) as! [String: Any]
+        let largePapers = largeSnap["papers"] as! [[String: Any]]
+        let paperTemplate = largePapers.first { $0["identityStatus"] as? String == "verified" }!
+        var bulkPapers: [[String: Any]] = []
+        bulkPapers.reserveCapacity(10006)
+        for idx in 1...10005 {
+            var p = paperTemplate
+            p["id"] = String(format: "arxiv:2601.%05d", idx)
+            p["date"] = "2026-11-26"
+            let slug = base + "papers/bulk-\(idx)/"
+            p["blogURL"] = slug
+            p["appearances"] = [slug]
+            bulkPapers.append(p)
+        }
+        var oldestPaper = paperTemplate
+        oldestPaper["id"] = "arxiv:2001.00001"
+        oldestPaper["date"] = "2020-01-01"
+        oldestPaper["blogURL"] = targetOldURL
+        oldestPaper["appearances"] = [targetOldURL]
+        bulkPapers.append(oldestPaper)
+        largeSnap["papers"] = bulkPapers
+        try JSONSerialization.data(withJSONObject: largeSnap, options: [.sortedKeys]).write(to: largeCurrent, options: .atomic)
+        _ = largeSvc; _ = largeAccess; _ = largeDoc
+        let coldLarge = try LibraryService(dataDirectory: largeDir, transport: { _, _ in throw URLError(.notConnectedToInternet) })
+        try await coldLarge.waitUntilReady()
+        let coldLargeAccess = try await coldLarge.aggregateReadAccess(id: "page:/audio-research-portal/ci-daily/")
+        let coldLargeDoc = try await coldLarge.aggregatePresentation(coldLargeAccess)
+        try expect(try await coldLarge.aggregateLink(coldLargeAccess, document: coldLargeDoc, index: 0) == .paper("arxiv:2001.00001"), "aggregateLink resolves verified paper beyond 10,000-paper list cap")
         try expect(try Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-original.html"))==original&&Data(contentsOf:fixtureRoot.appendingPathComponent("aggregate-daily24-links-rows.json"))==rowBytes,"routing never rewrites source or catalog fixture")
     }
     static func main() async throws {

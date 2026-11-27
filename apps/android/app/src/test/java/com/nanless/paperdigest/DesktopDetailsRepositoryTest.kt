@@ -590,7 +590,9 @@ class DesktopDetailsRepositoryTest {
             // Aggregate catalog works natively from paper-desktop-snapshot without needing client/index.json!
             val aggCatalog = requireNotNull(repo.aggregateCatalog())
             assertEquals(snapshotId, aggCatalog.snapshotSHA256)
-            assertEquals(2, aggCatalog.records.size)
+            assertEquals(2, aggCatalog.records.count { it.kind != "page" })
+            assertEquals(3, aggCatalog.records.count { it.kind == "page" })
+            assertEquals(5, aggCatalog.records.size)
             assertTrue(aggCatalog.records.any { it.kind == "daily" && it.title == "2026-11-17 语音论文速递" })
             assertTrue(aggCatalog.records.any { it.kind == "conference" && it.conferenceScope == "overview" })
 
@@ -602,7 +604,7 @@ class DesktopDetailsRepositoryTest {
             // Cold reload from disk (`paperdigest-published-library` unchanged) makes zero HTTP calls
             val coldRepo = CatalogRepository(null, personal) { _, _ -> error("Cold reload must not use network") }
             assertEquals(3, coldRepo.papers().size)
-            assertEquals(2, coldRepo.aggregateCatalog()!!.records.size)
+            assertEquals(5, coldRepo.aggregateCatalog()!!.records.size)
         }
     }
 
@@ -1711,10 +1713,20 @@ class DesktopDetailsRepositoryTest {
             val macosStateFile = File(dir, "PublishedLibrary/desktop-details/macos-states/$snapshotId-$epoch.json")
             JsonFiles.write(macosStateFile, macosWitness.toString().toByteArray(Charsets.UTF_8))
 
-            // 1. Cold-load CatalogRepository on Android from macOS-restored workspace -> succeeds, opens article, imports tombstoneHistory & aggregates!
+            // 1. Cold-load CatalogRepository on Android from macOS-restored workspace -> succeeds, opens article, imports tombstoneHistory & aggregates (including canonical /about/, /conferences/, /links/)!
             val restoredRepo = CatalogRepository(null, personal) { url, limit -> mock.fetch(url, limit) }
             assertEquals(1, restoredRepo.papers().size)
-            assertEquals(1, restoredRepo.aggregateCatalog()!!.records.size)
+            val restoredAgg = requireNotNull(restoredRepo.aggregateCatalog())
+            assertEquals(1, restoredAgg.records.count { it.kind == "daily" })
+            assertEquals(
+                setOf(
+                    "https://nanless.github.io/audio-research-portal/about/",
+                    "https://nanless.github.io/audio-research-portal/conferences/",
+                    "https://nanless.github.io/audio-research-portal/links/",
+                ),
+                restoredAgg.records.filter { it.kind == "page" }.map { it.sourceURL }.toSet(),
+            )
+            assertEquals(4, restoredAgg.records.size)
             val history = restoredRepo.tombstoneHistory()
             assertEquals(1, history.getJSONObject("currentTombstones").length())
             val eventTypes = history.getJSONArray("events").objects().map { it.getString("eventType") }
@@ -1974,6 +1986,58 @@ class DesktopDetailsRepositoryTest {
                 val rawRow = aggStore.originalRow(page)
                 assertEquals(page.source.normalizedRowSHA256, PublishedAggregateReader.sha(rawRow))
             }
+            // Round-5 P0: aggregate-index/<snapshotSHA>.json on disk must stay strictly pure manifest-derived baseCatalog (1 daily), never pre-merged N+3
+            val sidecarFile = File(dir, "PublishedLibrary/aggregate-index/${coldCatalog.snapshotSHA256}.json")
+            val sidecarJson = JSONObject(sidecarFile.readText(Charsets.UTF_8))
+            assertEquals(1, sidecarJson.getInt("aggregateCount"))
+            assertEquals(1, sidecarJson.getJSONArray("records").length())
+            assertEquals("daily", sidecarJson.getJSONArray("records").getJSONObject(0).getString("kind"))
         }
+    }
+
+    @Test
+    fun `html sanitizer preserves semantic tags ol start li value and table alignment while stripping unsafe markup`() {
+        val rawHtml = """
+            <div id="article-body" class="post-content">
+                <p><del>旧结论</del> <ins>新结论</ins> <small>脚注</small> <kbd>Cmd+K</kbd> <abbr title="Automatic Speech Recognition">ASR</abbr> <cite>Smith 2026</cite></p>
+                <ol start="5"><li value="7">第七条</li><li value="invalid;1">非法值被清</li></ol>
+                <ol start="bad"><li value="-2">负值允许</li></ol>
+                <table><thead><tr><th style="text-align: center; color: red">指标</th><th style="text-align: right">得分</th></tr></thead>
+                <tbody><tr><td style="text-align: left; background: url(https://evil.example/a.png)">WER</td><td style="color: blue">3.1%</td></tr></tbody></table>
+                <p style="color: red" data-x="1">普通段落</p>
+            </div>
+        """.trimIndent()
+        val sanitized = DesktopDetailsRepository.verifyAndSanitizeArticleHtml(
+            rawHtml.toByteArray(Charsets.UTF_8),
+            site + "posts/2026-11-26-sanitizer-check/",
+        )
+        val out = sanitized.body.html()
+        for (expected in listOf("<del>旧结论</del>", "<ins>新结论</ins>", "<small>脚注</small>", "<kbd>Cmd+K</kbd>", "<abbr title=\"Automatic Speech Recognition\">ASR</abbr>", "<cite>Smith 2026</cite>")) {
+            assertTrue("Expected $expected in $out", out.contains(expected))
+        }
+        assertTrue(out.contains("<ol start=\"5\">"))
+        assertTrue(out.contains("<li value=\"7\">"))
+        assertTrue(out.contains("<li value=\"-2\">"))
+        assertFalse(out.contains("start=\"bad\""))
+        assertFalse(out.contains("value=\"invalid;1\""))
+        assertTrue(sanitized.body.select("th.ta-center").isNotEmpty())
+        assertTrue(sanitized.body.select("th.ta-right").isNotEmpty())
+        assertTrue(sanitized.body.select("td.ta-left").isNotEmpty())
+        assertFalse(out.contains("style="))
+        assertFalse(out.contains("evil.example"))
+        // Negative: <script> still fails closed in desktop-details verifier and is stripped by CatalogRepository.sanitizeHtmlFragment
+        assertTrue(
+            runCatching {
+                DesktopDetailsRepository.verifyAndSanitizeArticleHtml(
+                    "<div id=\"article-body\"><script>alert(1)</script><p>x</p></div>".toByteArray(Charsets.UTF_8),
+                    site + "posts/2026-11-26-bad-script/",
+                )
+            }.isFailure,
+        )
+        val frag = org.jsoup.Jsoup.parseBodyFragment("<p onclick=\"evil()\"><script>alert(1)</script><del>保留</del></p>").body()
+        CatalogRepository.sanitizeHtmlFragment(frag, site + "posts/2026-11-26-bad-script/")
+        assertFalse(frag.html().contains("<script"))
+        assertFalse(frag.html().contains("onclick"))
+        assertTrue(frag.html().contains("<del>保留</del>"))
     }
 }

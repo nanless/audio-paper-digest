@@ -1695,6 +1695,8 @@ extension LibraryService {
 
         desktopDetails = newState
         snapshot = replacement
+        resourceBadgesLoaded = false
+        cachedDemoPaperIDs = nil
         pruneSupersededDesktopDetailsStates(keepingFileName: stateURL.lastPathComponent)
         promoteLoadPhaseAfterSync()
         progress(Progress(phase: "complete", message: "已同步 \(summary.paperCount) 篇论文，\(summary.recordCount) 条页面记录", completed: catalogShards.count, total: catalogShards.count))
@@ -2858,7 +2860,7 @@ extension LibraryService {
                             articleResources.append(Resource(sourceURL: canonicalURLString, kind: "image", localPath: nil, sha256: nil, missingReason: svcErr.localizedDescription))
                             if res.requiredForOffline { allRequiredGuideMediaCached = false }
                             notices.append("部分图片未离线保存：\(svcErr.localizedDescription)")
-                        case .invalid:
+                        case .invalid, .responseTooLarge:
                             // Unpinned external image policy/size/DNS failures (e.g. third-party image host) degrade per-image
                             // instead of blocking the entire paper from opening; pinned/bundled/cumulative limits remain fail-closed.
                             if res.expectedSha256 != nil { throw svcErr }

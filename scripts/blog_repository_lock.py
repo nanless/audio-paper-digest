@@ -106,6 +106,17 @@ def shared_lock_root(blog_repo, *, create=True):
     return root
 
 
+BOOT_TIME_DRIFT_TOLERANCE_SECONDS = 60
+
+
+def _minimal_system_probe_env():
+    return {
+        'PATH': os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin'),
+        'LC_ALL': 'C',
+        'TZ': 'UTC',
+    }
+
+
 def _boot_time_seconds():
     """返回本机最近一次启动的 Unix 秒时间戳；获取不到时返回 None。"""
     if sys.platform == 'darwin':
@@ -113,6 +124,7 @@ def _boot_time_seconds():
             res = subprocess.run(
                 ['sysctl', '-n', 'kern.boottime'],
                 check=False, capture_output=True, text=True, timeout=2,
+                env=_minimal_system_probe_env(),
             )
             if res.returncode == 0 and res.stdout:
                 import re
@@ -149,6 +161,7 @@ def _pid_start_time(pid):
         res = subprocess.run(
             ['ps', '-p', str(pid), '-o', 'lstart='],
             check=False, capture_output=True, text=True, timeout=2,
+            env=_minimal_system_probe_env(),
         )
         if res.returncode == 0:
             val = ' '.join(res.stdout.strip().split())
@@ -332,9 +345,9 @@ def _pid_state(record):
     if record['hostname'] != socket.gethostname():
         return 'remote'
     recorded_boot = record.get('bootTime')
-    if isinstance(recorded_boot, int):
+    if type(recorded_boot) is int:
         current_boot = _boot_time_seconds()
-        if current_boot is not None and current_boot != recorded_boot:
+        if current_boot is not None and abs(current_boot - recorded_boot) > BOOT_TIME_DRIFT_TOLERANCE_SECONDS:
             return 'dead'
     try:
         os.kill(record['pid'], 0)

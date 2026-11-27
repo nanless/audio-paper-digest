@@ -28,7 +28,7 @@ const server=http.createServer(async(req,res)=>{
 
  const response=()=>{
   res.setHeader('Content-Type','application/json');
-  if(req.url.includes('responses')){const body={id:'local-response',model:'desktop-local-test',status:req.url.includes('truncate')?'incomplete':'completed',incomplete_details:req.url.includes('truncate')?{reason:'max_output_tokens'}:null,output:[{type:'message',role:'assistant',content:[{type:'output_text',text:'本地 Responses 验证 [p.5]'}]}],usage:{input_tokens:12,output_tokens:7,total_tokens:19}};if(json.stream){res.setHeader('Content-Type','text/event-stream');res.end(`event: response.completed\ndata: ${JSON.stringify({type:'response.completed',response:body})}\n\n`);}else res.end(JSON.stringify(body));}
+  if(req.url.toLowerCase().includes('responses')){const body={id:'local-response',model:'desktop-local-test',status:req.url.includes('truncate')?'incomplete':'completed',incomplete_details:req.url.includes('truncate')?{reason:'max_output_tokens'}:null,output:[{type:'message',role:'assistant',content:[{type:'output_text',text:'本地 Responses 验证 [p.5]'}]}],usage:{input_tokens:12,output_tokens:7,total_tokens:19}};if(json.stream){res.setHeader('Content-Type','text/event-stream');res.end(`event: response.completed\ndata: ${JSON.stringify({type:'response.completed',response:body})}\n\n`);}else res.end(JSON.stringify(body));}
   else res.end(JSON.stringify({id:'local-chat',...(req.url.startsWith('/model-unreported/')?{}:{model:'desktop-local-test'}),choices:[{index:0,message:{role:'assistant',content:'本地 Chat 验证 [p.5]'},finish_reason:req.url.includes('truncate')?'length':'stop'}],usage:{prompt_tokens:12,completion_tokens:7,total_tokens:19}}));
  };
  if(req.url.includes('/slow/')){const timer=setTimeout(()=>{timers.delete(timer);if(!res.destroyed)response();},20_000);timers.add(timer);}else response();
@@ -53,5 +53,24 @@ const server=http.createServer(async(req,res)=>{
  const explicitChat=requests.find(r=>r.url==='/coding/v1/chat/completions');assert(explicitChat,'explicit chat uses actual chat/completions at coding/v1');assert.equal(explicitChat.body.model,'mimo-desktop-test');assert(Array.isArray(explicitChat.body.messages));assert.equal(explicitChat.body.input,undefined);
  const explicitResponses=requests.find(r=>r.url==='/deepseek-explicit/v1/responses');assert(explicitResponses,'explicit Responses remains responses despite deepseek model');assert.equal(explicitResponses.body.model,'deepseek-desktop-test');assert(Array.isArray(explicitResponses.body.input));assert.equal(explicitResponses.body.messages,undefined);assert.equal(explicitResponses.body.store,false);
  assert.equal(requests.filter(r=>r.url.includes('/truncate-')).length,2,'both truncation paths execute once');
+ // Round-5 P2: llm-worker.cjs must NOT append duplicate /responses when endpoint has trailing slash or uppercase /Responses
+ const runWorkerDirect = async (cfg, name) => {
+  const dir = path.join(temporary, 'direct-' + name); fs.mkdirSync(dir, {recursive: true});
+  const proc = spawn(process.execPath, [path.join(resources, 'llm-worker.cjs')], {cwd: fs.realpathSync(temporary), env: {PATH: '/usr/bin:/bin'}, stdio: ['pipe', 'pipe', 'pipe']});
+  let out = ''; proc.stdout.on('data', d => out += d);
+  proc.stdin.end(JSON.stringify({config: {key: 'test-only-not-a-real-key', model: 'responses-endpoint-test', ...cfg}, messages: [{role: 'user', content: 'endpoint normalization'}], usageDirectory: fs.realpathSync(dir), runID: '00000000-0000-4000-8000-000000000099', paperID: 'test:' + name}));
+  assert.equal(await new Promise(r => proc.on('close', r)), 0);
+  return JSON.parse(out);
+ };
+ const trailRes = await runWorkerDirect({endpoint: address + '/trail-resp/v1/responses/', protocol: 'responses'}, 'trail-slash');
+ assert.equal(trailRes.okay, true, trailRes.error?.message);
+ assert.equal(requests.find(r => r.url.startsWith('/trail-resp/'))?.url, '/trail-resp/v1/responses', 'trailing slash must not produce /responses/responses');
+ const upperRes = await runWorkerDirect({endpoint: address + '/upper-resp/v1/Responses', protocol: 'responses'}, 'upper-case');
+ assert.equal(upperRes.okay, true, upperRes.error?.message);
+ assert.equal(requests.find(r => r.url.startsWith('/upper-resp/'))?.url, '/upper-resp/v1/Responses', 'uppercase /Responses must not produce /Responses/responses');
+ const chatOnUpperRes = await runWorkerDirect({endpoint: address + '/chat-upper-resp/v1/Responses/', protocol: 'chat'}, 'chat-upper-reject');
+ assert.equal(chatOnUpperRes.okay, false);
+ assert.equal(chatOnUpperRes.error?.code, 'MODEL_CONFIGURATION_INVALID');
+ assert.equal(requests.some(r => r.url.startsWith('/chat-upper-resp/')), false, 'chat on uppercase /Responses/ must fail closed before HTTP');
  console.log(`ModelWorker PASS: ${requests.length} HTTP requests, all loopback mock; no paid endpoint or real key`);
 })().catch(error=>{console.error(error.message);process.exitCode=1;}).finally(()=>{for(const timer of timers)clearTimeout(timer);server.closeAllConnections();server.close();fs.rmSync(temporary,{recursive:true,force:true});});

@@ -316,7 +316,16 @@ function validateValue(item, rawValue) {
     case 'url':
         try {
             const parsed = new URL(value);
-            if (!parsed.protocol.startsWith('https:') && parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') {
+            if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
+                || !/^https?:\/\/[^/?#\\]+/i.test(value)
+                || !parsed.hostname) {
+                return {
+                    ok: 'fail',
+                    detail: `仅支持带主机名的 http(s) URL（收到 ${parsed.protocol || '未知协议'}）`,
+                    hint: item.hint || '请使用 https:// 或 http:// 开头的合法地址'
+                };
+            }
+            if (parsed.protocol !== 'https:' && parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost' && parsed.hostname !== '[::1]') {
                 return { ok: 'warn', detail: `非 HTTPS：${parsed.protocol}//${parsed.hostname}`, hint: '生产端点应为 HTTPS' };
             }
             return { ok: 'ok', detail: `URL ${parsed.protocol}//${parsed.hostname}` };

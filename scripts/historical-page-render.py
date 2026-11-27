@@ -210,16 +210,21 @@ def render_packet(packet):
         reader_title = str(plan.get('readerTitle') or title).strip()
         one_sentence = str(plan.get('oneSentenceThesis') or '').strip()
         article = str(
-            (api_reader_payload['article'] if api_reader_payload else projected.get('apiReaderArticle'))
+            (api_reader_payload['renderedArticle'] if api_reader_payload else projected.get('apiReaderArticle'))
             or ''
         ).strip()
         if not article:
             raise ValueError('历史会议论文的解读正文不能为空。')
         article = normalize_repeated_bold_prefixes(article)
-        figures = projected.get('apiReaderFigures')
-        article = publisher.render_ephemeral_api_reader_figures(
-            article, [] if figures is None else figures
+        already_rendered_ephemeral = bool(
+            api_reader_payload
+            and api_reader_payload.get('figurePersistence') == publisher.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT
         )
+        if not already_rendered_ephemeral:
+            figures = projected.get('apiReaderFigures')
+            article = publisher.render_ephemeral_api_reader_figures(
+                article, [] if figures is None else figures
+            )
         article = publisher._nest_reader_headings(article, minimum_level=3)
         tags = [str(item).lstrip('#') for item in parsed.get('tags', []) if str(item).strip()]
         score_line = publisher.format_complete_score_line(parsed)

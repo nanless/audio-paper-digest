@@ -749,10 +749,26 @@ function sealOneSource(context, member, deps, createdAt, { replayExisting = true
             // 这样实现迁移就能修掉一个确定性的 PDF 审计缺陷，
             // 既不用删掉失败证据，也不用授权新的分析运行。
             upgradedFrom = names.receipt;
-            const rawExtractorProfile = String(
-                process.env.PD_CONFERENCE_EXTRACTOR_PROFILE || process.env.PD_CONFERENCE_EXTRACTOR_VERSION || ''
-            ).trim().toLowerCase();
-            const targetExtractorSha = (rawExtractorProfile === 'legacy' || rawExtractorProfile === 'v1')
+            const profileEnv = String(process.env.PD_CONFERENCE_EXTRACTOR_PROFILE || '').trim().toLowerCase();
+            let resolvedExtractorProfile;
+            if (profileEnv) {
+                if (profileEnv !== 'enhanced' && profileEnv !== 'legacy') {
+                    throw new Error(`unsupported PD_CONFERENCE_EXTRACTOR_PROFILE: ${JSON.stringify(profileEnv)} (expected enhanced or legacy)`);
+                }
+                resolvedExtractorProfile = profileEnv;
+            } else {
+                const versionEnv = String(process.env.PD_CONFERENCE_EXTRACTOR_VERSION || '').trim().toLowerCase();
+                if (!versionEnv) {
+                    resolvedExtractorProfile = 'enhanced';
+                } else if (versionEnv === 'enhanced' || versionEnv === 'v2') {
+                    resolvedExtractorProfile = 'enhanced';
+                } else if (versionEnv === 'legacy' || versionEnv === 'v1') {
+                    resolvedExtractorProfile = 'legacy';
+                } else {
+                    throw new Error(`unsupported PD_CONFERENCE_EXTRACTOR_VERSION: ${JSON.stringify(versionEnv)} (expected enhanced or legacy)`);
+                }
+            }
+            const targetExtractorSha = resolvedExtractorProfile === 'legacy'
                 ? extraction.EXTRACTOR_IMPLEMENTATION_SHA256
                 : extraction.EXTRACTOR_ENHANCED_IMPLEMENTATION_SHA256;
             const generation = stableHash({ source: context.authority.implementationSha256,

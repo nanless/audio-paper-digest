@@ -12,10 +12,21 @@ function scientificMathAt(text,start){
  for(let end=start+open.length;end<text.length;end++){
   if(!display&&text[end]==='\n')return null;
   if(text.startsWith(close,end)&&!escapedAt(text,end)&&end>start+open.length){
-   return {start,end:end+close.length,text:text.slice(start+open.length,end),display,raw:text.slice(start,end+close.length)};
+   const match={start,end:end+close.length,text:text.slice(start+open.length,end),display,raw:text.slice(start,end+close.length)};
+   if(isCurrencyDollarSpan(text,match))return null;
+   return match;
   }
  }
  return null;
+}
+function isCurrencyDollarSpan(text,match){
+ if(match.display||!match.raw.startsWith('$')||match.raw.startsWith('$$'))return false;
+ const inner=match.text;if(!inner)return false;
+ const nextChar=text[match.end]||'',startsWithDigit=/^\d/.test(inner),hasBackslash=inner.includes('\\');
+ if(startsWithDigit&&/^\d/.test(nextChar))return true;
+ if(!hasBackslash&&/[\u3000-\u303F\u4E00-\u9FFF\uFF00-\uFFEF]/.test(inner))return true;
+ if(startsWithDigit&&/\s$/.test(inner)&&!/[\\^_{}=<>±×÷∑∏∫√∞≈≠≤≥]/.test(inner)&&/^\d[\d,.]*(?:[kKmMbB])?(?:[^0-9A-Za-z_^{}\\]|\s|$)/.test(inner))return true;
+ return false;
 }
 function nextScientificMath(text,from=0){for(let i=from;i<text.length;i++){const match=scientificMathAt(text,i);if(match)return match;}return null;}
 function prepareDisplayMath(wrapper){wrapper.tabIndex=0;wrapper.setAttribute('role','region');wrapper.setAttribute('aria-label','数学公式');wrapper.setAttribute('aria-description','内容较宽时可左右滚动');}

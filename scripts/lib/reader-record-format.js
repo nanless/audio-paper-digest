@@ -138,19 +138,19 @@ function compilationOptionsForSavedPlan(plan) {
     if (!isIntegratedPlan(plan)) throw new Error('已保存文章不是受支持的完整来源绑定格式');
     const header = storedPlanHeader(plan);
     if (Object.hasOwn(header, 'version')) {
-        return { requiredProfile: INTEGRATED, compileCurrent: false, editorialProfile: LEGACY_INTEGRATED };
+        return { requiredProfile: INTEGRATED, compileCurrent: false, editorialProfile: LEGACY_INTEGRATED, legacyNarrativeNumeralReplay: true };
     }
     if (codec.isCurrentHeader(header, 'beginner-researcher')) {
         return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: STRUCTURED_EDITORIAL, compiledPlanHeader: header };
     }
     if (header.contract === 'beginner-researcher' && header.schemaFingerprint === V5_PLAN_FP) {
-        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: STRUCTURED_V5_EDITORIAL, compiledPlanHeader: header };
+        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: STRUCTURED_V5_EDITORIAL, compiledPlanHeader: header, legacyNarrativeNumeralReplay: true };
     }
     if (header.contract === 'beginner-researcher' && header.schemaFingerprint === V4_PLAN_FP) {
-        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: COHESIVE_EDITORIAL, compiledPlanHeader: header };
+        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: COHESIVE_EDITORIAL, compiledPlanHeader: header, legacyNarrativeNumeralReplay: true };
     }
     if (header.contract === 'beginner-researcher' && header.schemaFingerprint === OLD_PLAN_FP) {
-        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: LEGACY_INTEGRATED, compiledPlanHeader: header };
+        return { requiredProfile: INTEGRATED, compileCurrent: true, editorialProfile: LEGACY_INTEGRATED, compiledPlanHeader: header, legacyNarrativeNumeralReplay: true };
     }
     throw new Error('原稳定格式尚无对应冷重放编译器');
 }

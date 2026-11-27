@@ -6410,9 +6410,9 @@ def _paper_uses_structured_editorial(paper):
 _WORKFLOW_LEAK_SPEC = json.loads(
     (PROJECT_ROOT / 'config' / 'workflow-leak-patterns.json').read_text(encoding='utf-8')
 )
-_V5_SPEC_FORBIDDEN_HTML_TAGS = frozenset(_WORKFLOW_LEAK_SPEC['v5SpecForbiddenHtmlTags'])
-_V5_SPEC_WORKFLOW_LEAK_RE = re.compile(
-    _WORKFLOW_LEAK_SPEC['v5SpecWorkflowLeakPattern'],
+_STRUCTURED_SPEC_FORBIDDEN_HTML_TAGS = frozenset(_WORKFLOW_LEAK_SPEC['structuredSpecForbiddenHtmlTags'])
+_STRUCTURED_SPEC_WORKFLOW_LEAK_RE = re.compile(
+    _WORKFLOW_LEAK_SPEC['structuredSpecWorkflowLeakPattern'],
     flags=re.IGNORECASE,
 )
 
@@ -6432,7 +6432,7 @@ def _has_forbidden_spec_html_or_markdown(text):
     for match in re.finditer(r'<([!/A-Za-z][^>]*)>', outside_code):
         inner = match.group(1).strip()
         is_safe_token = bool(re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]{0,24}', inner)) \
-            and inner.lower() not in _V5_SPEC_FORBIDDEN_HTML_TAGS
+            and inner.lower() not in _STRUCTURED_SPEC_FORBIDDEN_HTML_TAGS
         if not is_safe_token:
             return True
     return False
@@ -6496,7 +6496,7 @@ def _sanitize_implementation_spec_text(text):
         def _replace_tag(match):
             inner = match.group(1).strip()
             if re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]{0,24}', inner) \
-                    and inner.lower() not in _V5_SPEC_FORBIDDEN_HTML_TAGS:
+                    and inner.lower() not in _STRUCTURED_SPEC_FORBIDDEN_HTML_TAGS:
                 return f'`<{inner}>`'
             return match.group(0).replace('<', '&lt;').replace('>', '&gt;')
         safe = re.sub(r'<([^<>]+)>', _replace_tag, part)
@@ -7513,7 +7513,7 @@ def _render_daily_spotlight(scored, date_str, paper_slugs):
     ]
     from paper_reader_presentation import score_dimensions_for_rubric
     import scoring_rubric as _scoring
-    is_v2 = _scoring.is_unified_rubric(parsed.get('scoringRubricVersion'))
+    is_unified_rubric = _scoring.is_unified_rubric(parsed.get('scoringRubricVersion'))
     active_dims = score_dimensions_for_rubric(parsed.get('scoringRubricVersion'))
     ranked_dims = []
     for key, label, maximum in active_dims:
@@ -7525,7 +7525,7 @@ def _render_daily_spotlight(scored, date_str, paper_slugs):
             ratio = num / float(maximum)
         except (TypeError, ValueError):
             continue
-        val_str = f'{num:.1f}/{maximum}' if is_v2 else f'{raw_val}/{maximum}'
+        val_str = f'{num:.1f}/{maximum}' if is_unified_rubric else f'{raw_val}/{maximum}'
         ranked_dims.append((ratio, float(maximum), f'{label} {val_str}'))
     ranked_dims.sort(key=lambda item: (item[0], item[1]), reverse=True)
     highlight_bits = [text for _, _, text in ranked_dims[:3]]
@@ -9429,7 +9429,7 @@ def _api_reader_payload_uncached(paper):
                     or not 4 <= len(specs[key].strip()) <= 650
                     or len(re.sub(r'\s+', '', specs[key].strip())) > 550
                     or _has_forbidden_spec_html_or_markdown(specs[key])
-                    or bool(_V5_SPEC_WORKFLOW_LEAK_RE.search(specs[key]))
+                    or bool(_STRUCTURED_SPEC_WORKFLOW_LEAK_RE.search(specs[key]))
                     for key in specs
                 ):
             raise PublishDataValidationError(
@@ -9652,7 +9652,7 @@ def _api_reader_payload_uncached(paper):
                             ) \
                             or item['explanationQuote'] not in article_paragraphs[image_index + 2]:
                         raise PublishDataValidationError(
-                            'API Reader v3 的论文图未按导读、看图路径、原图、图注和解释的顺序相邻排列，或对应内容与图片计划不一致。'
+                            'API Reader 的论文图未按导读、看图路径、原图、图注和解释的顺序相邻排列，或对应内容与图片计划不一致。'
                         )
                 else:
                     caption_para = article_paragraphs[image_index + 1].strip() if (image_index is not None and image_index + 1 < len(article_paragraphs)) else ''
@@ -10104,7 +10104,7 @@ def generate_paper_page(paper, date_str, category='论文速递', *, source_text
         else _manual_reader_article(paper, reader_plan, date_str)
     )
     reader_first = reader_plan is not None and reader_article is not None
-    api_reader_v2 = bool(
+    api_reader_record = bool(
         api_reader_payload
         and reader_formats.is_structured_contract(api_reader_payload.get('contract'))
     )
@@ -10184,7 +10184,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         )
     md += _historical_source_notice(paper)
     reader_authors_content = ''
-    if api_reader_v2 and api_reader_payload.get('readerAuthors'):
+    if api_reader_record and api_reader_payload.get('readerAuthors'):
         reader_authors_content = _render_api_reader_author_block(paper, api_reader_payload)
     if paper.get('analysisSource') == 'abstract':
         md += '> ⚠️ 本文仅基于论文摘要生成，未能取得可验证的全文，技术细节与评分置信度有限。\n\n'
@@ -10212,14 +10212,14 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         if reader_display_fields is not None:
             metadata_block = (build_index_context_line(parsed_analysis, aurl) or '') + '\n\n'
 
-        if parsed_analysis.get('authors') and not api_reader_v2:
+        if parsed_analysis.get('authors') and not api_reader_record:
             metadata_block += f"\n### 👥 作者与机构\n\n{parsed_analysis['authors']}\n"
 
         if reader_first and reader_identity_lines:
             md += '> ' + '\n>\n> '.join(reader_identity_lines) + '\n\n'
         elif not reader_first:
             md += metadata_block
-        if api_reader_v2 and reader_authors_content:
+        if api_reader_record and reader_authors_content:
             md += f"\n## 👥 作者与机构\n\n{reader_authors_content}\n"
 
         # 分离补充信息（从 opensource 中提取）
@@ -10280,9 +10280,8 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                             content, reader_first_image_plans,
                         )
                     content = _nest_reader_headings(
-                        # API v2 在 H3 展开它的讲解路径。历史上的
-                        # Manual/API 契约仍然保留已核验保存的 H4 嵌套。
-                        content.strip(), minimum_level=3 if api_reader_v2 else 4
+                        # 结构化 API Reader 在 H3 展开讲解路径；历史 Manual/API 契约仍保留 H4 嵌套。
+                        content.strip(), minimum_level=3 if api_reader_record else 4
                     )
                 else:
                     content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
@@ -10303,12 +10302,12 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                             f'{content}\n\n</details>\n'
                         )
                 else:
-                    heading_level = '##' if api_reader_v2 else '###'
+                    heading_level = '##' if api_reader_record else '###'
                     md += f'\n{heading_level} {label}\n\n{content}\n'
 
         # 补充信息放到最后面
         if supplementary:
-            md += f'\n{"##" if api_reader_v2 else "###"} 📎 补充信息\n\n{supplementary}\n'
+            md += f'\n{"##" if api_reader_record else "###"} 📎 补充信息\n\n{supplementary}\n'
         implementation_specs_block = (
             _render_api_reader_implementation_specs(api_reader_payload.get('plan'))
             if api_reader_payload is not None else ''
@@ -10321,7 +10320,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
             md += f'\n## ⚖️ 评分明细\n\n{reader_display_fields["scoringReason"]}\n'
         if reader_first and scoring_evidence:
             md += (
-                f'\n{"##" if api_reader_v2 else "###"} ⚖️ 评分依据与证据（展开查看）\n\n'
+                f'\n{"##" if api_reader_record else "###"} ⚖️ 评分依据与证据（展开查看）\n\n'
                 f'<details>\n<summary>逐维得分、全文证据与扣分边界</summary>\n\n'
                 f'{scoring_evidence}\n\n</details>\n'
             )

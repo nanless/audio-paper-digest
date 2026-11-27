@@ -121,18 +121,19 @@ async function renderOfficialInlineSvg(resource, _deps = {}) {
                 terminateChild();
             } else chunks.push(chunk);
         });
-        child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(0, 4000); });
+        child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-4000); });
         child.once('error', error => { clearTimeout(timeout); terminateChild(); reject(error); });
         child.stdin.on('error', error => { failure ||= error; });
         child.once('close', code => {
             clearTimeout(timeout);
+            const lastStderrLine = stderr.split(/\r?\n/).map(line => line.trim()).filter(Boolean).at(-1) || '';
             const reason = [
                 'external_css_icon_glyph',
                 'external_latexml_layout_css',
                 'raw_latex_leak_in_svg',
                 'foreign_object_text_overlap'
             ].find(reason =>
-                stderr.trim() === JSON.stringify({ contract: 'reader-inline-svg-error-v1', code: 'unsupported_dependency', reason }));
+                lastStderrLine === JSON.stringify({ contract: 'reader-inline-svg-error-v1', code: 'unsupported_dependency', reason }));
             if (!failure && size === 0 && code === 65 && reason) {
                 const rejected = new Error(`受控渲染器确认封存来源缺少依赖：${reason}`);
                 unsupportedDependencyCauses.set(rejected, reason);

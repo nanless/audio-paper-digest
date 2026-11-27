@@ -522,10 +522,14 @@ def _remove_lock_dir_checked(lock_path, expected_snapshot):
         return False
 
 
+BOOT_TIME_DRIFT_TOLERANCE_SECONDS = 60
+
+
 def _minimal_system_probe_env():
     return {
         'PATH': os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin'),
         'LC_ALL': 'C',
+        'TZ': 'UTC',
     }
 
 
@@ -604,7 +608,7 @@ def _local_lock_owner_alive(owner):
     recorded_boot = owner.get('bootTime')
     if type(recorded_boot) is int:
         process_boot = _get_process_boot_time_seconds()
-        if process_boot is not None and recorded_boot != process_boot:
+        if process_boot is not None and abs(process_boot - recorded_boot) > BOOT_TIME_DRIFT_TOLERANCE_SECONDS:
             return False
     owner_pid = owner.get('pid')
     try:
@@ -2235,6 +2239,24 @@ def parse_opencode_go_usage_payload(payload):
     }
 
 
+def _parse_iso_ms(value):
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith(('Z', 'z')):
+        text = text[:-1] + '+00:00'
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    ms = dt.timestamp() * 1000.0
+    return int(round(ms)) if math.isfinite(ms) else None
+
+
 def apply_live_usage_snapshots(api_keys, endpoint, snapshots_by_account_id, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *, now_ms=None):
     keys = normalize_api_keys(api_keys)
     identity = get_pool_identity(keys, endpoint)
@@ -2284,10 +2306,13 @@ def apply_live_usage_snapshots(api_keys, endpoint, snapshots_by_account_id, stat
             next_quota['snapshotAtMs'] = now_ms
             next_quota['lastLiveSyncAtMs'] = now_ms
 
-            for win_key, win_snap in (
-                ('monthly', snap['monthly']),
-                ('weekly', snap['weekly']),
-                ('rolling_5h', snap['rolling']),
+            raw_fetched_at = snap.get('fetchedAtMs') if 'fetchedAtMs' in snap else snap.get('fetched_at_ms')
+            snap_fetched_at_ms = int(raw_fetched_at) if _is_non_negative_finite(raw_fetched_at) else now_ms
+            pre_sync_windows = snap.get('_pre_sync_windows') if isinstance(snap.get('_pre_sync_windows'), dict) else None
+            for win_key, win_snap, pct_field, reset_field in (
+                ('monthly', snap['monthly'], 'monthlyRemainingPct', None),
+                ('weekly', snap['weekly'], 'weeklyRemainingPct', 'weeklyResetAtMs'),
+                ('rolling_5h', snap['rolling'], 'rolling5hRemainingPct', 'rolling5hResetAtMs'),
             ):
                 if win_snap['limited'] and win_snap['resets_at_ms'] > now_ms:
                     next_windows[win_key] = {
@@ -2298,7 +2323,37 @@ def apply_live_usage_snapshots(api_keys, endpoint, snapshots_by_account_id, stat
                         'updatedAt': now_iso,
                     }
                 elif win_key in next_windows:
-                    del next_windows[win_key]
+                    existing_win = next_windows[win_key]
+                    existing_until = (
+                        int(existing_win['blockedUntilMs'])
+                        if isinstance(existing_win, dict) and _is_non_negative_finite(existing_win.get('blockedUntilMs'))
+                        else 0
+                    )
+                    last_exhausted_ms = (
+                        _parse_iso_ms(existing_win.get('lastExhaustedAt'))
+                        if isinstance(existing_win, dict) else None
+                    )
+                    pre_win = pre_sync_windows.get(win_key) if pre_sync_windows is not None else None
+                    existed_unchanged_before_sync = (
+                        isinstance(pre_win, dict)
+                        and isinstance(existing_win, dict)
+                        and pre_win.get('lastExhaustedAt') == existing_win.get('lastExhaustedAt')
+                        and pre_win.get('blockedUntilMs') == existing_win.get('blockedUntilMs')
+                    )
+                    preserve_newer_cooldown = (
+                        existing_until > now_ms
+                        and last_exhausted_ms is not None
+                        and (
+                            last_exhausted_ms > snap_fetched_at_ms
+                            or (last_exhausted_ms == snap_fetched_at_ms and not existed_unchanged_before_sync)
+                        )
+                    )
+                    if preserve_newer_cooldown:
+                        next_quota[pct_field] = 0
+                        if reset_field is not None:
+                            next_quota[reset_field] = existing_until
+                    else:
+                        del next_windows[win_key]
 
             active_max = 0
             active_limit_name = None
@@ -2529,11 +2584,12 @@ def sync_opencode_go_pool_usage(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_
 
         def _worker(item):
             slot, key, account_id = item
+            fetched_at_ms = check_now_ms if has_explicit_now else int(time.time() * 1000)
             outcome = fetch_opencode_go_account_usage(
                 key, endpoint, proxy_url=proxy_url, timeout_ms=timeout_ms,
                 fetcher=fetcher, now_ms=(check_now_ms if has_explicit_now else None),
             )
-            return slot, account_id, outcome
+            return slot, account_id, fetched_at_ms, outcome
 
         max_workers = min(8, len(targets))
         with ThreadPoolExecutor(max_workers=max_workers) as pool_exec:
@@ -2546,10 +2602,19 @@ def sync_opencode_go_pool_usage(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_
         failed = 0
         succeeded_ids = []
         failed_ids = []
-        for slot, account_id, outcome in fetched:
+        for slot, account_id, fetched_at_ms, outcome in fetched:
             if outcome.get('ok'):
                 p = outcome['parsed']
-                snapshots[account_id] = p
+                prev_rec = accounts.get(account_id) if isinstance(accounts, dict) else None
+                prev_windows = (
+                    prev_rec.get('windows')
+                    if isinstance(prev_rec, dict) and isinstance(prev_rec.get('windows'), dict)
+                    else None
+                )
+                snap_entry = {**p, 'fetchedAtMs': fetched_at_ms}
+                if prev_windows is not None:
+                    snap_entry['_pre_sync_windows'] = prev_windows
+                snapshots[account_id] = snap_entry
                 succeeded_ids.append(account_id)
                 results.append({
                     'slot': slot, 'ok': True, 'status_code': 200,

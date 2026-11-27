@@ -1054,6 +1054,7 @@ function parseSseResponse(raw) {
     const deltas = [];
     let completed = null;
     let terminalFailure = null;
+    let sawResponseEvent = false;
     for (const block of String(raw || '').split(/\r?\n\r?\n/)) {
         let eventName = '';
         const dataLines = [];
@@ -1070,7 +1071,11 @@ function parseSseResponse(raw) {
         } catch {
             continue;
         }
-        const type = event.type || eventName;
+        if (!event || typeof event !== 'object' || Array.isArray(event)) continue;
+        const type = typeof event.type === 'string' && event.type ? event.type : eventName;
+        if (typeof type === 'string' && type.startsWith('response.')) {
+            sawResponseEvent = true;
+        }
         if (type === 'response.output_text.delta' && typeof event.delta === 'string') {
             deltas.push(event.delta);
         } else if (type === 'response.completed' && event.response && typeof event.response === 'object') {
@@ -1098,7 +1103,7 @@ function parseSseResponse(raw) {
         }
         return completed;
     }
-    if (deltas.length > 0) {
+    if (deltas.length > 0 || sawResponseEvent) {
         const error = new Error('OpenAI Responses SSE 缺少 response.completed 终态事件');
         error.code = 'SSE_TERMINAL_EVENT_MISSING';
         throw error;
@@ -1203,6 +1208,10 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                     try {
                         streamed = parseSseResponse(raw);
                     } catch (sseError) {
+                        if (Number.isInteger(res.statusCode) && (res.statusCode < 200 || res.statusCode >= 300)) {
+                            sseError.status = res.statusCode;
+                            sseError.statusCode = res.statusCode;
+                        }
                         finish(reject, responseFailure(sseError));
                         return;
                     }
@@ -1220,6 +1229,10 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                             ? `（HTTP ${res.statusCode}）` : '';
                         const error = new Error(`响应无法解析为 JSON 或 SSE${status}`);
                         error.code = 'LLM_RESPONSE_PARSE_ERROR';
+                        if (Number.isInteger(res.statusCode)) {
+                            error.status = res.statusCode;
+                            error.statusCode = res.statusCode;
+                        }
                         finish(reject, responseFailure(error));
                     }
                 }

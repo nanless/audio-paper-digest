@@ -455,8 +455,11 @@ async function fetchDailyOaiCategory(categoryId, boundary, existingIds, options 
     const runNonce = crypto.randomUUID();
     const fetchPage = async (prefix, index, token, replayPage = false) => {
         const url = urlFor(prefix, categoryId, boundary, token);
-        const retryableTransportCodes = new Set(['ECONNRESET', 'ETIMEDOUT',
-            'ARXIV_REQUEST_DEADLINE_EXCEEDED', 'ARXIV_REQUEST_SOCKET_TIMEOUT']);
+        const retryableTransportCodes = new Set([
+            'ECONNRESET', 'ETIMEDOUT',
+            'ARXIV_REQUEST_DEADLINE_EXCEEDED', 'ARXIV_REQUEST_SOCKET_TIMEOUT',
+            'ARXIV_RESPONSE_CLOSED', 'PROXY_CONNECT_CLOSED', 'PROXY_CONNECT_TIMEOUT'
+        ]);
         let response, file;
         for (let attempt = 0; attempt < 3; attempt++) {
             health.attempts++;

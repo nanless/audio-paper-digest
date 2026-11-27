@@ -50,27 +50,27 @@ def _trusted_renderers():
 
 def replay_saved_inline_svg_pixels(raw, expected_sha256, *, contract=None):
     from reader_inline_svg import (
-        UnsupportedSvgDependency, validate_svg, render_svg, MAX_OUTPUT_BYTES, CONTRACT as V2_CONTRACT,
+        UnsupportedSvgDependency, validate_svg, render_svg, MAX_OUTPUT_BYTES, CONTRACT as PIXEL_REPLAY_CONTRACT,
     )
     if not re.fullmatch(r'[a-f0-9]{64}', str(expected_sha256 or '')):
         raise ValueError('Saved SVG pixel SHA is invalid')
     # The current security validator still gates every historical producer.
     validate_svg(raw)
-    if contract == V2_CONTRACT or contract is None:
-        v2_attempts = 16 if contract == V2_CONTRACT else 8
-        for attempt in range(v2_attempts):
+    if contract == PIXEL_REPLAY_CONTRACT or contract is None:
+        pixel_replay_attempts = 16 if contract == PIXEL_REPLAY_CONTRACT else 8
+        for attempt in range(pixel_replay_attempts):
             try:
-                v2_actual = render_svg(raw, hidpi=True, deterministic_hidpi=True)
-                if hashlib.sha256(v2_actual).hexdigest() == expected_sha256:
-                    return v2_actual, None
+                pixel_replay_actual = render_svg(raw, hidpi=True, deterministic_hidpi=True)
+                if hashlib.sha256(pixel_replay_actual).hexdigest() == expected_sha256:
+                    return pixel_replay_actual, None
             except (UnsupportedSvgDependency, ValueError):
-                if contract == V2_CONTRACT:
+                if contract == PIXEL_REPLAY_CONTRACT:
                     raise
                 break
             except Exception:
-                if contract == V2_CONTRACT and attempt + 1 >= v2_attempts:
+                if contract == PIXEL_REPLAY_CONTRACT and attempt + 1 >= pixel_replay_attempts:
                     raise
-                if contract != V2_CONTRACT:
+                if contract != PIXEL_REPLAY_CONTRACT:
                     break
     try:
         actual = render_svg(raw)

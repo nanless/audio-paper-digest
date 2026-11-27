@@ -2216,6 +2216,8 @@ function hasValidIntegratedApiReaderRecordsUnchecked(paper, options = {}) {
                                 ? require('./lib/reader-table-pdf-evidence').savedCellMatches(binding, cell, text)
                                 : normalize(text) === normalize(cell.sourceText)
                                     || normalize(textUnescaped) === normalize(cell.sourceText)
+                                    || normalize(text) === normalize(require('./lib/reader-source-display').projectReaderCellTexDisplay(cell.sourceText))
+                                    || normalize(textUnescaped) === normalize(require('./lib/reader-source-display').projectReaderCellTexDisplay(cell.sourceText))
                                     || require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, text)
                                     || require('./lib/reader-dom-span-projection').savedCellMatches(paper, binding, cell, text, renderedTables[index])
                                     || require('./lib/source-cell-math-display').strictSourceCellMathDisplay(cell.sourceText)?.displayText === text);
@@ -2654,32 +2656,40 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 if (paper.analysisFactReviewObligation && Object.hasOwn(analyzed, 'analysisFactReviewObligation')
                     && !require('node:util').isDeepStrictEqual(paper.analysisFactReviewObligation,
                         analyzed.analysisFactReviewObligation)) throw new Error('分析结果不能替换当前来源绑定的事实反馈义务');
-                Object.assign(paper, analyzed);
-                require('./lib/reader-candidate-transactions.js').transferDeferredReaderCandidate(analyzed, paper);
             }
+            const candidate = analyzed && typeof analyzed === 'object' ? { ...paper, ...analyzed } : null;
+            const copySafeRecoveryMetadata = target => {
+                if (!analyzed || typeof analyzed !== 'object') return;
+                for (const key of ['analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints', 'analysisStaleSnapshots']) {
+                    if (Object.hasOwn(analyzed, key) && analyzed[key] !== undefined) {
+                        target[key] = analyzed[key];
+                    }
+                }
+                require('./lib/reader-candidate-transactions.js').transferDeferredReaderCandidate(analyzed, target);
+            };
 
             if (analyzed && analyzed.analysis) {
-                const parsed = parseAnalysis(analyzed.analysis);
+                const parsed = parseAnalysis(candidate.analysis);
                 let onlineSourceText = typeof options.sourceText === 'string'
                     ? options.sourceText
-                    : (typeof analyzed.sourceText === 'string' ? analyzed.sourceText : '');
-                if (!onlineSourceText && /[\u0400-\u04FF]/u.test(analyzed.analysis)) {
+                    : (typeof candidate.sourceText === 'string' ? candidate.sourceText : '');
+                if (!onlineSourceText && /[\u0400-\u04FF]/u.test(candidate.analysis)) {
                     try {
                         const fresh = require('./lib/fresh-analysis-context');
                         const context = fresh.getFreshAnalysisContext();
                         if (context) {
-                            fresh.assertFreshPaper(analyzed);
-                            onlineSourceText = fresh.readFreshSource(context.runDir, analyzed, context)?.text || '';
+                            fresh.assertFreshPaper(candidate);
+                            onlineSourceText = fresh.readFreshSource(context.runDir, candidate, context)?.text || '';
                         } else {
-                            const confSource = readConferenceFinalRejectionSource(analyzed);
+                            const confSource = readConferenceFinalRejectionSource(candidate);
                             if (confSource) {
                                 onlineSourceText = confSource.text || '';
                             } else {
                                 const daily = require('./lib/daily-fresh-source-plan');
                                 const data = readJsonFileStrict(require('./config').FILES.deepAnalysisResult);
                                 const plan = daily.requireDailyFreshSourceRecoveryPlan(data);
-                                if (daily.isPaperBoundToPlan(analyzed, plan)) {
-                                    onlineSourceText = daily.readDailyFreshSource(plan, analyzed)?.text || '';
+                                if (daily.isPaperBoundToPlan(candidate, plan)) {
+                                    onlineSourceText = daily.readDailyFreshSource(plan, candidate)?.text || '';
                                 }
                             }
                         }
@@ -2687,53 +2697,54 @@ async function analyzePaperWithRetry(paper, options = {}) {
                         onlineSourceText = '';
                     }
                 }
-                const invalidReason = getInvalidAnalysisReason(analyzed.analysis, parsed, {
-                    paper: analyzed,
+                const invalidReason = getInvalidAnalysisReason(candidate.analysis, parsed, {
+                    paper: candidate,
                     enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
-                        analyzed.analysisManifest || paper.analysisManifest
+                        candidate.analysisManifest || paper.analysisManifest
                     ),
                     experimentTableContractVersion: (
-                        analyzed.analysisManifest || paper.analysisManifest
+                        candidate.analysisManifest || paper.analysisManifest
                     )?.contracts?.experimentTables,
                     enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
-                        analyzed.analysisManifest || paper.analysisManifest
+                        candidate.analysisManifest || paper.analysisManifest
                     ),
                     enforceCyrillicProseGarble: true,
                     enforceTableCommentaryAlignment: true,
                     sourceText: onlineSourceText
                 });
-                const recoveryReason = getIncompleteAnalysisContentReason(analyzed);
+                const recoveryReason = getIncompleteAnalysisContentReason(candidate);
                 // A returned object may omit recovery metadata; the locked
                 // current paper still retains the verified obligation.
-                const pendingFeedbackComplete = require('./lib/pending-fact-feedback').completed(paper);
+                const pendingFeedbackComplete = require('./lib/pending-fact-feedback').completed(candidate);
                 const rejectionReason = invalidReason || recoveryReason
                     || (!pendingFeedbackComplete ? '当前来源绑定的事实反馈尚未完成，保留原成功正文与失败记录。' : null);
                 if (rejectionReason) {
+                    copySafeRecoveryMetadata(paper);
                     // 正文已生成但最终阶段证明不完整时，保留真实输出供正常续跑。
                     // 失败仍然失败；不能把未经核验的正文或来源放进恢复检查点。
-                    if (!invalidReason && hasValidAnalysisBody(analyzed)) {
+                    if (!invalidReason && hasValidAnalysisBody(candidate)) {
                         try {
                             const fresh = require('./lib/fresh-analysis-context');
                             const context = fresh.getFreshAnalysisContext();
                             let source;
                             if (context) {
-                                fresh.assertFreshPaper(analyzed);
-                                source = fresh.readFreshSource(context.runDir, analyzed, context);
+                                fresh.assertFreshPaper(candidate);
+                                source = fresh.readFreshSource(context.runDir, candidate, context);
                             } else {
-                                source = readConferenceFinalRejectionSource(analyzed);
+                                source = readConferenceFinalRejectionSource(candidate);
                                 if (!source) {
                                     const daily = require('./lib/daily-fresh-source-plan');
                                     const data = readJsonFileStrict(require('./config').FILES.deepAnalysisResult);
                                     const plan = daily.requireDailyFreshSourceRecoveryPlan(data);
-                                    if (!daily.isPaperBoundToPlan(analyzed, plan)) throw new Error('正文未绑定当前封存来源');
-                                    source = daily.readDailyFreshSource(plan, analyzed);
+                                    if (!daily.isPaperBoundToPlan(candidate, plan)) throw new Error('正文未绑定当前封存来源');
+                                    source = daily.readDailyFreshSource(plan, candidate);
                                 }
                             }
                             const sourceSha256 = crypto.createHash('sha256').update(String(source?.text || '')).digest('hex');
-                            if (sourceSha256 === analyzed.sourceSha256
-                                && sourceSha256 === analyzed.analysisManifest?.sourceAcquisition?.sourceSha256) {
-                                paper.analysisCheckpoint = analyzed.analysis;
-                                if (finalCheckpoint?.analysis === analyzed.analysis
+                            if (sourceSha256 === candidate.sourceSha256
+                                && sourceSha256 === candidate.analysisManifest?.sourceAcquisition?.sourceSha256) {
+                                paper.analysisCheckpoint = candidate.analysis;
+                                if (finalCheckpoint?.analysis === candidate.analysis
                                     && finalCheckpoint.sourceSha256 === sourceSha256
                                     && finalCheckpoint.acquisitionSourceSha256 === sourceSha256) {
                                     paper.analysisStageCheckpoints = finalCheckpoint.checkpoints;
@@ -2751,6 +2762,8 @@ async function analyzePaperWithRetry(paper, options = {}) {
                     }
                     continue;
                 }
+                Object.assign(paper, analyzed);
+                require('./lib/reader-candidate-transactions.js').transferDeferredReaderCandidate(analyzed, paper);
                 const successfulResult = {
                     success: true,
                     result: {
@@ -2803,6 +2816,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 }
                 return successfulResult;
             } else if (analyzed && analyzed.error) {
+                copySafeRecoveryMetadata(paper);
                 lastError = analyzed.error;
                 lastErrorCode = analyzed.errorCode || null;
                 lastErrorRetryable = analyzed.errorRetryable !== false;

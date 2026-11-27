@@ -407,7 +407,7 @@ LEGACY_CONTRACT = 'reader-official-inline-svg-pixels-v1'
 CONTRACT = 'reader-official-inline-svg-pixels-v2'
 ACCEPTED_CONTRACTS = frozenset({LEGACY_CONTRACT, CONTRACT})
 
-_DETERMINISTIC_V2_CHROMIUM_ARGS = (
+_DETERMINISTIC_CHROMIUM_ARGS = (
     '--disable-gpu',
     '--disable-gpu-compositing',
     '--use-gl=angle',
@@ -534,7 +534,7 @@ def render_svg(raw, *, hidpi=False, deterministic_hidpi=False, deterministic_v2=
         expected = Path(playwright.chromium.executable_path)
         options = {'headless': True}
         if deterministic_hidpi:
-            options['args'] = list(_DETERMINISTIC_V2_CHROMIUM_ARGS)
+            options['args'] = list(_DETERMINISTIC_CHROMIUM_ARGS)
         if not expected.is_file():
             candidates = []
             for cache in (Path.home() / 'Library/Caches/ms-playwright', Path.home() / '.cache/ms-playwright'):

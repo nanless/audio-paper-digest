@@ -355,10 +355,16 @@ function buildFenceAwareSectionBounds(lines, sections = null) {
         const line = lines[lineIdx];
         const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
         if (fenceMatch) {
-            if (!fence) fence = fenceMatch[1];
-            else if (fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length
-                && line.slice(fenceMatch[0].length).trim() === '') fence = null;
-            continue;
+            if (!fence) {
+                if (!(fenceMatch[1][0] === '`' && line.slice(fenceMatch[0].length).includes('`'))) {
+                    fence = fenceMatch[1];
+                    continue;
+                }
+            } else {
+                if (fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length
+                    && line.slice(fenceMatch[0].length).trim() === '') fence = null;
+                continue;
+            }
         }
         if (fence) continue;
         const hm = /^###\s+(.+)$/.exec(line);

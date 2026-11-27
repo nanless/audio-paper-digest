@@ -154,6 +154,7 @@ export function mountPodcast(app, {dockElement, onOpenPaper} = {}) {
     const shouldShow = (state.available && episodes.length > 0) || Boolean(state.activeEpisodeId) || Boolean(state.downloadingEpisodeId);
     dock.hidden = !shouldShow;
     if (!shouldShow || !episode) {
+      scrubbing = false;
       lastStructureKey = '';
       dock.replaceChildren();
       return;
@@ -173,6 +174,7 @@ export function mountPodcast(app, {dockElement, onOpenPaper} = {}) {
       return;
     }
     lastStructureKey = structureKey;
+    scrubbing = false;
 
     const episodeOptions = episodes.length > 1
       ? `<select class="podcast-episode-select" id="podcast-episode-select" aria-label="选择播客节目">${episodes.map(ep => `<option value="${esc(ep.id)}" ${ep.id === episode.id ? 'selected' : ''}>${esc(ep.date)} · ${esc(ep.title)}</option>`).join('')}</select>`
@@ -295,6 +297,9 @@ export function mountPodcast(app, {dockElement, onOpenPaper} = {}) {
         try {
           applyState(await app.call('podcast.seek', {seconds: Number(scrubber.value)}));
         } catch (err) { fail(err); }
+      };
+      scrubber.onpointercancel = () => {
+        scrubbing = false;
       };
     }
 

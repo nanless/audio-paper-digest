@@ -61,14 +61,16 @@ process.stdin.on('end', async () => {
     if(effort==='default'||effort==='none')delete process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
     else process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT=effort;
     // An explicit Responses selection is represented as the full declared route.
-    const declared = config.protocol === 'responses' && !endpoint.endsWith('/responses')
-      ? endpoint.replace(/\/+$/, '') + '/responses' : endpoint;
+    const trimmedEndpoint = endpoint.replace(/\/+$/, '');
+    const endsWithResponses = trimmedEndpoint.toLowerCase().endsWith('/responses');
+    const declared = config.protocol === 'responses' && !endsWithResponses
+      ? trimmedEndpoint + '/responses' : trimmedEndpoint;
     if (config.httpProxy) {
       const proxy = new URL(config.httpProxy);
       if (!['http:', 'https:'].includes(proxy.protocol)) throw new Error('代理必须是 HTTP CONNECT 地址');
       process.env.HTTPS_PROXY = config.httpProxy; process.env.HTTP_PROXY = config.httpProxy;
     }
-    if(config.protocol==='chat' && (model.toLowerCase().startsWith('muse-spark-') || endpoint.replace(/\/+$/,'').endsWith('/responses')))throw new Error('此模型或完整端点要求 Responses；未发送不兼容的 Chat 请求');
+    if(config.protocol==='chat' && (model.toLowerCase().startsWith('muse-spark-') || endsWithResponses))throw new Error('此模型或完整端点要求 Responses；未发送不兼容的 Chat 请求');
     const protocol = config.protocol==='chat' ? 'openai' : config.protocol==='responses' ? 'openai_responses' : api.detectApiType(declared, model);
     observed.protocol=protocol;
     const maxTokens = Math.max(256, Math.min(32768, Number(config.maxTokens) || 8192));

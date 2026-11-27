@@ -83,6 +83,7 @@ internal class StudyCoordinator(
     private val pdfEvidence: suspend (PdfDocumentRef, Int, Int) -> PdfEvidence,
     private val enqueueStudyWork: (String, String) -> Unit,
     private val onRefresh: () -> Unit,
+    private val isPlatformStudyWorkFinished: suspend (java.util.UUID?) -> Boolean = { false },
 ) {
     private data class FreshStudyIntent(
         val check: Boolean,
@@ -407,7 +408,44 @@ internal class StudyCoordinator(
         return prepared.put("queued", true)
     }
 
-    suspend fun performStudy(id: String, workspaceEpoch: String) {
+    /** Called under maintenance. Never reissues paid study work; retires finished/missing platform jobs so restore cannot stay wedged. */
+    suspend fun reconcileStudyJobs() {
+        val jobs = personal.snapshot().getJSONArray("jobs").objects()
+        for (row in jobs) {
+            val kind = row.optString("kind")
+            val id = row.optString("id")
+            if (kind !in setOf("model.run", "model.check") ||
+                row.optString("status") !in setOf("queued", "running") || active.containsKey(id)
+            ) continue
+            val workID = runCatching { java.util.UUID.fromString(id) }.getOrNull()
+            if (isPlatformStudyWorkFinished(workID)) {
+                val session = personal.session(id)
+                if (session != null && !session.optBoolean("syncedHistory") &&
+                    session.optString("status") in setOf("prepared", "pending")
+                ) {
+                    personal.appendSession(
+                        session.copy()
+                            .put("status", "interrupted")
+                            .put("endedAt", now())
+                            .put("charge", if (session.optBoolean("requestIssued")) "unknown" else "not-issued")
+                            .put("error", "后台研究任务已结束或中断；原始记录保留，不会自动重发")
+                    )
+                }
+                personal.upsertJob(
+                    studyJob(row, personal.session(id))
+                        .put("status", "interrupted")
+                        .put("endedAt", now())
+                        .put("message", "后台研究任务已结束或不存在；未自动重发付费请求，请核对记录。")
+                )
+            }
+        }
+    }
+
+    suspend fun performStudy(
+        id: String,
+        workspaceEpoch: String,
+        enterForeground: suspend () -> Unit = {},
+    ) {
         val job = currentCoroutineContext()[Job]!!
         val row = maintenance().withLock {
             requireCurrentEpoch(workspaceEpoch)
@@ -419,6 +457,13 @@ internal class StudyCoordinator(
         }
         try {
             onRefresh()
+            try {
+                enterForeground()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Non-fatal foreground promotion failure (e.g. Android 12+ background FGS restriction).
+            }
             val result = model.run(id)
             withContext(NonCancellable) {
                 maintenance().withLock {

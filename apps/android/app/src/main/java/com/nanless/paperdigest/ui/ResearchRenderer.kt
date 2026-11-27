@@ -94,7 +94,7 @@ object ResearchRenderer {
             }
             if (inlineTicks == 0) {
                 val match=scientificMathAt(markdown,i)
-                if(match!=null){
+                if(match!=null&&!isCurrencyDollarSpan(markdown,match)){
                     require(match.text.length<=12000&&formulas.size<256){"公式超过安全渲染上限，请查看原始 Markdown"}
                     val token="$prefix${formulas.size}END";formulas+=Formula(token,match.text,match.display)
                     output.append(token);i=match.end;continue

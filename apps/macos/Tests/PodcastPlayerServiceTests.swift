@@ -455,6 +455,97 @@ private actor PodcastFixtureTransport {
         try check(((stateV2["episodes"] as? [[String: Any]])?.first?["cached"] as? Bool) == false, "re-published episode with new sha256 must serialize cached=false")
         await repubService.shutdown()
 
+        // 11. Round-5 P1: PodcastPlayerService.play() actor reentrancy across installRemoteCommandsIfNeeded suspension
+        // Must NOT kill newly switched playback or paused playback when an older play() resumes from suspension.
+        func makePlayableSilentMP3(seed: UInt8) -> Data {
+            // 20 valid MPEG-1 Layer III 128 kbps 44.1 kHz stereo silent frames (417 bytes each, ~0.52s)
+            // plus a valid ID3v2.3 tag so different episodes have distinct SHA-256 while AVAudioPlayer plays cleanly.
+            let frameHeader: [UInt8] = [0xFF, 0xFB, 0x90, 0x00]
+            let singleFrame = frameHeader + [UInt8](repeating: 0x00, count: 413)
+            var tagPayload = [UInt8](repeating: 0x00, count: 16)
+            tagPayload[0] = seed
+            var data = Data([0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10])
+            data.append(contentsOf: tagPayload)
+            for _ in 0..<20 { data.append(contentsOf: singleFrame) }
+            return data
+        }
+        actor PlayGate {
+            private var hitA: CheckedContinuation<Void, Never>?
+            private var releaseA: CheckedContinuation<Void, Never>?
+            private var armed = true
+            private var entered = false
+            func waitUntilEntered() async {
+                if entered { return }
+                await withCheckedContinuation { hitA = $0 }
+            }
+            func onHook() async {
+                guard armed else { return }
+                armed = false
+                entered = true
+                hitA?.resume(); hitA = nil
+                await withCheckedContinuation { releaseA = $0 }
+            }
+            func release() {
+                releaseA?.resume(); releaseA = nil
+            }
+        }
+        let reentTransport = PodcastFixtureTransport()
+        let reentDir = root.appendingPathComponent("ReentrancyPlay", isDirectory: true)
+        let reentService = try PodcastPlayerService(
+            cacheDirectory: reentDir,
+            siteBaseURL: base,
+            feedTransport: { url, limit in try await reentTransport.fetchFeed(url, limit) },
+            audioTransport: { url, limit in try await reentTransport.fetchAudio(url, limit) },
+            enableMediaCenter: false
+        )
+        let playableA = makePlayableSilentMP3(seed: 0x41)
+        let playableB = makePlayableSilentMP3(seed: 0x42)
+        let urlPlayA = "https://github.com/nanless/audio-paper-digest-blog/releases/download/v1.5/play-a.mp3"
+        let urlPlayB = "https://github.com/nanless/audio-paper-digest-blog/releases/download/v1.5/play-b.mp3"
+        await reentTransport.setFeed(status: 200, data: try makeFeedJSON(episodes: [
+            episodeDict(id: "ep-play-a", date: "2026-11-26", title: "Play A", audioUrl: urlPlayA, data: playableA),
+            episodeDict(id: "ep-play-b", date: "2026-11-25", title: "Play B", audioUrl: urlPlayB, data: playableB)
+        ]))
+        await reentTransport.setAudio(urlPlayA, status: 200, data: playableA)
+        await reentTransport.setAudio(urlPlayB, status: 200, data: playableB)
+        _ = try await reentService.fetchFeed(forceRefresh: true)
+        // Pre-cache both so play() hits installRemoteCommandsIfNeeded directly without download latency.
+        _ = try await reentService.downloadEpisode(id: "ep-play-a")
+        _ = try await reentService.downloadEpisode(id: "ep-play-b")
+
+        // Case A: Task 1 suspends inside installRemoteCommandsIfNeeded() for ep-play-a;
+        // Task 2 switches to ep-play-b and starts playing; Task 1 resumes and MUST NOT kill ep-play-b!
+        let gateSwitch = PlayGate()
+        await reentService.setInstallRemoteCommandsHook { await gateSwitch.onHook() }
+        let taskPlayA = Task { try await reentService.play(episodeId: "ep-play-a") }
+        await gateSwitch.waitUntilEntered()
+        let stateB = try await reentService.play(episodeId: "ep-play-b")
+        try check((stateB["activeEpisodeId"] as? String) == "ep-play-b" && (stateB["isPlaying"] as? Bool) == true, "ep-play-b starts playing while ep-play-a is suspended")
+        await gateSwitch.release()
+        var staleCancelled = false
+        do { _ = try await taskPlayA.value } catch is CancellationError { staleCancelled = true }
+        try check(staleCancelled, "stale play(ep-play-a) throws CancellationError after reentrancy")
+        let afterSwitch = await reentService.stateSnapshot()
+        try check((afterSwitch["activeEpisodeId"] as? String) == "ep-play-b" && (afterSwitch["isPlaying"] as? Bool) == true, "stale play(ep-play-a) must NOT kill newly switched ep-play-b")
+
+        // Case B: ep-play-b is paused while stale play(ep-play-a) is suspended inside installRemoteCommandsIfNeeded();
+        // releasing stale play(ep-play-a) MUST NOT clear the paused ep-play-b state!
+        let pausedB = await reentService.pause()
+        try check((pausedB["activeEpisodeId"] as? String) == "ep-play-b" && (pausedB["isPlaying"] as? Bool) == false, "ep-play-b is paused")
+        let gatePause = PlayGate()
+        await reentService.setInstallRemoteCommandsHook { await gatePause.onHook() }
+        let taskPlayA2 = Task { try await reentService.play(episodeId: "ep-play-a") }
+        await gatePause.waitUntilEntered()
+        _ = await reentService.pause()
+        await gatePause.release()
+        var stalePauseCancelled = false
+        do { _ = try await taskPlayA2.value } catch is CancellationError { stalePauseCancelled = true }
+        try check(stalePauseCancelled, "stale play(ep-play-a) throws CancellationError when paused mid-suspension")
+        let afterPause = await reentService.stateSnapshot()
+        try check((afterPause["activeEpisodeId"] as? String) == "ep-play-b" && (afterPause["isPlaying"] as? Bool) == false, "stale play(ep-play-a) must NOT destroy paused ep-play-b playback")
+        await reentService.setInstallRemoteCommandsHook(nil)
+        await reentService.shutdown()
+
         print("PodcastPlayerServiceTests: ALL CHECKS PASSED")
     }
 }

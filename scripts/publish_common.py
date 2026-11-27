@@ -3369,9 +3369,12 @@ def mask_protected_markdown_table_regions(text, *, protect_quotes=True):
             output.append(blank)
             continue
         if boundary and not comment:
-            fence = boundary.group(1)
-            output.append(blank)
-            continue
+            fence_marker = boundary.group(1)
+            rest = markup_line[boundary.end():]
+            if not (fence_marker[0] == '`' and '`' in rest):
+                fence = fence_marker
+                output.append(blank)
+                continue
         starts_html_block = bool(_HTML_TABLE_BLOCK_START.match(markup_line))
         # 原样 HTML 里的反引号不是代码；普通单元格里的 HTML 代码示例则须保留。
         probe = line if html_block or comment or starts_html_block else re.sub(
@@ -5629,7 +5632,7 @@ def validate_manual_reader_quality(analysis):
             rf'{reader_number}(?:{unit_pattern(numeric_connector_suffixes)})',
         ),
         re.compile(
-            r'(?:下|上|这|另|哪)\s*1\s*(?:步|层|类|种|段|项|组|张|个)|'
+            r'(?:(?<!加)[下上这另哪])\s*1\s*(?:步|层|类|种|段|项|组|张|个)|'
             r'(?:同|唯|统|单)\s*1\s*(?=[\u4e00-\u9fff])|归\s*1\s*(?=(?:化|后|组合|处理|权重))',
         ),
         re.compile(
@@ -7349,6 +7352,7 @@ def parse_publish_sse_response(raw_text):
     deltas = []
     completed = None
     terminal_failure = None
+    saw_response_event = False
     for block in re.split(r'\r?\n\r?\n', str(raw_text or '')):
         event_name = ''
         data_lines = []
@@ -7369,6 +7373,8 @@ def parse_publish_sse_response(raw_text):
         if not isinstance(event, dict):
             continue
         event_type = event.get('type') or event_name
+        if isinstance(event_type, str) and event_type.startswith('response.'):
+            saw_response_event = True
         if event_type == 'response.output_text.delta' and isinstance(event.get('delta'), str):
             deltas.append(event['delta'])
         elif event_type == 'response.completed' and isinstance(event.get('response'), dict):
@@ -7394,7 +7400,7 @@ def parse_publish_sse_response(raw_text):
         if not parse_publish_response_text('openai_responses', completed) and deltas:
             completed = {**completed, 'output_text': ''.join(deltas)}
         return completed
-    if deltas:
+    if deltas or saw_response_event:
         raise PublishSseTerminalEventMissingError('OpenAI Responses SSE 缺少 response.completed 终态事件')
     return None
 

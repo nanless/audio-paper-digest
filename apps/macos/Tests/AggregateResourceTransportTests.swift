@@ -4,6 +4,7 @@ private actor ImageTransportFixture {
  let manifest:Data,shard:Data,shardPath:String,image:Data
  var queued:[String:[Data]]=[:]
  var failedImages:Set<String>=[]
+ var customErrors:[String:Error]=[:]
  var html:String,failHTML=false,blockImages=false,imageStarted=false,addresses:[String]=[],overrides:[String:Data]=[:],imageLimits:[Int]=[]
  init()throws{
   let paper:[String:Any]=["pageType":"paper","permalink":"/audio-paper-digest-blog/ci-paper/","title":"Controlled source paper","date":"2026-10-24","sourceKind":"arxiv","identityStatus":"verified","arxivId":"2501.00001","citation":["identityStatus":"verified","sourceKind":"arxiv","arxivId":"2501.00001v1","sourceUrl":"https://arxiv.org/abs/2501.00001v1","pdfUrl":"https://arxiv.org/pdf/2501.00001v1.pdf"]]
@@ -19,10 +20,11 @@ private actor ImageTransportFixture {
   if url.path.contains("/client/"){throw LibraryService.ServiceError.httpStatus(404)}
   if url.path.hasSuffix("/index.json"){return manifest}
   if url.path.hasSuffix(shardPath){return shard}
-  if url.host=="arxiv.org"{imageStarted=true;imageLimits.append(limit);if failedImages.contains(url.lastPathComponent){throw URLError(.notConnectedToInternet)};if blockImages{try await Task.sleep(nanoseconds:30_000_000_000)};if var next=queued[url.absoluteString],!next.isEmpty{let bytes=next.removeFirst();queued[url.absoluteString]=next;return bytes};return overrides[url.absoluteString] ?? image}
+  if url.host=="arxiv.org"{imageStarted=true;imageLimits.append(limit);if let err=customErrors[url.lastPathComponent]{throw err};if failedImages.contains(url.lastPathComponent){throw URLError(.notConnectedToInternet)};if blockImages{try await Task.sleep(nanoseconds:30_000_000_000)};if var next=queued[url.absoluteString],!next.isEmpty{let bytes=next.removeFirst();queued[url.absoluteString]=next;return bytes};return overrides[url.absoluteString] ?? image}
   if (url.path.hasSuffix("/ci-images/")||url.path.hasSuffix("/ci-images")){if failHTML{throw URLError(.notConnectedToInternet)};return Data(html.utf8)}
   throw AggregateFailure.invalid("Unexpected controlled transport URL")
  }
+ func setCustomErrors(_ values:[String:Error]){customErrors=values}
  func queue(_ path:String,_ values:[Data]){queued["https://arxiv.org/html/2610.30682/"+path]=values}
  func setFailedImages(_ values:Set<String>){failedImages=values}
  func imageAddresses()->[String]{addresses.filter{$0.hasPrefix("https://arxiv.org/")}}
@@ -78,6 +80,22 @@ private actor ImageTransportFixture {
   let perImageSource=try await library.aggregateDocument(id:catalog.records[0].id),perImage=try await library.aggregateResourceRendering(perImageSource)
   let afterOversize=await fixture.countImages()
   try check(perImage.manifest.images.allSatisfy{$0.sha256==nil} && afterOversize==beforeOversize+1,"response beyond16MiB is not cached and conservative exhausted budget prevents subsequent requests")
+  // Round-5 P1: 404, timeout, or missing arXiv proxy on earlier figures must NOT exhaust total byte budget or abort remaining valid figures
+  await fixture.setCustomErrors([
+   "missing-404.png": LibraryService.ServiceError.httpStatus(404),
+   "timed-out.png": URLError(.timedOut),
+   "no-proxy.png": LibraryService.ServiceError.unavailable("arXiv 原文与图片需要配置HTTP CONNECT代理；已有导读仍可阅读。")
+  ])
+  await fixture.change("<p>Non-oversize errors do not abort later figures</p><img src='https://arxiv.org/html/2610.30682/missing-404.png' alt='404'/><img src='https://arxiv.org/html/2610.30682/timed-out.png' alt='timeout'/><img src='https://arxiv.org/html/2610.30682/no-proxy.png' alt='noproxy'/><img src='https://arxiv.org/html/2610.30682/valid-after-errors.png' alt='valid'/>")
+  let mixedSource=try await library.aggregateDocument(id:catalog.records[0].id),mixedRender=try await library.aggregateResourceRendering(mixedSource)
+  try check(mixedRender.manifest.images[0].sha256==nil && mixedRender.manifest.images[1].sha256==nil && mixedRender.manifest.images[2].sha256==nil && mixedRender.manifest.images[3].sha256 != nil && mixedRender.manifest.images[3].mime=="image/png","404, timeout, and missing arXiv proxy on figures #1-#3 do NOT abort valid figure #4")
+  await fixture.setCustomErrors(["curl-63.png": LibraryService.ServiceError.responseTooLarge("资源超过大小上限；未保存不完整文件。")])
+  let beforeCurl63=await fixture.countImages()
+  await fixture.change("<p>Explicit responseTooLarge still halts budget</p><img src='https://arxiv.org/html/2610.30682/curl-63.png'/><img src='https://arxiv.org/html/2610.30682/after-curl-63.png'/>")
+  let curl63Source=try await library.aggregateDocument(id:catalog.records[0].id),curl63Render=try await library.aggregateResourceRendering(curl63Source)
+  let afterCurl63=await fixture.countImages()
+  try check(curl63Render.manifest.images.allSatisfy{$0.sha256==nil} && afterCurl63==beforeCurl63+1,"ServiceError.responseTooLarge (e.g. curl exit 63) still exhausts conservative transfer budget")
+  await fixture.setCustomErrors([:])
   for i in 0..<5{await fixture.override("budget-\(i).png",padded)}
   let beforeTotal=await fixture.countImages()
   await fixture.change("<p>Total limit</p>"+(0..<5).map{"<img src='https://arxiv.org/html/2610.30682/budget-\($0).png'/>"}.joined())

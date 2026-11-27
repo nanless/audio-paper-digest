@@ -35,7 +35,7 @@ CONTRACT_V1 = "pdf-page1-author-evidence-v1"
 CONTRACT_V2 = "pdf-page1-author-evidence-v2"
 CONTRACT_V3 = "pdf-page1-author-evidence-v3"
 CONTRACT = CONTRACT_V2
-_V3_GUARDS_ENABLED = False
+_GEOMETRIC_GUARDS_ENABLED = False
 # PyMuPDF (fitz) 全局上下文非线程安全，且 v3 使用模块级守卫开关，多线程并发重放必须串行化。
 _PDF_AUTHOR_EXTRACT_LOCK = threading.RLock()
 PYMUPDF_LOCK = _PDF_AUTHOR_EXTRACT_LOCK
@@ -1276,7 +1276,7 @@ def _extract_page1_lines(page: fitz.Page) -> tuple[list[dict], list[dict], float
             abstract_y = row_y
             break
         # v3: 首页 Teaser Figure 1 图注位于作者/机构区之后、摘要之前，截断以防图内文字与编号框混入机构
-        if _V3_GUARDS_ENABLED and row_y >= page_h * 0.16 and re.match(r"^(?:Figure|Fig\.?)\s*1\s*[:.]", row_text, re.IGNORECASE):
+        if _GEOMETRIC_GUARDS_ENABLED and row_y >= page_h * 0.16 and re.match(r"^(?:Figure|Fig\.?)\s*1\s*[:.]", row_text, re.IGNORECASE):
             abstract_y = row_y
             break
     if abstract_y is None:
@@ -1663,7 +1663,7 @@ def _extract_marked_affiliations_from_lines(lines: list[dict], author_names: lis
     # Pass 1: explicit [[SUP:...]] markers
     confirmed_aff_cont_lines: set[int] = set()
     for idx, ln in enumerate(lines):
-        if _V3_GUARDS_ENABLED and STREET_ADDRESS_RE.match(ln["text"].strip()):
+        if _GEOMETRIC_GUARDS_ENABLED and STREET_ADDRESS_RE.match(ln["text"].strip()):
             continue
         annotated = _annotate_line_with_markers(ln)
         stripped_ann = annotated.lstrip()
@@ -4299,13 +4299,13 @@ def _extract_pdf_page1_authors_structured_locked(pdf_bytes: bytes) -> dict | Non
 
 def extract_pdf_page1_authors_geometric(pdf_bytes: bytes) -> dict | None:
     with _PDF_AUTHOR_EXTRACT_LOCK:
-        global _V3_GUARDS_ENABLED
-        prev = _V3_GUARDS_ENABLED
-        _V3_GUARDS_ENABLED = True
+        global _GEOMETRIC_GUARDS_ENABLED
+        prev = _GEOMETRIC_GUARDS_ENABLED
+        _GEOMETRIC_GUARDS_ENABLED = True
         try:
             result = extract_pdf_page1_authors_structured(pdf_bytes)
         finally:
-            _V3_GUARDS_ENABLED = prev
+            _GEOMETRIC_GUARDS_ENABLED = prev
     if isinstance(result, dict):
         return {**result, "contract": CONTRACT_V3}
     return result

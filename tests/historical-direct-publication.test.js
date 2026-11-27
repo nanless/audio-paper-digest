@@ -825,7 +825,7 @@ test('G17 & G16: --waive-visuals 自动绑定 2026-11-02 不生图政策，statu
     assert.equal(beforeOnline.webVerified, false);
 
     fs.writeFileSync(path.join(outputRoot, publicationId, 'online-verification.json'), JSON.stringify({
-        publicationId, remoteVerifiedOid: oid('f'), pagesDeployVerified: true, webVerified: true,
+        publicationId, planSha256: plan.planSha256, remoteVerifiedOid: oid('f'), pagesDeployVerified: true, webVerified: true,
         checked: 1, ok: 1, failed: 0, verifiedAt: now
     }, null, 2));
     const afterOnline = api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps);

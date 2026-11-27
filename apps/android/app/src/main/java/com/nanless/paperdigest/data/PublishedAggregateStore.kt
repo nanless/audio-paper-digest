@@ -62,7 +62,7 @@ class PublishedAggregateStore(private val directory:File) {
             canonical(descriptor.json())+"|"+rawHTMLSHA256+"|"+responseURL+"|"+fetchedAt
     }
     private data class SourceFile(val file:File,val limit:Int,val sha256:String)
-    private data class ParsedSource(val catalog:PublishedAggregateCatalog,val shapeSHA256:String)
+    private data class ParsedSource(val base:PublishedAggregateCatalog,val mergedFromRef:PublishedAggregateCatalog?,val catalog:PublishedAggregateCatalog,val shapeSHA256:String)
     private data class ParsedImagePlan(val plan:AggregateImagePlan,val canonical:String)
     private class SourceReadScope {
         val owner=Thread.currentThread()
@@ -186,13 +186,46 @@ class PublishedAggregateStore(private val directory:File) {
         return if(extra.isEmpty())base else PublishedAggregateCatalog(base.snapshotSHA256,base.sourceRecordCount,(base.records+extra).sortedBy{it.id})
     }
 
+    private fun macCompatibleBaseCatalog(base:PublishedAggregateCatalog):PublishedAggregateCatalog {
+        var changed=false
+        val mapped=base.records.map{record->
+            if(record.kind=="conference"&&record.conferenceScope=="overview"&&record.sourceURL.endsWith("-summary/")){
+                changed=true
+                record.copy(conferenceScope=null)
+            }else record
+        }
+        return if(changed)PublishedAggregateCatalog(base.snapshotSHA256,base.sourceRecordCount,mapped) else base
+    }
+    private fun verifySidecarBytes(base:PublishedAggregateCatalog,mergedFromRef:PublishedAggregateCatalog?,sidecar:File,readFile:(File,Int)->ByteArray):ByteArray {
+        val original=readFile(sidecar,8*1024*1024)
+        runCatching{catalogRecord(base,original)}.getOrNull()?.let{return it}
+        val macBase=macCompatibleBaseCatalog(base)
+        if(macBase!=base){
+            runCatching{catalogRecord(macBase,original)}.getOrNull()?.let{return it}
+        }
+        // Backwards compatibility for legacy Android v1.4.8–v1.5.1 backups whose aggregate-index
+        // pre-merged verified aggregate-pages-refs/<snapshotSHA>.json records.
+        if(mergedFromRef!=null){
+            runCatching{catalogRecord(mergedFromRef,original)}.getOrNull()?.let{return it}
+            val mergedMac=macCompatibleBaseCatalog(mergedFromRef)
+            if(mergedMac!=mergedFromRef){
+                runCatching{catalogRecord(mergedMac,original)}.getOrNull()?.let{return it}
+            }
+        }
+        return catalogRecord(base,original)
+    }
+
     fun stage(rawManifest:ByteArray,validationEpoch:String,supplementalPages:List<JSONObject> = emptyList(),check:()->Unit={}):PublishedAggregateCatalog {
         val identity=epoch(validationEpoch)
         val base=PublishedAggregateReader.read(rawManifest,check){read(shardFile(it.url,it.sha256),it.bytes)}
         check();immutable(child("aggregate-manifests","${base.snapshotSHA256}.json"),rawManifest)
         val sidecar=child("aggregate-index","${base.snapshotSHA256}.json")
         val refFile=child("aggregate-pages-refs","${base.snapshotSHA256}.json")
-        if(supplementalPages.isNotEmpty()&&(!sidecar.exists()||refFile.exists())){
+        check()
+        if(!sidecar.exists())immutable(sidecar,catalogRecord(base))
+        val existingMerged=if(refFile.exists())mergeSupplementalPages(base,refFile,::read) else null
+        val actual=verifySidecarBytes(base,existingMerged,sidecar,::read)
+        if(supplementalPages.isNotEmpty()&&!refFile.exists()){
             val existingIds=base.records.mapTo(HashSet()){it.id}
             val seenIds=HashSet<String>()
             val filtered=supplementalPages.filter{row->
@@ -208,22 +241,21 @@ class PublishedAggregateStore(private val directory:File) {
                 val pageSHA=PublishedAggregateReader.sha(pageBytes)
                 val pageURL="client/details/pages/$pageSHA.json"
                 check();immutable(child("aggregate-pages","$pageSHA.json"),pageBytes)
-                if(!refFile.exists()){
-                    val ref=JSONObject().put("snapshotSHA256",base.snapshotSHA256).put("shardURL",pageURL).put("shardSHA256",pageSHA).put("shardBytes",pageBytes.size).put("recordCount",filtered.size)
-                    check();immutable(refFile,OfflineFoundationJSON.encode(ref))
-                }
+                val ref=JSONObject().put("snapshotSHA256",base.snapshotSHA256).put("shardURL",pageURL).put("shardSHA256",pageSHA).put("shardBytes",pageBytes.size).put("recordCount",filtered.size)
+                check();immutable(refFile,OfflineFoundationJSON.encode(ref))
             }
         }
-        val catalog=if(refFile.exists())mergeSupplementalPages(base,refFile,::read) else base
-        check()
-        if(!sidecar.exists())immutable(sidecar,catalogRecord(catalog))
-        val actual=catalogRecord(catalog,read(sidecar,8*1024*1024))
-        val marker=child("aggregate-activations",catalog.snapshotSHA256,"$identity.json")
+        val catalog=when {
+            existingMerged!=null -> existingMerged
+            refFile.exists() -> mergeSupplementalPages(base,refFile,::read)
+            else -> PublishedAggregateReader.supplementCanonicalDesktopPages(base,rawManifest)
+        }
+        val marker=child("aggregate-activations",base.snapshotSHA256,"$identity.json")
         val actualSHA=PublishedAggregateReader.sha(actual)
         check()
-        if(marker.exists()) checkActivation(read(marker,4096),catalog.snapshotSHA256,identity,actualSHA)
+        if(marker.exists()) checkActivation(read(marker,4096),base.snapshotSHA256,identity,actualSHA)
         else {
-            val activation=ClientProtocols.record(activationFamily).put("snapshotSHA256",catalog.snapshotSHA256).put("validationEpoch",identity).put("catalogSHA256",actualSHA)
+            val activation=ClientProtocols.record(activationFamily).put("snapshotSHA256",base.snapshotSHA256).put("validationEpoch",identity).put("catalogSHA256",actualSHA)
             immutable(marker,OfflineFoundationJSON.encode(activation))
         }
         return catalog
@@ -233,23 +265,31 @@ class PublishedAggregateStore(private val directory:File) {
         val identity=runCatching{epoch(validationEpoch)}.getOrNull()?:return null
         val manifest=child("aggregate-manifests","$activeSnapshotSHA256.json");val sidecar=child("aggregate-index","$activeSnapshotSHA256.json");val marker=child("aggregate-activations",activeSnapshotSHA256,"$identity.json")
         if(!manifest.exists()||!sidecar.exists()||!marker.exists())return null
-        val catalog=sourceCatalog(activeSnapshotSHA256,check)
-        val actual=catalogRecord(catalog,sourceBytes(sidecar,8*1024*1024))
+        val parsed=sourceParsed(activeSnapshotSHA256,check)
+        val actual=verifySidecarBytes(parsed.base,parsed.mergedFromRef,sidecar,::sourceBytes)
         checkActivation(sourceBytes(marker,4096),activeSnapshotSHA256,identity,PublishedAggregateReader.sha(actual))
-        return catalog
+        return parsed.catalog
     }
-    private fun sourceCatalog(snapshot:String,check:()->Unit={}):PublishedAggregateCatalog {
+    private fun sourceParsed(snapshot:String,check:()->Unit={}):ParsedSource {
         require(PublishedAggregateReader.validSHA(snapshot));check()
-        ownedSourceReadScope()?.catalogs?.get(snapshot)?.let{saved->return saved.catalog}
+        ownedSourceReadScope()?.catalogs?.get(snapshot)?.let{return it}
         val raw=sourceBytes(child("aggregate-manifests","$snapshot.json"),2*1024*1024);require(PublishedAggregateReader.sha(raw)==snapshot)
         val base=PublishedAggregateReader.read(raw,check){sourceBytes(shardFile(it.url,it.sha256),it.bytes)}
         val refFile=child("aggregate-pages-refs","$snapshot.json")
-        val catalog=if(refFile.exists())mergeSupplementalPages(base,refFile,::sourceBytes) else base
-        ownedSourceReadScope()?.catalogs?.put(snapshot,ParsedSource(catalog,PublishedAggregateReader.sha(OfflineFoundationJSON.encode(catalog.json()))))
-        return catalog
+        val mergedFromRef=if(refFile.exists())mergeSupplementalPages(base,refFile,::sourceBytes) else null
+        val catalog=mergedFromRef?:PublishedAggregateReader.supplementCanonicalDesktopPages(base,raw)
+        val parsed=ParsedSource(base,mergedFromRef,catalog,PublishedAggregateReader.sha(OfflineFoundationJSON.encode(catalog.json())))
+        ownedSourceReadScope()?.catalogs?.put(snapshot,parsed)
+        return parsed
     }
+    private fun sourceCatalog(snapshot:String,check:()->Unit={}):PublishedAggregateCatalog = sourceParsed(snapshot,check).catalog
     fun originalRow(descriptor:PublishedAggregate):ByteArray {
         require(sourceCatalog(descriptor.source.manifestSHA256).records.contains(descriptor)){"汇总原目录身份未核验"}
+        if(descriptor.kind=="page"&&descriptor.source.shardURL==PublishedAggregateReader.CANONICAL_DESKTOP_PAGES_SHARD_URL){
+            require(descriptor.source.shardSHA256==descriptor.source.manifestSHA256&&descriptor.source.shardBytes==0){"桌面规范页面来源声明无效"}
+            val row=PublishedAggregateReader.canonicalDesktopPageRow(descriptor.source.rowIndex)
+            return PublishedAggregateReader.normalizedRow(row).also{require(PublishedAggregateReader.sha(it)==descriptor.source.normalizedRowSHA256)}
+        }
         val raw=read(shardFile(descriptor.source.shardURL,descriptor.source.shardSHA256),descriptor.source.shardBytes);require(PublishedAggregateReader.sha(raw)==descriptor.source.shardSHA256)
         val rows=JSONArray(PublishedUtf8.decode(raw));require(descriptor.source.rowIndex in 0 until rows.length())
         return PublishedAggregateReader.normalizedRow(rows.getJSONObject(descriptor.source.rowIndex)).also{require(PublishedAggregateReader.sha(it)==descriptor.source.normalizedRowSHA256)}

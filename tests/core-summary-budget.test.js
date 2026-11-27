@@ -64,13 +64,13 @@ test('每次摘要修复请求使用当前候选真实字数与剩余空间，�
         { callModelFn: async messages => {
             const prompt = messages[0].content;
             const actualCount = countChinese(summaries[requestCount]);
-            assert.ok(prompt.includes('当前摘要实际含 ' + actualCount + ' 个汉字与中文标点'));
-            assert.ok(prompt.includes('距 600 个上限只剩 ' + (600 - actualCount) + ' 个'));
+            assert.ok(prompt.includes('当前 ' + actualCount + ' 汉字与中文标点'));
+            assert.ok(prompt.includes('距上限 600 剩 ' + (600 - actualCount) + ' 字'));
             assert.match(prompt, /420–520/);
             assert.match(prompt, /320–600/);
             assert.match(prompt, /6–12/);
-            assert.match(prompt, /修正缺项应替换原有不完整或重复句/);
-            assert.match(prompt, /反馈明确要求逐字保留的句子必须原样保留/);
+            assert.match(prompt, /修复缺项时优先替换已有不完整或重复的说明|替换缺陷句而非追加/);
+            assert.match(prompt, /反馈明确要求逐字保留的句子(?:必须|仍)原样保留|若纠错反馈明确要求某句逐字保留，则该句必须原样保留/);
             assert.match(prompt, /数值可以位于不同方法行/);
             assert.match(prompt, /禁止把不同数据集、评测协议、指标或不连续证据片段拼成同条件比较/);
             assert.doesNotMatch(prompt, /逐字来自同一原表行/);

@@ -228,12 +228,16 @@ function checkMeanDeltaMergedColumns(headerCells, rows) {
     const deltaRows = rows.filter(cells => MEAN_DELTA_LABEL.test(normalizeText(cells[0] || '').trim()));
     if (deltaRows.length === 0) return issues;
     for (const cells of deltaRows) {
-        for (let column = 1; column + 1 < cells.length; column += 1) {
-            // 合并列在 Markdown 里体现为“真值 + —/空 续列”。
-            if (!isCoveredContinuation(cells[column + 1])) continue;
-            if (isCoveredContinuation(cells[column])) continue;
-            const leftHeader = headerCells[column] || '';
-            const rightHeader = headerCells[column + 1] || '';
+        let anchor = -1;
+        for (let column = 1; column < cells.length; column += 1) {
+            // 合并列在 Markdown 里体现为“真值 + 一个或多个 —/空 续列”。
+            if (!isCoveredContinuation(cells[column])) {
+                anchor = column;
+                continue;
+            }
+            if (anchor < 1) continue;
+            const leftHeader = headerCells[anchor] || '';
+            const rightHeader = headerCells[column] || '';
             const sameMetric = stripUnitAndDirection(leftHeader) === stripUnitAndDirection(rightHeader);
             const sameUnit = unitOfCell(leftHeader) === unitOfCell(rightHeader);
             if (!sameMetric || !sameUnit) {
@@ -242,7 +246,7 @@ function checkMeanDeltaMergedColumns(headerCells, rows) {
                 issues.push({
                     severity: 'warn',
                     code: 'table-mean-delta-merged-unit',
-                    message: `“Mean Δ” 合并列的第 ${column + 1}/${column + 2} 列不是同一指标同一单位（${left} vs ${right}），不能合并`
+                    message: `“Mean Δ” 合并列的第 ${anchor + 1}/${column + 1} 列不是同一指标同一单位（${left} vs ${right}），不能合并`
                 });
             }
         }

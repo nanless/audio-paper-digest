@@ -2,6 +2,10 @@ package com.nanless.paperdigest.zotero
 
 import com.nanless.paperdigest.data.*
 import com.nanless.paperdigest.secret.SecretStore
+import com.nanless.paperdigest.zotero.webdav.DavReplyFile
+import com.nanless.paperdigest.zotero.webdav.DavWireReply
+import com.nanless.paperdigest.zotero.webdav.DavWireTransport
+import com.nanless.paperdigest.zotero.webdav.ZoteroDavBackend
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import okhttp3.Request
@@ -121,6 +125,93 @@ class ZoteroServiceTest {
  @Test fun fileCancellationRemainsCancellationWithoutAuthenticationOrCooldown()=runBlocking{val f=fixture();f.configure();val id=f.prepare();f.server.cancelDownload=true;val e=assertFails{f.service.execute("archive",JSONObject().put("preparedID",id))};assertTrue(e is CancellationException);assertEquals("cancelled",f.service.state().getJSONArray("journals").getJSONObject(0).getString("status"));assertFalse(JSONObject(File(f.root,"Research/ZoteroConnection/connection.json").readText()).has("backoffUntil"));assertFalse(f.service.state().getBoolean("busy"))}
  @Test fun collectionChangeCannotSilentlyResumeIntoOldTarget()=runBlocking{val f=fixture();f.service.execute("save",JSONObject().put("libraryType","users").put("libraryID","123").put("collection","ABCDEFGH"));val id=f.prepare();f.configure();assertFails{f.service.execute("archive",JSONObject().put("preparedID",id))};assertTrue(f.server.requests.isEmpty());f.service.execute("save",JSONObject().put("libraryType","users").put("libraryID","123").put("collection","ABCDEFGH"));f.service.execute("resume",JSONObject().put("journalID",id));assertEquals("completed",f.service.state().getJSONArray("journals").getJSONObject(0).getString("status"))}
  @Test fun invalidExternalAddressesRejected(){listOf("http://example.org/f","https://u:p@example.org/f","file:///tmp/f","https://example.org/f#x").forEach{assertThrows(IllegalArgumentException::class.java){ZoteroService.safeExternal(it)}}}
+ @Test fun webdavReArchiveWithUnchangedNoteReusesNoteWithoutDavJournalIDCrash()=runBlocking{
+  val root=Files.createTempDirectory("pd-zotero-webdav-note-").toFile().canonicalFile
+  try {
+   val research=File(root,"Research").also{it.mkdirs()}
+   val pdfFile=File(root,"original.pdf").also{it.writeBytes("%PDF-v1-bytes".toByteArray())}
+   val noteHtml="<div>unchanged research note</div>"
+   val bib=JSONObject().put("itemType","preprint").put("title","WebDAV Note Reuse Paper")
+   val secrets=object:SecretStore {
+    val map=mutableMapOf<String,String>("zotero.primary" to "fake-api-key")
+    override fun load(scope:String):String?=map[scope]?:if(scope.startsWith("zotero.webdav:") || scope.startsWith("zotero.dav"))"fake-dav-password" else "fake-api-key"
+    override fun save(scope:String,secret:String){map[scope]=secret}
+    override fun remove(scope:String){map.remove(scope)}
+   }
+   val apiItems=linkedMapOf<String,JSONObject>()
+   val davStore=mutableMapOf<String,ByteArray>()
+   var davPuts=0
+   val wire=object:ZoteroTransport,DavWireTransport {
+    override suspend fun request(request:Request,limit:Int):HttpBytes {
+     val p=request.url.encodedPath
+     fun reply(code:Int,body:String="")=HttpBytes(code,emptyMap(),body.toByteArray())
+     if(p=="/keys/current")return reply(200,JSONObject().put("userID",123).put("access",JSONObject().put("user",JSONObject().put("library",true).put("write",true).put("files",false).put("notes",true))).toString())
+     if(request.method=="POST"&&p.endsWith("/items")){
+      val buf=Buffer();request.body!!.writeTo(buf);val arr=JSONArray(buf.readUtf8())
+      for(i in 0 until arr.length()){
+       val it=arr.getJSONObject(i)
+       apiItems[it.getString("key")]=JSONObject(it.toString()).put("version",1).also{item->if(item.optString("itemType")=="attachment"){item.put("md5",JSONObject.NULL).put("mtime",JSONObject.NULL)}}
+      }
+      return reply(200,"{\"successful\":{},\"unchanged\":{},\"failed\":{}}")
+     }
+     val key=request.url.pathSegments[3]
+     if(request.method=="GET")return apiItems[key]?.let{reply(200,JSONObject().put("key",key).put("version",it.getLong("version")).put("library",JSONObject().put("type","user").put("id",123)).put("data",it).toString())}?:reply(404)
+     if(request.method=="PATCH"){
+      val actual=apiItems[key]!!
+      val buf=Buffer();request.body!!.writeTo(buf);val body=JSONObject(buf.readUtf8())
+      actual.put("md5",body.getString("md5")).put("mtime",body.getLong("mtime")).put("version",actual.getLong("version")+1)
+      return reply(204)
+     }
+     error("Unhandled ${request.method} $p")
+    }
+    override suspend fun download(request:Request,target:File,limit:Long):HttpFile=error("unused")
+    override suspend fun exchange(request:Request,limit:Long,reply:DavReplyFile?,check:()->Unit):DavWireReply {
+     check()
+     if(request.url.host=="api.zotero.org"){val r=request(request,limit.toInt());return DavWireReply(r.code,r.headers,r.bytes,r.bytes.size.toLong(),sha256(r.bytes))}
+     val path=request.url.encodedPath
+     if(request.method=="PUT"){val b=Buffer();request.body!!.writeTo(b);davStore[path]=b.readByteArray();davPuts++;return DavWireReply(201,emptyMap())}
+     val bytes=davStore[path]?:return DavWireReply(404,emptyMap())
+     if(reply!=null){reply.open().use{val b=java.nio.ByteBuffer.wrap(bytes);while(b.hasRemaining())it.write(b)};return DavWireReply(200,emptyMap(),bytes=bytes.size.toLong(),sha256=sha256(bytes))}
+     return DavWireReply(200,emptyMap(),bytes,bytes.size.toLong(),sha256(bytes))
+    }
+   }
+   val provider=ZoteroMaterialProvider {
+    ZoteroMaterials(
+     "arxiv:2611.00077","b".repeat(64),bib.copy(),
+     listOf(
+      ZoteroMaterial("pdf","Original PDF","application/pdf",pdfFile,sha256=sha256(pdfFile.readBytes())),
+      ZoteroMaterial("note","Research Note","text/html",noteHTML=noteHtml,sha256=sha256(noteHtml.toByteArray()))
+     )
+    )
+   }
+   val service=ZoteroService(research,secrets,provider,wire,davFactory={dir,k->ZoteroDavBackend(dir,k,wire)})
+   service.execute("save",JSONObject().put("libraryType","users").put("libraryID","123").put("attachmentBackend","webdav").put("davBaseURL","https://dav.example.org/dav/").put("davUsername","researcher"))
+   val firstID=service.execute("prepare").getString("preparedID")
+   val firstRes=service.execute("archive",JSONObject().put("preparedID",firstID))
+   assertEquals("completed",firstRes.getString("status"))
+   val firstNoteKey=apiItems.values.single{it.optString("itemType")=="note"}.getString("key")
+   val firstParentKey=apiItems.values.single{it.optString("itemType")=="preprint"}.getString("key")
+   assertEquals(2,davPuts) // .zip + .prop for first PDF
+
+   // Mutate PDF while keeping note & identity unchanged -> re-prepare MUST reuse note without crashing on davJournalID!
+   pdfFile.writeBytes("%PDF-v2-updated-bytes".toByteArray())
+   val secondID=service.execute("prepare").getString("preparedID")
+   assertNotEquals(firstID,secondID)
+   val secondJournal=JSONObject(File(research,"ZoteroArchives/$secondID/journal.json").readText())
+   val secondNoteRole=secondJournal.getJSONArray("roles").objects().single{it.getBoolean("note")}
+   assertEquals(firstNoteKey,secondNoteRole.getString("key"))
+   assertFalse("Note role must never carry davJournalID",secondNoteRole.has("davJournalID"))
+   val secondRes=service.execute("archive",JSONObject().put("preparedID",secondID))
+   assertEquals("completed",secondRes.getString("status"))
+   assertEquals(1,apiItems.values.count{it.optString("itemType")=="preprint"})
+   assertEquals(firstParentKey,apiItems.values.single{it.optString("itemType")=="preprint"}.getString("key"))
+   assertEquals(1,apiItems.values.count{it.optString("itemType")=="note"})
+   assertEquals(2,apiItems.values.count{it.optString("itemType")=="attachment"})
+   assertEquals(4,davPuts) // second PDF uploaded cleanly to WebDAV
+  } finally {
+   root.deleteRecursively()
+  }
+ }
  private suspend fun assertFails(block:suspend()->Unit):Exception {try{block()}catch(e:Exception){return e};throw AssertionError("Expected failure")}
  companion object{private fun md5(b:ByteArray)=MessageDigest.getInstance("MD5").digest(b).joinToString(""){"%02x".format(it.toInt()and 255)}}
 }

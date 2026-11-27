@@ -367,6 +367,8 @@ extension LibraryService {
         } catch ServiceError.invalid(let message) {
             // HTTP 200 payload exceeding the size limit still fails closed.
             throw ServiceError.invalid(message)
+        } catch ServiceError.responseTooLarge(let message) {
+            throw ServiceError.responseTooLarge(message)
         } catch {
             // Optional Tier 2 network / transient HTTP error: do not mark loaded,
             // preserve prior cachedSignals, and still return Tier 1 local cachedDemoIds.

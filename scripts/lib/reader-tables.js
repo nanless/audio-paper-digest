@@ -275,14 +275,16 @@ function hasSourceBoundRepeatedEnglishTriple(cell, context = {}, duplicate = nul
 
 function hasSourceBoundRepeatedRangeChain(cell, context = {}, duplicate = null) {
     const text = String(cell || '').normalize('NFKC');
-    const compact = text.replace(/\s+/g, '').replace(/\\times/gi, '×');
+    const normalized = text.replace(/\s+/g, '');
     const number = '[+\\-]?\\d+(?:\\.\\d+)?';
     const range = `\\[${number},${number}\\]`;
-    const chainPattern = new RegExp(`((?:${range}×){2}${range})`);
-    const match = chainPattern.exec(compact);
-    if (!match || [...compact.matchAll(/\[[^\]]+\]/g)].length !== 3
+    const times = '(?:×|\\\\times)';
+    const chainPattern = new RegExp(`((?:${range}${times}){2}${range})`, 'i');
+    const match = chainPattern.exec(normalized);
+    if (!match || [...normalized.matchAll(/\[[^\]]+\]/g)].length !== 3
         || (duplicate && !(duplicate.index >= match.index
             && duplicate.index + duplicate.length <= match.index + match[0].length))) return false;
+    const canonicalChain = match[1].replace(/\\times/gi, '×');
     const sourceChains = (Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
         .map(value => String(value || '').normalize('NFKC')
             .replace(/\s+/g, '').replace(/\\times/gi, '×'));
@@ -290,7 +292,7 @@ function hasSourceBoundRepeatedRangeChain(cell, context = {}, duplicate = null) 
     // 但前提是完整链条确实出现在已核验的原文中。
     // 整个单元格被复制、范围被漏掉或顺序被打乱，都不符合
     // 这个精确的三范围形态。
-    return sourceChains.some(source => source.includes(match[1]));
+    return sourceChains.some(source => source.includes(canonicalChain));
 }
 
 function hasSourceBoundNumericScalar(cell, context = {}, duplicate = null) {
@@ -642,8 +644,8 @@ function assessReaderTableSelectionEligibility(table) {
                     header: matrix[0], row: cells, rowIndex: row, columnIndex: column,
                     sourceTexts: [displayCell]
                 })) add('source_display_cleanup_required', { row, column });
-                if (!(headerRow && readerVisibleWithTex(text)) && /\\[A-Za-z]+/.test(projectReaderMathSymbols(text))) add('unresolved_source_tex', { row, column });
-                if (unsafeMarkdownCell(projectReaderMathSymbols(text))) add('unsafe_markdown_cell', { row, column });
+                if (!(headerRow && readerVisibleWithTex(displayCell)) && /\\[A-Za-z]+/.test(projectReaderMathSymbols(displayCell))) add('unresolved_source_tex', { row, column });
+                if (unsafeMarkdownCell(projectReaderMathSymbols(displayCell))) add('unsafe_markdown_cell', { row, column });
             }
         }
     }

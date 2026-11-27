@@ -327,7 +327,7 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     return unbound.length;
 }
 
-function alignMixedBindingsToCurrentTableNodes(draft, tables, allowCompleteDeclarations = false) {
+function alignMixedBindingsToCurrentTableNodes(draft, tables, allowCompleteDeclarations = false, trackedBindings = null) {
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
     if (!bindings.length || tables.length !== bindings.length) return false;
     if (!bindings.every((binding, index) => binding?.tableIndex === index + 1)) return false;
@@ -355,13 +355,20 @@ function alignMixedBindingsToCurrentTableNodes(draft, tables, allowCompleteDecla
     }
     let proseIndex = 0;
     const markerMap = new Map();
+    const nextTracked = trackedBindings ? new Set() : null;
     draft.tableBindings = tables.map((table, canonicalIndex) => {
         const binding = table.marker
             ? selectionByOrdinal.get(table.markerIndex)
             : proseBindings[proseIndex++];
         if (table.marker) markerMap.set(table.markerIndex, canonicalIndex + 1);
-        return { ...binding, tableIndex: canonicalIndex + 1 };
+        const cloned = { ...binding, tableIndex: canonicalIndex + 1 };
+        if (nextTracked && trackedBindings.has(binding)) nextTracked.add(cloned);
+        return cloned;
     });
+    if (nextTracked) {
+        trackedBindings.clear();
+        for (const item of nextTracked) trackedBindings.add(item);
+    }
     for (const section of draft.sections) {
         if (typeof section?.body !== 'string') continue;
         section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
@@ -374,7 +381,7 @@ function alignMixedBindingsToCurrentTableNodes(draft, tables, allowCompleteDecla
 // 来源引文表和结构化原表的绑定没有可见序号。模型改变小节顺序后，
 // 必须找到唯一的表格对应关系才能重新排列。结构化原表要求每个展示单元格
 // 都与已核验的原表 DOM 单元格一致；带选择标记的表仍按显式序号对应，不从正文猜测。
-function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredArtifacts = null) {
+function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredArtifacts = null, trackedBindings = null) {
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
     if (!bindings.length || tables.length !== bindings.length
         || !bindings.every((binding, index) => binding?.tableIndex === index + 1)) return false;
@@ -437,9 +444,13 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
                     || !Array.isArray(row) || typeof row[columnIndex] !== 'string'
                     || typeof sourceCell?.text !== 'string'
                     || seenCells.has(key)
-                    || ![sourceCell.text, require('./reader-table-pdf-evidence').displayCell(sourceTable, sourceRow, sourceColumn)]
-                        .some(value => normalize(value.replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%'))
-                            === normalize(row[columnIndex].replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%')))) {
+                    || ![
+                        sourceCell.text,
+                        require('./reader-table-pdf-evidence').displayCell(sourceTable, sourceRow, sourceColumn),
+                        require('./reader-tables').readerTableCellDisplay(sourceTable, sourceRow, sourceColumn)
+                    ]
+                        .some(value => normalize(String(value ?? '').replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%'))
+                            === normalize(require('./reader-tables').unescapeMarkdownTableCell(row[columnIndex]).replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%')))) {
                     return false;
                 }
                 seenCells.add(key);
@@ -547,13 +558,20 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
         item.index, evidenceBindings[index].binding
     ]));
     let markerMap = new Map();
+    const nextTracked = trackedBindings ? new Set() : null;
     draft.tableBindings = tables.map((table, canonicalIndex) => {
         const binding = table.marker
             ? markerBindings.get(table.markerIndex)
             : assignedByNode.get(proseNodes.indexOf(table));
         if (table.marker) markerMap.set(table.markerIndex, canonicalIndex + 1);
-        return { ...binding, tableIndex: canonicalIndex + 1 };
+        const cloned = { ...binding, tableIndex: canonicalIndex + 1 };
+        if (nextTracked && trackedBindings.has(binding)) nextTracked.add(cloned);
+        return cloned;
     });
+    if (nextTracked) {
+        trackedBindings.clear();
+        for (const item of nextTracked) trackedBindings.add(item);
+    }
     for (const section of draft.sections || []) {
         if (typeof section?.body !== 'string') continue;
         section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
@@ -583,9 +601,10 @@ function pruneTrailingUnboundSourceQuoteBindings(draft, tables) {
 // 只补齐完整原表的确定性展示。这里不创建selection、不推断字段或数值；
 // 完整来源SHA以及后续逐格绑定、粘贴和正文检查仍由正式解析器执行。
 function restoreCompleteArtifactTableMarkers(draft, artifacts) {
+    const restoredBindings = new Set();
     // 恢复身份迁移尚未传入来源，留给带封存来源的正式解析器校验和恢复。
-    if (artifacts === null || artifacts === undefined) return;
-    if (!Array.isArray(draft?.sections) || !Array.isArray(draft?.tableBindings)) return;
+    if (artifacts === null || artifacts === undefined) return restoredBindings;
+    if (!Array.isArray(draft?.sections) || !Array.isArray(draft?.tableBindings)) return restoredBindings;
     for (const [index, binding] of draft.tableBindings.entries()) {
         const marker = `[[TABLE_${binding?.tableIndex}]]`;
         const matching = draft.sections.filter(section => typeof section?.body === 'string'
@@ -651,7 +670,9 @@ function restoreCompleteArtifactTableMarkers(draft, artifacts) {
         const parsed = extractMarkdownTables(markdown);
         if (parsed.length !== 1 || JSON.stringify([parsed[0].header, ...parsed[0].rows]) !== JSON.stringify(displayMatrix)) fail();
         matching[0].body = matching[0].body.replace(marker, () => markdown);
+        restoredBindings.add(binding);
     }
+    return restoredBindings;
 }
 
 // 新输入模式只声明整表身份，不接受模型填写单元格或选择子集。
@@ -745,9 +766,10 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
     if (draft.tableBindings?.some(binding => Object.hasOwn(binding || {}, 'completeTable'))) {
         alignMixedBindingsToCurrentTableNodes(draft, locateReaderDraftTables(draft), true);
     }
+    let completeTableBindings = new Set();
     try {
         compileCompleteReaderTableDeclarations(draft, structuredArtifacts);
-        restoreCompleteArtifactTableMarkers(draft, structuredArtifacts);
+        completeTableBindings = restoreCompleteArtifactTableMarkers(draft, structuredArtifacts);
     } catch (error) {
         if (error.code === 'READER_SOURCE_TABLE_UNRENDERABLE') {
             // Indices may already have been deterministically aligned to the
@@ -775,7 +797,7 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
     pruneTrailingUnboundSourceQuoteBindings(draft, originalTables);
     // 小节顺序正确也可能把来源声明留在旧表序；仅按唯一的原格或引文对应重排。
     if (Array.isArray(draft.tableBindings)
-        && alignSourceQuoteBindingsToCurrentTableNodes(draft, originalTables, structuredArtifacts)) {
+        && alignSourceQuoteBindingsToCurrentTableNodes(draft, originalTables, structuredArtifacts, completeTableBindings)) {
         originalTables = locateReaderDraftTables(draft);
     }
     let tableMap = originalTables.map(table => ({ rawIndex: table.bindingIndex, canonicalIndex: table.bindingIndex,
@@ -792,7 +814,7 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
         // 小节排序前先检查选择标记与普通表混排的对应关系：选择绑定按唯一 TABLE 序号对应，
         // 来源引文与原表绑定保持原有相对顺序。
         // 后续来源检查仍须逐个核对单元格和引文。
-        if (!valid && alignMixedBindingsToCurrentTableNodes(draft, originalTables)) {
+        if (!valid && alignMixedBindingsToCurrentTableNodes(draft, originalTables, false, completeTableBindings)) {
             originalTables = locateReaderDraftTables(draft);
             valid = originalTables.length === draft.tableBindings.length
                 && draft.tableBindings.every((binding, index) => binding?.tableIndex === index + 1
@@ -803,7 +825,7 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
                         : !originalTables[index]?.marker));
         }
         if (!valid && alignSourceQuoteBindingsToCurrentTableNodes(
-            draft, originalTables, structuredArtifacts
+            draft, originalTables, structuredArtifacts, completeTableBindings
         )) {
             originalTables = locateReaderDraftTables(draft);
             valid = originalTables.length === draft.tableBindings.length
@@ -830,7 +852,14 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
             rawSectionIndex: table.sectionIndex, canonicalSectionIndex: newSectionIndex.get(table.sectionIndex) }));
         const markerMap = new Map(tableMap.filter(item => originalTables[item.rawIndex].marker)
             .map(item => [item.rawIndex + 1, item.canonicalIndex + 1]));
-        draft.tableBindings = tableMap.map(item => ({ ...draft.tableBindings[item.rawIndex], tableIndex: item.canonicalIndex + 1 }));
+        const nextComplete = new Set();
+        draft.tableBindings = tableMap.map(item => {
+            const previous = draft.tableBindings[item.rawIndex];
+            const cloned = { ...previous, tableIndex: item.canonicalIndex + 1 };
+            if (completeTableBindings.has(previous)) nextComplete.add(cloned);
+            return cloned;
+        });
+        completeTableBindings = nextComplete;
         // 一次替换全部序号，避免 1→2→1 的连续改名冲突；只改有明确对应记录的
         // 表格选择标记，不改其他正文或表格单元格。
         for (const section of sections) {
@@ -838,7 +867,7 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
                 (marker, index) => markerMap.has(Number(index)) ? `[[TABLE_${markerMap.get(Number(index))}]]` : marker);
         }
     } else if (!sectionOrderChanged && sectionsAreKnown && Array.isArray(draft.tableBindings)) {
-        const mixedAligned = alignMixedBindingsToCurrentTableNodes(draft, originalTables);
+        const mixedAligned = alignMixedBindingsToCurrentTableNodes(draft, originalTables, false, completeTableBindings);
         if (mixedAligned) originalTables = locateReaderDraftTables(draft);
         const markerOrdinals = mixedAligned ? null : completeSelectionMarkerPermutation(draft, originalTables);
         if (!mixedAligned && markerOrdinals && markerOrdinals.some((ordinal, index) => ordinal !== index + 1)) {
@@ -850,9 +879,14 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
             }));
             const markerMap = new Map(markerOrdinals.map((ordinal, canonicalIndex) =>
                 [ordinal, canonicalIndex + 1]));
-            draft.tableBindings = tableMap.map(item => ({
-                ...draft.tableBindings[item.rawIndex], tableIndex: item.canonicalIndex + 1
-            }));
+            const nextComplete = new Set();
+            draft.tableBindings = tableMap.map(item => {
+                const previous = draft.tableBindings[item.rawIndex];
+                const cloned = { ...previous, tableIndex: item.canonicalIndex + 1 };
+                if (completeTableBindings.has(previous)) nextComplete.add(cloned);
+                return cloned;
+            });
+            completeTableBindings = nextComplete;
             for (const section of sections) {
                 if (typeof section?.body === 'string') section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
                     (marker, index) => markerMap.has(Number(index))
@@ -883,8 +917,12 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
         }
     }
     const conceptMarkerLocations = normalizeConceptBridgeMarkerLocations(draft);
+    const completeTableIndexes = (Array.isArray(draft?.tableBindings) ? draft.tableBindings : [])
+        .filter(binding => completeTableBindings.has(binding))
+        .map(binding => binding.tableIndex)
+        .filter(Number.isSafeInteger);
     const outputSha256 = sha(draft);
-    return { draft, mapping: { ...draftOrderHeader(), inputSha256, outputSha256,
+    return { draft, completeTableIndexes, mapping: { ...draftOrderHeader(), inputSha256, outputSha256,
         changed: inputSha256 !== outputSha256, sections: sectionMap, tables: tableMap,
         conceptBridges: bridgeMap, conceptMarkerLocations } };
 }

@@ -810,7 +810,8 @@ function deterministicReview(record, bytes) {
         if (mdIssues.length > 0) {
             fail(`历史 Markdown 页面确定性发布检查失败（${record.path}）：${mdIssues.join('；')}`);
         }
-        for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+        const scannableText = stripCodeForDeterministicScan(text);
+        for (const match of scannableText.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
             const target = match[1].trim();
             if (!target.startsWith('/') && !target.startsWith('https://') && !target.startsWith('#')) {
                 fail(`历史 Markdown 页面含不安全或非规范链接：${record.path}`);
@@ -886,11 +887,13 @@ function runHugoRenderedHtmlGate({ publicDir, sourceDir, modifiedMarkdownPaths }
         'issues = list(gate.validate_hugo_rendered_html_gate(public_dir, artifacts))',
         'for artifact in other_pages:',
         '    candidates = gate.rendered_page_candidates(public_dir, artifact["frontmatter"].get("title"), artifact["path"])',
-        '    for rendered_path, rendered in candidates:',
-        '        reader_html = gate.rendered_article_fragment(rendered)',
-        '        label = f"{Path(artifact[\'path\']).name} -> {rendered_path.name}"',
-        '        issues.extend(gate._rendered_math_error_issues(reader_html, label))',
-        '        issues.extend(gate.math_and_emphasis_issues(reader_html, label, rendered_html=True))',
+        '    if len(candidates) != 1:',
+        '        issues.append(f"{Path(artifact[\'path\']).name} 未找到唯一渲染 HTML 页面（命中 {len(candidates)} 个）")',
+        '        continue',
+        '    rendered_path, rendered = candidates[0]',
+        '    reader_html = gate.rendered_article_fragment(rendered)',
+        '    label = f"{Path(artifact[\'path\']).name} -> {rendered_path.name}"',
+        '    issues.extend(gate.math_and_emphasis_issues(reader_html, label, rendered_html=True))',
         'sys.stdout.write(json.dumps({"issues": issues}, ensure_ascii=False))'
     ].join('\n');
     const gateResult = spawnSync('bash', [path.join(scriptsDir, 'python-runtime.sh'), '-c', pythonScript, scriptsDir], {
@@ -1575,7 +1578,12 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
         try {
             const online = strictJsonFile(onlinePath, '在线网页核验记录').value;
             const matchesPublication = online.publicationId === loaded.plan.publicationId
-                && (!publication || !online.remoteVerifiedOid || online.remoteVerifiedOid === publication.remoteVerifiedOid);
+                && Boolean(
+                    publication
+                    && online.remoteVerifiedOid
+                    && online.remoteVerifiedOid === publication.remoteVerifiedOid
+                    && online.planSha256 === loaded.plan.planSha256
+                );
             if (matchesPublication) {
                 pagesDeployVerified = online.pagesDeployVerified === true;
                 webVerified = online.webVerified === true;

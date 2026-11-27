@@ -355,6 +355,23 @@ function isReleaseNotFoundError(err) {
         || (combined.includes('http 404') && combined.includes('release'));
 }
 
+function isReleaseAlreadyExistsError(err) {
+    if (!err) return false;
+    if (err.code === 'ENOENT') return false;
+    const combined = `${err.message || ''}\n${err.stderr || ''}\n${err.stdout || ''}`.toLowerCase();
+    if (combined.includes('command not found')
+        || combined.includes('enoent')
+        || combined.includes('not logged into')
+        || combined.includes('authentication')
+        || combined.includes('http 401')
+        || combined.includes('http 403')) {
+        return false;
+    }
+    return combined.includes('already exists')
+        || combined.includes('already_exists')
+        || combined.includes('http 422');
+}
+
 function buildGhReleaseCommands({ repo, tag, assetPath, title, notes }) {
     const validRepo = validateRepoSlug(repo);
     const validTag = validateReleaseTag(tag);
@@ -516,8 +533,16 @@ function publishPodcastToGitHubRelease(options = {}) {
             execFn('gh', commands.uploadArgs, execOpts);
             action = 'uploaded';
         } else {
-            execFn('gh', commands.createArgs, execOpts);
-            action = 'created';
+            try {
+                execFn('gh', commands.createArgs, execOpts);
+                action = 'created';
+            } catch (createErr) {
+                if (!isReleaseAlreadyExistsError(createErr)) {
+                    throw createErr;
+                }
+                execFn('gh', commands.uploadArgs, execOpts);
+                action = 'uploaded';
+            }
         }
 
         return {

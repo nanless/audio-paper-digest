@@ -12,4 +12,5 @@ class ResearchRendererTest {
  @Test fun javascriptLinkIsSanitized(){val p=ResearchRenderer.prepare("[link](javascript:alert%281%29)");assertFalse(p.html.contains("href=\"javascript:"))}
  @Test fun maximumMathAndInputAreBounded(){assertThrows(IllegalArgumentException::class.java){ResearchRenderer.prepare("\$x\$ ".repeat(257))};assertThrows(IllegalArgumentException::class.java){ResearchRenderer.prepare("x".repeat(1_000_001))}}
  @Test fun maliciousMathRemainsDataBeforeTrustedRenderer(){val p=ResearchRenderer.prepare("\\(</script><script>BAD</script>\\)");assertEquals("</script><script>BAD</script>",p.formulae.single().tex);assertFalse(p.html.contains("BAD"));assertFalse(p.html.contains("<script>"))}
+ @Test fun currencyDollarSpansStayLiteralWhileRealMathParsesInMarkdown(){val en=ResearchRenderer.prepare("Price dropped from \$100 to \$50 while \$x + y\$ remains math.");assertEquals(listOf("x + y"),en.formulae.map{it.tex});assertTrue(en.html.contains("\$100 to \$50"));val zh=ResearchRenderer.prepare("预算约 \$100 美元，实付 \$50，公式 \$a_i + b_i\$ 保留。");assertEquals(listOf("a_i + b_i"),zh.formulae.map{it.tex});assertTrue(zh.html.contains("\$100 美元，实付 \$50"))}
 }

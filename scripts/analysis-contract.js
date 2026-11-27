@@ -376,13 +376,14 @@ function stripFencedCodeBlocks(text) {
     return String(text || '').split('\n').map(line => {
         const match = line.match(/^\s*(`{3,}|~{3,})/);
         if (!fence) {
-            if (match) {
+            if (match && !(match[1][0] === '`' && line.slice(match[0].length).includes('`'))) {
                 fence = { char: match[1][0], length: match[1].length };
                 return '';
             }
             return line;
         }
-        if (match && match[1][0] === fence.char && match[1].length >= fence.length) {
+        if (match && match[1][0] === fence.char && match[1].length >= fence.length
+            && line.slice(match[0].length).trim() === '') {
             fence = null;
         }
         return '';
@@ -606,7 +607,11 @@ function maskProtectedMarkdownTableRegions(text, { excludeQuotes = true } = {}) 
                 && syntaxLine.slice(boundary[0].length).trim() === '') fence = null;
             return blank();
         }
-        if (boundary && !comment && !htmlLiteral) { fence = boundary[1]; return blank(); }
+        if (boundary && !comment && !htmlLiteral
+            && !(boundary[1][0] === '`' && syntaxLine.slice(boundary[0].length).includes('`'))) {
+            fence = boundary[1];
+            return blank();
+        }
         // 行内代码里的 HTML 字样是单元格内容，不是注释或 HTML 区块。
         const startsHtmlBlock = /^ {0,3}<\/?(?:address|article|aside|blockquote|body|caption|center|col|colgroup|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|main|menu|nav|ol|p|section|summary|table|tbody|td|tfoot|th|thead|title|tr|ul)(?=[\s/>])/i.test(syntaxLine);
         const probe = (htmlBlock || comment || startsHtmlBlock) ? line : maskMarkdownCodeSpanParagraph(line, 'x');

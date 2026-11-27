@@ -397,7 +397,10 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null, options = {}) {
             validateEvidenceClaimList(evidenceProfile.primaryDefects, 'primaryDefects', 0, 3, allowedEvidenceIds);
         }
     }
-    const rubricVersion = isUnified ? scoringRubric.CURRENT_SCORING_RUBRIC : scoringRubric.LEGACY_SCORING_RUBRIC;
+    const requestedRubric = String(options?.rubricVersion || '').trim();
+    const rubricVersion = isUnified
+        ? (scoringRubric.isUnifiedRubric(requestedRubric) ? requestedRubric : scoringRubric.CURRENT_SCORING_RUBRIC)
+        : scoringRubric.LEGACY_SCORING_RUBRIC;
     const dimSpecs = getScoringDimensionsForRubric(rubricVersion);
     assertExactObjectKeys(parsed.dimensions, dimSpecs.map(spec => spec.key), '评分审计 dimensions');
 
@@ -537,7 +540,10 @@ function applyScoringAuditResult(analysis, audit) {
     const dimSpecs = getScoringDimensionsForRubric(audit?.rubricVersion);
     let updated = mergeSectionByTitle(analysis, '评分', `${Number(audit.total).toFixed(1)}/10`);
     if (isUnified) {
-        updated = setMachineSummaryField(updated, 'rubric_version', scoringRubric.CURRENT_SCORING_RUBRIC);
+        const emittedRubric = scoringRubric.isUnifiedRubric(audit?.rubricVersion)
+            ? audit.rubricVersion
+            : scoringRubric.CURRENT_SCORING_RUBRIC;
+        updated = setMachineSummaryField(updated, 'rubric_version', emittedRubric);
     }
     updated = setMachineSummaryField(updated, 'document_type', audit.documentType);
     updated = setMachineSummaryField(updated, 'rank_bucket', audit.rankBucket);

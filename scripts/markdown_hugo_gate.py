@@ -1167,7 +1167,7 @@ def _mask_literal_markdown_image_alt_brackets(text):
 
 def math_and_emphasis_issues(text, label, *, rendered_html=False):
     """Hugo 可能把语法渲染成破碎的纯文本时，这里按失败处理。"""
-    base = strip_fenced_code_for_format_gate(text)
+    base = text if rendered_html else strip_fenced_code_for_format_gate(text)
     clean = mask_closed_code_for_format_gate(base, rendered_html=rendered_html)
     delimiter_view = text if rendered_html else _mask_literal_markdown_image_alt_brackets(text)
     delimiter_clean = (clean if delimiter_view == text else
@@ -1588,10 +1588,12 @@ def mask_source_bound_author_dollars(rendered, artifact):
 
         def handle_endtag(self, tag):
             if self.anchor is not None and (tag != 'a' or not self.stack or self.stack[-1][0] != 'a'):
-                self.heading['valid'] = False
+                if self.heading is not None:
+                    self.heading['valid'] = False
             if self.anchor is not None and tag == 'a':
-                self.heading['valid'] = self.heading['valid'] and ''.join(self.anchor) == '#'
-                self.heading['anchorSeen'] = True
+                if self.heading is not None:
+                    self.heading['valid'] = self.heading['valid'] and ''.join(self.anchor) == '#'
+                    self.heading['anchorSeen'] = True
                 self.anchor = None
             if self.block is not None and (not self.stack or self.stack[-1][0] != tag):
                 self.block['valid'] = False
@@ -1608,6 +1610,7 @@ def mask_source_bound_author_dollars(rendered, artifact):
             if self.heading is not None and tag == self.heading['tag']:
                 self.pending = self.heading['valid'] and ''.join(self.heading['parts']).strip() == '👥 作者与机构'
                 self.heading = None
+                self.anchor = None
             for i in range(len(self.stack) - 1, -1, -1):
                 if self.stack[i][0] == tag:
                     del self.stack[i:]

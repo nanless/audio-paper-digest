@@ -223,6 +223,12 @@ actor PodcastPlayerService {
     private var remoteCommandsInstalled = false
     private var remoteRegistry: PodcastRemoteCommandRegistry?
     private var isShutDown = false
+    #if PAPER_DIGEST_TESTS
+    private var installRemoteCommandsHook: (@Sendable () async -> Void)?
+    func setInstallRemoteCommandsHook(_ hook: (@Sendable () async -> Void)?) {
+        installRemoteCommandsHook = hook
+    }
+    #endif
     private static let dnsQueue = DispatchQueue(
         label: "com.nanless.PaperDigest.dns.podcast",
         qos: .userInitiated,
@@ -860,10 +866,21 @@ actor PodcastPlayerService {
             lastError = nil
             startProgressLoop()
             await updateNowPlaying(episode: episode)
+            guard !isShutDown, myGen == playbackGeneration else {
+                if isShutDown, self.player === existing {
+                    stopPlaybackInternal()
+                    await clearNowPlaying()
+                }
+                throw CancellationError()
+            }
             notifyState()
             return stateSnapshot()
         }
         let localFile = try await downloadEpisode(id: targetId)
+        guard !isShutDown, myGen == playbackGeneration, !Task.isCancelled else {
+            throw CancellationError()
+        }
+        await installRemoteCommandsIfNeeded()
         guard !isShutDown, myGen == playbackGeneration, !Task.isCancelled else {
             throw CancellationError()
         }
@@ -882,9 +899,9 @@ actor PodcastPlayerService {
             }
         } catch {
             stopPlaybackInternal()
-            await clearNowPlaying()
             lastError = error.localizedDescription
             notifyState()
+            await clearNowPlaying()
             throw error
         }
         self.player = audioPlayer
@@ -893,14 +910,15 @@ actor PodcastPlayerService {
         self.currentTime = audioPlayer.currentTime
         self.isPlaying = true
         self.lastError = nil
-        await installRemoteCommandsIfNeeded()
-        guard !isShutDown, myGen == playbackGeneration else {
-            stopPlaybackInternal()
-            await clearNowPlaying()
-            throw CancellationError()
-        }
         startProgressLoop()
         await updateNowPlaying(episode: episode)
+        guard !isShutDown, myGen == playbackGeneration else {
+            if isShutDown, self.player === audioPlayer {
+                stopPlaybackInternal()
+                await clearNowPlaying()
+            }
+            throw CancellationError()
+        }
         notifyState()
         return stateSnapshot()
     }
@@ -1026,6 +1044,11 @@ actor PodcastPlayerService {
     }
 
     private func installRemoteCommandsIfNeeded() async {
+        #if PAPER_DIGEST_TESTS
+        if let hook = installRemoteCommandsHook {
+            await hook()
+        }
+        #endif
         guard enableMediaCenter, !remoteCommandsInstalled, !isShutDown else { return }
         remoteCommandsInstalled = true
         let registry = await MainActor.run { () -> PodcastRemoteCommandRegistry in

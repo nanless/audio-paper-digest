@@ -237,6 +237,12 @@
         "prompts/current/table-fill.md"
       ]
     },
+    "09bdb504751d83579c358ccb0d2b174b6a52a32bf5b9bfbdfa5b46fe0b03c689": {
+      "blobOid": "cc86d9ca81b7048ba842a4e0c56c60650cd93f42",
+      "paths": [
+        "prompts/current/deep-analysis.md"
+      ]
+    },
     "0b6252f820d00c5d790be921d665c4e0ee1ed0f6bbdf41e46557258780bc0607": {
       "blobOid": "cd059e6cf8a7009bdd53b6a5becf08911c878311",
       "paths": [
@@ -1918,6 +1924,12 @@
       "blobOid": "5fddc838bb64d342b3cef0170de05bafc84da0a5",
       "paths": [
         "prompts/gap-fill-v2.md"
+      ]
+    },
+    "c2f8d623db6caf1a56493533a0d19c04b6b2554a4a7e2bb6a993c5201c825284": {
+      "blobOid": "98d833e2b7f9f39b48b2f010bf6b282ab77077fe",
+      "paths": [
+        "prompts/current/core-summary-repair.md"
       ]
     },
     "c3c3b78abae9b4e8b3191ef6a20b765c55bad5e8ad999a13ae8b816cad6def0e": {

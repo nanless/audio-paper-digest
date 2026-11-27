@@ -1050,7 +1050,11 @@ function replayCatalog(providerId, outputRoot) {
         'conference', 'contract', 'implementationSha256', 'metadataFile',
         'metadataSha256', 'paperSetSha256', 'parser', 'providerId', 'receiptSha256', 'responses'
     ], `${providerId} catalog.receipt.json`);
-    if (receipt.contract !== EXTENDED_CATALOG_RECEIPT_CONTRACT
+    const acceptedCatalogContracts = new Set([
+        EXTENDED_CATALOG_RECEIPT_CONTRACT,
+        'official-conference-catalog-receipt-v2'
+    ]);
+    if (!acceptedCatalogContracts.has(receipt.contract)
         || receipt.providerId !== provider.conference.id
         || receipt.parser !== provider.parser
         || receipt.metadataFile !== 'metadata.json'
@@ -1170,7 +1174,11 @@ function replayPdfReceipt(replayed, paper) {
         'receiptSha256', 'redirects', 'requestedUrl', 'responseStatus'
     ], `${paper.id} PDF receipt`);
     const expectedMode = replayed.provider.parser === 'ieee-local-manifest' ? 'local-sealed-pdf' : 'official-http-pdf';
-    if (receipt.contract !== EXTENDED_PDF_RECEIPT_CONTRACT
+    const acceptedPdfContracts = new Set([
+        EXTENDED_PDF_RECEIPT_CONTRACT,
+        'official-conference-pdf-receipt-v2'
+    ]);
+    if (!acceptedPdfContracts.has(receipt.contract)
         || receipt.acquisitionMode !== expectedMode
         || receipt.providerId !== replayed.provider.conference.id
         || receipt.metadataSha256 !== replayed.metadataSha256

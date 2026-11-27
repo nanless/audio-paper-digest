@@ -63,8 +63,9 @@ function classifyFailure(error, now) {
     else if (code === 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED') category = 'source_upgrade';
     // 失败分类必须同时认英文和中文消息：旧失败记录里存的是英文，当前消息已汉化。
     // 前半段英文词必须逐字保持原样，否则旧记录的复算结果会变；
-    // 后半段是英文词的对应中文说法（不安全／不一致／完整性／已漂移／非规范／SHA 不符）。
-    else if (/integrity|SHA.*mismatch|authority.*drift|unsafe|non.canonical|不安全|不一致|完整性|已漂移|非规范|SHA\s*不符/i.test(message)) category = 'integrity';
+    // 后半段只锚定真正的完整性/来源/权威性故障，避免把常规 LLM 校验报错（如列数不一致、
+    // 表格绑定数量不一致、评分理由不一致、未通过完整性检查等）误判为不可重试的 integrity。
+    else if (/integrity|SHA.*mismatch|authority.*drift|unsafe|non.canonical|不安全|已漂移|非规范|SHA\s*不符|(?:SHA|哈希|摘要|来源|引文|凭证|清单|检查点|阶段记录|身份|边界|协议|字节|重放|版本)\s*[^\n。；;]{0,20}不一致|(?:来源|文件|数据|记录|阶段|封存|四源)\s*完整性/i.test(message)) category = 'integrity';
     // 公共分析层已判定的运行级故障必须原样阻止补派，不能靠错误文案再次猜回单篇失败。
     if (category === 'paper' && error?.scope === 'run') category = 'run';
     const systemic = error?.scope === 'run'

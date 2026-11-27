@@ -730,6 +730,40 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
         try expect(article.citationSidecar != nil && article.researchContext != nil && article.resources.count == 4, "real bibliography, context and four figures discovered")
         print("LIVE RESULT \(summary.recordCount) page records / \(summary.paperCount) unique papers / \(summary.shardCount) shards / \(article.plainText.count) article characters")
     }
+    static func testSyncResetsResourceBadgesCache() async throws {
+        let folder = try temporary(); defer { try? FileManager.default.removeItem(at: folder) }
+        let p1 = row("2501.00011", slug: "badge-paper", title: "Badge Paper", date: "2026-11-25", score: 8.5)
+        let transport = LibraryFixtureTransport(try fixture([[p1]]))
+        let library = try service(folder, transport)
+        _ = try await library.sync()
+        // Initial read sees 404 -> sets resourceBadgesLoaded = true, available = false
+        let initial = try await library.resourceBadgesResponse(forceRefresh: false)
+        try expect((initial["available"] as? Bool) == false, "initial resourceBadges 404 returns available=false")
+        // Publish resource-badges.json on server
+        let badgesPayload: [String: Any] = try ClientProtocols.record("paper-resource-badges-index", fields: [
+            "generatedAt": "2026-11-26T00:00:00Z",
+            "papers": [
+                "arxiv:2501.00011": [
+                    "hasCode": true,
+                    "hasDemo": true,
+                    "hasProjectPage": false,
+                    "codeUrls": ["https://github.com/example/repo"],
+                    "demoUrls": ["https://example.github.io/demo"],
+                    "projectUrls": [] as [String]
+                ]
+            ]
+        ])
+        let badgesBytes = try JSONSerialization.data(withJSONObject: badgesPayload, options: [.sortedKeys])
+        await transport.update("/blog/client/signals/resource-badges.json", badgesBytes)
+        // Before sync, cached resourceBadgesLoaded=true still serves cached unavailable
+        let beforeSync = try await library.resourceBadgesResponse(forceRefresh: false)
+        try expect((beforeSync["available"] as? Bool) == false, "cached resourceBadges stays memoized prior to sync")
+        // Sync resets resourceBadgesLoaded=false and cachedDemoPaperIDs=nil
+        _ = try await library.sync()
+        let afterSync = try await library.resourceBadgesResponse(forceRefresh: false)
+        let papersMap = afterSync["papers"] as? [String: [String: Any]]
+        try expect((afterSync["available"] as? Bool) == true && (papersMap?["arxiv:2501.00011"]?["hasCode"] as? Bool) == true, "sync resets resourceBadgesLoaded so subsequent non-forced read fetches updated badges")
+    }
     static func main() async {
         do {
             if let option=CommandLine.arguments.firstIndex(of:"--pdf-loopback"),CommandLine.arguments.count>option+1 {try await testMutablePDFLoopback(CommandLine.arguments[option+1])}
@@ -755,6 +789,7 @@ final class LibraryURLFixtureProtocol: URLProtocol, @unchecked Sendable {
                 try await testSyncCommandRecoversFailedLoad()
                 try await testAggregateStagePreparedShards()
                 try await testPersonalCatalogJoin()
+                try await testSyncResetsResourceBadgesCache()
             }
             print("PASS \(assertions) assertions")
         } catch { fputs("FAIL: \(error.localizedDescription)\n", stderr); exit(1) }
