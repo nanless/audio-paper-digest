@@ -1,14 +1,14 @@
-# 工作台 1.5.2 预发布记录
+# 工作台 1.5.2 发布记录
 
 [English](README.en.md) · 返回[文档索引](README.md)
 
-版本 **1.5.2（构建号 26）（尚未公开发布）** 是 `1.5.1 / 构建号 25`（2026-11-27 公开发布，附注标签 `v1.5.1` 指向发行提交 `7622f2ec`）之后的双端会议展示齐平、客户端并发与传输加固，以及内容生产引擎第 1–4 轮全栈深度审查与架构收敛预发布版本。目前仅完成源码版本冻结与离线自动化预冻结验证，尚未创建公开发行标签或上传 GitHub Release 附件；公开下载仍以最近已公开发行版本 `1.5.1 / 构建号 25` 为准（见 [1.5.1 发版记录](workbench-1.5.1-review.md) 与 [客户端发行核验](client-release-verification.md)）。
+版本 **1.5.2（构建号 26）** 是 `1.5.1 / 构建号 25`（2026-11-27 公开发布，附注标签 `v1.5.1` 指向发行提交 `7622f2ec`）之后的双端会议展示齐平、客户端并发与传输加固，以及内容生产引擎第 1–4 轮全栈深度审查与架构收敛版本。1.5.2 已于 2026-11-27 23:05（北京时间，`2026-11-27T15:05:39Z`）公开发布：附注标签 `v1.5.2`（`37d11f7d…`）指向冻结发行提交 `63fa298f`，[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2)（Release ID `460739646`）含 12 件附件；签名、附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
 
 ## 1.5.1 之后的改动
 
 ### 1. 六端 58 键会议名齐平与双端客户端加固（提交 `7f292e55`、`61216ef7`、`732fc6f0`）
 
-- **六端 58 键会议展示名统一**：在 macOS Swift（`apps/macos/Sources/LibraryCompactProjection.swift`）、macOS WebView JS（`apps/macos/Resources/website-browser.js`）、Android Kotlin（`apps/android/app/src/main/java/com/nanless/paperdigest/ui/WebsiteLibraryIndex.kt`）与“音频研究门户”（门户仓提交 `5dd0a1a7`）间对齐全部 58 组会议显示名（覆盖 `Interspeech`、`Speech Prosody`、`ACM MM`、`DCASE`、`TASLP`、`IJCAI`、`ICCV`、`ECCV` 等），统一执行一致的三步分隔符归一化（原键 → `-` 转 `_` → 去 `_` 紧凑匹配）及严格的 ASCII 年份校验（`[0-9]{2}`）。
+- **六端 58 键会议展示名统一**：在 macOS Swift（`apps/macos/Sources/LibraryCompactProjection.swift`）、macOS WebView JS（`apps/macos/Resources/website-browser.js`）、Android Kotlin（`apps/android/app/src/main/java/com/nanless/paperdigest/ui/WebsiteLibraryIndex.kt`）与“音频研究门户”（门户仓提交 `5dd0a1a7`）间对齐全部 58 组会议显示名（覆盖 `Interspeech`、`Speech Prosody`、`ACM MM`、`DCASE`、`TASLP`、`IJCAI`、`ICCV`、`ECCV` 等），统一执行一致的三步分隔符归一化（原键 → `-` 转 `_` → 去 `_` 紧凑匹配）及严格的四位 ASCII 年份校验（`(19|20)[0-9]{2}`）。
 - **并发、传输与离线边界加固**：
   - Android `StudyCoordinator` 新增 `reconcileStudyJobs()` 对账逻辑，在平台后台任务已结束或缺失时安全收敛旧队列记录，避免恢复工作空间时发生死锁，同时不自动重发已派发的付费研究请求；同步加固 `RootController`、`CatalogRepository`、`DesktopDetailsRepository`、`PublishedAggregateStore` 与 `ZoteroService`。
   - macOS 修复 `LibraryImageTransport` 的 `responseTooLarge` 边界与 `PodcastPlayerService` 并发下载/播放竞态，同步加固 `PublishedAggregateStore`、`LibraryService`、`LibraryDesktopDetails`、`llm-worker.cjs` 与播客界面状态同步。
@@ -27,18 +27,22 @@
 ### 3. 版本、签名边界与随包许可同步
 
 - macOS `apps/macos/Info.plist` 升为 `1.5.2`（构建号 `26`），同步更新 `apps/macos/package.json`（保留 `katex` `0.19.1` 不变）、`apps/macos/Sources/AppDocuments.swift` 回退版本号、`apps/macos/release_tools.py` `1.5.2` 发行说明、`apps/macos/Tests/Branding.test.py`，并通过 `apps/macos/refresh_licenses.py` 刷新随包许可清单（`apps/macos/Resources/licenses/manifest.json`）与第三方声明页面（`apps/macos/Resources/third-party-notices.html`）。
-- Android `apps/android/app/build.gradle.kts` 升为 `versionName = "1.5.2"`、`versionCode = 26`；未来正式打包继续沿用 `1.4.4–1.5.1` 的发布签名库（证书 SHA-256 `6a0c3138…`），已安装 `1.4.4–1.5.1` 的用户可直接覆盖升级，`1.4.3`（`d7c680d9…`）用户仍需先导出备份、卸载旧版再安装；零新增权限、依赖或组件。
+- Android `apps/android/app/build.gradle.kts` 升为 `versionName = "1.5.2"`、`versionCode = 26`；正式打包继续沿用 `1.4.4–1.5.1` 的发布签名库（证书 SHA-256 `6a0c3138…`），已安装 `1.4.4–1.5.1` 的用户可直接覆盖升级，`1.4.3`（`d7c680d9…`）用户仍需先导出备份、卸载旧版再安装；零新增权限、依赖或组件。
 
-## 预发布自动化验证范围
+## 本轮已执行的自动化验证
 
-本轮预冻结验证在冻结提交与正式打包前执行，覆盖以下离线自动化检查：
+本轮验证在发行提交 `63fa298f` 冻结、双端正式打包与公开发布前完成，覆盖以下离线自动化检查与线上门户核验：
 
 - 索引、静态套件与文档一致性：`npm run docs:check`、`npm run scripts:index:check`、`npm run verify -- --suite static`。
 - 双端与门户协议注册表一致核验：`bash scripts/python-runtime.sh apps/generate-client-protocols.py --check --blog-repo "$PAPER_DIGEST_BLOG_REPO"`。
 - 双端品牌、打包与文档测试：`bash scripts/python-runtime.sh apps/macos/Tests/Branding.test.py`、`bash scripts/python-runtime.sh apps/macos/Tests/ReleasePackaging.test.py`、`bash scripts/python-runtime.sh apps/android/Tests/WorkbenchBranding.test.py`、`bash apps/android/build.sh :app:verifyClientProtocols :app:testDebugUnitTest`、`node --test tests/docs-consistency.test.js tests/docs-consistency-real.test.js tests/documentation.test.js`。
 - macOS 原生 Swift 定向编译与运行：`DesktopAppDocsEvidenceTests.swift`、`LibraryFiltersTests.swift` 与 `DesktopDiagnosticsTests.swift`。
+- 配套门户线上部署：`audio-research-portal` 已线上部署 `fcecae13`（KaTeX SSR 容错）、`5dd0a1a7`（六端 58 键会议齐平与扩展 SOTA 专题）与 `89206070`（全量双语文档）。
 
-## 发行状态（尚未公开发布）
+## 发行结果
 
-- 当前状态：**预发布（尚未公开发布）**，尚未生成正式 DMG/ZIP/APK 附件、尚未打 `v1.5.2` 标签、尚未创建 GitHub Release；公开下载仍以最近已公开发行版本 `1.5.1 / 构建号 25` 为准。
-- 人工验收边界：本轮预发布未重新执行 84/86 项人工图形与实机验收矩阵；最新完整人工图形与实机验收范围仍属 `1.3.0`（见 [1.3.0 记录](workbench-1.3.0-review.md#正式发行与升级检查)）。待正式构建、双端打包回读、签名验证、附注标签公开与匿名下载核验完成后，再补充 `1.5.2` 正式发布结果与 12 件附件校验表至[客户端发行核验](client-release-verification.md)。
+- **发布时间**：2026-11-27 23:05（北京时间，`2026-11-27T15:05:39Z`）。
+- **标签与提交**：附注标签 `v1.5.2`（标签对象 `37d11f7d2218f2cd48e6ffaeebd5de8570d7395d`），指向冻结发行提交 `63fa298f1b3aa681674d57143f75e2a959e67334`（`63fa298f`）；GitHub Release [v1.5.2](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2)（Release ID `460739646`，`draft: false`，`prerelease: false`）。
+- **附件与匿名下载**：12 件附件（Mac 6 件：DMG、ZIP、`RELEASE_NOTES.md`、`build-info.json`、`release-manifest.json`、`SHA256SUMS`；Android 6 件：APK、`android-build-info.json`、`android-source-inputs.json`、`android-runtime-materials.json`、`android-release-manifest.json`、`ANDROID-SHA256SUMS`）。2026-11-27 未登录请求（无 Cookie、无 `Authorization` 头）访问发行页（149,394 字节）与全部 12 件附件均返回 HTTP 200，下载字节数、SHA-256 与本地构建清单、`SHA256SUMS` / `ANDROID-SHA256SUMS` 及双端 `verify-downloaded` 包体回读（`androidAPKReverified: true`、`macArtifactsReverified: true`、`downloadedAssetsSHAExact: true`）均一致，详见[客户端发行核验](client-release-verification.md)。
+- **双端签名**：Mac 公开 ZIP 内 `音频研究工作台.app` 经 `codesign -dv --verbose=4` 核对为 `Identifier=com.nanless.PaperDigest`、`Format=app bundle with Mach-O thin (arm64)`、`Signature=adhoc`、`TeamIdentifier=not set`、CDHash `a7600cf4964f6015c95241f174f7aaf97297feb7`；Android 公开 APK 经 `apksigner verify --print-certs --verbose`（`apksigner` 36.0.0，`signingOrigin: provided-signed-apk`）通过 APK Signature Scheme v3 验证，沿用 `1.4.4–1.5.1` 发布签名库（证书 SHA-256 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，`6a0c3138…`），`1.4.4–1.5.1` 用户可直接覆盖升级，`1.4.3`（`d7c680d9…`）用户仍需先导出备份、卸载旧版再安装。
+- **人工验收边界**：本版未重新执行 84/86 项人工图形与实机验收矩阵；最新完整人工图形与实机验收范围仍属 `1.3.0`（见 [1.3.0 记录](workbench-1.3.0-review.md#正式发行与升级检查)）。本轮改动通过双端及服务端自动化测试、打包回读、匿名下载签名核验与线上门户部署核验覆盖。

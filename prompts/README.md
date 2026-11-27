@@ -33,12 +33,12 @@
 | 任务 | 当前文件 | 修改边界 |
 |---|---|---|
 | 提取开源与复现信息 | [opensource-scan.md](current/opensource-scan.md) | 逐字提取实际资源链接；可达状态由程序另查 |
-| 补充实验表格 | [table-fill.md](current/table-fill.md) | 只返回实验结果章节，不编造数字或图片 |
+| 补充实验表格 | [table-fill.md](current/table-fill.md) | 只返回实验结果章节，不编造数字或图片；`deep-analyzer.js` 精确透传 `{tableIssue}`，模板按 KV 缓存友好静态前缀排列 |
 | 补充方法解释 | [method-fill.md](current/method-fill.md) | 只返回方法概述和架构章节 |
 | 纠正分类标签 | [tag-repair.md](current/tag-repair.md) | 从提供的词表选择概念，不改正文 |
-| 修复核心摘要 | [core-summary-repair.md](current/core-summary-repair.md) | 只改核心摘要，其余 12 节保持不变 |
-| 修复分析结构 | [structure-repair.md](current/structure-repair.md) | 只修反馈指出的章节边界或内容问题 |
-| 修复 Reader 指定目标 | [api-reader-repair.md](current/api-reader-repair.md) | 按原稿及目标 SHA 返回受限补丁，不默认重写全文 |
+| 修复核心摘要 | [core-summary-repair.md](current/core-summary-repair.md) | 只改核心摘要，其余 12 节保持不变；静态前缀重排以提升 KV 缓存命中 |
+| 修复分析结构 | [structure-repair.md](current/structure-repair.md) | 只修反馈指出的章节边界或内容问题；静态前缀重排以提升 KV 缓存命中 |
+| 修复 Reader 指定目标 | [api-reader-repair.md](current/api-reader-repair.md) | 按原稿及目标 SHA 返回受限补丁，不默认重写全文；静态前缀重排以提升 KV 缓存命中 |
 
 主分析和标签修复共用当前 400 项词表，只选择本篇有原文依据的直接标签。原有 3–5 项、主任务、主方法以及 JSON 或四行文本结构保持不变。发布器从同一词表推导父级导航；模型不输出整套目录，也不把祖先概念补进直接标签凑数。目录里的零计数方向可以保留，但不能因此给论文强贴标签。
 
@@ -67,7 +67,7 @@ Reader 首次写作只依据本次提供的全文和实际收到的图像。可�
 
 只有本次受控恢复实际给出独立官方封存 PDF 的原字符全文，并明确允许相应引文操作时，`source_quotes` 才可增加 `pdfSourceQuotes`。路径、字段例子、图注、像素或先前的 PDF 证明都不替代本次材料和范围。`sealedPdfQuoteEvidence` 由程序核验生成，模型不得填写。不能通过换一种来源字段逃避数字、单位或比较条件检查。
 
-日更 Reader 通过 Responses 修复普通已有字段时，程序还可生成带目标编号 `targetOrdinal` 和短标记 `requestToken` 的运行时提示词，再编译为按原字段 SHA 核验的补丁。特殊修复仍遵守各自规则。这类运行时提示词另记身份和真实请求，不增加目录模板数量，也不增加原窗口额度。
+日更 Reader 通过 Responses 修复普通已有字段时，程序还可由 `scripts/lib/reader-ordinal-format.js` 生成带目标编号 `targetOrdinal` 和短标记 `requestToken` 的运行时提示词，再编译为按原字段 SHA 核验的补丁。当前采用 `ordinal-v2`（`static-prefix-v2` 静态前缀格式，结构指纹 `f3957708…`）：前 4,060 个字符为固定静态前缀，内嵌裸 JSON 输出约束与字符串/对象替换范例，并将动态 `{{requestToken}}` 移至文末，与同样完成静态前缀重排的四份修复模板（`api-reader-repair.md`、`table-fill.md`、`core-summary-repair.md`、`structure-repair.md`）一起提升 KV 缓存命中；历史冷核重放同时兼容三代格式（含前一代 `334889bc…` 与初代历史模板）。特殊修复仍遵守各自规则。这类运行时提示词另记身份和真实请求，不增加目录模板数量，也不增加原窗口额度。
 
 发布审查的页面输入由公共发布器生成，模型请求使用公共请求封装；它不是本目录中的另一份写作模板。旧稿从原保存进度和相应入口恢复，不能只因更换模板而重新取得内容额度。
 

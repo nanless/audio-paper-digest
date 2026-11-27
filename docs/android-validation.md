@@ -4,6 +4,10 @@
 
 两端当前公开发行版本、Android 签名升级边界、逐版改动及 12 件附件匿名下载核验均见[客户端发行核验](client-release-verification.md)与[版本总览](README.md#阅读论文与使用工作台)（安装包下载以 [GitHub 发行页](https://github.com/nanless/audio-research-workbench/releases)为准）。开发测试使用独立工作目录和测试资料，下列记录保留当时实测的版本、设备和结果。
 
+## 1.5.2 公开发行
+
+公开 APK 为 `paperdigest-android-1.5.2-26-universal.apk`，versionName 1.5.2、versionCode 26，minSdk 28、targetSdk 37，包含四种 ABI 且原生库符合 16 KiB ELF 对齐，应用标识为 `com.nanless.paperdigest`，零新增权限、依赖或组件。公开的 `android-build-info.json` 与 `apksigner verify` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（APK Signature Scheme v3，`signingOrigin: provided-signed-apk`），与 1.4.4–1.5.1 相同，因此已安装 1.4.4–1.5.1 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，仍需先导出完整备份、卸载旧版再安装。1.5.2 没有重新执行 84/86 项人工验收，也没有新增实体机或完整 TalkBack 遍历；改动由双端离线自动测试（Android `:app:verifyClientProtocols`、`:app:testDebugUnitTest`、`DocumentTables.test.cjs` 与 `WorkbenchBranding.test.py`）、服务端第 1–4 轮回归、打包回读、匿名下载签名复核与线上门户部署核验覆盖。签名、十二件附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
+
 ## 1.5.1 公开发行
 
 公开 APK 为 `paperdigest-android-1.5.1-25-universal.apk`，versionName 1.5.1、versionCode 25，minSdk 28、targetSdk 37，包含四种 ABI 且原生库符合 16 KiB ELF 对齐，应用标识为 `com.nanless.paperdigest`，零新增权限、依赖或组件。公开的 `android-build-info.json` 与 `apksigner verify` 记录证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（APK Signature Scheme v3，`signingOrigin: provided-signed-apk`），与 1.4.4–1.5.0 相同，因此已安装 1.4.4–1.5.0 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9225c5b90ba960bf6c890f84d702c7bcc9a166951b56d01af08c40e00`，仍需先导出完整备份、卸载旧版再安装。1.5.1 没有重新执行 84/86 项人工验收，也没有新增实体机或完整 TalkBack 遍历；改动由双端全量自动测试（Android 998 项 JUnit + `lintDebug`）、服务端回归、打包回读、匿名下载签名复核与线上门户部署核验覆盖。签名、十二件附件与匿名下载核验见[客户端发行核验](client-release-verification.md)。
@@ -38,23 +42,23 @@
 
 ## 1.3.0 既有联合发行记录
 
-既有联合版本为 **1.3.0（构建号 8）**，发行来源 `a39fa8d0`。全站多级分类、网站资源与阅读返回对齐 Mac，手机、宽屏、输入法、深色和大字分别适配。API 35 正式包 code7→8 覆盖保留 61 份原研究文件、UID、首装时间及六类个人对象；全空环境首启另验。最终 APK 与该次实测原件逐字节一致，正常准备、来源、payload 和原证书复核绑定最终提交。21 项调试设备回归及 16 阶段真实系统树增量各保留自己的范围；最终 CI 12/12、12 件附件匿名下载及两端正常包重验通过，见[发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.3.0)和[详细记录](workbench-1.3.0-review.md#正式发行与升级检查)。该轮未新增实体机、API 28 或完整 TalkBack 遍历；未变化服务与备份四腿保留原验证范围。
+既有联合版本为 **1.3.0（构建号 8）**，发行来源 `a39fa8d0`。全站多级分类、网站资源与阅读返回对齐 Mac，手机、宽屏、输入法、深色和大字分别适配。API 35 正式包 code7→8 覆盖保留 61 份原研究文件、UID、首装时间及六类个人对象；全空环境首启另验。最终 APK 与该次实测原件逐字节一致，正常准备、来源、payload 和原证书复核绑定最终提交。21 项调试设备回归及 16 阶段真实系统树增量各保留自己的范围；最终 CI 12/12、12 件附件匿名下载及两端正常包重验通过，见[发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.3.0)和[详细记录](workbench-1.3.0-review.md#正式发行与升级检查)。该轮未新增实体机、API 28 或完整 TalkBack 遍历；未变化服务与备份四腿保留原验证范围。
 
 ## 1.2.1 历史验证
 
-当时公开版本为 **1.2.1（构建号 7）**。收藏沿用网站原多级分类，移除自建与手工归类入口，保留收藏时间分区。最终来源为 `571242ea`；专用 API 35 模拟器真实完成正式 code6→code7 覆盖升级，57 份原研究文件、应用身份和首次安装时间保持，原时间、笔记与待读完整；网站三级分类、返回、干净首启及完整备份四腿往返通过。12 件附件完成匿名 HTTP 200 下载和正常两端包重验，下载见[1.2.1 发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.2.1)，范围见[本轮正式记录](workbench-1.2.1-review.md#正式发行与升级检查)。当时未新增实体机或 API 28 实测，Mac 备份腿为生产引擎隔离驱动。
+当时公开版本为 **1.2.1（构建号 7）**。收藏沿用网站原多级分类，移除自建与手工归类入口，保留收藏时间分区。最终来源为 `571242ea`；专用 API 35 模拟器真实完成正式 code6→code7 覆盖升级，57 份原研究文件、应用身份和首次安装时间保持，原时间、笔记与待读完整；网站三级分类、返回、干净首启及完整备份四腿往返通过。12 件附件完成匿名 HTTP 200 下载和正常两端包重验，下载见[1.2.1 发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.2.1)，范围见[本轮正式记录](workbench-1.2.1-review.md#正式发行与升级检查)。当时未新增实体机或 API 28 实测，Mac 备份腿为生产引擎隔离驱动。
 
 ## 1.2.0 历史验证
 
-当时版本为 **1.2.0（构建号 6）**，增加收藏多分类与真实时间分区，并改善列表返回、模型设置、取消处理和阅读反馈。应用 ID 与原正式签名保持兼容，支持 API 28 及以上、四种架构和 16 KiB 对齐。下载见 [1.2.0 发行页](https://github.com/nanless/audio-paper-digest/releases/tag/v1.2.0)，本轮范围见 [1.2.0 审改与正式发行记录](workbench-usability-review-20261101.md#正式发行与升级检查)。
+当时版本为 **1.2.0（构建号 6）**，增加收藏多分类与真实时间分区，并改善列表返回、模型设置、取消处理和阅读反馈。应用 ID 与原正式签名保持兼容，支持 API 28 及以上、四种架构和 16 KiB 对齐。下载见 [1.2.0 发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.2.0)，本轮范围见 [1.2.0 审改与正式发行记录](workbench-usability-review-20261101.md#正式发行与升级检查)。
 
 1.2.0 已于 2026-11-01 与 Mac 联合公开，最终来源为 `71f1f0b1`。隔离 API 35 模拟器实际完成正式 1.1.0/code5 → 1.2.0/code6 覆盖升级，56 个原研究文件 SHA、首次安装时间、应用身份、笔记与待读保持；新旧收藏时间、多分类、删除分类保留收藏、阅读返回原位置和干净首启均已检查。实际图形验收的 APK 与最终来源经正常完整校验确认逐字节相同。十二件上传附件完成匿名下载和正常包重验。
 
 本轮新增界面在 API 35 模拟器检查；实体手机及 API 28 新界面未另测。下文 1.1.0、1.0.1 与既有真实服务记录保留各自原范围，不能把旧包检查写成新包重复实测。
 
-1.1.0 已于 2026-11-01 与 Mac 安装包[联合公开](https://github.com/nanless/audio-paper-digest/releases/tag/v1.1.0)。本次隔离 API 35 模拟器完成正式 1.0.1/code4 → 1.1.0/code5 原证书覆盖升级，33 个原研究文件 SHA、笔记、待读和首次安装时间保持；实际日更、会议、两种返回及干净首启和简单配置通过。公开后十二件附件无需登录下载，大小与 SHA 一致，APK 和 Mac 资产重验通过，详见[本轮正式发行检查](workbench-1.1.0-review.md#正式发行与升级检查)。
+1.1.0 已于 2026-11-01 与 Mac 安装包[联合公开](https://github.com/nanless/audio-research-workbench/releases/tag/v1.1.0)。本次隔离 API 35 模拟器完成正式 1.0.1/code4 → 1.1.0/code5 原证书覆盖升级，33 个原研究文件 SHA、笔记、待读和首次安装时间保持；实际日更、会议、两种返回及干净首启和简单配置通过。公开后十二件附件无需登录下载，大小与 SHA 一致，APK 和 Mac 资产重验通过，详见[本轮正式发行检查](workbench-1.1.0-review.md#正式发行与升级检查)。
 
-历史记录（2026-10-29）：论文速递工作台 **1.0.1（构建号 4）** 当时完成本地正式包核验、安全检查和同签名覆盖升级。应用标识为 `com.nanless.paperdigest`，支持 API 28 及以上，包含四种架构并符合 16 KiB 对齐要求。其原十二件联合附件曾逐件下载核对大小与 SHA。旧 Release 条目现已清理，[v1.0.1 源码标签](https://github.com/nanless/audio-paper-digest/tree/v1.0.1)保留。
+历史记录（2026-10-29）：论文速递工作台（更名前旧名） **1.0.1（构建号 4）** 当时完成本地正式包核验、安全检查和同签名覆盖升级。应用标识为 `com.nanless.paperdigest`，支持 API 28 及以上，包含四种架构并符合 16 KiB 对齐要求。其原十二件联合附件曾逐件下载核对大小与 SHA。旧 Release 条目现已清理，[v1.0.1 源码标签](https://github.com/nanless/audio-research-workbench/tree/v1.0.1)保留。
 
 ## 当前结论
 

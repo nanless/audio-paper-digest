@@ -5,13 +5,14 @@
 <p align="center">
   <strong>简体中文</strong> · <a href="README.en.md">English</a> ·
   <a href="https://nanless.github.io/audio-research-portal/">音频研究门户（在线阅读）</a> ·
+  <a href="https://github.com/nanless/audio-research-portal">门户源码仓（audio-research-portal）</a> ·
   <a href="https://github.com/nanless/audio-research-workbench/releases">下载 Mac / Android 客户端</a> ·
   <a href="docs/README.md">文档总索引</a>
 </p>
 
 <p align="center">
   <a href="https://nanless.github.io/audio-research-portal/"><img src="https://img.shields.io/badge/Live_Portal-Studio_Monograph_2.0-0f5c58?style=flat-square" alt="音频研究门户" /></a>
-  <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1"><img src="https://img.shields.io/badge/Client-v1.5.1_(Build_25)-b85a34?style=flat-square" alt="Client v1.5.1" /></a>
+  <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2"><img src="https://img.shields.io/badge/Client-v1.5.2_(Build_26)-b85a34?style=flat-square" alt="Client v1.5.2" /></a>
   <img src="https://img.shields.io/badge/macOS-15%2B_Apple_Silicon-182120?style=flat-square" alt="macOS 15+" />
   <img src="https://img.shields.io/badge/Android-9%2B_(4_ABIs)-182120?style=flat-square" alt="Android 9+" />
   <img src="https://img.shields.io/badge/Archive-9%2C400%2B_篇归档_(8%2C650%2B_论文)-1f8a82?style=flat-square" alt="9,400+ Posts (8,650+ Papers)" />
@@ -74,20 +75,25 @@
 
 内容生产、公开门户与个人研究彼此隔离：本仓库产出的内容经三层审查按凭证推送至 Hugo 门户（承载 `client/details/*` 内容寻址快照与播客 Feed）；Mac 与 Android 客户端仅只读消费这些静态资产，打开任何论文都不会触发生产模型调用。
 
+| 仓库 | 定位与职责 |
+|---|---|
+| `nanless/audio-research-workbench`（本仓库） | 内容生产引擎（日更 / 会议 / 历史）、三层审查与凭证推送、每日播客生成，以及 macOS 与 Android 1.5.x 原生客户端源码与发行包。 |
+| `nanless/audio-research-portal`（[GitHub 仓库](https://github.com/nanless/audio-research-portal) · [在线站点](https://nanless.github.io/audio-research-portal/)） | Hugo + Studio Monograph 2.0 公开站点、已审核中文精读与顶会 / SOTA 专题、`client/details/*` 内容寻址快照导出、Pagefind 全文索引及标准播客 RSS（[`feeds/podcast.xml`](https://nanless.github.io/audio-research-portal/feeds/podcast.xml)）。 |
+
 ![Mac 与 Android 1.5.x 工作台公开订阅与个人同步边界](docs/images/client-experience.zh.svg)
 
 | 能力维度 | 音频研究门户（Web） | macOS 工作台（1.5.x） | Android 工作台（1.5.x） |
 |---|:---:|:---:|:---:|
-| 9,400+ 篇归档、400 项九维分类与评分/开源筛选 | 浏览器即开 + `⌘K` 面板 | 离线快照 + NFKC 多词检索 | 离线快照 + 后台预热 |
+| 9,400+ 篇归档、400 项九维分类、六端 58 键会议名齐平与筛选 | 浏览器即开 + `⌘K` 面板 | 离线快照 + NFKC 多词检索 | 离线快照 + 后台预热 |
 | 中文精读与原始 PDF 对照 / 物理页锚定 | 官方原文直达 | AppKit + PDFKit 双栏 | 手机单栏 / 平板并排 |
-| 每日音频播客（章节跳听 / `0.75×–2.0×`） | 网页播客播放器 | `AVAudioPlayer` + SHA 缓存 | `MediaPlayer` + SHA 缓存 |
+| 每日音频播客（章节跳听 / `0.75×–2.0×`） | 网页播放器 + 标准 RSS（[`feeds/podcast.xml`](https://nanless.github.io/audio-research-portal/feeds/podcast.xml)） | `AVAudioPlayer` + SHA 缓存 | `MediaPlayer` + SHA 缓存 |
 | 排版与图注交互（Studio Monograph 风格） | 1×–6× 原图灯箱 / 表格排序 | 严格白名单净化渲染 | Material 3 紧凑净化渲染 |
 | 个人研究追问（自配模型、账单完全隔离） | — | 仅发确认提取文字 | 仅发确认提取文字 |
 | Zotero 文献归档（书目 + 导读 + PDF + 笔记） | BibTeX / RIS / Obsidian | 本机 Zotero Desktop API | 官方 Zotero Web API v3 |
 | 坚果云 WebDAV 同步与全空间快照备份 | — | 一键双向同步 + 无损合并 / 独立快照 | 一键双向同步 + 无损合并 / 独立快照 |
 
-- **源码与公开发行版本**：当前源码版本为 **1.5.2（构建号 26）（尚未公开发布）**（详见 [1.5.2 预发布记录](docs/workbench-1.5.2-review.md)）；最近已公开发行版本为 **1.5.1 / 构建号 25**（2026-11-27 公开发布，附注标签 `v1.5.1` 指向发行提交 `7622f2ec`），下载与校验见 [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)、[1.5.1 发版记录](docs/workbench-1.5.1-review.md) 与 [客户端发行核验](docs/client-release-verification.md)。
-- **升级提示**：macOS 从 1.4.x 升级后应用包更名为 `音频研究工作台.app`，继续共用 `com.nanless.PaperDigest` 标识、原资料目录与钥匙串（本地 ad-hoc 签名，需 macOS 15+ Apple Silicon），安装后退出并移除旧包即可。Android 沿用 1.4.4+ 签名证书，1.4.4–1.5.1 可直接覆盖升级，1.4.3 须先备份并卸载再安装。
+- **当前公开发行版本**：macOS 与 Android 当前公开发行版本均为 **1.5.2（构建号 26）**（2026-11-27 23:05 北京时间公开发布，附注标签 `v1.5.2` 指向发行提交 `63fa298f`），下载与校验见 [GitHub Release v1.5.2](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2)、[1.5.2 发布记录](docs/workbench-1.5.2-review.md) 与 [客户端发行核验](docs/client-release-verification.md)。
+- **升级提示**：macOS 从 1.4.x 升级后应用包更名为 `音频研究工作台.app`，继续共用 `com.nanless.PaperDigest` 标识、原资料目录与钥匙串（本地 ad-hoc 签名，需 macOS 15+ Apple Silicon），安装后退出并移除旧包即可。Android 沿用 1.4.4+ 签名证书，1.4.4–1.5.1 用户可直接覆盖升级至 1.5.2，1.4.3 须先备份并卸载再安装。
 
 ---
 
@@ -108,8 +114,8 @@
 
 四项核心保障控制质量与成本：
 
-1. **四文件来源封存**：筛选后、分析前为每篇论文封存 `source.txt`、`source.pdf`、`source-runtime.json`、`source-manifest.json` 并计算 SHA-256，写作、局部修复与冷重放只读这组冻结来源。
-2. **按阶段分级推理 + 前缀缓存**：默认启用分级推理（`PD_TIERED_REASONING_EFFORT=1`）与阶段稳定前缀键（`PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=1`）——主分析与 Reader 长文用 `xhigh`，评分审计与局部修复用 `high`，结构/插图补丁用 `medium`，筛选与发布文本审查用 `low`，机械标签与开源扫描用 `minimal`。
+1. **四文件来源封存与零漏召回预筛**：日更筛选叠层（`daily-filter-prefilter.js`）先以零美元正文音频锚点排除明显无关论文，并对进入全文取证的候选采用 30K 保底召回摘录（`codepoint-safe-excerpt-v2`）；筛选入选后、分析前为每篇论文封存 `source.txt`、`source.pdf`、`source-runtime.json`、`source-manifest.json` 并计算 SHA-256，写作、局部修复与冷重放只读这组冻结来源。
+2. **按阶段分级推理 + 静态前缀缓存**：默认启用分级推理（`PD_TIERED_REASONING_EFFORT=1`）与阶段稳定前缀键（`PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=1`）——主分析与 Reader 长文用 `xhigh`，评分审计与局部修复用 `high`，结构/插图补丁用 `medium`，日更筛选与发布文本审查统一用 `low`，机械标签与开源扫描用 `minimal`；常规节点局部补丁采用 `ordinal-v2`（`static-prefix-v2` 静态前缀布局）与修复模板前缀重排以提升 KV 缓存命中。
 3. **到期优先账号池与不可变账本**：同路由多个 API Key 合并为共享账号池，默认按北京时间月到期日优先、同天选有效剩余月额度最多（且月/周/5 小时三窗口均有额）调度（`PD_LLM_ACCOUNT_POOL_STRATEGY=expiry_priority`，可改 `equal_rotation`），运行时经项目代理自动同步官方 `/zen/go/v1/usage` 实时额度（5 分钟 TTL，可用 `npm run llm:accounts:quota -- sync` 刷新）。仅 429 配额上限或 401 余额不足才同请求换号并冷却，普通 401 立即停产保护在途稿。用量事件默认平铺留账，可按需开启 `PD_LLM_USAGE_SHARD_BY_DATE=1` 按北京时间 `YYYY-MM-DD/` 目录分片，历史账本绝不清零。
 4. **三层审查与 SHA 永久复用**：依次通过程序规则、正文与原图审查及 Hugo 实构建；已通过页面按“相对路径 + 内容 SHA”永久复用，重跑只审变动页。
 
@@ -162,7 +168,7 @@
 | **锁状态、文档与索引校验** | `npm run locks`、`npm run docs:check`、`npm run scripts:index:check`、`npm run validate:data` |
 | **定向单测与客户端测试** | `npm run test:python`、`npm run test:client:macos`、`npm run test:client:android` |
 | **存储诊断与账本压缩** | `npm run papers:compact`、`npm run storage:pdf-dedupe`、`npm run storage:report`、`npm run storage:prune` |
-| **可选工具：分数校准 / 每日播客** | `npm run digest:calibrate -- --dry-run`、`npm run podcast:generate -- --date YYYY-MM-DD --dry-run` |
+| **可选工具：分数校准 / 每日播客** | `npm run digest:calibrate -- --dry-run`、`npm run podcast:generate -- --date YYYY-MM-DD --dry-run`（传入 `--portal-repo` 同步门户 `feeds/podcast.xml`、`data/podcast-episodes.json` 与 `client/podcast/feed.json`） |
 
 </details>
 
@@ -223,10 +229,10 @@ npm run digest:prepare -- YYYY-MM-DD
 
 ```text
 audio-research-workbench/
-├── scripts/               # 内容生产核心引擎（抓取、筛选、封存、分析、评分、Reader、审查、推送、播客）
-│   └── lib/               # 公共库：LLM 路由/缓存/账号池、来源验证、SVG/PDF 处理、锁与成本账本
+├── scripts/               # 第 4 轮模块化零循环依赖（零 SCC）内容生产引擎（抓取、筛选、封存、分析、评分、Reader、审查、推送、播客）
+│   └── lib/               # 公共库：LLM 路由/缓存/账号池、来源验证、SVG/PDF 处理、目录锁与成本账本
 ├── prompts/current/       # 现行阶段提示词模板（附历史 Git blob 指纹冷重放索引）
-├── config/                # 400 项九维分类词表、协议目录（clients*.json）、工作区角色与历史见证
+├── config/                # 跨语言路径单一真源（runtime-paths.json）、400 项九维分类词表、协议目录（clients*.json）、工作区角色与历史见证
 ├── apps/
 │   ├── macos/             # macOS 原生音频研究工作台（Swift / AppKit / WebKit / PDFKit / AVAudioPlayer）
 │   └── android/           # Android 原生音频研究工作台（Kotlin / Jetpack Compose / 原子 JSON 存储 + PDFBox / WorkManager）
@@ -234,7 +240,7 @@ audio-research-workbench/
 ├── prototypes/macos-research/ # 客户端离线 PDF/图注原型及已入库的 MiCLA 测试资产
 ├── docs/                  # 架构、数据合同、操作指南、客户端验收与 Studio Monograph 双语示意图（docs/images/）
 ├── skills/                # 可复用的清晰技术写作与工程操作 Skill
-├── manual/                # 已退役整批 Manual 的只读历史核验与单篇独立人工审查入口
+├── manual/                # 第 4 轮与日常 API 链路隔离的已退役整批 Manual 只读历史核验与单篇独立人工审查入口
 └── tests/                 # Node.js + Python 自动化回归测试套件（含离线契约与冷重放测试）
 ```
 

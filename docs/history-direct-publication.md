@@ -83,7 +83,7 @@ npm run history:publication -- status --publication-id UUID
 
 ## 审查内容和续跑
 
-页面正文、图片、模型路由及展示规则复用日更的 `publish-to-blog.py`/`publish_common.py`；不可变文件读写、Git 基线和远端读取统一由 `publication-file-primitives.js` 执行。历史适配保留冻结 URL、论文与页面集合、来源及计划 SHA，因而使用与日更不同的外层凭证，不能把这份凭证冒充日更批次。
+页面正文、图片、模型路由及展示规则复用日更的 `publish-to-blog.py`、`publish_common.py` 及拆出的 `publish_llm_client.py`、`blog_core_summary_verifier.py`；不可变文件读写、Git 基线和远端读取统一由 `publication-file-primitives.js` 执行。历史适配保留冻结 URL、论文与页面集合、来源及计划 SHA，因而使用与日更不同的外层凭证，不能把这份凭证冒充日更批次。
 
 正常 Reader 若保存 `authenticatedPdfTableEvidence`，生成与发布须通过共用的只读来源桥重放原 PDF、原表引文和行列单位证明。历史的 arXiv 与保留会议 PDF 都使用本次真实直改来源身份，不伪装日更封存目录或官方会议执行。来源文件、快照、稿件或表绑定变化会使原证明失效；不从页面提交的 PDF 路径或布尔声明授予能力，详见[表绑定数据协议](data-format.md)。
 

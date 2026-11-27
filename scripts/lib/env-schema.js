@@ -87,6 +87,8 @@ const SCHEMA = Object.freeze([
     { name: 'PD_FILTER_SCOPE_CONCURRENCY', required: false, type: 'int', min: 1, max: 8 },
     { name: 'PD_KEYWORD_PREFILTER_ENABLED', required: false, type: 'bool', allowed: ['1','0','true','false','yes','no','on','off'] },
     { name: 'PD_BLOG_REVIEW_CONCURRENCY', required: false, type: 'int', min: 1, max: 32 },
+    { name: 'PD_BLOG_REVIEW_LLM_MAX_INFLIGHT', required: false, type: 'int', min: 1, max: 32,
+        hint: '发布审查进程级 LLM 并发总上限，默认 12，范围 1–32（防止页面并发与图片并发叠乘打满单账号）' },
     { name: 'PD_CONFERENCE_EXTRACTOR_PROFILE', required: false, type: 'string', allowed: ['enhanced', 'legacy'],
         hint: '会议 PDF 抽取器配置：enhanced（默认，双栏重排/结构化表/288 DPI 裁切）或 legacy（历史冻结抽取器）' },
     { name: 'PD_CONFERENCE_EXTRACTOR_VERSION', required: false, type: 'string', allowed: ['v1', 'v2'], deprecated: true,

@@ -319,7 +319,7 @@ Hugo 在隔离目录保留固定博客提交的完整物理旧来源，供站点
 
 逐页通过证据只按相对路径和页面内容 SHA 复用。实现、模型、协议或批次记录变化后，未变页面保留通过依据，当前批次仍须重跑程序检查并生成新审查记录。图片子审查不能脱离整页身份或省略来源检查。
 
-发布正文审查默认并发 5，先在这五个槽位中稳定派发汇总，再按论文原相对顺序补派；每页分块串行，最终整批记录恢复原 generation 顺序，不改变完整审查集合。会议发布器读取 `PD_BLOG_REVIEW_CONCURRENCY` 后会夹取到最多 5 路（`publish-conference.py` 内 `min(workers, 5)`），所以把该变量调大只提升日更，不会提高会议并发。
+发布正文审查默认并发 5，读取 `PD_BLOG_REVIEW_CONCURRENCY` 并支持 1–32 范围（与日更一致，不再夹取到 5 路）；派发顺序为先全批单篇页、后汇总页，让零告警已通过的单篇图片先填充 `verified_paper_images` 供汇总页去重。单页分块仍保持串行，最终整批记录恢复原 generation 顺序，不改变完整审查集合。
 
 程序只按空出的并发位置补派任务；正文、图片或 Markdown 的普通内容拒稿保存不可变失败审计后，继续审查其余页面，最后写整批 blocked 摘要并拒绝审查通过及推送。服务、存储、页面字节变化或凭证损坏停止补派，等待已经开始的审查结束，保留各页已保存的通过记录，再交回原错误。
 
@@ -807,7 +807,7 @@ npm run conference:queue -- --status --plan /absolute/path/plan.json
 npm run conference:queue -- --apply --plan /absolute/path/plan.json
 ```
 
-队列项 `concurrency` 默认 3、范围 1–3；独立 process 的默认 1、范围 1–60 是另一层配置，不能互换。队列发现已发布会议也会进入真实 verify，不仅凭旧发布回执跳过当前线上检查。
+队列项 `concurrency` 默认 3，允许范围 `1..maxConcurrency`；上限默认 3，可通过环境变量 `PD_CONFERENCE_QUEUE_CONCURRENCY` 调整为 1–32。独立 process 的默认 1、范围 1–60 是另一层配置，不能互换。队列发现已发布会议也会进入真实 verify，不仅凭旧发布回执跳过当前线上检查。
 
 阶段抛错或 process 存活状态不明时，队列暂停后续会议，并保留已保存的阶段进度、错误和各阶段结果。只有确认故障解除，才在 `--apply` 命令中显式加 `--retry-failed` 释放暂停和重试条件。普通恢复不清空错误依据，不重新分析完成项，也不能为了显示完成手改状态。
 
@@ -1244,7 +1244,7 @@ npm run digest:scorecard -- --workflow conference --date YYYY-MM-DD
 
 ### 第 5 步：在门户登记会议目录
 
-在门户仓库 `audio-research-portal/data/conference-directory.json` 的 `entries` 中新增该会议元数据（`id`、`venueId`、`name`、`fullName`、`year`、`summaryPath` 等），确保门户会议目录页与客户端离线会议筛选同步识别。若尚未登记，`conference:publish:generate` 会向 stderr 发出非阻断软提示。
+在伴生门户仓库 [audio-research-portal](https://github.com/nanless/audio-research-portal) 的 `data/conference-directory.json` 的 `entries` 中新增该会议元数据（`id`、`venueId`、`name`、`fullName`、`year`、`summaryPath` 等），确保门户会议目录页与客户端离线会议筛选同步识别。若尚未登记，`conference:publish:generate` 会向 stderr 发出非阻断软提示。新增会议简称时，同时核对六端 58 键规范会议显示名映射（门户前端、macOS Swift 与 WebView、Android Kotlin）及三步分隔符归一化规则（原键 → `-` 转 `_` → 去 `_` 紧凑匹配）与 ASCII 年份校验，避免新会议简称在不同端显示不一致。
 
 ## 与全历史重写的衔接
 

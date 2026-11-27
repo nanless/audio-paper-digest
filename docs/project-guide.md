@@ -4,7 +4,7 @@
 
 ## 先分清网站与阅读应用
 
-音频研究门户（Audio Research Portal）保存已经正式发布的中文论文解读、评分、引用资料和汇总。Mac 与 Android 上的“音频研究工作台”读取这些公开内容，提供原始 PDF 对照、收藏、笔记、每日播客和个人研究。
+音频研究门户（Audio Research Portal）保存已经正式发布的中文论文解读、评分、引用资料和汇总。两个仓库按职责分工协作：本仓库（`audio-research-workbench`）负责日更、会议与历史内容生产引擎及 Mac、Android 原生客户端源码；伴生门户仓库 [audio-research-portal](https://github.com/nanless/audio-research-portal) 承载 Hugo 与 Studio Monograph 2.0 模板、已审精读页面、静态快照及播客订阅文件，在线访问 [音频研究门户](https://nanless.github.io/audio-research-portal/)。Mac 与 Android 上的“音频研究工作台”读取这些公开内容，提供原始 PDF 对照、收藏、笔记、每日播客和个人研究。
 
 打开已经发布的论文，不会让内容生产流程重新分析它。应用里的个人研究是另一项主动操作：用户选择材料、配置模型服务并确认后，才会发送实际材料。网站生产任务与个人研究各自保存授权、结果、用量和费用。
 

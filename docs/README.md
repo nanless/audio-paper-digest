@@ -2,7 +2,7 @@
 
 **中文** · [English](README.en.md)
 
-这里收录音频研究门户网站、内容生产流程和两端“音频研究工作台”阅读应用的说明。先按要完成的任务选择入口，再读相关细节；不必先通读全部协议。文档中的命令、来源和发布限制以实际程序与 [AGENTS.md](../AGENTS.md)为依据。
+这里收录音频研究门户（[在线站点](https://nanless.github.io/audio-research-portal/) · [门户源码仓 `audio-research-portal`](https://github.com/nanless/audio-research-portal)）、本仓库内容生产流程和两端“音频研究工作台”阅读应用的说明。先按要完成的任务选择入口，再读相关细节；不必先通读全部协议。文档中的命令、来源和发布限制以实际程序与 [AGENTS.md](../AGENTS.md)为依据。
 
 ## 第一次接触项目
 
@@ -23,13 +23,14 @@
 | 比较两端功能和窗口适配 | [Android 功能映射](android-feature-parity.md)、[界面设计](macos-interface-design-research.md) |
 | 理解个人研究与产品取舍 | [工作台规划](desktop-research-workbench-plan.md)，其中后续目标与当前实现分别说明 |
 
-Mac 与 Android 当前源码版本均为 **1.5.2（构建号 26）（尚未公开发布）**，汇总六端 58 键会议名齐平、客户端并发与传输加固及服务端第 1–4 轮架构收敛，详见 [1.5.2 预发布记录](workbench-1.5.2-review.md)。最近已公开发行版本为 **1.5.1 / 构建号 25**（2026-11-27 公开发布，附注标签 `v1.5.1` 指向发行提交 `7622f2ec`），下载见 [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)，详见 [1.5.1 发版记录](workbench-1.5.1-review.md)。
+Mac 与 Android 当前公开发行版本均为 **1.5.2（构建号 26）**（2026-11-27 23:05 北京时间公开发布，附注标签 `v1.5.2` 指向发行提交 `63fa298f`），汇总六端 58 键会议名齐平、客户端并发与传输加固及服务端第 1–4 轮架构收敛；下载见 [GitHub Release v1.5.2](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2)，详见 [1.5.2 记录](workbench-1.5.2-review.md)与[客户端发行核验](client-release-verification.md)。
 
 <details>
-<summary>查看 1.5.0–1.3.0 历史版本摘要（每次发版的真实测试与验证范围均以对应记录为准）</summary>
+<summary>查看 1.5.1–1.3.0 历史版本摘要（每次发版的真实测试与验证范围均以对应记录为准）</summary>
 
 | 版本（构建号） | 发布日期 | 核心改动摘要 | 详细记录 |
 |---|---|---|---|
+| 1.5.1 / 25 | 2026-11-27 | 双端 Studio Monograph 视觉升级与全量页面修复、账号池实时额度同步及官方会议与历史更新全面日更齐平 | [1.5.1 记录](workbench-1.5.1-review.md) |
 | 1.5.0 / 24 | 2026-11-26 | 双端原生每日音频播客播放器、音频参数速览与评分审计排版升级、离线多词检索与品牌及默认站点路径迁移 | [1.5.0 记录](workbench-1.5.0-review.md) |
 | 1.4.7（23） | 2026-11-23 | 修复新版论文博客页打开问题，加固 HTML5/SVG/MathML 净化、网络、WebDAV 与 Zotero 路径 | [1.4.7 记录](workbench-1.4.7-review.md) |
 | 1.4.6（22） | 2026-11-20 | 优先读取 `client/details/*` 内容寻址快照，补齐笔记冲突无损合并与便携备份桌面详情冷核 | [1.4.6 记录](workbench-1.4.6-review.md) |
@@ -119,7 +120,7 @@ Mac 与 Android 当前源码版本均为 **1.5.2（构建号 26）（尚未公�
 
 历史记录用于理解当时发现的问题、采用的修改和真实验证范围。它们不是另一套现行操作入口。
 
-- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)、[1.4.6](workbench-1.4.6-review.md)、[1.4.7](workbench-1.4.7-review.md)、[1.5.0](workbench-1.5.0-review.md)、[1.5.1](workbench-1.5.1-review.md)、[1.5.2（预发布）](workbench-1.5.2-review.md)。
+- 工作台版本：[1.1.0](workbench-1.1.0-review.md)、[1.2.1](workbench-1.2.1-review.md)、[1.3.0](workbench-1.3.0-review.md)、[1.3.7](workbench-1.3.7-review.md)、[1.4.0](workbench-1.4.0-review.md)、[1.4.1](workbench-1.4.1-review.md)、[1.4.2](workbench-1.4.2-review.md)、[1.4.3](workbench-1.4.3-review.md)、[1.4.4](workbench-1.4.4-review.md)、[1.4.5](workbench-1.4.5-review.md)、[1.4.6](workbench-1.4.6-review.md)、[1.4.7](workbench-1.4.7-review.md)、[1.5.0](workbench-1.5.0-review.md)、[1.5.1](workbench-1.5.1-review.md)、[1.5.2](workbench-1.5.2-review.md)。
 - Android 修复记录：[1.3.1](android-1.3.1-review.md)、[1.3.2](android-1.3.2-review.md)、[1.3.3](android-1.3.3-review.md)。
 - 工作台设计与使用：[2026年11月1日可用性评审](workbench-usability-review-20261101.md)。
 

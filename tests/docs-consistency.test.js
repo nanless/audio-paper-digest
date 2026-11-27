@@ -119,13 +119,14 @@ test('checkVersionClaims 拦截带分号/逗号括号的旧构建号与已发布
     fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('ROOT_DOCS 纳入客户端双语 README 与 prompts/README.md，且按最近 package.json 与测试语境核验', () => {
+test('ROOT_DOCS 纳入客户端双语 README 与 prompts/README.{md,en.md}，且按最近 package.json 与测试语境核验', () => {
     for (const expected of [
         'apps/macos/README.md',
         'apps/macos/README.en.md',
         'apps/android/README.md',
         'apps/android/README.en.md',
-        'prompts/README.md'
+        'prompts/README.md',
+        'prompts/README.en.md'
     ]) {
         assert.ok(docs.ROOT_DOCS.includes(expected), `ROOT_DOCS 缺少 ${expected}`);
     }

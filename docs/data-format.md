@@ -35,6 +35,8 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 ## `data/current/` 核心文件
 
+`data/current/`、`data/archive/`、`data/runtime/` 以及博客相对路径已统一登记在跨语言单一真源 `config/runtime-paths.json` 中，由 Node（`scripts/config.js`）与 Python（`scripts/path_config.py`）共同读取并纳入实现指纹。
+
 候选、筛选决定和入选集三份当前产物共用一组头字段：北京时间 `timestamp`、与它一致的 `batchDate`、`batchId`、`candidateFingerprint`、`sourceConfigFingerprint`、`blogDedupFingerprint`、`rawPapersSha256` 和 `fetchSourcesSha256`。其中 `rawPapersSha256` 绑定原始候选的 `papers`，`fetchSourcesSha256` 绑定本次抓取检查点。筛选决定和入选集另带 `filterConfigFingerprint`、`filterModel` 和 `filterPromptHash`。
 
 ### `papers.json`
@@ -61,9 +63,9 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 官方 PDF 在全部候选地址上都返回 404 时，筛选阶段可写一条跳过记录，避免整批停在这一篇：字段为 `related: false`、`retryable: false`、`fallback: false`、`parseSource: official_pdf_404_skipped`、`errorCode: ARXIV_PDF_NOT_FOUND`、`errorStatus: 404`，并保留原始 `error`、`reason`、`decidedAt` 和输入 SHA；该记录不带 `filterScopeEvidence`。`error` 不逐字比对，只要求是含本论文规范化编号的非空文本；新记录另写入 `arxivId`，旧记录可缺。它只说明这篇取不到官方来源，不是“论文不相关”的模型结论；读取时须逐字段核验，跳过项不进入后续正常筛选与分析集合。
 
-仅命中泛多模态词、未明确声音模态的候选会交给模型判断，并在任何付费筛选请求前取得全部这类候选的官方材料；取得或核验失败时停止，已保存的完整材料可核验后复用。摘要达到80字只满足本地预筛的长度条件，不证明它列全了论文模态。人工流程不因此新增联网。`filterScopeEvidence` 保存四个来源文件的核验信息、选取的实际原文和内容 SHA；这份证据也进入决定的输入 SHA。恢复和数据校验会重新读取核验，不能只信保存的 SHA 字段。材料只帮助模型判断实际输入、输出和评测模态，不直接把论文标为相关，也不改写原始候选。
+仅命中泛多模态词、未明确声音模态的候选会交给模型判断，并在任何付费筛选请求前取得全部这类候选的官方材料；取得或核验失败时停止，已保存的完整材料可核验后复用。日更叠层 `scripts/lib/daily-filter-prefilter.js` 会先在剔除 References 尾节后的官方正文上检查音频锚点：若整篇非参考文献正文零音频锚点且不属于 `eess.AS`/`cs.SD`，则以 `parseSource: scope_body_audio_anchor_prefilter` 零模型请求确定性排除并保留四文件来源证明。摘要达到80字只满足本地预筛的长度条件，不证明它列全了论文模态。人工流程不因此新增联网。`filterScopeEvidence` 保存四个来源文件的核验信息、选取的实际原文和内容 SHA；这份证据也进入决定的输入 SHA。恢复和数据校验会重新读取核验，不能只信保存的 SHA 字段。材料只帮助模型判断实际输入、输出和评测模态，不直接把论文标为相关，也不改写原始候选。
 
-范围证据的片段端点和字符预算不得切断数学字母等补充平面 Unicode 字符。新记录用 `selectionProfile` 区分端点是否经过调整，并由真实片段重算输入 SHA。已有筛选决定按原记录格式复验，完整保留原输入指纹。官方来源原字节、原决定、请求及费用不因截取修复而改签或清零。
+范围证据的片段端点和字符预算不得切断数学字母等补充平面 Unicode 字符。当前 `official-modality-scope`（结构指纹 `94541e58…`）采用 `selectionProfile: codepoint-safe-excerpt-v2`（上限 30,000 字符：10K 开头 + 最多 9 个聚类强锚点窗 + 4 个结构窗，最坏约 28,741 ≤ 30,000 字符，数学保证不裁丢已选锚点窗），并由真实片段重算输入 SHA。旧 120,000 字符的 `codepoint-safe-excerpt` 与 `unchanged-excerpt` 记录保持只读冷核兼容，已有筛选决定按原记录格式复验并保留原输入指纹。官方来源原字节、原决定、请求及费用不因截取修复而改签或清零。
 
 ### `filtered-papers.json`
 
@@ -364,7 +366,7 @@ generation 可从 current 或按完整物理 SHA 唯一匹配的 superseded 找�
 
 ## 归档
 
-`data/archive/<date>/` 保存日批次快照及最终视觉资产；`data/archive/` 下另有 `papers-<date>.json.gz` 与对应 `.manifest.json`（论文库压缩备份，保留最近 7 组）和 `cleanup/`（退役分析结果归档）。历史 `digest:status` 只有在候选、决定、入选及分析文件的日期和集合都匹配时，才可使用归档；当前日期不会用归档掩盖当前数据的故障。
+`data/archive/<date>/` 保存日批次快照及最终视觉资产；`data/archive/` 下另有 `papers-<date>.json.gz` 与对应 `.manifest.json`（论文库原子压缩备份，由独立叶模块 `scripts/lib/papers-backup.js` 与 `scripts/lib/file-lock.js` 实现，保留最近 7 组）和 `cleanup/`（退役分析结果归档）。历史 `digest:status` 只有在候选、决定、入选及分析文件的日期和集合都匹配时，才可使用归档；当前日期不会用归档掩盖当前数据的故障。
 
 ## 验证与状态读取（后者会写报告）
 

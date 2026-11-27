@@ -5,13 +5,14 @@
 <p align="center">
   <a href="README.md">简体中文</a> · <strong>English</strong> ·
   <a href="https://nanless.github.io/audio-research-portal/">Audio Research Portal (Live)</a> ·
+  <a href="https://github.com/nanless/audio-research-portal">Portal Repo (audio-research-portal)</a> ·
   <a href="https://github.com/nanless/audio-research-workbench/releases">Download Mac / Android Apps</a> ·
   <a href="docs/README.en.md">Documentation Index</a>
 </p>
 
 <p align="center">
   <a href="https://nanless.github.io/audio-research-portal/"><img src="https://img.shields.io/badge/Live_Portal-Studio_Monograph_2.0-0f5c58?style=flat-square" alt="Audio Research Portal" /></a>
-  <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1"><img src="https://img.shields.io/badge/Client-v1.5.1_(Build_25)-b85a34?style=flat-square" alt="Client v1.5.1" /></a>
+  <a href="https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2"><img src="https://img.shields.io/badge/Client-v1.5.2_(Build_26)-b85a34?style=flat-square" alt="Client v1.5.2" /></a>
   <img src="https://img.shields.io/badge/macOS-15%2B_Apple_Silicon-182120?style=flat-square" alt="macOS 15+" />
   <img src="https://img.shields.io/badge/Android-9%2B_(4_ABIs)-182120?style=flat-square" alt="Android 9+" />
   <img src="https://img.shields.io/badge/Archive-9%2C400%2B_Posts_(8%2C650%2B_Papers)-1f8a82?style=flat-square" alt="9,400+ Posts (8,650+ Papers)" />
@@ -74,20 +75,25 @@ Dozens of new speech, music, acoustics, and Audio LLM papers arrive on arXiv and
 
 Production, publishing, and personal reading stay isolated: this repository pushes reviewed diffs into the Hugo portal (serving `client/details/*` content-addressed snapshots and the podcast feed), while the Mac and Android clients consume those static files read-only without ever calling a production LLM.
 
+| Repository | Role & Responsibilities |
+|---|---|
+| `nanless/audio-research-workbench` (this repo) | Content production engine (daily / conference / historical), three-layer review & receipt-bound push, daily podcast generation, plus macOS & Android 1.5.x native client source and releases. |
+| `nanless/audio-research-portal` ([GitHub repo](https://github.com/nanless/audio-research-portal) · [live site](https://nanless.github.io/audio-research-portal/)) | Hugo + Studio Monograph 2.0 portal, reviewed Chinese paper guides and venue / SOTA hubs, `client/details/*` content-addressed snapshot exports, Pagefind search index, and standard podcast RSS ([`feeds/podcast.xml`](https://nanless.github.io/audio-research-portal/feeds/podcast.xml)). |
+
 ![Mac and Android 1.5.x Workbench public feeds vs. personal sync boundaries](docs/images/client-experience.en.svg)
 
 | Capability | Audio Research Portal (Web) | macOS Workbench (1.5.x) | Android Workbench (1.5.x) |
 |---|:---:|:---:|:---:|
-| 9,400+ posts, 400-concept taxonomy & score/OSS filters | Instant browse + `⌘K` palette | Offline snapshots + NFKC search | Offline snapshots + idle preload |
+| 9,400+ posts, 400-concept taxonomy, 6-surface 58-key venue parity & filters | Instant browse + `⌘K` palette | Offline snapshots + NFKC search | Offline snapshots + idle preload |
 | Guide + side-by-side PDF with physical page anchors | Direct source links | AppKit + PDFKit split view | Phone 1-col / Tablet 2-col |
-| Daily Audio Podcast (chapters, `0.75×–2.0×`) | Web podcast player | `AVAudioPlayer` + SHA cache | `MediaPlayer` + SHA cache |
+| Daily Audio Podcast (chapters, `0.75×–2.0×`) | Web player + standard RSS ([`feeds/podcast.xml`](https://nanless.github.io/audio-research-portal/feeds/podcast.xml)) | `AVAudioPlayer` + SHA cache | `MediaPlayer` + SHA cache |
 | Typography & figure/table UX (Studio Monograph) | 1×–6× lightbox / sortable tables | Strict allowlist sanitizer | Material 3 compact sanitizer |
 | Personal LLM Q&A (user endpoint, isolated billing) | — | Approved extracted text only | Approved extracted text only |
 | Zotero Archiving (metadata + guide + PDF + notes) | BibTeX / RIS / Obsidian | Local Zotero Desktop API | Official Zotero Web API v3 |
 | Nutstore WebDAV sync & full-space backups | — | One-click bidirectional sync + lossless merge / snapshots | One-click bidirectional sync + lossless merge / snapshots |
 
-- **Source & public release**: Current source version is **1.5.2 (build 26) (not yet published)** (see the [1.5.2 pre-release record](docs/workbench-1.5.2-review.md)). The latest published release on both macOS and Android is **1.5.1 / build 25** (published 27 Nov 2026, Beijing time, annotated tag `v1.5.1`, commit `7622f2ec`); see [GitHub Release v1.5.1](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1), [1.5.1 release record](docs/workbench-1.5.1-review.md), and [client release verification](docs/client-release-verification.md).
-- **Upgrade notes**: Upgrading macOS from 1.4.x renames the bundle to `音频研究工作台.app` while keeping `com.nanless.PaperDigest`, data directories, and Keychain entries (local ad-hoc signature, macOS 15+ Apple silicon)—quit and remove the old bundle after installing. Android keeps the 1.4.4+ signing certificate so 1.4.4–1.5.1 upgrade in place; 1.4.3 requires backing up and uninstalling first.
+- **Current published release**: Both macOS and Android are publicly released at **1.5.2 (build 26)** (published 27 Nov 2026, 23:05 Beijing time, annotated tag `v1.5.2`, commit `63fa298f`); see [GitHub Release v1.5.2](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2), [1.5.2 release record](docs/workbench-1.5.2-review.md), and [client release verification](docs/client-release-verification.md).
+- **Upgrade notes**: Upgrading macOS from 1.4.x renames the bundle to `音频研究工作台.app` while keeping `com.nanless.PaperDigest`, data directories, and Keychain entries (local ad-hoc signature, macOS 15+ Apple silicon)—quit and remove the old bundle after installing. Android keeps the 1.4.4+ signing certificate so 1.4.4–1.5.1 users upgrade in place to 1.5.2; 1.4.3 requires backing up and uninstalling first.
 
 ---
 
@@ -105,8 +111,8 @@ Content production runs an **LLM/API pipeline by default** across three active, 
 
 Four engineering safeguards keep quality verifiable and cost bounded:
 
-1. **Four-file source sealing**: Before analysis begins, each paper's `source.txt`, `source.pdf`, `source-runtime.json`, and `source-manifest.json` are hashed and frozen; writing, repairs, and cold replay read only this bundle.
-2. **Tiered per-stage reasoning + prefix caching**: Enabled by default (`PD_TIERED_REASONING_EFFORT=1`, `PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=1`)—`xhigh` for primary analysis & Reader guides, `high` for scoring audits & repairs, `medium` for figure/structure patches, `low` for screening & text review, and `minimal` for mechanical tagging/OSS checks.
+1. **Four-file source sealing & guaranteed-recall screening**: The daily screening overlay (`daily-filter-prefilter.js`) excludes off-topic full texts through a zero-dollar body audio-anchor gate and builds 30K guaranteed-recall excerpts (`codepoint-safe-excerpt-v2`) for scope evidence; before analysis begins, each selected paper's `source.txt`, `source.pdf`, `source-runtime.json`, and `source-manifest.json` are hashed and frozen so writing, repairs, and cold replay read only this bundle.
+2. **Tiered per-stage reasoning + static-prefix caching**: Enabled by default (`PD_TIERED_REASONING_EFFORT=1`, `PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY=1`)—`xhigh` for primary analysis & Reader guides, `high` for scoring audits & repairs, `medium` for figure/structure patches, `low` uniformly for daily screening & text review, and `minimal` for mechanical tagging/OSS checks; routine node patches use `ordinal-v2` (`static-prefix-v2`) static-prefix layouts and reordered repair templates to maximize KV cache hits.
 3. **Expiry-priority shared account pool & immutable ledger**: Keys on the same route merge into one shared pool scheduled by earliest monthly reset date (Beijing time) and highest remaining monthly headroom across monthly/weekly/5-hour windows (`PD_LLM_ACCOUNT_POOL_STRATEGY=expiry_priority`, or `equal_rotation`), auto-syncing official `/zen/go/v1/usage` quotas over the project proxy (5 min TTL, or `npm run llm:accounts:quota -- sync`). Only quota 429 or insufficient-balance 401 rotates within a request; auth 401 halts dispatch to protect in-flight work. Usage records default to flat layout (`0`), with opt-in Beijing-date sharding via `PD_LLM_USAGE_SHARD_BY_DATE=1`, and are never wiped.
 4. **Three-layer review gate & permanent SHA cache**: Programmatic checks, text/figure audits, and full Hugo builds gate every push; approved pages cache permanently by relative path and content SHA.
 
@@ -152,7 +158,7 @@ Replace example dates, IDs, and paths with real values before running:
 | **Locks, docs, index & data integrity** | `npm run locks`, `npm run docs:check`, `npm run scripts:index:check`, `npm run validate:data` |
 | **Targeted Python & client test suites** | `npm run test:python`, `npm run test:client:macos`, `npm run test:client:android` |
 | **Ledger compaction & PDF dedupe** | `npm run papers:compact`, `npm run storage:pdf-dedupe`, `npm run storage:report`, `npm run storage:prune` |
-| **Opt-in CLIs: calibration / podcast** | `npm run digest:calibrate -- --dry-run`, `npm run podcast:generate -- --date YYYY-MM-DD --dry-run` |
+| **Opt-in CLIs: calibration / podcast** | `npm run digest:calibrate -- --dry-run`, `npm run podcast:generate -- --date YYYY-MM-DD --dry-run` (pass `--portal-repo` to sync `feeds/podcast.xml`, `data/podcast-episodes.json`, and `client/podcast/feed.json`) |
 
 </details>
 
@@ -213,10 +219,10 @@ A daily digest is complete only when all six criteria in [AGENTS.md](AGENTS.md#�
 
 ```text
 audio-research-workbench/
-├── scripts/               # Production engine (fetch, filter, seal, analyze, score, Reader, review, push, podcast)
-│   └── lib/               # Shared libs: LLM router/cache/pool, source checks, SVG/PDF pipeline, locks & ledgers
+├── scripts/               # Round 4 modular zero-SCC production engine (fetch, filter, seal, analyze, score, Reader, review, push, podcast)
+│   └── lib/               # Shared libs: LLM router/cache/pool, source checks, SVG/PDF pipeline, file locks & ledgers
 ├── prompts/current/       # Active stage prompt templates (with Git blob cold-replay evidence index)
-├── config/                # 400-concept 9-facet taxonomy, protocol registries (clients*.json), workspace roles
+├── config/                # Cross-language path SSOT (runtime-paths.json), 400-concept 9-facet taxonomy, protocol registries (clients*.json), workspace roles
 ├── apps/
 │   ├── macos/             # Native macOS Audio Research Workbench (Swift / AppKit / WebKit / PDFKit / AVAudioPlayer)
 │   └── android/           # Native Android Audio Research Workbench (Kotlin / Jetpack Compose / Atomic JSON + PDFBox / WorkManager)
@@ -224,7 +230,7 @@ audio-research-workbench/
 ├── prototypes/macos-research/ # Offline PDF/figure prototype & committed MiCLA test fixtures
 ├── docs/                  # Architecture, data contracts, playbooks, acceptance & Studio Monograph diagrams (docs/images/)
 ├── skills/                # Reusable clear-technical-writing and engineering skills
-├── manual/                # Read-only legacy verification & independent single-paper manual review
+├── manual/                # Round 4 isolated read-only legacy verification & independent single-paper manual review (zero active loading on routine API runs)
 └── tests/                 # Node.js + Python regression suites (offline contracts & cold-replay tests)
 ```
 

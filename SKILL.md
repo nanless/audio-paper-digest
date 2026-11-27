@@ -89,7 +89,7 @@ conference:acquire → conference:discover → 全文证据与每会筛选
 2. **仅更新完整会议页面与后处理减权**：已有完整会议需更新页面时，先核全成员状态再显式迁移并重暂存单篇与汇总，复用合格分析与费用；已有 `publish.json` 的旧 process 不重复 generate，既有 URL 改走历史维护，见[只更新会议页面](docs/conference-workflow.md#已有完整会议只更新页面)。需先统一检查且硬禁模型时加 `--postprocess-only`（准备人工收尾前保留失败稿另加 `--preserve-failed-readers`，不得与重试或清单混用）；调度前先在锁内零请求采纳已保存完成子稿或复验活跃付费候选，不重复购买合格稿。
 3. **失败集合续跑与追加付费窗口**：全体后处理并报告完整失败集合后，显式加 `--retry-failed` 续跑；原窗口耗尽后，按[持续授权](AGENTS.md#持续授权以效率和效果为准)显式登记并执行后续独立窗口（`--retry-failed --recovery-manifest ABSOLUTE_PATH`，使用 `conference-recovery-grant` 及其结构指纹，旧版清单格式兼容读取不变）。每窗最多 3 轮、Reader 累计 6 次内容响应及 2 次完整长文，新旧窗口分账、原稿与费用保留；从第二轮起持久保存已失败非 Reader 阶段的请求禁令，详见[原额度耗尽后的独立付费恢复](docs/conference-workflow.md#原额度耗尽后的独立付费恢复)。
 4. **零请求修正与认证来源纠正**：原许可全轮后少量完整失败集仍有真实活跃候选时，使用同迁移入口的 `--reader-corrections`（每篇 1–8 个已有节点、硬禁模型与网络、绑定原 CAS 与完整资格），见[零请求 Reader 修正](docs/conference-workflow.md#最后失败集合的零请求-reader-修正)。认证 PDF 的资源归属或唯一核心句确需零请求纠正时，使用 `--postprocess-only --source-corrections ABSOLUTE_PATH`（资源权限与核心权限分离），见[认证来源纠正](docs/conference-workflow.md#认证来源事实的零请求纠正)。
-5. **博客拒稿后的正常 Reader 维护与独立 PDF 出版视图**：会议发布审查出现普通内容拒稿时先等全批结束（汇总在 5 个审查槽位中优先派发，单页分块串行），再将正文及未解决格式问题的完整失败集合交正常 Reader 维护（`pending` 期间不得另跑普通迁移漂移基线）：
+5. **博客拒稿后的正常 Reader 维护与独立 PDF 出版视图**：会议发布审查出现普通内容拒稿时先等全批结束（会议审查默认 5 并发、支持 1–32，先全批单篇后汇总以复用零告警已审图，单页分块串行），再将正文及未解决格式问题的完整失败集合交正常 Reader 维护（`pending` 期间不得另跑普通迁移漂移基线）：
 
 ```bash
 npm run conference:migrate-process -- --apply --catalog CATALOG.json --report REPORT.json --filter FILTER_UUID --from PROCESS_UUID --concurrency 5 --reader-review-feedback /absolute/process/review-reader-maintenance/BATCH_UUID/manifest.json

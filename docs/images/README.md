@@ -6,7 +6,7 @@
 
 | 文件 | 说明什么 | 引用位置 |
 |---|---|---|
-| `hero-workbench.zh.svg` | 音频研究工作台（Audio Research Workbench）Studio Monograph 深岩青声谱旗舰封面：展示核心定位、9,300+ 篇中文精读（8,650+ 篇论文）、400 项九维分类与 8 大 SOTA 专题、三条齐平产线、每日播客及 Mac/Android 1.5.x 核心指标。 | `README.md` |
+| `hero-workbench.zh.svg` | 音频研究工作台（Audio Research Workbench）Studio Monograph 深岩青声谱旗舰封面：展示核心定位、9,400+ 篇中文精读与专题汇总（含 9,200+ 篇单篇精读、覆盖 8,650+ 篇已核验论文）、400 项九维分类与 8 大 SOTA 专题、三条齐平产线、每日播客及 Mac/Android 1.5.x 核心指标。 | `README.md` |
 | `hero-workbench.en.svg` | 上一张的英文版，内容与结构相同。 | `README.en.md` |
 | `portal-home-preview.png` | 音频研究门户 Studio Monograph 2.0 暖纸版首页本地真实渲染 2× 截图：包含 `最新一期 2026.11.26` 声谱封面与本期选读、`⌘K` 快捷检索栏及下方 8 大音频研究专题榜单卡片。 | `README.md`、`README.en.md` |
 | `portal-paper-preview.png` | 音频研究门户单篇深度精读页本地真实渲染 2× 截图：同屏呈现左侧跟随目录、正文 KaTeX 数学公式与带“反色 / 放大查看”工具栏的已核验论文原图，以及右侧悬浮的八维评分环/分项条与来源信息卡。 | `README.md`、`README.en.md` |

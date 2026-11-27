@@ -10,9 +10,9 @@
 
 `manualHandoff` 只是建议报告：它指出哪些论文可能需要人工处理，不会自动取得来源能力或增加机器请求额度。
 
-本目录保留用于核验旧来源、作者策略、签名、正文与教程合同的模块，它们同时也是现行生产代码。`scripts/analysis-contract.js` 在日更正文校验中引入人工代理策略、研究合同、教程合同编排、新写作合同和教程载荷；正式数据验证脚本 `scripts/validate-data-files.js` 另引入来源身份模块；发布器的审查实现入口包含 `manual/scripts/manual-review-blog.py` 和 `manual/scripts/tutorial_payload_verifier.py`。
+本目录保留用于核验旧来源、作者策略、签名、正文与教程合同的模块，并已与常规 API 产线完成隔离：`scripts/analysis-contract.js` 对 5 个退役 `manual/scripts/*` 合同模块（人工代理策略、研究合同、教程合同编排、新写作合同和教程载荷）采用按需惰性加载，常规日更、会议和历史 API 路径导入时不会加载任何 `manual/scripts/*`；日常发布与 Hugo 门禁（`scripts/publish-to-blog.py`、`scripts/markdown_hugo_gate.py`、`scripts/lib/paper-page-staging.js`）直接导入迁入 `scripts/` 的 `scripts/tutorial_payload_verifier_core.py`，退役 Manual 历史校验也已抽离至 `scripts/publish_manual_legacy.py`，`manual/scripts/tutorial_payload_verifier.py` 仅保留为兼容薄壳（供 `manual/scripts/sealed_tutorial_preview.py` 与历史测试使用）。正式数据验证脚本 `scripts/validate-data-files.js` 仍按需引入 `manual-paper-source-identity.js` 与 `manual-fresh-authoring-contract.js`，独立人工审查入口仍为 `manual/scripts/manual-review-blog.py`。
 
-只读的是旧记录核验所依据的历史字节，不是这些模块本身。`manual/scripts` 下除 `assemble-manual-review-attestation.py` 和 `manual-signature-contract.js` 外，其余 12 个模块都在审查协议指纹和页面生成器实现指纹的依赖闭包内，改动会改变这两项指纹，本批审查凭证须按新指纹重签。改动后必须回归 `npm run verify`，并重跑受影响的当前批次审查；内容未变的已通过页面不会因此重审。
+只读的是旧记录核验所依据的历史字节，不是这些模块本身。按实测依赖闭包区分：日更审查协议闭包（`_REVIEW_IMPLEMENTATION_ENTRIES` 包含独立审查入口 `manual/scripts/manual-review-blog.py`）当前包含 10 个 `manual/scripts/` 模块（不含 `assemble-manual-review-attestation.py`、`manual-signature-contract.js`、`sealed_tutorial_preview.py` 和 `tutorial_payload_verifier.py`）；页面生成器 `templateFingerprint` 仅包含 1 个 `manual/scripts/` 模块（`manual/scripts/sealed_tutorial_preview.py`），以及迁入 `scripts/` 的 `scripts/tutorial_payload_verifier_core.py` 与 `scripts/publish_manual_legacy.py`；不含 `manual/` 入口的常规 API 闭包依赖 0 个 `manual/scripts/` 模块。改动上述闭包内模块会改变对应指纹，本批审查凭证须按新指纹重签；改动后必须回归 `npm run verify`，并重跑受影响的当前批次审查，内容未变的已通过页面不会因此重审。
 
 旧合同 Prompt 已从工作树移除，核验时通过受控 Git 索引取回原字节并核对原声明 SHA，不补签旧结果；旧编辑规范和结构说明通过独立的原文件证据目录读取。
 

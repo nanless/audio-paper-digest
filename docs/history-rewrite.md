@@ -2,7 +2,7 @@
 
 历史博客更新线与日更、官方会议三条流程保持齐平维护。本页说明如何审计过时历史文章，以及如何从论文原文重新分析全部或选定范围的历史论文，生成单篇页、每日汇总、会议汇总和会议任务页。当前流程称为 `direct-local-first`：会议论文使用通过核验的本地论文信息和 PDF，arXiv 论文在新一轮来源获取时重新保存官方文本和 PDF。正常任务不以旧对照表（`npm run history:crosswalk`）的身份确认或抽样试运行通过为前提。
 
-全历史任务在当前 `audio-research-workbench` 工作区执行，先按 [AGENTS.md](../AGENTS.md) 核对 `daily` 角色与 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`。旧历史工作区已废弃，不再读取或迁移其中的运行资料。当前进度保存在本项目 `data/runtime/`。执行者须安排日更、会议、历史发布错峰；历史发布前同步代码和博客的最新远端基线，重新生成对应凭证。
+全历史任务在当前 `audio-research-workbench` 工作区执行，先按 [AGENTS.md](../AGENTS.md) 核对 `daily` 角色与 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`。旧历史工作区已废弃，不再读取或迁移其中的运行资料。当前进度保存在本项目 `data/runtime/`。执行者须安排日更、会议、历史发布错峰；历史发布前同步代码仓与伴生门户仓库 [audio-research-portal](https://github.com/nanless/audio-research-portal) 的最新远端基线，重新生成对应凭证。
 
 ```text
 冻结现有博客清单 ─┬─ 提取已有的单一 arXiv ID 线索 ─┐

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1080" height="330" viewBox="0 0 1080 330" role="img" aria-labelledby="title desc">
   <title id="title">Audio Research Workbench · Overview Banner</title>
-  <desc id="desc">Studio Monograph dark slate acoustic hero banner introducing Audio Research Workbench: 9,300+ Chinese paper guides across 8,650+ verified audio papers, Studio Monograph 2.0 portal, daily audio podcast, and native macOS and Android v1.5.x clients.</desc>
+  <desc id="desc">Studio Monograph dark slate acoustic hero banner introducing Audio Research Workbench: 9,400+ Chinese paper guides across 8,650+ verified audio papers, Studio Monograph 2.0 portal, daily audio podcast, and native macOS and Android v1.5.x clients.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#111d1c"/>
@@ -105,7 +105,7 @@
 
   <g transform="translate(48, 248)">
     <rect x="0" y="0" width="234" height="58" rx="12" fill="#101a19" fill-opacity="0.82" stroke="#2c4a47"/>
-    <text x="16" y="25" class="stat-num">9,300+ Guides</text>
+    <text x="16" y="25" class="stat-num">9,400+ Guides</text>
     <text x="16" y="45" class="stat-lbl">8,650+ verified papers live</text>
 
     <rect x="250" y="0" width="234" height="58" rx="12" fill="#101a19" fill-opacity="0.82" stroke="#2c4a47"/>

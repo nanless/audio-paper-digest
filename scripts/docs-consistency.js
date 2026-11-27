@@ -11,7 +11,7 @@ const ROOT_DOCS = [
     'manual/README.md', 'manual/README.en.md',
     'apps/macos/README.md', 'apps/macos/README.en.md',
     'apps/android/README.md', 'apps/android/README.en.md',
-    'prompts/README.md'
+    'prompts/README.md', 'prompts/README.en.md'
 ];
 const MARKDOWN_DIRS = ['docs', 'skills'];
 const COMMAND = /npm run ([a-z][a-z0-9:_-]*)/g;

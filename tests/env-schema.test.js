@@ -378,6 +378,7 @@ test('会议抽取器版本、队列并发与 Pages 部署轮询/超时变量在
         ...base,
         PD_CONFERENCE_EXTRACTOR_PROFILE: 'enhanced',
         PD_CONFERENCE_QUEUE_CONCURRENCY: '3',
+        PD_BLOG_REVIEW_LLM_MAX_INFLIGHT: '12',
         PD_PAGES_DEPLOY_POLL_SECONDS: '10',
         PD_PAGES_DEPLOY_TIMEOUT_SECONDS: '600'
     });
@@ -389,6 +390,7 @@ test('会议抽取器版本、队列并发与 Pages 部署轮询/超时变量在
         PD_CONFERENCE_EXTRACTOR_PROFILE: 'legacy',
         PD_CONFERENCE_EXTRACTOR_VERSION: 'v1',
         PD_CONFERENCE_QUEUE_CONCURRENCY: '32',
+        PD_BLOG_REVIEW_LLM_MAX_INFLIGHT: '32',
         PD_PAGES_DEPLOY_POLL_SECONDS: '120',
         PD_PAGES_DEPLOY_TIMEOUT_SECONDS: '1800'
     });
@@ -399,6 +401,7 @@ test('会议抽取器版本、队列并发与 Pages 部署轮询/超时变量在
         PD_CONFERENCE_EXTRACTOR_PROFILE: 'unknown-profile',
         PD_CONFERENCE_EXTRACTOR_VERSION: 'v3',
         PD_CONFERENCE_QUEUE_CONCURRENCY: '33',
+        PD_BLOG_REVIEW_LLM_MAX_INFLIGHT: '33',
         PD_PAGES_DEPLOY_POLL_SECONDS: '121',
         PD_PAGES_DEPLOY_TIMEOUT_SECONDS: '9'
     });
@@ -407,6 +410,7 @@ test('会议抽取器版本、队列并发与 Pages 部署轮询/超时变量在
         'PD_CONFERENCE_EXTRACTOR_PROFILE',
         'PD_CONFERENCE_EXTRACTOR_VERSION',
         'PD_CONFERENCE_QUEUE_CONCURRENCY',
+        'PD_BLOG_REVIEW_LLM_MAX_INFLIGHT',
         'PD_PAGES_DEPLOY_POLL_SECONDS',
         'PD_PAGES_DEPLOY_TIMEOUT_SECONDS'
     ]) {

@@ -57,7 +57,7 @@
 
   <rect x="370" y="146" width="220" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
   <text x="382" y="168" class="t-badge" fill="#0f5c58">Studio Monograph 2.0</text>
-  <text x="382" y="191" class="t-item">9,300+ guides (8,650+ papers)</text>
+  <text x="382" y="191" class="t-item">9,400+ guides (8,650+ papers)</text>
 
   <rect x="370" y="218" width="220" height="62" rx="9" fill="#f7f5f0" stroke="#ddd6ca" stroke-width="1.2"/>
   <text x="382" y="240" class="t-badge" fill="#0f5c58">400-Concept Taxonomy</text>

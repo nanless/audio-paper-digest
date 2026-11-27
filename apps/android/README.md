@@ -2,9 +2,21 @@
 
 [English](README.en.md)
 
-音频研究工作台是“音频研究门户”的 Android 原生客户端。它读取网站已发布的论文目录、图文导读、每日音频研究与会议汇总，支持原始 PDF、每日播客、笔记、离线阅读、个人研究、Zotero 归档和坚果云备份。阅读和同步已有文章不会重新调用模型。
+音频研究工作台是[音频研究门户](https://nanless.github.io/audio-research-portal/)（门户源码见 [`audio-research-portal`](https://github.com/nanless/audio-research-portal)）的 Android 原生客户端。它读取网站已发布的论文目录、图文导读、每日音频研究与会议汇总，支持原始 PDF、每日播客、笔记、离线阅读、个人研究、Zotero 归档和坚果云备份。阅读和同步已有文章不会重新调用模型。
 
-当前源码版本为 **1.5.2（构建号 26）（尚未公开发布）**（预发布改动与验证见 [1.5.2 记录](../../docs/workbench-1.5.2-review.md)）；最近已公开发行版本为 **1.5.1 / 构建号 25**（2026-11-27 公开发布，来源提交 `7622f2ec`），下载见 [GitHub 发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)。支持 Android 9 / API 28 及以上系统，包含 `armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64` 四种架构。应用标识仍为 `com.nanless.paperdigest`。1.4.4 起改用新的发布签名库，证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，与 1.4.3 的 `d7c680d9…` 不同；已安装 1.4.3 的用户需要先导出备份、卸载旧版再安装；1.4.5 至 1.5.2 沿用 1.4.4 的签名库，已安装 1.4.4–1.5.1 的用户可直接覆盖升级。安装、测试范围和发行状态见[验证说明](<../../docs/android-validation.md>)；1.5.2 见 [1.5.2 记录](../../docs/workbench-1.5.2-review.md)，1.5.1 的改动与验证范围见 [1.5.1 记录](../../docs/workbench-1.5.1-review.md)，1.5.0 见 [1.5.0 记录](../../docs/workbench-1.5.0-review.md)，1.4.7 见 [1.4.7 记录](../../docs/workbench-1.4.7-review.md)，1.4.6 见 [1.4.6 记录](../../docs/workbench-1.4.6-review.md)，1.4.5 见 [1.4.5 记录](../../docs/workbench-1.4.5-review.md)，1.4.3 的自动测试、未重做的人工验收和发行状态见 [1.4.3 记录](../../docs/workbench-1.4.3-review.md#发行状态)，启动与导读性能见[客户端性能](../../docs/client-performance.md)，签名、证书与附件见[客户端发行核验](../../docs/client-release-verification.md)；1.4.2 的修复范围见[审改记录](../../docs/workbench-1.4.2-review.md)；更早的分类与界面改进见[1.3.0 记录](../../docs/workbench-1.3.0-review.md)。
+## 版本与签名兼容性
+
+| 项目 | 支持范围 |
+|---|---|
+| 版本 | 当前公开发行版本 1.5.2（构建号 26；`versionCode` 26，2026-11-27 23:05 北京时间公开发布，来源提交 `63fa298f`） |
+| 系统与架构 | Android 9（API 28）及以上，包含 `armeabi-v7a`、`arm64-v8a`、`x86`、`x86_64` 四种 ABI（原生库 16 KiB ELF 对齐） |
+| 应用标识 | `com.nanless.paperdigest` |
+| 发布签名 | 1.4.4–1.5.2 共用同一发布签名库，证书 SHA-256 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（APK Signature Scheme v3） |
+| 升级路径 | 1.4.4–1.5.1 用户可直接覆盖升级至 1.5.2；1.4.3（旧证书 `d7c680d9…`）用户须先导出完整备份、卸载旧版再安装 |
+
+安装包与校验值与 Mac 版在同一 [GitHub 发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2)提供。本版改动与验证范围见 [1.5.2 记录](../../docs/workbench-1.5.2-review.md)，12 件附件与签名核验见[客户端发行核验](../../docs/client-release-verification.md)，安装与测试边界见[验证说明](../../docs/android-validation.md)，启动与导读性能见[客户端性能](../../docs/client-performance.md)。
+
+1.5.1 至 1.3.0 的历次发版摘要与审改记录集中列在[文档索引](../../docs/README.md#阅读论文与使用工作台)。
 
 ## 开始使用
 
@@ -26,7 +38,7 @@
 
 Android 端内置基于系统 `MediaPlayer`、`AudioAttributes`、`AudioFocusRequest` 与 `PlaybackParams` 的原生每日音频播客播放器（零新增第三方依赖与额外权限）：
 
-- **只读订阅与校验缓存**：读取门户可选的 `client/podcast/feed.json`（HTTP 404/410 静默隐藏，离线模式不联网），仅从受控 GitHub Release 白名单 HTTPS 下载音频，经 40 MiB 上限、字节长度、流式 SHA-256 与 MP3 魔数核验后才允许播放。
+- **只读订阅与校验缓存**：读取门户可选的 `client/podcast/feed.json`（HTTP 404/410 静默隐藏，离线模式不联网），仅从受控 GitHub Release 白名单 HTTPS 下载音频，经 40 MiB 上限、字节长度、流式 SHA-256 与 MP3 魔数核验后才允许播放。外部播客客户端（如 Apple Podcasts、Pocket Casts、小宇宙）可另行订阅门户标准 RSS：<https://nanless.github.io/audio-research-portal/feeds/podcast.xml>。
 - **通勤播放与论文联动**：支持 `0.75×–2.0×` 倍速、章节跳转、系统音频焦点避让，以及从章节直接跳转对应论文导读页。
 - **独立 LRU 缓存**：本地保存最多 `150 MiB / 5 期` 播客音频缓存，明确排除在完整备份与一键同步 WebDAV 之外。
 
@@ -38,7 +50,7 @@ Android 端内置基于系统 `MediaPlayer`、`AudioAttributes`、`AudioFocusReq
 
 ### 查看任务和处理失败
 
-在“任务”查看同步、研究、归档和备份的进度，并执行当前任务提供的取消或继续操作。已派发但结果未知的模型请求，不会因重启或恢复自动重发；没有取得的金额保持未知，不能把取消或失败理解成没有消费。
+在“任务”查看同步、研究、归档和备份的进度，并执行当前任务提供的取消或继续操作。已派发但结果未知的模型请求，不会因重启或恢复自动重发；没有取得的金额保持未知，不能把取消或失败理解成没有消费。1.5.2 起 `StudyCoordinator.reconcileStudyJobs()` 在平台后台任务已结束或缺失时安全对账收敛旧队列记录，避免恢复工作空间时发生死锁，同时不自动重发已派发的付费请求。
 
 API 密钥和连接密码由本机安全存储管理。研究资料可通过系统文件选择器导出；卸载或清除应用数据会删除本机私有资料，请先备份。
 
@@ -52,7 +64,7 @@ API 密钥和连接密码由本机安全存储管理。研究资料可通过系�
 
 可以同时选择多个方向。研究任务、研究方法等是不同分类维度，也称“分面”；同一维度任选其一，跨维度则同时满足。例如，两项任务与一项方法组合，表示符合任一所选任务、并采用该方法的论文。默认包含子类；高级选项可以改为只查直接标签，或限定主要角色、研究类型和领域。方向详情提供原定义、别名和完整路径。
 
-“筛选与排序”提供来源、离线会议筛选（含篇数计数）、评分快捷档位（全部 / 精选 ≥ 8.0 / 高分 ≥ 7.0 / 推荐 ≥ 6.0 / 仅含评分）、开源/权重/数据集/本机缓存音频 Demo 筛选和网站发布日期范围；1.5.0 起论文搜索支持 NFKC 与变音符归一化的多词空格 AND 检索，并可在输入查询时按“相关度”排序。日期是导读在网站上的日期，和收藏时间分别处理。搜索、分类与阅读位置在全部、收藏、待读等范围分别保存；打开论文后使用系统返回，继续原列表。同一论文有多篇导读时，“论文信息与全部已发布导读”列出实际匹配的导读和各自信息，官网入口明确在浏览器打开。
+“筛选与排序”提供来源、离线会议筛选（含篇数计数）、评分快捷档位（全部 / 精选 ≥ 8.0 / 高分 ≥ 7.0 / 推荐 ≥ 6.0 / 仅含评分）、开源/权重/数据集/本机缓存音频 Demo 筛选和网站发布日期范围；1.5.0 起论文搜索支持 NFKC 与变音符归一化的多词空格 AND 检索，并可在输入查询时按“相关度”排序；1.5.2 进一步在 Android、macOS Swift/WebView 与门户间对齐全部 58 组会议显示名、三步分隔符归一化与严格 ASCII 年份校验。日期是导读在网站上的日期，和收藏时间分别处理。搜索、分类与阅读位置在全部、收藏、待读等范围分别保存；打开论文后使用系统返回，继续原列表。同一论文有多篇导读时，“论文信息与全部已发布导读”列出实际匹配的导读和各自信息，官网入口明确在浏览器打开。
 
 论文库操作菜单中的“网站全部成果”汇集日更、会议、关于与研究资源，并提供官网论文库、搜索、归档和 RSS 等入口；网页专属功能在浏览器使用，图文导读、PDF、笔记和个人研究继续在工作台中使用。
 
@@ -97,7 +109,7 @@ Zotero Storage 空间不足时，可以明确确认改用本应用已配置的�
 ./apps/android/test.sh
 ```
 
-默认调试包输出到 `apps/android/app/build/outputs/apk/debug/app-debug.apk`。调试资源通道 `private-qa` 带有固定公开 MiCLA 小样；正式 `release` 通道只含空目录引导、排版资源和完整开源许可。两个通道的输出与清单分开，正式包不包含验收页面、用户资料、生产运行数据或 `.env`。
+默认调试包输出到 `apps/android/app/build/outputs/apk/debug/app-debug.apk`。1.5.2 起 Gradle 任务 `:app:verifyClientProtocols` 完整监听 `config/protocols/` 下全部 12 份 `clients.json` 与 `clients-*.json` 文件，防止协议注册表变动漏触发校验。调试资源通道 `private-qa` 带有固定公开 MiCLA 小样；正式 `release` 通道只含空目录引导、排版资源和完整开源许可。两个通道的输出与清单分开，正式包不包含验收页面、用户资料、生产运行数据或 `.env`。
 
 ## 设备测试
 

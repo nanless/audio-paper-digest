@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-音频研究工作台把网站导读、论文原始 PDF 和个人研究放在同一个阅读环境中。你可以先读音频研究门户已经发布的图文讲解，再打开原文核对，保存自己的问题、模型回答、摘录和笔记，最后将选定材料归档到 Zotero 文献库。
+音频研究工作台把网站导读、论文原始 PDF 和个人研究放在同一个阅读环境中。你可以先读[音频研究门户](https://nanless.github.io/audio-research-portal/)（门户源码见 [`audio-research-portal`](https://github.com/nanless/audio-research-portal)）已经发布的图文讲解，再打开原文核对，保存自己的问题、模型回答、摘录和笔记，最后将选定材料归档到 Zotero 文献库。
 
 安装后应用独立运行，无需下载项目源码、启动开发服务器或另装 Node。阅读和同步网站已有内容不重新分析论文；只有主动发起个人研究或连接测试，才会请求自己配置的模型服务。
 
@@ -10,15 +10,17 @@
 
 | 项目 | 支持范围 |
 |---|---|
-| 版本 | 源码 1.5.2（构建号 26）（尚未公开发布）；最近已公开发行版本为 1.5.1 / 构建号 25（2026-11-27 公开发布，来源提交 `7622f2ec`） |
+| 版本 | 当前公开发行版本 1.5.2（构建号 26）（2026-11-27 23:05 北京时间公开发布，来源提交 `63fa298f`） |
 | 系统 | macOS 15 及以上 |
 | 处理器 | Apple Silicon（arm64）；当前发行包不同时包含 Intel 与 Apple Silicon 两种架构 |
 | 签名 | 本地临时签名（ad-hoc），未通过 Apple 公证 |
 | 随包运行时 | Node 24.19.0，使用者无需另行安装 |
 
-Mac 与 Android 的安装包和校验值在同一 [GitHub 发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1)提供。1.5.0 起应用更名为“音频研究工作台.app”，安装时将解压后的应用包或 DMG 中的应用拖入“应用程序”。首次打开若被系统拦截，先核对下载来源与发布校验值，再按 macOS 的“隐私与安全性”提示允许打开该应用。
+Mac 与 Android 的安装包和校验值在同一 [GitHub 发行页](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2)提供。1.5.0 起应用更名为“音频研究工作台.app”，安装时将解压后的应用包或 DMG 中的应用拖入“应用程序”。首次打开若被系统拦截，先核对下载来源与发布校验值，再按 macOS 的“隐私与安全性”提示允许打开该应用。
 
-1.3.0 增加全站多级分类浏览、整理桌面导航，并与 Android 对齐查询规则；该轮实现、逐轮审查和实际验收状态见[审改记录](../../docs/workbench-1.3.0-review.md)。1.4.3 把大目录移到后台载入、列表改用紧凑投影，并减少打开导读和云上传的重复工作；本轮自动测试、未重做的人工验收和发行状态见 [1.4.3 记录](../../docs/workbench-1.4.3-review.md#发行状态)，性能数据见[客户端性能](../../docs/client-performance.md)。当前源码版本为 1.5.2（构建号 26）（尚未公开发布），改动与预发布验证见 [1.5.2 记录](../../docs/workbench-1.5.2-review.md)；最近已公开发行的安装包为 1.5.1 / 构建号 25（2026-11-27 发布，来源提交 `7622f2ec`），改动与验证范围见 [1.5.1 记录](../../docs/workbench-1.5.1-review.md)（上一版 1.5.0 / 构建号 24 见 [1.5.0 记录](../../docs/workbench-1.5.0-review.md)，1.4.7 见 [1.4.7 记录](../../docs/workbench-1.4.7-review.md)，1.4.6 见 [1.4.6 记录](../../docs/workbench-1.4.6-review.md)，1.4.5 见 [1.4.5 记录](../../docs/workbench-1.4.5-review.md)），签名与附件核验见[客户端发行核验](../../docs/client-release-verification.md)。
+**1.5.2（构建号 26）**为当前公开发行版本，对齐了六端 58 键会议简称显示，加固了 `LibraryImageTransport` 大响应边界与 `PodcastPlayerService` 并发下载/播放竞态，并随服务端第 1–4 轮架构收敛同步发布。改动与验证范围见 [1.5.2 记录](../../docs/workbench-1.5.2-review.md)，12 件附件与签名核验见[客户端发行核验](../../docs/client-release-verification.md)。
+
+较早的关键里程碑包括 [1.3.0 全站多级分类浏览](../../docs/workbench-1.3.0-review.md)与 [1.4.3 后台目录载入和紧凑投影](../../docs/workbench-1.4.3-review.md#发行状态)（性能实测见[客户端性能](../../docs/client-performance.md)）；1.5.1 至 1.3.0 的历次发版摘要与审改记录集中列在[文档索引](../../docs/README.md#阅读论文与使用工作台)。
 
 升级前保存编辑并正常退出旧应用。旧名称的应用包不会自动删除；新旧包共用原有资料目录与钥匙串服务，请勿同时运行。删除应用包会保留个人研究资料；需要清除资料时，请先自行导出备份。
 
@@ -32,13 +34,13 @@ Mac 与 Android 的安装包和校验值在同一 [GitHub 发行页](https://git
 
 1.4.6 起已发行的客户端与当前源码优先读取网站的 `client/details/manifest.json` 静态快照与内容寻址详情；只有服务器对该入口明确返回 HTTP 404 或 410 时，才依次回退读取 `client/index.json` 与原目录入口 `index.json`。论文附属文件按已核验详情或页面声明的论文身份、日期、字节数和 SHA 校验；旧安装包使用的原公开地址继续保留。格式损坏、结构指纹不匹配和网络故障不会触发旧接口回退，失败时保留已有资料。已发行的 1.4.3 至 1.4.5 安装包读取 `client/index.json`，1.4.2 及更早版本使用原入口；完整边界见[网站数据与恢复](../../docs/mac-app-data.md)。
 
-资料库搜索覆盖元数据、已读取导读和个人笔记。1.5.0 起支持 NFKC 与变音符归一化的多词空格 AND 检索，输入查询时可按相关度排序，并对齐了离线会议筛选（含篇数计数）、评分快捷档位（全部 / 精选 ≥ 8.0 / 高分 ≥ 7.0 / 推荐 ≥ 6.0 / 仅含评分）与开源/权重/数据集/音频 Demo 资源筛选。导读与列表同步升级为 **Studio Monograph** 视觉与排版（含音频参数速览卡与评分审计卡片、分层评分徽章与排名档位）。想查 PDF 原文时，使用阅读器内的查找；PDF 文字不参加资料库全文索引。
+资料库搜索覆盖元数据、已读取导读和个人笔记。1.5.0 起支持 NFKC 与变音符归一化的多词空格 AND 检索，输入查询时可按相关度排序，并对齐了离线会议筛选（含篇数计数）、评分快捷档位（全部 / 精选 ≥ 8.0 / 高分 ≥ 7.0 / 推荐 ≥ 6.0 / 仅含评分）与开源/权重/数据集/音频 Demo 资源筛选。1.5.2 进一步在 macOS Swift、WebView JS、Android 与门户间统一 58 组会议显示名、三步分隔符归一化与严格 ASCII 年份校验，并加固 `LibraryImageTransport` 的 `responseTooLarge` 边界与 `PublishedAggregateStore` / `LibraryService` 并发读取。导读与列表同步升级为 **Studio Monograph** 视觉与排版（含音频参数速览卡与评分审计卡片、分层评分徽章与排名档位）。想查 PDF 原文时，使用阅读器内的查找；PDF 文字不参加资料库全文索引。
 
 ### 每日音频播客（1.5.0）
 
 工作台内置基于系统 `AVAudioPlayer` 与媒体中心（`MPNowPlayingInfoCenter` / `MPRemoteCommandCenter`）的原生每日音频播客播放器：
 
-- **只读订阅与严格校验**：自动读取门户的 `client/podcast/feed.json`（HTTP 404/410 时静默隐藏，不影响目录同步并遵守离线模式）。音频仅从受控 GitHub Release 白名单 HTTPS 地址下载，先完成 40 MiB 上限、精确字节数、流式 SHA-256 与 MP3 魔数校验，再开始播放。
+- **只读订阅与严格校验**：自动读取门户的 `client/podcast/feed.json`（HTTP 404/410 时静默隐藏，不影响目录同步并遵守离线模式）。音频仅从受控 GitHub Release 白名单 HTTPS 地址下载，先完成 40 MiB 上限、精确字节数、流式 SHA-256 与 MP3 魔数校验，再开始播放。1.5.2 已加固 `PodcastPlayerService` 并发下载/播放与界面状态同步；外部播客客户端（如 Apple Podcasts、Pocket Casts、小宇宙）可另行订阅门户标准 RSS：<https://nanless.github.io/audio-research-portal/feeds/podcast.xml>。
 - **章节与倍速控制**：支持 `0.75×–2.0×` 播放倍速、按章节时间戳跳听，以及从播客章节直接跳入对应规范编号的论文精读页。
 - **独立本地缓存**：本地维护 `150 MiB / 5 期` 的 LRU 音频缓存，供断网重听；该缓存明确排除在完整空间备份与一键同步 WebDAV 之外，不会占用坚果云配额。
 

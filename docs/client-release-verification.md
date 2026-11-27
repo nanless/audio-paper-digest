@@ -1,6 +1,48 @@
-# 客户端发行核验（最近公开发行 1.5.1）
+# 客户端发行核验（最近公开发行 1.5.2）
 
-> 当前源码版本已推进至 **1.5.2（构建号 26）（尚未公开发布）**，详见 [1.5.2 预发布记录](workbench-1.5.2-review.md)。待 `v1.5.2` 正式冻结构建、双端签名打包、创建附注标签与完成公开匿名下载核验后，再补充 1.5.2 十二件附件与签名记录；下表为最近已公开发行版本 `1.5.1 / 构建号 25` 的核验实录。
+## 1.5.2 公开结果
+
+| 项 | 值 |
+|---|---|
+| 标签 | `v1.5.2`（附注标签 `37d11f7d2218f2cd48e6ffaeebd5de8570d7395d`），指向发行提交 `63fa298f1b3aa681674d57143f75e2a959e67334`（`63fa298f`） |
+| 发布时间 | 2026-11-27 23:05（北京时间，`2026-11-27T15:05:39Z`） |
+| 发行页 | https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2（Release ID `460739646`，`draft: false`，`prerelease: false`） |
+| 版本、构建号 | 两端均为 1.5.2、26（Android `versionName` 1.5.2、`versionCode` 26） |
+| 附件 | 12 件：Mac 6 件（ZIP、DMG、`build-info.json`、`RELEASE_NOTES.md`、`release-manifest.json`、`SHA256SUMS`），Android 6 件（APK、`android-build-info.json`、`android-source-inputs.json`、`android-runtime-materials.json`、`android-release-manifest.json`、`ANDROID-SHA256SUMS`） |
+| 匿名下载 | 发行页（149,394 字节）与 12 件附件未登录请求（无 Cookie、无 `Authorization` 头）均返回 HTTP 200（2026-11-27 复核），下载文件字节数、SHA-256 与本地构建清单、`SHA256SUMS` / `ANDROID-SHA256SUMS` 及双端 `verify-downloaded` 包体回读（`androidAPKReverified: true`、`macArtifactsReverified: true`、`downloadedAssetsSHAExact: true`）均一致 |
+| Android 签名 | 沿用 1.4.4–1.5.1 发布签名库（`apksigner` 36.0.0 以 APK Signature Scheme v3 签名并经 `finalize-signed` 封存核验，`signingOrigin: provided-signed-apk`），证书 SHA-256 `6a0c3138…`；1.4.4–1.5.1 用户可直接覆盖升级，1.4.3（`d7c680d9…`）用户仍需备份后卸载重装 |
+| 人工验收 | 未重新执行 84/86 项人工图形与实机验收矩阵；本版完成双端离线自动测试、服务端及协议一致性回归、打包回读、匿名下载签名核验，以及配套“音频研究门户”线上部署（`fcecae13` KaTeX SSR 容错、`5dd0a1a7` 六端 58 键会议齐平与扩展 SOTA 专题、`89206070` 全量双语文档）核验 |
+
+1.5.2 的改动与验证范围见 [1.5.2 记录](workbench-1.5.2-review.md)。
+
+## 1.5.2 的十二件附件
+
+以下字节与 SHA-256 于 2026-11-27 对公开 Release 页面及 12 件附件执行未登录下载复核；按 `SHA256SUMS` 与 `ANDROID-SHA256SUMS` 对照，逐件字节数与 SHA-256 与下表一致。两份校验表都不包含自身；`SHA256SUMS` 覆盖其余五件 Mac 资产（含 `release-manifest.json`），`ANDROID-SHA256SUMS` 覆盖 APK 与三份 Android 构建记录，不包含 `android-release-manifest.json`，核对时以表内条目为准。
+
+| 平台 | 附件 | 字节 | SHA-256 |
+|---|---|---:|---|
+| Mac | `PaperDigest-macOS-1.5.2-arm64.dmg` | 59709696 | `795a5d42027ad48e9e14f1384359e0cb0c94488e736ce9432d1ed3634199e2aa` |
+| Mac | `PaperDigest-macOS-1.5.2-arm64.zip` | 50530874 | `cd0197e8113324ab0a2eb04e58303559adf450749685003039fbb82753df7a5c` |
+| Mac | `RELEASE_NOTES.md` | 3364 | `baa4bdc0fca4dc0ae42cc93c4980af4ddb6cc192440e8f2f47c8b786cc909c1f` |
+| Mac | `SHA256SUMS` | 453 | `2f8b1ca8be28d87bc69ef2d254be7e7a2321a1c7a817e4a105d251bfbeda33f1` |
+| Mac | `build-info.json` | 1528 | `30183a118166e78f863cdb5db80237e3d87bcf6af269208a96624c2b576a5a7c` |
+| Mac | `release-manifest.json` | 687 | `af86ec22cdece1642f255ec182f3c713600ac0c9cf074a89ccb78772cfed627a` |
+| Android | `paperdigest-android-1.5.2-26-universal.apk` | 76613190 | `bfac4b960ee69db39b8c07d54daca22dab151a6aea4c14416717c6381b12ba69` |
+| Android | `ANDROID-SHA256SUMS` | 389 | `9b903d3e328f4b16bb039e5738a9422ebd6a656305de67b0607ba55f74b5d089` |
+| Android | `android-build-info.json` | 346263 | `9124123afb6d4d2256c74c07e7dd123f0f7691801abb4b26e0727c63b35cbc41` |
+| Android | `android-source-inputs.json` | 198231 | `79b0c13d98cc27430ed2b450409118c474c9ac68c4ccad9b4dc5613fb0574768` |
+| Android | `android-runtime-materials.json` | 31654 | `b22576c093c870d36e4f0d9b95eab83073a0f6a982dc845aa3591f1dd4b8160b` |
+| Android | `android-release-manifest.json` | 591 | `62789e72c7fcbc871f97ae255e519f7ddec2eee61eb49e59f86661f2c2dba068` |
+
+## 1.5.2 的签名
+
+Mac 应用使用应用包名 `音频研究工作台.app`、应用标识 `com.nanless.PaperDigest` 与本地 `ad-hoc; not notarized` 签名（未经过 Apple 公证）。公开 ZIP 中的应用包经 `codesign -dv --verbose=4` 核对：`Identifier=com.nanless.PaperDigest`，`Format=app bundle with Mach-O thin (arm64)`，`Signature=adhoc`，`TeamIdentifier=not set`，CDHash `a7600cf4964f6015c95241f174f7aaf97297feb7`；`build-info.json` 记录 `sourceCommit` 与 `releaseHead` 均为 `63fa298f1b3aa681674d57143f75e2a959e67334`，版本 1.5.2 / 构建号 26、`arm64`、最低系统 macOS 15.0、随包 Node `24.19.0`。ad-hoc 签名只证明包在打包后没有被改动，不提供 Apple 开发者身份。
+
+公开 APK 沿用 1.4.4–1.5.1 的发布签名库（使用 `apksigner` 36.0.0 签名并经 `finalize-signed` 封存核验，`signingOrigin: provided-signed-apk`）。经 `apksigner verify --print-certs --verbose` 核对，验证通过（`Verifies`），证书 DN 为 `CN=Paper Digest, OU=Release, O=nanless, L=Shanghai, ST=Shanghai, C=CN`，证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`（RSA 4096，SHA-1 `de65bb1ed6ba93137e36e75eab18d4d2ca1da67b`），实际通过 **APK Signature Scheme v3** 验证（`v1/v2/v3.1/v4` 为 `false`）；`android-build-info.json` 记录 `versionName` 1.5.2、`versionCode` 26、`minSdk` 28、`targetSdk` 37，应用标识 `com.nanless.paperdigest`，四种 ABI 齐全且原生库符合 16 KiB ELF 对齐。已安装 1.4.4–1.5.1 的用户可以直接覆盖升级；1.4.3 的证书是 `d7c680d9…`，仍需先导出完整备份、卸载旧版再安装。
+
+# 1.5.1 发行核验（历史存档）
+
+本节记录上一版 1.5.1 / 构建号 25 的公开结果、附件与签名；当前公开发行版本 1.5.2 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
 
 ## 1.5.1 公开结果
 
@@ -44,7 +86,7 @@ Mac 应用使用应用包名 `音频研究工作台.app`、应用标识 `com.nan
 
 # 1.5.0 发行核验（历史存档）
 
-本节记录上一版 1.5.0 / 构建号 24 的公开结果、附件与签名；当前公开发行版本 1.5.1 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
+本节记录历史版本 1.5.0 / 构建号 24 的公开结果、附件与签名；当前公开发行版本 1.5.2 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
 
 ## 1.5.0 公开结果
 
@@ -88,7 +130,7 @@ Mac 应用自 1.5.0 起更名为 `音频研究工作台.app`，继续使用应�
 
 # 1.4.7 发行核验（历史存档）
 
-本节记录历史版本 1.4.7 的公开结果、附件与签名；当前公开发行版本 1.5.1 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
+本节记录历史版本 1.4.7 的公开结果、附件与签名；当前公开发行版本 1.5.2 的核验结果见上文。各版本的包只能对照同版本的校验表核对。1.4.7 及更早版本发布于仓库更名前，以下历史存档保留当时原始旧仓路径 `audio-paper-digest`（GitHub 已自动重定向至 `audio-research-workbench`）。
 
 ## 1.4.7 公开结果
 
@@ -132,7 +174,7 @@ Mac 包使用本地 `ad-hoc; not notarized` 签名，未经过 Apple 公证；`b
 
 # 1.4.6 发行核验（历史存档）
 
-本节记录历史版本 1.4.6 的公开结果、附件与签名；当前公开发行版本 1.5.1 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
+本节记录历史版本 1.4.6 的公开结果、附件与签名；当前公开发行版本 1.5.2 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
 
 ## 1.4.6 公开结果
 
@@ -176,7 +218,7 @@ Mac 包使用本地 `ad-hoc; not notarized` 签名，未经过 Apple 公证；`b
 
 # 1.4.5 发行核验（历史存档）
 
-本节记录历史版本 1.4.5 的公开结果、附件与签名；当前公开发行版本 1.5.1 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
+本节记录历史版本 1.4.5 的公开结果、附件与签名；当前公开发行版本 1.5.2 的核验结果见上文。各版本的包只能对照同版本的校验表核对。
 
 ## 1.4.5 公开结果
 
@@ -224,7 +266,7 @@ Mac 包使用本地 ad-hoc 签名，未经过 Apple 公证；`build-info.json` �
 
 ## 存档说明
 
-本节起为 1.4.4 与 1.4.3 的历史发行记录，当前公开发行版本 1.5.1 及此前 1.5.0、1.4.7、1.4.6、1.4.5 的结果见上文。下文先登记 1.4.4 的公开结果、签名与附件，再保留 1.4.3 的签名对照、附件表和校验表；1.4.4 的包只能对照 1.4.4 的表，不能用 1.4.3 的字节或证书核验。
+本节起为 1.4.4 与 1.4.3 的历史发行记录，当前公开发行版本 1.5.2 及此前 1.5.1、1.5.0、1.4.7、1.4.6、1.4.5 的结果见上文。下文先登记 1.4.4 的公开结果、签名与附件，再保留 1.4.3 的签名对照、附件表和校验表；1.4.4 的包只能对照 1.4.4 的表，不能用 1.4.3 的字节或证书核验。
 
 1.4.4 重新生成了 Android 发布签名库（1.4.3 使用的签名库不在本机，也没有可用备份），因此 1.4.4 的签名证书 SHA-256 为 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`，与 1.4.3 的 `d7c680d9…` 不同。已安装 1.4.3 的 Android 用户不能覆盖升级，需要先导出完整备份、卸载旧版，再安装 1.4.4、恢复资料并重新配置设备凭据。签名库在仓库外以 `0600` 权限单独保存，口令保存在本机登录钥匙串的服务条目 `com.nanless.PaperDigest.android-release-signing.v1` 中；签名库、私钥和证书都需要单独备份。公开的 `android-build-info.json` 记录的证书 SHA-256 也是 `6a0c3138…`。
 
@@ -350,7 +392,7 @@ a426a79a54a7cb48148190958560a8d5bebd6c88f2650e5b8069db44485ebdaa  android-source
 
 ```sh
 curl -sS -L -o /dev/null -w '%{http_code} %{size_download}\n' \
-  https://github.com/nanless/audio-research-workbench/releases/download/v1.5.1/SHA256SUMS
+  https://github.com/nanless/audio-research-workbench/releases/download/v1.5.2/SHA256SUMS
 ```
 
 核验下载件时，先核对对应版本校验表自身的大小和 SHA，再用它核对同平台资产。不要只核对 Release 页面显示的文件大小；服务端对象存储和重定向都可能让“页面能打开”与“字节正确”成为两件事。

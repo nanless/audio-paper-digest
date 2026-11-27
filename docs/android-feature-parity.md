@@ -2,9 +2,9 @@
 
 音频研究工作台的 Android 实现对应 Mac 的 69 项功能与 17 项云端、发行要求。`A-` 编号保持原对应关系。下表保留每项要求，验证范围在表后说明；操作与版本状态见[Android 验证说明](<android-validation.md>)。
 
-本表最初的两端联合发行基线为 [1.3.0](https://github.com/nanless/audio-paper-digest/releases/tag/v1.3.0)（详见[1.3.0 检查记录](workbench-1.3.0-review.md#正式发行与升级检查)），下表保留原功能 ID 和 1.0.1 历史矩阵；当前公开发行版本、Android 签名升级边界、后续各版自动化覆盖与 12 件附件核验见[客户端发行核验](client-release-verification.md)与[版本总览](README.md#阅读论文与使用工作台)。1.4.4 及后续版本未重做 86 项人工验收，状态列仍记录原矩阵结论，未变化服务按实际影响复用原证据。
+本表最初的两端联合发行基线为 [1.3.0](https://github.com/nanless/audio-research-workbench/releases/tag/v1.3.0)（详见[1.3.0 检查记录](workbench-1.3.0-review.md#正式发行与升级检查)），下表保留原功能 ID 和 1.0.1 历史矩阵；当前公开发行版本、Android 签名升级边界、后续各版自动化覆盖与 12 件附件核验见[客户端发行核验](client-release-verification.md)与[版本总览](README.md#阅读论文与使用工作台)。1.4.4 及后续版本未重做 86 项人工验收，状态列仍记录原矩阵结论，未变化服务按实际影响复用原证据。
 
-历史 1.0.1 基线的 **86 项全部通过**：code4 当时完成正式包安全核验、同签名覆盖升级及两端联合公开后的逐件下载核对。旧 Release 条目已清理，[v1.0.1 源码标签](https://github.com/nanless/audio-paper-digest/tree/v1.0.1)保留。
+历史 1.0.1 基线的 **86 项全部通过**：code4 当时完成正式包安全核验、同签名覆盖升级及两端联合公开后的逐件下载核对。旧 Release 条目已清理，[v1.0.1 源码标签](https://github.com/nanless/audio-research-workbench/tree/v1.0.1)保留。
 
 ## 怎样读这张表
 

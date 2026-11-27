@@ -39,18 +39,19 @@ flowchart LR
 
 | 职责 | 权威代码 | 要保留的规则 |
 |---|---|---|
-| 分析编排、锁、检查点、费用与恢复 | `scripts/analysis-engine.js`、`scripts/deep-analyzer.js`、`lib/analysis-failure-rounds.js`、`lib/workflow-error-policy.js` | 同篇锁内重读合并，原稿、失败与费用保留；传递错误保留 `code`/`retryable`/`category`/`status`/`scope` |
-| 筛选解析与模板填充 | `lib/filter-decision.js`、`lib/filter-prompt.js`、`lib/prompt-contracts.js` | 共用筛选解析与模板登记；历史任务按冻结范围更新，不增加重新筛选 |
-| 网络与模型 | `utils.js`、`llm-account-pool.js`、`llm_account_pool.py`、`publish_common.py` | Muse/arXiv 强制代理；共享账号池默认按月到期优先并自动同步 `/zen/go/v1/usage` 实时额度（可改等权轮转），仅声明的额度故障可在同请求内切换 |
+| 跨语言路径单一真源 | `config/runtime-paths.json`（由 `scripts/config.js` 与 `scripts/path_config.py` 共用） | 统一登记 `data/current/`、`data/archive/`、`data/runtime/` 与博客相对路径，纳入实现指纹并对称拒绝路径穿越 |
+| 分析编排、锁、检查点、费用与恢复 | `scripts/analysis-engine.js`、`scripts/deep-analyzer.js`、`lib/analysis-failure-rounds.js`、`lib/workflow-error-policy.js`、`lib/file-lock.js`、`lib/papers-backup.js`、`lib/physical-request-hook.js`、`lib/deep-arxiv-source-fetch.js`、`lib/deep-primary-sections.js` | 同篇锁内重读合并，原稿、失败与费用保留；传递错误保留 `code`/`retryable`/`category`/`status`/`scope`；全 JS 模块图保持零循环依赖 SCC（由 `tests/architecture-scc-and-cycles.test.js` 守卫） |
+| 筛选解析与模板填充 | `lib/filter-decision.js`、`lib/filter-prompt.js`、`lib/prompt-contracts.js`、`lib/daily-filter-prefilter.js`、`lib/filter-scope-evidence.js` | 共用筛选解析与模板登记；历史任务按冻结范围更新，不增加重新筛选 |
+| 网络与模型 | `utils.js`、`llm-account-pool.js`、`llm_account_pool.py`、`publish_common.py`、`scripts/publish_llm_client.py`、`scripts/pinned_http_transport.py` | Muse/arXiv 强制代理；Python 共享固定公网 IP 传输与 arXiv `OriginGate` 并发闸门、冷却与抖动退避；共享账号池默认按月到期优先并自动同步 `/zen/go/v1/usage` 实时额度（可改等权轮转），仅声明的额度故障可在同请求内切换 |
 | 全文、表格、公式、作者和资源身份 | `lib/fresh-analysis-context.js`、`lib/reader-*`、`lib/reader-pdf-extraction-scope.js`、`reader_sealed_pdf_*.py` | 来源 SHA、结构化单元格、原始 TeX、真实像素、作者逐项身份与资源可达状态；短作用域纯提取复用仅缓存同输入 worker 输出（上限 32 MiB/128 项），不缓存来源或通过资格 |
-| Reader 写作与局部修复 | `deep-analyzer.js`、`lib/reader-contract.js`、`lib/reader-repair.js`、`lib/reader-draft-order.js` | 同一长文结构、术语机制解释、来源绑定、受限修复预算；新稿、保存稿与 Python 发布共用占位结果表检测，旧签名不能代替当前内容资格 |
+| Reader 写作与局部修复 | `deep-analyzer.js`、`lib/reader-contract.js`、`lib/reader-repair.js`、`lib/reader-draft-order.js`、`lib/reader-ordinal-format.js` | 同一长文结构、术语机制解释、来源绑定、受限修复预算；普通节点局部补丁采用 `ordinal-v2`（`static-prefix-v2` 静态前缀格式，保留三代冷核兼容）；新稿、保存稿与 Python 发布共用占位结果表检测，旧签名不能代替当前内容资格 |
 | 资源宣称 | `deep-analyzer.js` 的共享资源规则与发布只读重放 | 代码可访问不等于权重可下载；否定、条件、第三方引用与本文发布声明区分；“开源代码、可下载权重、可运行系统是三件事”等闭合概念列举只识别自身范围；作者提供声明须有同类型原文且保留当前核验限定，不豁免前后独立当前声明或双否；新阶段绑定当前 `reader-resource-availability-claims` 头（旧 `-v1` 按原格式读取） |
-| 评分与标签 | `analysis-contract.js`、`lib/tag-stage-record.js`、`tag_stage_record.py`、`tag_catalog.py` | 八维评分、封顶总分；第三方闭源对照与本文资源缺失分开检查，后者仍按原维度归属；当前中文标签与明确主任务/方法，严格纯追加按原SHA只读重放旧分类证明 |
+| 评分与标签 | `analysis-contract.js`、`lib/analysis-contract-paper-exemptions.js`、`lib/tag-stage-record.js`、`tag_stage_record.py`、`tag_catalog.py`、`scripts/blog_core_summary_verifier.py` | 八维评分、封顶总分；历史单篇豁免隔离在 `analysis-contract-paper-exemptions.js`；第三方闭源对照与本文资源缺失分开检查，后者仍按原维度归属；当前中文标签与明确主任务/方法，严格纯追加按原SHA只读重放旧分类证明 |
 | 页面展示与引用导出 | `publish-to-blog.py`、`paper_reader_presentation.py`、`tag_presentation.py` | 同一资源去重、作者展示、评分说明、多级分类路径及 JSON/BibTeX/RIS/上下文导出；会议使用真实会议身份 |
 | 站点分类版本 | 日更 `tag_catalog_file_contents()`；会议/历史 `tag_catalog_publication.py` | 日更将词表资产纳入发布清单；会议/历史只读核验双份版本目录及本批原快照，缺失先阻断 |
 | 实现指纹 | `lib/workflow-implementation-files.js` | 收录共享模块和 Python worker 的传递依赖；当前 Prompt 只由版本登记表选取 |
 | 不可变文件与页面暂存 | `lib/publication-file-primitives.js`、`lib/paper-page-staging.js` | inode/单链接/目录、严格 UTF-8、SHA 回读和精确路径守卫 |
-| 发布与审查 | `publish-to-blog.py`、`publish_common.py`、流程发布适配器 | 内容 SHA 审查复用、事务锁、精确文件清单、远端 OID、部署与网页核验 |
+| 发布与审查 | `publish-to-blog.py`、`publish_common.py`、`scripts/publish_llm_client.py`、`scripts/publish_manual_legacy.py`、`scripts/tutorial_payload_verifier_core.py`、流程发布适配器 | 内容 SHA 审查复用、事务锁、精确文件清单、远端 OID、部署与网页核验 |
 
 `lib/reader-*` 分成来源、表格、修复和恢复等模块是职责拆分；它们仍由公共引擎调用，不能因文件多而删掉守卫。表格单元格显示投影是其中的共享显示层：`lib/reader-source-display.js` 与 `publish-to-blog.py` 使用同一规则和 `tests/fixtures/reader-cell-tex-display.json`；它只改页面显示，不改来源、已保存 Reader 或数字来源核验。
 
@@ -64,12 +65,14 @@ npm run keyword:recall -- [ARCHIVE_DIR]
 
 它用 `tests/fixtures/keyword-prefilter-gold.json` 的人工标注样例，以及 `ARCHIVE_DIR`（默认 `data/archive`）里历史 `filtered-papers.json` 的入选论文，重新执行当前预筛。输出分别给出应保留却被排除、应排除却被保留、原始命中率，以及剔除已确认误筛后的正样本召回；历史记录只读，不重跑筛选。没有有效正样本、存在误漏或误放、或任一 gold 样例不符时，命令以退出码 2 结束。改动预筛规则后仍须验证真实候选与筛选，不能只凭一次统计宣称规则可用。
 
+为保证历史会议筛选回放逐字节一致，`lib/keyword-prefilter.js` 保持冻结；日更在其上运行专用叠层 `lib/daily-filter-prefilter.js`：补充 2025–2026 语音/音频新词表，仅在缺少显式音频上下文时零漏召回消歧高噪多义词（如 `ViTs`、无线 `beamforming`、`SE(3)`、安全 `ASR`、心电/雷达 `waveform`、纯医学或视觉多模态），识别 arXiv 撤稿声明，为 `cs.CV`/`cs.HC` 增设音视频锚点门，并对已封存官方全文的泛多模态候选在剔除 References 尾节后执行零模型请求的确定性正文音频锚点闸门（`parseSource: scope_body_audio_anchor_prefilter`，保留四文件来源证明）。进入全文取证的候选由 `lib/filter-scope-evidence.js` 采用 `codepoint-safe-excerpt-v2`（上限 30,000 字符：10K 开头 + 最多 9 个聚类强锚点窗 + 4 个结构窗，最坏不重叠合计约 28,741 ≤ 30,000 字符，数学保证不裁丢已选锚点窗）。日更 LLM 筛选无论是否携带 `scopeEvidence`（含 `dailyFilter` 与 `dailyFilterAbstractOnly`），均统一维持 `low` 推理档。
+
 ### 日更和会议逐阶段对照
 
 | 阶段 | 直接共享的实现 | 会议必须保留的输入或状态适配 |
 |---|---|---|
 | 候选获取与去重 | 网络、代理、字节与 SHA 校验规则 | 日更按来源窗口重叠补抓并仅以已发布页去重；会议按官方完整目录、真实会议 ID 和唯一 exact PDF 固定全集，不套用日更日期边界 |
-| 摘要与关键词预筛 | `lib/keyword-prefilter.js` | 日更使用官方元数据摘要；会议先从受控 PDF 定位摘要，证据不可用及核心音频会议按明确规则放行给 LLM，不能凭缺摘要排除 |
+| 摘要与关键词预筛 | `lib/keyword-prefilter.js`（冻结基线）；日更叠加 `lib/daily-filter-prefilter.js` 与 `lib/filter-scope-evidence.js` | 日更使用官方元数据摘要与正文锚点闸门；会议先从受控 PDF 定位摘要，证据不可用及核心音频会议按明确规则放行给 LLM，不能凭缺摘要排除 |
 | LLM 筛选 | 当前 `prompts/current/filter.md`、`lib/filter-decision.js`、`lib/filter-prompt.js`、`requestLlmJson()` | 会议填入真实会议类别和 PDF 摘要证据，保留每会 spec、来源集合、请求/响应和选择回执；不混用日更的候选文件或筛选 SHA |
 | 全文预处理 | 公共来源上下文、输入清洗、均衡证据取样与预算 | 日更读取本批封存 HTML/PDF 四文件；会议的 PDF 文本、布局、图像、摘要证据由官方来源账本适配进入公共引擎，不能伪造 HTML DOM 或原 TeX |
 | 深度分析与后处理 | 同一 `analysis-engine.js` / `deep-analyzer.js`、13 节主分析、审校、资源/表格/方法/结构/摘要修复、八维评分、标签和 Reader 当前模板 | 来源能力决定表格、公式、作者和图片哪些证据可用；会议分析保存隔离的 canonical analysis 和真实会议身份，不写入日更 `data/current` |
@@ -171,7 +174,7 @@ Reader 批量刷新默认使用配置并发5和总轮数3，分别可用 `--conc
 
 已完成会议的博客拒稿另使用[正常 Reader 维护](conference-workflow.md#博客拒稿后的正常-reader-维护)：先完整审查，再把全部 text 及未解决格式问题交共享 Reader 全批处理，仅失败集合续轮。原始意见标作待核验，原主文、核心、评分、标签与费用保留，必要独立窗口按持续授权登记，不借人工条数上限或伪 partial。全部 image 失败可诚实 deferred 先走同 PDF 完整页新展示和正常目标图审查，残余语义再维护 Reader；出版像素与原模型像素分别认证，私有两阶段历史能力不授新通过。pending 阻断发布和普通迁移。此会议来源与登记适配不改变日更、历史的封存/计划入口，也不改旧日更 SVG 输出或 proof。
 
-博客审查遇到正常内容拒稿时继续检查本批其他页面，最后汇总阻断发布；服务、存储、页面字节变化或凭证损坏按各入口的运行级故障规则停止新派发。会议审查稳定优先派汇总，但并发仍为5、范围1–5，单页分块仍串行；记录恢复原 generation 顺序。一次审查不会因普通拒稿在同次调用中反复请求该页；修正后重跑审查，只按各流程的真实通过缓存复用未变页面或分块。会议后续整批允许旧协议永久通过记录与当前协议失败并存：每个 passed 项须等于正式路径/页 SHA 内容寻址 cache，核完整 result 自哈希及合法原协议；不能改签或因协议不同重审未变通过页。失败审查记录是审计，不能充当通过记录。
+博客审查遇到正常内容拒稿时继续检查本批其他页面，最后汇总阻断发布；服务、存储、页面字节变化或凭证损坏按各入口的运行级故障规则停止新派发。会议审查采用先单篇后汇总的派发顺序（使零告警已通过单篇图片填充 `verified_paper_images` 供汇总去重），并发默认 5、支持 1–32（读取 `PD_BLOG_REVIEW_CONCURRENCY`），单页分块仍串行；最终记录恢复原 generation 顺序。一次审查不会因普通拒稿在同次调用中反复请求该页；修正后重跑审查，只按各流程的真实通过缓存复用未变页面或分块。会议后续整批允许旧协议永久通过记录与当前协议失败并存：每个 passed 项须等于正式路径/页 SHA 内容寻址 cache，核完整 result 自哈希及合法原协议；不能改签或因协议不同重审未变通过页。失败审查记录是审计，不能充当通过记录。
 
 共享图片审查对可识别的 Reader 图组保留完整的导读、原图、图注与解释（以及早期旧契约归档中留存的 `> **看图路径：**` 段落；现行 `structured-pipeline` 已改为紧凑 4 段式自然图文衔接，不再强插 `看图路径` 引用框），包含当前图的 PDF 整页来源说明；不再用固定字符窗口夹入下一张图的导读。合法的前图解释兼作后图导读时，该完整段落可在两图上下文中分别保留，其他图的图像与图注仍隔离。不识别的旧排版继续使用原局部窗口，不猜测或改写归属；图片自身的图文矛盾仍须正常拒绝。上下文修复只改变审查请求及协议，通过页仍按原路径与内容 SHA 复用，原失败记录和真实费用保留。
 
@@ -295,7 +298,7 @@ Git 执行器保留工作目录、受限环境、返回类型、严格解码及�
 
 会议独立 execution/analyze/postprocess CLI 已删除，统一走 `conference:process`；取数与暂存的分步入口 `conference:extract`、`conference:staging`、`conference:import`、`conference:plan` 仍保留，只负责准备材料，不替代统一调度对来源、阶段和账本的要求。历史旧独立分析、标签、暂存、汇总、发布 CLI 和旧整批重写 CLI 已删除，统一走当前历史计划与 `history:resume`。
 
-`manual/` 的剩余源码仅为旧记录来源/签名/正文核验，以及独立单页人工审查。旧历史核心中仍被受限恢复入口调用的部分保留，不允许重新建立旧任务或重置预算。单篇人工修正与审查是三流程的恢复能力。
+`manual/` 的剩余源码仅为旧记录来源/签名/正文核验，以及独立单页人工审查，并已与常规 API 产线隔离：`scripts/analysis-contract.js` 按需惰性加载 5 个退役 `manual/scripts/*` 合同模块，日常发布器与 Hugo 门禁改用迁入 `scripts/` 的 `scripts/tutorial_payload_verifier_core.py` 与 `scripts/publish_manual_legacy.py`。旧历史核心中仍被受限恢复入口调用的部分保留，不允许重新建立旧任务或重置预算。单篇人工修正与审查是三流程的恢复能力。
 
 独立人工审查的文章记录与受控机器资产分区，最终凭证仍覆盖完整生成清单。资产沿用正常来源、词表、引用资料重建与已审引用页核验，不将二进制文件当 Markdown，也不为资产伪造语义审查身份，见[独立审查边界](../manual/README.md)。
 

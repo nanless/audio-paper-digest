@@ -51,9 +51,9 @@ npm run digest:prepare -- YYYY-MM-DD
 | 问题 | 权威来源 |
 |---|---|
 | npm 命令 | `package.json.scripts` |
-| Node / Python 路径与参数 | `scripts/config.js`、`scripts/path_config.py` |
+| Node / Python 路径与参数 | `config/runtime-paths.json`、`scripts/config.js`、`scripts/path_config.py` |
 | 环境隔离与角色 | `config/workspace-roles.json`、`scripts/env-loader.js`、`scripts/project_env.py` |
-| LLM 路由与封装 | `scripts/utils.js`、`scripts/publish_common.py` |
+| LLM 路由与封装 | `scripts/utils.js`、`scripts/publish_common.py`、`scripts/publish_llm_client.py`、`scripts/pinned_http_transport.py` |
 | 脚本索引 | [scripts/README.md](scripts/README.md)、[scripts/INDEX.md](scripts/INDEX.md) |
 | 客户端版本与发行 | `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts`、[客户端发行核验](docs/client-release-verification.md) |
 | 会议与旧记录 | [会议流程](docs/conference-workflow.md)、[manual/README.md](manual/README.md) |

@@ -2,7 +2,7 @@
 
 ## 适合谁
 
-本文说明如何安装默认 LLM/API 日更所需的环境，也用于排查配置未被读取的问题。运行步骤见[主流程](../SKILL.md)，环境变量示例见 [env.example](../env.example)。
+本文说明如何安装默认 LLM/API 日更所需的环境，也用于排查配置未被读取的问题。运行步骤见[主流程](../SKILL.md)，环境变量示例见 [env.example](../env.example)，公开站点与 Hugo 模板由伴生门户仓库 [audio-research-portal](https://github.com/nanless/audio-research-portal) 承载。
 
 ## 最短安装路径
 
@@ -66,7 +66,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 账号选择、各窗口冷却、到期日与本地消耗保存在 `data/runtime/llm-account-pool.json`，供 Node、Python 和后续日期的运行共同使用；两边共享同一状态文件与一致的调度规则，配置顺序不同也不会改变选择序列。
 
-发布/验收相关变量：`PAPER_DIGEST_BLOG_REPO` 指定 Hugo 仓库；`PAPER_DIGEST_BLOG_URL` 指定站点 posts 根地址（verify:web 用它拼页面 URL）；`PAPER_DIGEST_BLOG_REPO_RUN` 可选，指定 Pages 部署 workflow 所属仓库（默认 `nanless/audio-research-portal`）；`PAPER_DIGEST_BLOG_BASE_PATH` 为站点子路径。
+发布/验收相关变量：`PAPER_DIGEST_BLOG_REPO` 指定伴生门户仓库 [audio-research-portal](https://github.com/nanless/audio-research-portal) 的本地检出目录；`PAPER_DIGEST_BLOG_URL` 指定站点 posts 根地址（verify:web 用它拼页面 URL）；`PAPER_DIGEST_BLOG_REPO_RUN` 可选，指定 Pages 部署 workflow 所属仓库（默认 `nanless/audio-research-portal`）；`PAPER_DIGEST_BLOG_BASE_PATH` 为站点子路径。
 
 `PAPER_ANALYZER_FALLBACK_API_KEYS` 可填写逗号分隔的更多账号。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 与这份列表合并进同一共享账号池（顺序不代表优先级，默认按到期优先调度），也可填写第三、第四等账号。需要独立副模型账号池时，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS` 与 `PAPER_ANALYZER_SECONDARY_TERTIARY_FALLBACK_API_KEY`。只有主副端点属于同一规范 OpenCode Go 服务、且副模型没有独立密钥时，副模型才继承主账号池；跨服务必须显式提供副模型密钥。
 
@@ -143,12 +143,14 @@ npm run validate:data -- --allow-empty
 | `PD_FILTER_BATCH_SIZE` | 默认 5 篇/批（≥1） |
 | `PD_FILTER_SCOPE_CONCURRENCY` | 默认 6，范围 1–8；筛选阶段官方原文取证并发度 |
 | `PD_FILTER_MAX_TOKENS` | 默认 1000（会议 1200），范围 1000–64000；推理 token 与可见输出共用，高推理档可按需抬高（如 `16000`） |
+| `PD_KEYWORD_PREFILTER_ENABLED` | 默认 `1`（开启 `keyword-prefilter.js`、日更 `daily-filter-prefilter.js` 叠层与正文音频锚点闸门）；设为 `0` 可临时跳过关键词预筛直入 LLM |
 | `PD_TIERED_REASONING_EFFORT` | 默认 `1`（开启按阶段分级推理强度）；设为 `0` 恢复全阶段统一档位 |
 | `PD_OPENAI_RESPONSES_PROMPT_CACHE_KEY` | 默认 `1`（按阶段注入稳定前缀缓存键）；设为 `0` 关闭 |
 | `PD_ARXIV_MAX_CONCURRENCY` | 默认 3，范围 1–6；arXiv 源站并发闸门上限，共享 `Retry-After` 退避 |
 | `PD_DAILY_SOURCE_SKIP_MAX` | 默认 2，范围 0–5；封存阶段官方 PDF 全地址 404 时本批最多跳过篇数 |
 | `PD_DAILY_CORRECTION_LIMIT` | 默认 `min(15, max(10, floor(N/10)))`，范围 1–15；仅允许抬高、不能降低默认值 |
-| `PD_BLOG_REVIEW_CONCURRENCY` | 日更独立页面审查默认 16，范围 1–32；会议页面审查最多 5 路，汇总优先派发 |
+| `PD_BLOG_REVIEW_CONCURRENCY` | 日更默认 16、会议默认 5，两者均支持 1–32；会议先审单篇再审汇总以复用已通过零告警图片 |
+| `PD_BLOG_REVIEW_LLM_MAX_INFLIGHT` | 默认 12，范围 1–32；发布审查进程级 LLM 并发总上限，防止页面并发与图片并发叠乘打满单账号 |
 | `PD_CONFERENCE_EXTRACTOR_PROFILE` | 会议 PDF 抽取器模式，默认 `enhanced`（双栏重排、结构化表与 288 DPI 裁切），可设为 `legacy` 兼容旧抽取器（兼容旧别名 `PD_CONFERENCE_EXTRACTOR_VERSION`） |
 | `PD_CONFERENCE_QUEUE_CONCURRENCY` | 会议队列调度最大并发上限，默认 3，范围 1–32 |
 | `PD_PAGES_DEPLOY_POLL_SECONDS` | 会议发布后等待 GitHub Pages 部署的轮询间隔（秒），默认 10，范围 1–120 |
@@ -161,7 +163,7 @@ npm run validate:data -- --allow-empty
 
 ### 可选每日音频播客变量（`npm run podcast:generate`）
 
-播客生成默认按需手动运行，不接入日更自动主链；支持本地 IndexTTS2 合成或远端 HTTP 语音合成端点，相关配置项均已在 `env.example` 与 `scripts/lib/env-schema.js` 登记：
+播客生成默认按需手动运行，不接入日更自动主链；支持本地 IndexTTS2 合成或远端 HTTP 语音合成端点，相关配置项均已在 `env.example` 与 `scripts/lib/env-schema.js` 登记。执行 `npm run podcast:generate -- --portal-repo "$PAPER_DIGEST_BLOG_REPO"`（正式发布模式、非 `--dry-run`/`--local-only`）时，会自动向门户仓库同步三份产物：`static/feeds/podcast.xml`（Podcast 2.0 / Apple Podcasts 兼容 RSS）、`data/podcast-episodes.json`（门户网页播放器）与 `static/client/podcast/feed.json`（Mac/Android 客户端只读 Feed）：
 
 | 变量 | 用途与默认值 |
 |---|---|
@@ -212,7 +214,7 @@ Reader 的一次逻辑请求最多进行2次传输尝试；筛选默认最多5�
 
 ## 博客与 Hugo
 
-`PAPER_DIGEST_BLOG_REPO` 须指向真实 Hugo 仓库。默认日更在归档或抓取前，必须同步并核验该仓库的 `origin/main`，以正式已发布页确定去重和补抓基线。目录缺失、Git 更新或基线核验失败都会停止，不能跳过去重继续抓取。审查会执行 Hugo 构建检查，Hugo 须在沙箱外环境中可用。发布后的部署核验还要使用已登录的 `gh` CLI；缺失或未登录时 `verify:web` 取不到 job 证据，不能把部署记为已核验。
+`PAPER_DIGEST_BLOG_REPO` 须指向真实的伴生门户 Hugo 仓库（[audio-research-portal](https://github.com/nanless/audio-research-portal) 本地检出）。默认日更在归档或抓取前，必须同步并核验该仓库的 `origin/main`，以正式已发布页确定去重和补抓基线。目录缺失、Git 更新或基线核验失败都会停止，不能跳过去重继续抓取。审查会执行 Hugo 构建检查，Hugo 须在沙箱外环境中可用。发布后的部署核验还要使用已登录的 `gh` CLI；缺失或未登录时 `verify:web` 取不到 job 证据，不能把部署记为已核验。
 
 外部进程有明确等待上限。图片审查、Hugo、Git 本地操作、提交及 hook、推送与远端核验默认分别为 120、300、30、180、180 秒。可在 `env.example` 规定范围内，分别使用 `PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS`、`PD_HUGO_GATE_TIMEOUT_SECONDS`、`PD_GIT_LOCAL_TIMEOUT_SECONDS`、`PD_GIT_COMMIT_TIMEOUT_SECONDS`和 `PD_GIT_NETWORK_TIMEOUT_SECONDS` 调整。超时不会被记录为审查或远端发布成功；有效的本地发布提交若尚未验证远端，会保留供续跑核对和使用。
 

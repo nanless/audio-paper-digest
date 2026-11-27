@@ -37,21 +37,22 @@
 
 | 变更 | 首要实现 | 需要核对的调用或读取位置 |
 |---|---|---|
-| Node 参数与路径 | `scripts/config.js` | 入口脚本、测试、env.example |
-| Python 发布路径 | `scripts/path_config.py` | generate/review/push 与测试 |
-| API 协议或代理 | `scripts/utils.js`、`scripts/publish_common.py` | 筛选、分析、页面审查、API key 测试 |
+| 跨语言运行路径单一真源 | `config/runtime-paths.json` | `scripts/config.js`、`scripts/path_config.py`、`lib/workflow-implementation-files.js`、`publish-to-blog.py` 与 `tests/r4-runtime-paths-and-contract-isolation.test.js` |
+| Node 参数与路径 | `scripts/config.js` | 入口脚本、测试、`env.example`、`config/runtime-paths.json` |
+| Python 发布路径 | `scripts/path_config.py` | generate/review/push、测试与 `config/runtime-paths.json` |
+| API 协议或代理 | `scripts/utils.js`、`scripts/publish_common.py`、`scripts/publish_llm_client.py`、`scripts/pinned_http_transport.py` | 筛选、分析、页面审查、API key 测试与 arXiv `OriginGate` |
 | 日更来源的文本与 PDF | `scripts/lib/daily-fresh-source-plan.js`、`scripts/lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、校验器、Python 发布三阶段、存储工具与文档 |
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
-| 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
-| 分析结构或评分 | `analysis-contract.js`、当前 `prompts/current/deep-analysis.md` 及评分提示词 | Node/Python 解析器和发布器 |
+| 分析恢复与共享叶模块 | `analysis-engine.js`、`deep-analyzer.js`、`lib/file-lock.js`、`lib/papers-backup.js`、`lib/physical-request-hook.js`、`lib/deep-arxiv-source-fetch.js`、`lib/deep-primary-sections.js` | 所有分析入口、`digest:status` 与 `tests/architecture-scc-and-cycles.test.js`（新增模块不得引入 JS 循环依赖 SCC） |
+| 分析结构或评分 | `analysis-contract.js`、`lib/analysis-contract-paper-exemptions.js`、`scripts/blog_core_summary_verifier.py`、当前 `prompts/current/deep-analysis.md` 及评分提示词 | Node/Python 解析器和发布器（`analysis-contract-paper-exemptions.js` 为历史单篇豁免隔离区，禁向其继续堆叠新单篇特例） |
 | 分类词表与多级路径 | `config/tag-catalog.json`、`lib/tag-rules.js`、`scripts/tag_catalog.py`、`scripts/tag_presentation.py` | 主分析/标签Prompt、旧SHA归档与双运行时证明、三种单篇/汇总渲染、站点版本目录及 `tag_catalog_publication.py` 发布守卫 |
-| Reader 写作、图表或修复 | 当前登记的 `prompts/current/api-reader-article.md`、`prompts/current/api-reader-repair.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
-| 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
+| Reader 写作、图表或修复 | 当前登记的 `prompts/current/api-reader-article.md`、`prompts/current/api-reader-repair.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js`、`lib/reader-ordinal-format.js`、`lib/reader-draft-hash.js` | Reader 校验器、`ordinal-v2`（`static-prefix-v2` 静态前缀格式与三代冷核）、失败候选及阶段指纹、博客审查 |
+| 博客事务与发布模块 | `publish-to-blog.py`、`scripts/publish_llm_client.py`、`scripts/publish_manual_legacy.py`、`scripts/tutorial_payload_verifier_core.py`、`scripts/blog_core_summary_verifier.py` | 三个独立入口与审查凭证测试 |
 | 不生图登记与发布豁免 | `waive-post-publish-visuals.js`、`lib/post-publication-policy.js` | `digest:status`、`publish:finish`、日更第 8 阶段与登记写入 |
 | 客户端版本与发行 | `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` | 两端源码的版本号与构建号、两端 README、`docs/README.md` 与 `docs/README.en.md` 的版本段和版本列表、当期 `docs/workbench-<版本>-review.md` 的发行状态、发行附件核验 |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
 
-日更审查协议指纹不再维护手写文件清单：`review_protocol_fingerprint()` 通过 `scripts/lib/workflow-implementation-files-cli.js` 调用会议和历史共用的 `workflow-implementation-files.js`，自动纳入入口的传递依赖闭包，因此新增或修改共享校验器（如 `publish_common.py`）会改变协议指纹并需要重签本批凭证，内容未变的通过页仍按路径与内容 SHA 复用。
+日更审查协议指纹不再维护手写文件清单：`review_protocol_fingerprint()` 通过 `scripts/lib/workflow-implementation-files-cli.js` 调用会议和历史共用的 `workflow-implementation-files.js`，自动纳入入口的传递依赖闭包（包含拆分后的 `publish_llm_client.py`、`publish_manual_legacy.py`、`blog_core_summary_verifier.py`、`tutorial_payload_verifier_core.py` 与 `config/runtime-paths.json`），因此新增或修改共享校验器会改变协议指纹并需要重签本批凭证，内容未变的通过页仍按路径与内容 SHA 复用。
 
 ## 不可破坏的边界
 
@@ -154,7 +155,7 @@ Reader 的数字来源核验保留完整数值，不能把 `130130`、无 TeX �
 
 ## 并发与原子性
 
-JSON 保存使用原子写入。读改写时取得公共文件锁，在锁内重读最新正式分析记录，只合并本次论文或字段，再递增 `generation`。不能把锁外的整份旧数组写回去覆盖其他任务。来源文件描述符采用有界读取（最多读到原大小与预算上限加 1 字节增长哨兵），末端仍核对身份与 SHA；临时文件仅清理由本次独占创建且 inode 匹配的对象，保护 `EEXIST`、短写、I/O 错误、回读变化和改名后的他人对象。账号错误 `type`/`code` 按精确字符串核对，`metadata` 按原顺序取首个合法 JSON 对象（合法空对象不跳过）。
+JSON 保存使用原子写入。Node 侧目录锁单一叶模块为 `scripts/lib/file-lock.js`（由 `analysis-engine.js` 与 `lib/papers-backup.js` 共享，零项目内依赖，与 Python `path_config.file_lock()` 对称）。读改写时取得公共文件锁，在锁内重读最新正式分析记录，只合并本次论文或字段，再递增 `generation`。不能把锁外的整份旧数组写回去覆盖其他任务。来源文件描述符采用有界读取（最多读到原大小与预算上限加 1 字节增长哨兵），末端仍核对身份与 SHA；临时文件仅清理由本次独占创建且 inode 匹配的对象，保护 `EEXIST`、短写、I/O 错误、回读变化和改名后的他人对象。账号错误 `type`/`code` 按精确字符串核对，`metadata` 按原顺序取首个合法 JSON 对象（合法空对象不跳过）。
 
 长任务定时更新运行或锁记录，并设置有效期限；只有程序确认持有者与期限符合失效条件时，才能回收。Node 分析队列遇到运行级错误会停止领取新论文。Python 页面审查通过 `run_bounded_llm_tasks()` 按指定并发数量安排任务，运行级故障后停止提交新任务，等待已开始的任务保存结果，再报告原故障；保存同时失败时也保留该异常。普通内容拒稿保存审计后继续剩余页面，最终汇总阻断；服务、存储、字节漂移或凭证损坏仍按各调用方的运行级故障规则处理，不能把任意异常转成内容失败。
 
@@ -255,7 +256,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 ## 锁视图与文档一致性
 
 - `npm run locks`：只读观察 `data/runtime`、`data/current` 原有有界目录范围内的锁及博客仓库的共享锁。共享根由真实 Git common-dir 定位，支持 linked worktree；不创建锁根，不修权限。输出 `scanComplete`、`scopes` 与 `problems`，缺配置、读取失败或坏 owner 明确记为未完成，不能把空列表当作无运行任务。完整观测退出 0，部分观测退出 1，参数或观察入口错误退出 2；运行守卫拒绝仍退出 1，并在结构化问题及 stderr 保留明确的外部运行说明，不回显环境标记原值。这是对原扫描结果总返回 0 的收紧。共享锁始终 `alive:null`、`stale:false`，不凭 PID 或心跳授回收权。`--recover` 仅预览，`deleted:false`，不会删除或解锁；`--json --recover` 把候选放入 `recoveryPreview`，stdout 只输出一份 JSON。完成观测也不证明发布空闲、持锁或后续 CAS 已满足。
-- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`SKILL.md`、`scripts/README.md`、`scripts/README.en.md`、`scripts/INDEX.md`、`manual/README.md`、`manual/README.en.md`、`apps/macos/README.md`、`apps/macos/README.en.md`、`apps/android/README.md`、`apps/android/README.en.md`、`prompts/README.md`、`docs/` 与 `skills/` 下全部 Markdown：按最近 `package.json` 核对 `npm run <script>` 是否存在、相对链接目标文件及 `#锚点` 是否有效、`docs/` 下每篇文档是否在 `docs/README.md` 与 `docs/README.en.md` **两份**索引中均已登记、是否出现带 `-vN` 后缀的协议名或废弃工作区路径、`PD_*` 环境变量是否被非测试生产代码实际读取（客户端 README 的测试说明行允许引用对应 `apps/*/Tests/` 真实测试变量）、`env.example` 与 `scripts/lib/env-schema.js` 是否双向同步（`env.example` 展示的每个配置键均已在 schema 登记，且 schema 中未废弃、非白名单豁免的正式配置项均已在 `env.example` 展示）、`AGENTS.md` 字节大小是否控制在 `20 KiB` 以内，以及中英文“当前/current”客户端版本（构建号）声明和版本列表是否与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 一致。任一不符返回非零。全仓相对链接和 skill 安装副本的链接边界仍由 `tests/documentation.test.js` 覆盖；配置值类型与范围由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令、文档或升级客户端时，同步对应文档、两份索引、版本段和版本列表。
+- `npm run docs:check`：检查根 `README.md`、`README.en.md`、`AGENTS.md`、`SKILL.md`、`scripts/README.md`、`scripts/README.en.md`、`scripts/INDEX.md`、`manual/README.md`、`manual/README.en.md`、`apps/macos/README.md`、`apps/macos/README.en.md`、`apps/android/README.md`、`apps/android/README.en.md`、`prompts/README.md`、`prompts/README.en.md`、`docs/` 与 `skills/` 下全部 Markdown：按最近 `package.json` 核对 `npm run <script>` 是否存在、相对链接目标文件及 `#锚点` 是否有效、`docs/` 下每篇文档是否在 `docs/README.md` 与 `docs/README.en.md` **两份**索引中均已登记、是否出现带 `-vN` 后缀的协议名或废弃工作区路径、`PD_*` 环境变量是否被非测试生产代码实际读取（客户端 README 的测试说明行允许引用对应 `apps/*/Tests/` 真实测试变量）、`env.example` 与 `scripts/lib/env-schema.js` 是否双向同步（`env.example` 展示的每个配置键均已在 schema 登记，且 schema 中未废弃、非白名单豁免的正式配置项均已在 `env.example` 展示）、`AGENTS.md` 字节大小是否控制在 `20 KiB` 以内，以及中英文“当前/current”客户端版本（构建号）声明和版本列表是否与 `apps/macos/Info.plist`、`apps/android/app/build.gradle.kts` 一致。任一不符返回非零。全仓相对链接和 skill 安装副本的链接边界仍由 `tests/documentation.test.js` 覆盖；配置值类型与范围由 `npm run config:check` 按 `scripts/lib/env-schema.js` 核对。新增命令、文档或升级客户端时，同步对应文档、两份索引、版本段和版本列表。
 
 ## 可选运维与按需 CLI
 
@@ -268,9 +269,9 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 - `npm run papers:compact`：原子压缩 `data/current/papers.json` 账本文件，保留完整记录并将权限收紧为 `0600`。
 - `npm run storage:pdf-dedupe [--apply]`：逐字节核验 `data/runtime/` 重复 PDF；`--apply` 经内核独占写时复制（APFS `clonefile`）回收重复空间而不删减任何路径。
 - `npm run digest:calibrate -- --dry-run|--replay|--live`：基于封存分析结果做瑞士轮 Bradley-Terry 批后相对分校准，输出伴生 `score-calibration.json`，不改写原 `scoringAudit`。
-- `npm run podcast:generate -- --date YYYY-MM-DD [--dry-run]`：基于已分析日批生成每日播客脚本、调用 IndexTTS2 合成音频并可选发布至 GitHub Release；所需 11 个 `PD_PODCAST_*` / `PD_INDEXTTS_*` 环境变量详见 `env.example` 与 `scripts/lib/env-schema.js`。
+- `npm run podcast:generate -- --date YYYY-MM-DD [--portal-repo <dir>] [--dry-run]`：基于已分析日批生成每日播客脚本、调用 IndexTTS2 合成音频并可选发布至 GitHub Release；正式发布模式传 `--portal-repo <dir>` 会同步更新伴生门户仓库 [audio-research-portal](https://github.com/nanless/audio-research-portal) 的 `static/feeds/podcast.xml`、`data/podcast-episodes.json` 和 `static/client/podcast/feed.json` 三份产物；所需 11 个 `PD_PODCAST_*` / `PD_INDEXTTS_*` 环境变量详见 `env.example` 与 `scripts/lib/env-schema.js`。
 - 定向验证便捷命令：`npm run scripts:index:check`（只读核对 `scripts/INDEX.md` 是否与当前脚本同步）、`npm run test:python`（运行三组 Python 单测）、`npm run test:client:macos`（运行 macOS 客户端隔离测试）与 `npm run test:client:android`（调用 `bash apps/android/test.sh` 运行 Android 客户端非设备合约测试、表格与资产测试及 Gradle 单测/Lint）。它们用于本地定向自检，不能代替提交前完整 `npm run verify`。
-- 独立提取器 `scripts/conference_layout_extractor.py` 与 `scripts/lib/arxiv-tex-source.js` / `scripts/arxiv_tex_extract.py` 作为按需模块保留，`scripts/conference_extractor.py` 因历史凭证哈希保持冻结。
+- 布局增强版会议 PDF 提取器 `scripts/conference_layout_extractor.py` 现为新会议批次默认 `enhanced` 模式（`PD_CONFERENCE_EXTRACTOR_PROFILE=enhanced`）；`scripts/lib/arxiv-tex-source.js` / `scripts/arxiv_tex_extract.py` 作为按需模块保留；`scripts/conference_extractor.py` 因历史凭证哈希保持冻结。
 
 ## 存储保留建议
 

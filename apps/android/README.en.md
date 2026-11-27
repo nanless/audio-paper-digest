@@ -2,11 +2,23 @@
 
 [简体中文](README.md)
 
-This native Android client reads the Audio Research Portal website's published paper catalog, illustrated explanations, daily editions, and conference overviews. It supports original PDFs, daily audio podcasts, notes, offline reading, personal study, Zotero archiving, and Nutstore backup. Reading or synchronizing existing articles does not request new model analysis.
-
-The current source version is **1.5.2 (build 26) (not yet published)** (see the [1.5.2 pre-release record (Chinese)](../../docs/workbench-1.5.2-review.md)); the latest published release is **1.5.1 / build 25**, published on 27 November 2026 (Beijing time, commit `7622f2ec`), downloadable from [GitHub Releases](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.1). Android 9 / API 28 or later is supported, with `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` architectures. The application identifier remains `com.nanless.paperdigest`. Since 1.4.4 the formal package uses a new signing key with certificate SHA-256 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb`, different from 1.4.3's `d7c680d9…`; users on 1.4.3 must export a backup, uninstall, and then install. Versions 1.4.5 through 1.5.2 keep the 1.4.4 signing key, so 1.4.4–1.5.1 users can upgrade in place. See [validation and release scope (Chinese)](../../docs/android-validation.md), the [1.5.2 pre-release record (Chinese)](../../docs/workbench-1.5.2-review.md), [1.5.1 record (Chinese)](../../docs/workbench-1.5.1-review.md), [1.5.0 record (Chinese)](../../docs/workbench-1.5.0-review.md), [1.4.7 record (Chinese)](../../docs/workbench-1.4.7-review.md), [1.4.6 record (Chinese)](../../docs/workbench-1.4.6-review.md), and [1.4.5 record (Chinese)](../../docs/workbench-1.4.5-review.md) for changes and tested scope, [client performance](../../docs/client-performance.md), and [client release verification](../../docs/client-release-verification.md) for signing and assets. The [1.4.4 review (Chinese)](../../docs/workbench-1.4.4-review.md), [1.4.3 record (Chinese)](../../docs/workbench-1.4.3-review.md#发行状态), [1.4.2 review (Chinese)](../../docs/workbench-1.4.2-review.md), and [1.3.0 review (Chinese)](../../docs/workbench-1.3.0-review.md) cover earlier changes.
+This native Android client reads the [Audio Research Portal](https://nanless.github.io/audio-research-portal/) (portal source in [`audio-research-portal`](https://github.com/nanless/audio-research-portal)) published paper catalog, illustrated explanations, daily editions, and conference overviews. It supports original PDFs, daily audio podcasts, notes, offline reading, personal study, Zotero archiving, and Nutstore backup. Reading or synchronizing existing articles does not request new model analysis.
 
 Quoted interface labels below refer to the application's Chinese interface. Detailed linked documents are in Chinese unless stated otherwise.
+
+## Version and signing compatibility
+
+| Item | Supported configuration |
+|---|---|
+| Version | Current published release 1.5.2 (build 26; `versionCode` 26, 27 November 2026, 23:05 Beijing time, commit `63fa298f`) |
+| OS & architectures | Android 9 (API 28) or later; `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64` ABIs (16 KiB ELF aligned) |
+| Application ID | `com.nanless.paperdigest` |
+| Release signing | Shared 1.4.4–1.5.2 signing key, certificate SHA-256 `6a0c3138f9a49b01f868a123490a7e562f6d78d951160afb2ea5b1e44274e5bb` (APK Signature Scheme v3) |
+| Upgrade path | Users on 1.4.4–1.5.1 can upgrade in place to 1.5.2; 1.4.3 users (certificate `d7c680d9…`) must export a full backup, uninstall, and reinstall |
+
+Packages and checksums ship alongside the Mac release on [GitHub Release v1.5.2](https://github.com/nanless/audio-research-workbench/releases/tag/v1.5.2). See the [1.5.2 record (Chinese)](../../docs/workbench-1.5.2-review.md) for changes and tested scope, [client release verification](../../docs/client-release-verification.md) for all 12 assets and signatures, [validation and release scope (Chinese)](../../docs/android-validation.md), and [client performance](../../docs/client-performance.md).
+
+Earlier release summaries and review records (1.5.1 through 1.3.0) are listed in the [documentation index](../../docs/README.en.md#read-papers-and-use-the-applications).
 
 ## Get started
 
@@ -28,7 +40,7 @@ Phone reading uses compact typography: a 14 px body, an approximately 18 px main
 
 The Android client includes a native daily audio podcast player built on Android's built-in `MediaPlayer`, `AudioAttributes`, `AudioFocusRequest`, and `PlaybackParams` with zero added third-party dependencies or extra manifest permissions:
 
-- **Read-only feed & verified downloads**: Reads the portal's optional `client/podcast/feed.json` (silently hides on HTTP 404/410 and respects offline mode). Audio files download strictly from the allowlisted GitHub Release HTTPS repositories and must pass the 40 MiB cap, exact byte-length check, streaming SHA-256 verification, and MP3 header check before playback.
+- **Read-only feed & verified downloads**: Reads the portal's optional `client/podcast/feed.json` (silently hides on HTTP 404/410 and respects offline mode). Audio files download strictly from the allowlisted GitHub Release HTTPS repositories and must pass the 40 MiB cap, exact byte-length check, streaming SHA-256 verification, and MP3 header check before playback. External podcast apps (such as Apple Podcasts or Pocket Casts) can also subscribe to the portal's standard RSS feed at <https://nanless.github.io/audio-research-portal/feeds/podcast.xml>.
 - **Commute playback & paper links**: Supports `0.75×–2.0×` playback speed, chapter-timestamp seeking, audio-focus handling, and jumping directly from a chapter to its matching paper guide.
 - **Isolated LRU cache**: Maintains a `150 MiB / 5-episode` local audio cache that is explicitly excluded from full-space backups and one-click WebDAV sync.
 
@@ -40,7 +52,7 @@ Before starting, confirm the question, selection or page range, model, and budge
 
 ### Follow tasks and handle failures
 
-Tasks shows synchronization, study, archiving, and backup progress, with the cancellation or continuation actions available for the actual task. Already-issued model requests with unknown results are not automatically resent after restart or restoration. Unreported amounts remain unknown; cancellation or failure does not establish that no charge occurred.
+Tasks shows synchronization, study, archiving, and backup progress, with the cancellation or continuation actions available for the actual task. Already-issued model requests with unknown results are not automatically resent after restart or restoration. Unreported amounts remain unknown; cancellation or failure does not establish that no charge occurred. Starting in 1.5.2, `StudyCoordinator.reconcileStudyJobs()` safely reconciles stale queue entries when platform background jobs have finished or gone missing, preventing workspace-restore deadlocks without re-dispatching already-sent paid study requests.
 
 API keys and connection passwords use local secure storage. Export research data through the system file picker. Uninstalling or clearing application data removes private local material, so back up first.
 
@@ -54,7 +66,7 @@ Tap a direction name to browse its next level and use breadcrumbs to return upwa
 
 Tasks, methods, and other facets are different classification perspectives. Selections within a facet use OR, while facets combine with AND. Two tasks and one method therefore mean either selected task together with that method. Descendants are included by default. Advanced options can limit matching to direct labels, primary roles, research type, or domain. Direction details show the definition, aliases, and full path.
 
-Filters and Sorting provides source, offline conference filters (with paper counts), quick score tiers (All / Featured ≥ 8.0 / High ≥ 7.0 / Recommended ≥ 6.0 / Scored), open-source / weights / dataset / locally cached audio-demo filters, and website publication-date ranges. Since 1.5.0, paper search supports NFKC and diacritic-normalized multi-word AND matching with relevance sorting while a query is active. That date belongs to the published explanation and is separate from favorite time. All papers, favorites, and the reading list retain their own search, classification, and reading position. System Back returns from a paper to the previous list. For papers with multiple explanations, “论文信息与全部已发布导读” lists the actual matching explanation and each explanation's information; official website entries explicitly open in a browser.
+Filters and Sorting provides source, offline conference filters (with paper counts), quick score tiers (All / Featured ≥ 8.0 / High ≥ 7.0 / Recommended ≥ 6.0 / Scored), open-source / weights / dataset / locally cached audio-demo filters, and website publication-date ranges. Since 1.5.0, paper search supports NFKC and diacritic-normalized multi-word AND matching with relevance sorting while a query is active. Version 1.5.2 further aligns all 58 canonical conference venue display names, three-step separator normalization, and strict ASCII year validation across Android, macOS Swift/WebView, and the portal. That date belongs to the published explanation and is separate from favorite time. All papers, favorites, and the reading list retain their own search, classification, and reading position. System Back returns from a paper to the previous list. For papers with multiple explanations, “论文信息与全部已发布导读” lists the actual matching explanation and each explanation's information; official website entries explicitly open in a browser.
 
 The library menu's “网站全部成果” collects daily digests, conferences, About, and research resources, with entries for the website library, search, archives, and RSS. Website-specific functions remain in a browser; explanations, PDFs, notes, and personal study remain in the workbench.
 
@@ -99,7 +111,7 @@ Run these commands from the repository root. The first builds a debug APK; the s
 ./apps/android/test.sh
 ```
 
-The default debug APK is `apps/android/app/build/outputs/apk/debug/app-debug.apk`. The debug asset channel, `private-qa`, includes a fixed public MiCLA sample. The formal `release` channel contains only an empty bootstrap catalog, layout resources, and complete open-source licenses. Outputs and manifests are separate. Formal packages exclude acceptance pages, user data, production runtime data, and `.env`.
+The default debug APK is `apps/android/app/build/outputs/apk/debug/app-debug.apk`. Starting in 1.5.2, Gradle `:app:verifyClientProtocols` watches all 12 `clients.json` and `clients-*.json` files under `config/protocols/` so protocol registry updates never skip verification. The debug asset channel, `private-qa`, includes a fixed public MiCLA sample. The formal `release` channel contains only an empty bootstrap catalog, layout resources, and complete open-source licenses. Outputs and manifests are separate. Formal packages exclude acceptance pages, user data, production runtime data, and `.env`.
 
 ## Test on a device
 

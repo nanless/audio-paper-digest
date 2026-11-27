@@ -1,6 +1,6 @@
 # 客户端静态数据合同
 
-本文规定音频研究门户公开站点的独立论文详情与内容寻址正文出口（`client/details/*`）。`paper-desktop-manifest`、`paper-desktop-snapshot` 与 `paper-desktop-detail` 已在 [`config/protocols/clients.json`](../config/protocols/clients.json) 登记，由 `apps/generate-client-protocols.py` 生成双端校验常量，由博客构建（`scripts/export-desktop-details.js` 与 `scripts/verify-build.js`）导出并全量核验，并在当前源码中由 Mac（[`LibraryDesktopDetails.swift`](../apps/macos/Sources/LibraryDesktopDetails.swift)、[`LibraryService.swift`](../apps/macos/Sources/LibraryService.swift)）与 Android 客户端原生消费，见[网站数据与恢复](mac-app-data.md)及[Android 说明](../apps/android/README.md)。
+本文规定音频研究门户公开站点的独立论文详情与内容寻址正文出口（`client/details/*`）。`paper-desktop-manifest`、`paper-desktop-snapshot` 与 `paper-desktop-detail` 已在 [`config/protocols/clients.json`](../config/protocols/clients.json) 登记，由 `apps/generate-client-protocols.py` 生成双端校验常量，由伴生门户仓库 [audio-research-portal](https://github.com/nanless/audio-research-portal) 的博客构建脚本（`scripts/export-desktop-details.js` 与 `scripts/verify-build.js`，位于门户仓库而非本仓库 `scripts/`）导出并全量核验，并在当前源码中由 Mac（[`LibraryDesktopDetails.swift`](../apps/macos/Sources/LibraryDesktopDetails.swift)、[`LibraryService.swift`](../apps/macos/Sources/LibraryService.swift)）与 Android 客户端原生消费，见[网站数据与恢复](mac-app-data.md)及[Android 说明](../apps/android/README.md)。
 
 当目标站点的 `client/details/manifest.json` 返回 HTTP 404 或 410（尚未部署该出口）时，客户端按过渡兼容规则回退读取 `client/index.json` 及原 `index.json`；一旦 `client/details/manifest.json` 返回 HTTP 200 或其他非缺失错误，任何协议头、结构指纹、字节长度或 SHA-256 异常均失败即拒并保留上一份完整快照，绝不静默回退。1.4.6 起已发行的安装包优先读取 `client/details/manifest.json`；已发行的 1.4.3 至 1.4.5 安装包继续读取 `client/index.json` 与 `client/papers/` 四份附属文件。接口不以路径编号表示结构变化，所有结构变更均以已登记的稳定合同名与 `schemaFingerprint` 为准。
 
@@ -23,6 +23,7 @@
 | 博客 `static/client/papers/` 与构建目录中的原地址兼容文件 | `citation.json`、BibTeX、RIS、`rethink-context.json` | 后者是摘要和研究上下文，不包含完整长文 |
 | 博客 `scripts/export-desktop-details.js` 与 `scripts/verify-build.js` | 生成并逐字节校验 `client/details/*` 快照、目录分片、删除分片、论文详情与安全 HTML 片段 | 模型请求数为 0；同时保留 `client/index.json`、`index.json` 与 `client/papers/` 供过渡及已发行客户端读取 |
 | 本项目 `scripts/publish-to-blog.py` | arXiv 与会议共用的四文件序列化及 SHA 记录 | 引用与上下文的旧声明、原字节及公开 URL 保持兼容 |
+| 本项目 `npm run podcast:generate -- --portal-repo` | 向门户仓库同步 `static/client/podcast/feed.json`、`static/feeds/podcast.xml` 与 `data/podcast-episodes.json` | 按需手动运行，不接入日更自动主链；客户端只读消费 `client/podcast/feed.json`，外部播客应用订阅 `feeds/podcast.xml` |
 
 页面里的 `paper-tools__client-sidecars` 声明必须保留 `schemaFingerprint` 的驼峰写法。Hugo 会把 front matter 参数 map 的嵌套键递归小写，博客模板因此按白名单逐字段重建声明，构建时再校验；2026-11-03 与 11-04 的页面曾输出小写 `schemafingerprint`，客户端只把它当作唯一已知别名，归一化后仍按登记指纹严格校验，不放开其他字段或历史格式。
 

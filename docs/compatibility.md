@@ -16,10 +16,10 @@
 
 | 数据或记录 | 怎样核对 |
 |---|---|
-| 筛选决定 | 决定必须覆盖完整候选集合；候选、模型和实际提示词匹配时，才可按原规则复用。 |
+| 筛选决定 | 决定必须覆盖完整候选集合；候选、模型和实际提示词匹配时，才可按原规则复用。范围取证 `official-modality-scope` 现行 `selectionProfile: codepoint-safe-excerpt-v2`（上限 30,000 字符），旧 120,000 字符记录保持只读兼容；日更零模型请求的正文音频锚点排除记为 `parseSource: scope_body_audio_anchor_prefilter` 并保留四文件来源证明。 |
 | 分析阶段清单 | 新建 API 清单用 `analysis-stage-manifest`。已有清单可以按原格式续跑；摘要、方法、表格、评分、来源和 Reader 各自核验。退役的人工分析记录按原声明读取。 |
 | 日更来源 | 核对目标日期、完整入选集合及每篇的 PDF、文本、来源信息和清单。旧文本或 PDF 缓存不能替代封存来源。 |
-| 论文解读 | `beginner-researcher` 声明正文要求，`api-reader-source-bindings` 绑定表格和公式，作者与资源另有各自的来源证明。较早且不具备这些来源证明的记录只可用于历史读取。 |
+| 论文解读 | `beginner-researcher` 声明正文要求，`api-reader-source-bindings` 绑定表格和公式，作者与资源另有各自的来源证明；普通节点局部补丁 `reader-target-ordinal-patch` 现行 `ordinal-v2`（`static-prefix-v2` 静态前缀格式，指纹 `f3957708…`），只读冷核同时兼容 `334889bc…` 等三代历史记录。较早且不具备这些来源证明的记录只可用于历史读取。 |
 | 评分审查 | `api-scoring-audit` 绑定实际依据和最终分析；重算八维总分，在满足触发条件时另查评分是否稳定。旧页面分数仍可显示。 |
 
 ## 页面、审查与维护

@@ -1,6 +1,6 @@
 # 音频研究门户网页阅读工具
 
-音频研究门户（[Audio Research Portal](https://nanless.github.io/audio-research-portal/)）的所有阅读、检索、图表交互与引用导出工具均在浏览器内直接运行，无需安装本机助手、克隆仓库或配置 API 密钥。门户采用 **Studio Monograph 2.0** 排版与前端交互脚本，由 `audio-research-portal` 仓库维护，新日更发布时自动沿用同一套模板。
+音频研究门户（[Audio Research Portal](https://nanless.github.io/audio-research-portal/)）的所有阅读、检索、图表交互与引用导出工具均在浏览器内直接运行，无需安装本机助手、克隆仓库或配置 API 密钥。门户采用 **Studio Monograph 2.0** 排版与前端交互脚本，由 [audio-research-portal 仓库](https://github.com/nanless/audio-research-portal)维护，新日更发布时自动沿用同一套模板。
 
 ## 快捷检索与八大专题导航
 
@@ -12,7 +12,7 @@
 
 - **论文原图检视器（`1×–6×` 缩放）**：点击正文中的论文原图即可进入灯箱检视，支持滚轮、双击（`2.5×`）与双指捏合在 `1×–6×` 之间缩放拖拽、左右切换全篇原图；在深色主题下提供单图“原色 / 反色”切换与暖纸底托，避免科研曲线与谱图被深色样式扭曲。
 - **交互式表格工作台**：对结构规整的实验结果表提供按列数值/文本排序（自动识别 `k/M/B`、`ms/s`、`Hz/kHz`、`dB`、`%` 与科学计数法，缺失值始终固定在底部）、首列冻结横向对比以及宽表全屏展开，原始表头与核验数值保持不变。
-- **每日音频播客播放器**：已发布播客音频的每日研究页内置网页播放器，仅从受控 GitHub Release HTTPS 地址加载音频，支持 `0.75× / 1.0× / 1.25× / 1.5× / 2.0×` 倍速、按章节时间戳一键跳听并高亮当前小节，也提供直接下载 MP3。
+- **每日音频播客播放器与标准 RSS**：已发布播客音频的每日研究页内置网页播放器，仅从受控 GitHub Release HTTPS 地址加载音频，支持 `0.75× / 1.0× / 1.25× / 1.5× / 2.0×` 倍速、按章节时间戳一键跳听并高亮当前小节，也提供直接下载 MP3。外部播客客户端（如 Apple Podcasts、Pocket Casts、小宇宙等）可订阅门户标准 Podcast 2.0 RSS [`feeds/podcast.xml`](https://nanless.github.io/audio-research-portal/feeds/podcast.xml)。
 
 ## 核对原论文，下载导读、Obsidian 笔记与引用
 
