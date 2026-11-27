@@ -81,14 +81,20 @@ const THIRD_PARTY_CONTEXT_RE = /(?:基于|使用|采用|复用|依托|依赖|对
 function hasPositiveResourceClaim(text, resourcePattern) {
     const clauses = splitAtomicClauses(text);
     const negRe = /(?:未开源|未公开|未发布|未提供|尚未开源|尚未公开|尚未发布|暂未开源|暂未公开|并未开源|并未公开|没有开源|没有公开|不可用|仅承诺|计划未来|待开源|待公开|未提及|未披露|仅提供演示|仅公开演示|无公开|伪代码|注意力权重|损失权重|门控权重|融合权重)/;
+    const disclaimerPrefixRe = /(?:并?不(?:能)?证明|不代表|不意味(?:着)?)[^，,。；;且]{0,16}$/u;
     // Require explicit open-source/public release verbs (never bare "提供...权重/代码" or adjective "开放权重")
-    const posRe = new RegExp(`(?:已开源|已公开|已发布|公开了|开源了|提供(?:了)?(?:开源|公开|可下载的?))(?:[^，,]{0,12})(?:${resourcePattern})`);
-    const posRevRe = new RegExp(`(?:${resourcePattern})(?:[^，,]{0,8})(?:已开源|已公开|已发布|可下载|已上线|均已公开|均已开源)`);
+    const posRe = new RegExp(`(?:已开源|已公开|已发布|公开了|开源了|提供(?:了)?(?:开源|公开|可下载的?))(?:[^，,]{0,12})(?:${resourcePattern})`, 'g');
+    const posRevRe = new RegExp(`(?:${resourcePattern})(?:[^，,]{0,8})(?:已开源|已公开|已发布|可下载|已上线|均已公开|均已开源)`, 'g');
     for (const sent of clauses) {
         if (negRe.test(sent) || THIRD_PARTY_CONTEXT_RE.test(sent)) continue;
         // Guard against "开放权重" adjective ("open-weight")
         if (sent.includes('开放权重')) continue;
-        if (posRe.test(sent) || posRevRe.test(sent)) return sent;
+        for (const match of sent.matchAll(posRe)) {
+            if (!disclaimerPrefixRe.test(sent.slice(0, match.index))) return sent;
+        }
+        for (const match of sent.matchAll(posRevRe)) {
+            if (!disclaimerPrefixRe.test(sent.slice(0, match.index))) return sent;
+        }
     }
     return null;
 }

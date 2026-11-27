@@ -1472,14 +1472,207 @@ function maskBoundParameterSweeps(text, percentMetricsRe = PERCENT_METRICS_RE) {
     return masked;
 }
 
+const BARE_TABLE_PERCENT_HEADER_CI_RE = /(?:准确率|正确率|召回率|错误率|词错(?:误)?率|字错(?:误)?率|字符错误率|覆盖率|命中率|指令遵循|\b(?:WER|CER|PER|EER|Acc(?:uracy)?|F1|F-?score|S-BAcc|Precision|Recall|UAR|DER|JER)\b)/iu;
+const BARE_TABLE_UPPERCASE_IF_RE = /\bIF\b/u;
+const isBareTablePercentHeader = header => BARE_TABLE_PERCENT_HEADER_CI_RE.test(header) || BARE_TABLE_UPPERCASE_IF_RE.test(header);
+
+function canonicalBarePercentMetricKeys(text) {
+    const keys = new Set();
+    const raw = String(text || '');
+    if (/(?:\bWER\b|词错(?:误)?率)/iu.test(raw)) keys.add('WER');
+    if (/(?:\bCER\b|字(?:符)?错(?:误)?率)/iu.test(raw)) keys.add('CER');
+    if (/(?:\bPER\b|音素错(?:误)?率)/iu.test(raw)) keys.add('PER');
+    if (/\bEER\b/iu.test(raw)) keys.add('EER');
+    // IF 严格区分大小写，避免命中英文小写连词 "if"（如 "Cost if enabled"）。
+    if (BARE_TABLE_UPPERCASE_IF_RE.test(raw) || /指令遵循/u.test(raw)) keys.add('IF');
+    if (/(?:\bAcc(?:uracy)?\b|\bS-BAcc\b|state-balanced accuracy|step accuracy|准确率|正确率)/iu.test(raw)) keys.add('ACC');
+    if (/(?:\bF1\b|F-?score)/iu.test(raw)) keys.add('F1');
+    if (/(?:\bRecall\b|召回率)/iu.test(raw)) keys.add('RECALL');
+    if (/(?:\bPrecision\b|精确率)/iu.test(raw)) keys.add('PRECISION');
+    if (/\bUAR\b/iu.test(raw)) keys.add('UAR');
+    if (/\bDER\b/iu.test(raw)) keys.add('DER');
+    if (/\bJER\b/iu.test(raw)) keys.add('JER');
+    if (/错误率/u.test(raw) && !keys.has('WER') && !keys.has('CER') && !keys.has('PER')
+        && !keys.has('EER') && !keys.has('DER') && !keys.has('JER')) keys.add('ERR');
+    if (/命中率/u.test(raw)) keys.add('HIT');
+    if (/覆盖率/u.test(raw)) keys.add('COV');
+    return keys;
+}
+
+function splitByH3Sections(rawText) {
+    const lines = String(rawText ?? '').split(/\r?\n/u);
+    const sections = [];
+    let currentLines = [];
+    let currentHeading = '';
+    let currentStartLine = 1;
+    let fence = null;
+    const flush = () => {
+        if (currentLines.length > 0 || sections.length === 0) {
+            sections.push({
+                heading: currentHeading,
+                text: currentLines.join('\n'),
+                startLine: currentStartLine
+            });
+        }
+    };
+    for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        const fenceMatch = trimmed.match(/^(```|~~~)/);
+        if (fenceMatch) {
+            if (!fence) {
+                if (trimmed.indexOf(fenceMatch[1], fenceMatch[1].length) < 0) {
+                    fence = fenceMatch[1];
+                }
+            } else if (trimmed.startsWith(fence)) {
+                fence = null;
+            }
+            currentLines.push(line);
+            continue;
+        }
+        if (!fence) {
+            const h3 = /^###\s+(.+?)\s*$/u.exec(line);
+            if (h3) {
+                if (currentLines.length > 0) flush();
+                currentHeading = h3[1].trim();
+                currentLines = [line];
+                currentStartLine = i + 1;
+                continue;
+            }
+        }
+        currentLines.push(line);
+    }
+    flush();
+    return sections;
+}
+
+function buildMetricTokenSource(percentMetricsRe) {
+    return `(?:词错(?:误)?率|字(?:符)?错(?:误)?率|音素错(?:误)?率|${percentMetricsRe.source})`;
+}
+
+function extractDeclaredBareScaleMetricKeys(sentenceText, percentMetricsRe) {
+    const keys = new Set();
+    const text = String(sentenceText || '');
+    const metricTokenSrc = buildMetricTokenSource(percentMetricsRe);
+    const metricListSrc = `${metricTokenSrc}(?:\\s*[、与和/]\\s*${metricTokenSrc})?`;
+    const patterns = [
+        // 仅记录直接附着尺度声明的具体指标（如 CER（%）），绝不连带同句其他指标。
+        new RegExp(`(?<metric>${metricTokenSrc})\\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲|比率|比例)\\s*[）)]`, 'giu'),
+        new RegExp(`(?<metric>${metricTokenSrc})\\s*(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)?\\s*(?:%|个百分点|点|分|无量纲|比率|比例)`, 'giu'),
+        new RegExp(`(?<metric>${metricListSrc})[^。！？\\n；;]{0,60}?(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)\\s*(?:%|个百分点|点|分|无量纲|比率|比例)`, 'giu'),
+        new RegExp(`(?<metric>${metricListSrc})[^。！？\\n，,；;]{0,24}?(?:均)?(?:以|按)\\s*(?:百分制|百分比|百分数)(?:裸数)?(?:报告|记录|计|表示|给出)`, 'giu'),
+        new RegExp(`(?:报告|给出|记录)[^。！？\\n，,；;]{0,24}(?<metric>${metricListSrc})[^。！？\\n，,；;]{0,24}(?:百分比|百分制)`, 'giu')
+    ];
+    for (const pattern of patterns) {
+        for (const match of text.matchAll(pattern)) {
+            for (const key of canonicalBarePercentMetricKeys(match.groups?.metric || '')) {
+                keys.add(key);
+            }
+        }
+    }
+    const uppercaseIfPatterns = [
+        /\bIF\b\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲|比率|比例)\s*[）)]/gu,
+        /\bIF\b\s*(?:表头|列名|指标)?\s*(?:单位|unit)\s*(?:为|是|=|:)?\s*(?:%|个百分点|点|分|无量纲|比率|比例)/gu,
+        /\bIF\b[^。！？\n，,；;]{0,24}?(?:均)?(?:以|按)\s*(?:百分制|百分比|百分数)(?:裸数)?(?:报告|记录|计|表示|给出)/gu,
+        /(?:报告|给出|记录)[^。！？\n，,；;]{0,24}\bIF\b[^。！？\n，,；;]{0,24}(?:百分比|百分制)/gu
+    ];
+    for (const pattern of uppercaseIfPatterns) {
+        if (pattern.test(text)) keys.add('IF');
+    }
+    return keys;
+}
+
+function extractBarePercentTableAndScaleContext(tableText, proseText, percentMetricsRe) {
+    const bareTableValues = new Map();
+    const bareTableMetrics = new Set();
+    const percentSuffixedTableMetrics = new Set();
+    const lines = String(tableText ?? '').split(/\r?\n/u);
+    const splitRow = row => {
+        const trimmed = row.trim();
+        const inner = trimmed.replace(/^\|/u, '').replace(/\|$/u, '');
+        return inner.split('|').map(cell => cell.trim());
+    };
+    const isSeparatorRow = row => /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/u.test(row);
+    let idx = 0;
+    while (idx + 1 < lines.length) {
+        if (lines[idx].includes('|') && isSeparatorRow(lines[idx + 1])) {
+            const headers = splitRow(lines[idx]);
+            const colInfo = headers.map(header => ({
+                isPercentMetric: isBareTablePercentHeader(header),
+                keys: canonicalBarePercentMetricKeys(header),
+                hasPercentCell: false,
+                hasBareOverOne: false,
+                bareTokens: []
+            }));
+            let rowIdx = idx + 2;
+            while (rowIdx < lines.length && lines[rowIdx].includes('|') && !/^\s*$/u.test(lines[rowIdx])) {
+                const cells = splitRow(lines[rowIdx]);
+                for (let col = 0; col < Math.min(cells.length, colInfo.length); col++) {
+                    if (!colInfo[col].isPercentMetric) continue;
+                    const cell = cells[col];
+                    if (/\d\s*%/u.test(cell)) {
+                        colInfo[col].hasPercentCell = true;
+                        continue;
+                    }
+                    for (const numMatch of cell.matchAll(/(?<![A-Za-z0-9_.])\d+(?:,\d{3})*(?:\.\d+)?(?![A-Za-z0-9_.%])/gu)) {
+                        const rawNum = numMatch[0];
+                        colInfo[col].bareTokens.push(rawNum);
+                        if (Number.parseFloat(rawNum.replace(/,/g, '')) > 1) {
+                            colInfo[col].hasBareOverOne = true;
+                        }
+                    }
+                }
+                rowIdx++;
+            }
+            for (const info of colInfo) {
+                if (!info.isPercentMetric) continue;
+                if (info.hasPercentCell) {
+                    for (const key of info.keys) percentSuffixedTableMetrics.add(key);
+                } else if (info.hasBareOverOne) {
+                    for (const key of info.keys) {
+                        bareTableMetrics.add(key);
+                        if (!bareTableValues.has(key)) bareTableValues.set(key, new Set());
+                        const bucket = bareTableValues.get(key);
+                        for (const token of info.bareTokens) bucket.add(token);
+                    }
+                }
+            }
+            idx = rowIdx;
+            continue;
+        }
+        idx++;
+    }
+    // 扫描同节相邻正文中的显式裸百分比尺度声明（如“下表报告各系统 IF/CER 百分比（省略 %）”或“WER（%）”）。
+    const declaredScaleMetrics = new Set();
+    let hasSectionWideBarePercentDeclaration = false;
+    const sectionWideBareScaleRe = /(?:(?:下表|上表|本表|表\s*\d+|表内|全表)[^。！？\n]{0,48}(?:均)?(?:以|按)\s*(?:百分制|百分比|百分数)(?:裸数)?(?:报告|记录|计|表示|给出)|(?:下表|上表|本表|表\s*\d+|表内|全表)[^。！？\n]{0,48}(?:省略|不带|不含)\s*(?:百分号|%))/iu;
+    for (const s of proseSentences(stripCodeLinksAndUrls(proseText))) {
+        if (sectionWideBareScaleRe.test(s.text)) {
+            hasSectionWideBarePercentDeclaration = true;
+        }
+        for (const key of extractDeclaredBareScaleMetricKeys(s.text, percentMetricsRe)) {
+            declaredScaleMetrics.add(key);
+        }
+    }
+    return {
+        bareTableValues,
+        bareTableMetrics,
+        percentSuffixedTableMetrics,
+        declaredScaleMetrics,
+        hasSectionWideBarePercentDeclaration
+    };
+}
+
 function findMissingComparisonUnits(text, options = {}) {
     const isStructured = isStructuredEditorial(options?.editorialProfile);
     const percentMetricsRe = isStructured ? STRUCTURED_EDITORIAL_PERCENT_METRICS_RE : PERCENT_METRICS_RE;
     const directionRe = isStructured ? STRUCTURED_EDITORIAL_DIRECTION_RE : DIRECTION_RE;
-    const value = stripCodeLinksAndUrls(text)
+    const metricTokenSrc = buildMetricTokenSource(percentMetricsRe);
+    const normalizeComparisonProse = raw => stripCodeLinksAndUrls(raw)
         // 否则「一对一分配」会被读成两个数值后面跟一个「分」。
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
             match => ' '.repeat(match.length));
+    const value = normalizeComparisonProse(text);
     const findings = [];
     // 千分位计数作为一个数值读取，避免把“50,000 条”中的 50 当成另一裸数。
     const quantity = `(?:\\d+(?:,\\d{3})*(?:\\.\\d+)?|[${CHINESE_DIGITS}]+(?:点[${CHINESE_DIGITS}]+)?)`;
@@ -1498,24 +1691,76 @@ function findMissingComparisonUnits(text, options = {}) {
             && !zeroPairMetricRe.test(context)) continue;
         findings.push(match);
     }
-    for (const sentence of proseSentences(value)) {
-        if (!percentMetricsRe.test(sentence.text) || !directionRe.test(sentence.text)) continue;
-        const explicitScoreUnit = new RegExp(
-            `(?:\\d+(?:\\.\\d+)?|[${CHINESE_DIGITS}]+点[${CHINESE_DIGITS}]+(?![${CHINESE_DIGITS}])|[${CHINESE_DIGITS}]+(?!点[${CHINESE_DIGITS}]))\\s*(?:%|个百分点|点|分)`,
-            'u'
+    const bodySections = splitByH3Sections(text);
+    const tableSections = typeof options?.tableContextText === 'string' && options.tableContextText !== text
+        ? splitByH3Sections(options.tableContextText)
+        : null;
+    const modelQualifierFollowingRe = /^\s*(?:教师|学生|专家|基线|模型|系统)/u;
+    for (let sectionIdx = 0; sectionIdx < bodySections.length; sectionIdx += 1) {
+        const bodySection = bodySections[sectionIdx];
+        let tableSectionText = bodySection.text;
+        if (tableSections) {
+            if (tableSections[sectionIdx] && tableSections[sectionIdx].heading === bodySection.heading) {
+                tableSectionText = tableSections[sectionIdx].text;
+            } else if (bodySection.heading) {
+                tableSectionText = tableSections.find(item => item.heading === bodySection.heading)?.text ?? '';
+            } else if (tableSections.length === 1 && bodySections.length === 1) {
+                tableSectionText = tableSections[0].text;
+            }
+        }
+        const bareTableContext = extractBarePercentTableAndScaleContext(
+            tableSectionText, bodySection.text, percentMetricsRe
         );
-        // 论文可能在指标名里声明单位，后面的数值直接沿用，例如
-        // 「WER（%）」「WER（单位为%）」或「SIM（无量纲）」。
-        // 这种声明算作就地绑定，不再要求每个比较数值后面
-        // 硬写出一个单位。
-        const metricUnitDeclaration = new RegExp(
-            `(?:${percentMetricsRe.source}\\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲|比率|比例)\\s*[）)]`
-            + `|${percentMetricsRe.source}\\s*(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)?\\s*(?:%|个百分点|点|分|无量纲|比率|比例)`
-            + `|${percentMetricsRe.source}[^。！？\\n]{0,120}?(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)\\s*(?:%|个百分点|点|分|无量纲|比率|比例))`,
-            'iu'
-        );
-        if (metricUnitDeclaration.test(sentence.text)) continue;
-        const hasSentenceExplicitScoreUnit = explicitScoreUnit.test(sentence.text);
+        const sectionValue = normalizeComparisonProse(bodySection.text);
+        for (const sentence of proseSentences(sectionValue)) {
+            if (!percentMetricsRe.test(sentence.text) || !directionRe.test(sentence.text)) continue;
+            const sentenceLine = bodySection.startLine - 1 + sentence.line;
+            const explicitScoreUnit = new RegExp(
+                `(?:\\d+(?:\\.\\d+)?|[${CHINESE_DIGITS}]+点[${CHINESE_DIGITS}]+(?![${CHINESE_DIGITS}])|[${CHINESE_DIGITS}]+(?!点[${CHINESE_DIGITS}]))\\s*(?:%|个百分点|点|分)`,
+                'u'
+            );
+            // 论文可能在指标名里声明单位，后面的数值直接沿用，例如
+            // 「WER（%）」「WER（单位为%）」或「SIM（无量纲）」。
+            // 但只能绑定紧邻声明的具体指标，且不得覆盖本节已带 % 后缀的表格指标。
+            const inlineDeclaredKeys = extractDeclaredBareScaleMetricKeys(sentence.text, percentMetricsRe);
+            const effectiveDeclaredKeys = new Set();
+            for (const key of bareTableContext.declaredScaleMetrics) {
+                if (!bareTableContext.percentSuffixedTableMetrics.has(key)) effectiveDeclaredKeys.add(key);
+            }
+            for (const key of inlineDeclaredKeys) {
+                if (!bareTableContext.percentSuffixedTableMetrics.has(key)) effectiveDeclaredKeys.add(key);
+            }
+            const sentenceTokenMatches = [...sentence.text.matchAll(new RegExp(metricTokenSrc, 'giu'))];
+            const nonQualifierMatches = sentenceTokenMatches.filter(
+                m => !modelQualifierFollowingRe.test(sentence.text.slice(m.index + m[0].length))
+            );
+            const sentenceMetricKeys = new Set();
+            for (const m of (nonQualifierMatches.length ? nonQualifierMatches : sentenceTokenMatches)) {
+                for (const key of canonicalBarePercentMetricKeys(m[0])) sentenceMetricKeys.add(key);
+            }
+            const sentenceHasPercentSuffixedTable = [...sentenceMetricKeys].some(
+                key => bareTableContext.percentSuffixedTableMetrics.has(key)
+            );
+            if (!sentenceHasPercentSuffixedTable && (
+                bareTableContext.hasSectionWideBarePercentDeclaration
+                || (sentenceMetricKeys.size > 0
+                    && [...sentenceMetricKeys].every(key => effectiveDeclaredKeys.has(key)))
+            )) {
+                continue;
+            }
+            const isCoveredByBareTableForKeys = (rawVal, metricKeys) => {
+                if (!metricKeys || metricKeys.size === 0) return false;
+                const token = String(rawVal || '').trim();
+                return [...metricKeys].every(
+                    key => !bareTableContext.percentSuffixedTableMetrics.has(key)
+                        && bareTableContext.bareTableValues.get(key)?.has(token) === true
+                );
+            };
+            const isDeclaredMetricScaleForKeys = metricKeys => (
+                Boolean(metricKeys && metricKeys.size > 0)
+                && [...metricKeys].every(key => effectiveDeclaredKeys.has(key))
+            );
+            const hasSentenceExplicitScoreUnit = explicitScoreUnit.test(sentence.text);
         // 模型名或产品名里的数字（例如 wav2vec-U、Qwen2-Audio）不算裸露的百分比数值。
         // 图表编号和“第 2 至 3 位”这类序号不是指标值。先做等长屏蔽，
         // 避免一句定性比较仅因包含图号/排名位置就被误判为缺少单位。
@@ -1795,16 +2040,25 @@ function findMissingComparisonUnits(text, options = {}) {
             );
             const nonPctFollowingUnitRe = /^\s*(?:%|个百分点|pp(?![A-Za-z])|点|分|倍|个|条|段|篇|张|种|类|组|套|块|步|轮|层|题|份|例|名|人|台|所|对|阶段|数据集|测试集|验证集|时|小时|路|模型|系统|骨干|样本|片段|词元|接口|分支|特征|维度|维|模态|bins?|位小数|句(?=$|[^A-Za-z0-9_.])|位\s*(?:评分者|评审者|受试者))/iu;
             const otherNonPercentMetricRe = /\b(?:UTMOS|DNSMOS|NISQA|ViSQOL|WV-MOS|SMOS|CMOS|DMOS|PESQ|MOS|SI-SDRi?|SDR|SNR|STOI|ESTOI|FAD|CLAP|RTF|TTFA|MCD|LSD|SIM|SECS|CIDEr|SPIDEr|METEOR|SPICE|BLEU(?:-[1-4])?|ROUGE(?:-[12L])?|FENSE)\b/i;
-            const hasPercentMetricContext = offset => {
+            const activePercentMetricKeysAt = offset => {
                 const beforeDelta = numericText.slice(0, offset);
+                const pickMetricKeys = segment => {
+                    const matches = [...segment.matchAll(new RegExp(metricTokenSrc, 'giu'))];
+                    if (!matches.length) return null;
+                    const nonQual = matches.filter(m => !modelQualifierFollowingRe.test(segment.slice(m.index + m[0].length)));
+                    const target = (nonQual.length ? nonQual : matches).at(-1);
+                    return { match: target, keys: canonicalBarePercentMetricKeys(target[0]) };
+                };
                 const clausePrefix = beforeDelta.split(/[，,；;]/u).at(-1);
-                if (percentMetricsRe.test(clausePrefix)) return true;
+                const clausePick = pickMetricKeys(clausePrefix);
+                if (clausePick) return clausePick.keys;
                 const semiSeg = beforeDelta.split(/[；;]/u).at(-1);
-                const metricMatches = [...semiSeg.matchAll(new RegExp(percentMetricsRe.source, 'gi'))];
-                if (!metricMatches.length) return false;
-                const lastMetric = metricMatches.at(-1);
-                const between = semiSeg.slice(lastMetric.index + lastMetric[0].length);
-                return !explicitScoreUnit.test(between) && !otherNonPercentMetricRe.test(between);
+                const semiPick = pickMetricKeys(semiSeg);
+                if (!semiPick) return new Set();
+                const between = semiSeg.slice(semiPick.match.index + semiPick.match[0].length);
+                return !explicitScoreUnit.test(between) && !otherNonPercentMetricRe.test(between)
+                    ? semiPick.keys
+                    : new Set();
             };
             const unitSuffixOpt = '(?:\\s*(?:%|个百分点|pp(?![A-Za-z])|点|分))?';
             const rangeDeltaRe = new RegExp(
@@ -1820,12 +2074,15 @@ function findMissingComparisonUnits(text, options = {}) {
             for (const m of numericText.matchAll(rangeDeltaRe)) {
                 const spanStart = m.index;
                 const spanEnd = m.index + m[0].length;
-                if (!hasPercentMetricContext(spanStart)) continue;
+                const activeKeys = activePercentMetricKeysAt(spanStart);
+                if (activeKeys.size === 0) continue;
                 coveredRangeSpans.push([spanStart, spanEnd]);
+                if (isDeclaredMetricScaleForKeys(activeKeys)) continue;
                 if (explicitScoreUnit.test(m[0]) || /\bpp(?![A-Za-z])/i.test(m[0])) continue;
                 const afterSpan = numericText.slice(spanEnd);
                 if (nonPctFollowingUnitRe.test(afterSpan)) continue;
-                if (isPctScaleRaw(m[1]) || isPctScaleRaw(m[2])) {
+                const pctVals = [m[1], m[2]].filter(isPctScaleRaw);
+                if (pctVals.length > 0 && !pctVals.every(val => isCoveredByBareTableForKeys(val, activeKeys))) {
                     hasUnboundDelta = true;
                     break;
                 }
@@ -1835,11 +2092,13 @@ function findMissingComparisonUnits(text, options = {}) {
                     const spanStart = m.index;
                     const spanEnd = m.index + m[0].length;
                     if (coveredRangeSpans.some(([s, e]) => spanStart >= s && spanEnd <= e)) continue;
-                    if (!hasPercentMetricContext(spanStart)) continue;
+                    const activeKeys = activePercentMetricKeysAt(spanStart);
+                    if (activeKeys.size === 0) continue;
+                    if (isDeclaredMetricScaleForKeys(activeKeys)) continue;
                     if (explicitScoreUnit.test(m[0]) || /\bpp(?![A-Za-z])/i.test(m[0])) continue;
                     const afterSpan = numericText.slice(spanEnd);
                     if (nonPctFollowingUnitRe.test(afterSpan)) continue;
-                    if (isPctScaleRaw(m[1])) {
+                    if (isPctScaleRaw(m[1]) && !isCoveredByBareTableForKeys(m[1], activeKeys)) {
                         hasUnboundDelta = true;
                         break;
                     }
@@ -1848,7 +2107,7 @@ function findMissingComparisonUnits(text, options = {}) {
             if (hasUnboundDelta) {
                 findings.push({
                     match: sentence.text,
-                    line: sentence.line,
+                    line: sentenceLine,
                     reason: 'percentage_metric_delta_without_unit'
                 });
             }
@@ -1873,27 +2132,69 @@ function findMissingComparisonUnits(text, options = {}) {
             });
         const bareValues = bareMatches.map(match => match[0]);
         // 显式比较中的两个测量值即使距指标较远，也不能漏掉单位。
-        // 只选“从数值提高/降到数值”的数值位置，不选中间的模型和条件计数。
-        const explicitComparisonValueIndexes = new Set();
+        // 只选“从数值提高/降到数值”的数值位置并按分句指标归属，不跨指标混用。
+        const explicitComparisonValueOwners = new Map();
+        const addComparisonOwner = (pos, prefix) => {
+            const matches = [...prefix.matchAll(new RegExp(metricTokenSrc, 'giu'))];
+            if (!matches.length) return;
+            const nonQual = matches.filter(m => !modelQualifierFollowingRe.test(prefix.slice(m.index + m[0].length)));
+            const owners = new Set();
+            for (const m of (nonQual.length ? nonQual : matches)) {
+                for (const key of canonicalBarePercentMetricKeys(m[0])) owners.add(key);
+            }
+            if (!explicitComparisonValueOwners.has(pos)) explicitComparisonValueOwners.set(pos, new Set());
+            const bucket = explicitComparisonValueOwners.get(pos);
+            for (const key of owners) bucket.add(key);
+        };
         const comparisonPattern = new RegExp(`从\\s*(${quantity})\\s*(?:提高到|提升到|增加到|下降到|降低到|减少到|降至|升至|到|至)\\s*(${quantity})`, 'gu');
         for (const comparison of numericText.matchAll(comparisonPattern)) {
             const prefix = numericText.slice(0, comparison.index).split(/[，,；;]/).at(-1);
             if (!percentMetricsRe.test(prefix)) continue;
             const first = comparison.index + comparison[0].indexOf(comparison[1]);
             const second = comparison.index + comparison[0].lastIndexOf(comparison[2]);
-            explicitComparisonValueIndexes.add(first);
-            explicitComparisonValueIndexes.add(second);
+            addComparisonOwner(first, prefix);
+            addComparisonOwner(second, prefix);
         }
         const resultPattern = new RegExp(`(?:提高到|提升至|提升到|升至|降低到|下降到|降至)\\s*(${quantity})`, 'gu');
         for (const result of numericText.matchAll(resultPattern)) {
             const prefix = numericText.slice(0, result.index).split(/[，,；;]/).at(-1);
             if (percentMetricsRe.test(prefix)) {
-                explicitComparisonValueIndexes.add(result.index + result[0].lastIndexOf(result[1]));
+                addComparisonOwner(result.index + result[0].lastIndexOf(result[1]), prefix);
             }
         }
+        const isBarePctScale = raw => (
+            /^\d/.test(raw)
+                ? Number.parseFloat(raw.replace(/,/g, '')) > 1
+                : /[十百千万亿]/.test(raw)
+                    || (raw.includes('点') && !/^[负正]?零点/.test(raw))
+        );
+        const activeMetricKeysBefore = pos => {
+            const prefix = numericText.slice(0, pos);
+            const allMatches = [
+                ...[...prefix.matchAll(new RegExp(metricTokenSrc, 'giu'))],
+                ...[...prefix.matchAll(/\bIF\b/gu)]
+            ].sort((a, b) => a.index - b.index);
+            const nonQual = allMatches.filter(
+                m => !modelQualifierFollowingRe.test(prefix.slice(m.index + m[0].length))
+            );
+            const target = nonQual.at(-1);
+            return target ? canonicalBarePercentMetricKeys(target[0]) : new Set();
+        };
+        let lastNonQualifierMetricKeys = null;
         const percentageMetricHasNearbyPercentageScaleValue = [...numericText.matchAll(
-            new RegExp(percentMetricsRe.source, 'gi')
+            new RegExp(metricTokenSrc, 'giu')
         )].some(metricMatch => {
+            const isModelQualifier = modelQualifierFollowingRe.test(
+                numericText.slice(metricMatch.index + metricMatch[0].length)
+            );
+            const ownKeys = canonicalBarePercentMetricKeys(metricMatch[0]);
+            const governingKeys = isModelQualifier && lastNonQualifierMetricKeys
+                ? lastNonQualifierMetricKeys
+                : ownKeys;
+            if (!isModelQualifier && ownKeys.size > 0) {
+                lastNonQualifierMetricKeys = ownKeys;
+            }
+            if (isDeclaredMetricScaleForKeys(governingKeys)) return false;
             const start = Math.max(0, metricMatch.index - 12);
             const end = Math.min(
                 numericText.length,
@@ -1901,14 +2202,29 @@ function findMissingComparisonUnits(text, options = {}) {
             );
             // 就近绑定必须使用同一组已筛出的裸数值；不能把远处的数字与
             // 指标旁的型号、计数或设置拼成一条缺单位诊断。
-            const nearbyNumbers = bareMatches.filter(match => match.index < end
-                && match.index + match[0].length > start || explicitComparisonValueIndexes.has(match.index)).map(match => match[0]);
-            return nearbyNumbers.some(raw => (
-                /^\d/.test(raw)
-                    ? Number.parseFloat(raw.replace(/,/g, '')) > 1
-                    : /[十百千万亿]/.test(raw)
-                        || (raw.includes('点') && !/^[负正]?零点/.test(raw))
+            const nearbyMatchObjs = bareMatches.filter(match => (
+                (match.index < end && match.index + match[0].length > start)
+                || (explicitComparisonValueOwners.has(match.index)
+                    && [...explicitComparisonValueOwners.get(match.index)].some(k => governingKeys.has(k)))
             ));
+            const pctScaleNearbyMatches = nearbyMatchObjs.filter(match => isBarePctScale(match[0]));
+            if (!pctScaleNearbyMatches.length) return false;
+            // 若同节 Markdown 表格中对应指标列本身以无 % 裸数报告（与原文一致），
+            // 且句中所有就近引用的 >1 裸数均逐字来自其所属指标的裸数表格列，则不强制追加 %。
+            // 跨逗号/分号落入前序分句的数值（如“低于 IF 教师的 82.1，CER 取 2.25”中的 82.1）
+            // 按其自身前序分句的指标键（IF）核对，不误算到后一分句的 CER 下。
+            const keysForBareMatch = match => {
+                if (match.index < metricMatch.index
+                    && /[，,；;]/u.test(numericText.slice(match.index + match[0].length, metricMatch.index))) {
+                    const prevKeys = activeMetricKeysBefore(match.index);
+                    if (prevKeys.size > 0) return prevKeys;
+                }
+                return governingKeys;
+            };
+            if (pctScaleNearbyMatches.every(match => isCoveredByBareTableForKeys(match[0], keysForBareMatch(match)))) {
+                return false;
+            }
+            return true;
         });
         const likelyPercentageScale = bareValues.some(raw => (
             /^\d/.test(raw)
@@ -1918,9 +2234,10 @@ function findMissingComparisonUnits(text, options = {}) {
         if (likelyPercentageScale && percentageMetricHasNearbyPercentageScaleValue) {
             findings.push({
                 match: sentence.text,
-                line: sentence.line,
+                line: sentenceLine,
                 reason: 'percentage_metric_delta_without_unit'
             });
+        }
         }
     }
     return findings;
@@ -2402,7 +2719,10 @@ function validateEditorialQuality(input, options = {}) {
         for (const finding of findTechnicalTermAdhesions(body)) {
             issues.push(issue('technical_term_adhesion', '中英文技术词边界缺少空格', { section, ...finding }));
         }
-        for (const finding of findMissingComparisonUnits(body, { editorialProfile: options.editorialProfile })) {
+        for (const finding of findMissingComparisonUnits(body, {
+            editorialProfile: options.editorialProfile,
+            ...(typeof options.tableContextText === 'string' && body ? { tableContextText: options.tableContextText } : {})
+        })) {
             issues.push(issue('comparison_unit_missing', '比较值的指标单位未就近完整绑定', { section, ...finding }));
         }
         for (const finding of findReaderTemplatePhrases(body, { editorialProfile: options.editorialProfile })) {

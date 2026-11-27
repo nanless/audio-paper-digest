@@ -1545,7 +1545,8 @@ function validateReaderEditorialQuality(article, sections, options = {}) {
     }, {
         sourceText: options.sourceText,
         editorialProfile: options.editorialProfile,
-        skipTableCommentaryAlignment: options.skipTableCommentaryAlignment === true
+        skipTableCommentaryAlignment: options.skipTableCommentaryAlignment === true,
+        ...(typeof options.tableContextText === 'string' ? { tableContextText: options.tableContextText } : {})
     });
     const sectionWarnings = findReaderSectionNearDuplicates(article, sections, {
         editorialProfile: options.editorialProfile

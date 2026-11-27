@@ -592,6 +592,7 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             filterRuntimeTemperature,
             {
                 usageContext,
+                ...(options.reasoningStage ? { reasoningStage: options.reasoningStage } : {}),
                 promptCacheKey: `pd:${usageContext.stage}:${String(runtimeConfig.model || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 24)}`
             }
         );
@@ -1957,11 +1958,13 @@ async function getSpeechAudioDecision(paper, options = {}) {
 
     try {
         circuitBreaker.assertClosed();
+        const reasoningStage = options.reasoningStage
+            || (scopeEvidence ? 'dailyFilter' : 'dailyFilterAbstractOnly');
         const request = (messages, maxTokens) => callModelForFilter(
             messages,
             maxTokens,
             options.maxRetries,
-            { ...options, paperId }
+            { ...options, paperId, reasoningStage }
         );
         const response = await request([{ role: 'user', content: prompt }], FILTER_CFG.maxTokens);
         circuitBreaker.recordSuccess();

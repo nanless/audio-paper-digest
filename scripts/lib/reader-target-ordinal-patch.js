@@ -15,7 +15,7 @@ const CONTRACT = format.wireHeader().contract;
 const COMPILATION_CONTRACT = format.compilationHeader().contract;
 const TEMPLATE = format.template();
 const sha = x => crypto.createHash('sha256').update(x).digest('hex');
-const TEMPLATE_SHA = sha(TEMPLATE);
+const TEMPLATE_SHA = format.templateSha();
 const stableSha=value=>{const sorted=v=>Array.isArray(v)?v.map(sorted):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])])):v;return sha(JSON.stringify(sorted(value)));};
 const SHA = /^[a-f0-9]{64}$/, TOKEN = /^[a-f0-9]{16}$/, ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const caps = new WeakMap();
@@ -91,7 +91,7 @@ function parseAck(raw, request = null) {
     // 有些实际响应将本次指纹漏掉最后一位。只在请求本身已通过完整校验、
     // 响应携带完全相同的请求令牌且指纹为其精确前缀时恢复内存中的格式头。
     // 原始响应和费用记录仍按收到的原字节保存与重放。
-    if (request && format.isCurrentWire(request)
+    if (request && format.isModernWire(request)
         && result.contract === request.contract && result.requestToken === request.requestToken
         && result.schemaFingerprint === request.schemaFingerprint.slice(0, -1)) {
         result.schemaFingerprint = request.schemaFingerprint;
@@ -219,7 +219,8 @@ function committedToken(request){
         draftSha256:request.draftSha256,orderedTargetsSha256:repair.hashDraft(request.targets)})).slice(0,16);
 }
 function requestFor(draft, targets, identity, candidateEnvelopeSha256) {
-    const request={...format.wireHeader(),templateSha256:TEMPLATE_SHA,
+    const header = format.wireHeader();
+    const request={...header,templateSha256:format.templateSha(header),
         requestSalt:crypto.randomBytes(16).toString('hex'),identitySha256:repair.hashDraft(identity),
         candidateEnvelopeSha256,draftSha256:repair.hashDraft(draft),targets};
     request.requestToken=committedToken(request);return request;
@@ -247,7 +248,7 @@ function renderPrompt(capability,{feedback,evidence,mechanicalContract,naturalRe
     const values={requestToken:s.request.requestToken,targets:JSON.stringify(s.request.targets.map(t=>({targetOrdinal:t.targetOrdinal,
         valueType:t.valueType,currentValue:node(s.draft,t.path)}))),feedback:String(feedback||''),evidence:String(evidence||''),mechanicalContract:String(mechanicalContract||'')};
     const rendered=require('./reader-resource-prose').renderPrompt(
-        TEMPLATE.replace(/\{\{(requestToken|targets|feedback|evidence|mechanicalContract)\}\}/g,(_,key)=>values[key]),naturalResourceProse);
+        format.template(s.request).replace(/\{\{(requestToken|targets|feedback|evidence|mechanicalContract)\}\}/g,(_,key)=>values[key]),naturalResourceProse);
     (s.prompts||=new Set()).add(rendered);return rendered;
 }
 function readRecord(filename,expectedSha) {
@@ -288,7 +289,7 @@ function bindDiagnostic(capability,diagnostic,messages) {
         ||!isDeepStrictEqual(q.identity,s.identity)||!isDeepStrictEqual(q.draft,s.draft)
         ||q.draftSha256!==s.request.draftSha256||q.promptSha256!==sha(q.prompt)||!s.prompts?.has(q.prompt)
         ||!isDeepStrictEqual(q.readerTargetOrdinalRequest,s.request)
-        ||q.actualRepairPromptTemplateSha256!==TEMPLATE_SHA||q.actualRepairPromptContract!==CONTRACT
+        ||q.actualRepairPromptTemplateSha256!==format.templateSha(s.request)||q.actualRepairPromptContract!==CONTRACT
         ||q.inputMessagesSha256!==sha(JSON.stringify(messages))
         ||!isDeepStrictEqual(messageImages(messages),q.images.map(i=>({mime:i.mime,base64Sha256:i.base64Sha256})))
         ||q.atomicOperation||q.sectionGroupPlanContract||q.termTargets

@@ -2119,17 +2119,30 @@ function validateStructuredImplementationSpecs(rawSpecs, proseFormatOptions) {
 }
 
 function parseApiReaderArticleResult(raw, options = {}) {
+    const readerFormat = require('./lib/reader-record-format');
+    const allowTypoNorm = options?.allowCurrentDraftFingerprintTypoNormalization === true;
+    let workingRaw = raw;
     let representation;
-    try { representation = require('./lib/reader-record-format').draftFormat(JSON.parse(extractJsonObjectText(raw))); }
-    catch { return parseApiReaderArticleResultUnchecked(raw, options); }
+    try {
+        let parsedObj = JSON.parse(extractJsonObjectText(raw));
+        if (allowTypoNorm) {
+            const checked = readerFormat.normalizeCurrentDraftFingerprintTypo(parsedObj);
+            if (checked.typoFixed) {
+                parsedObj = checked.normalized;
+                workingRaw = JSON.stringify(parsedObj);
+            }
+        }
+        representation = readerFormat.draftFormat(parsedObj);
+    }
+    catch { return parseApiReaderArticleResultUnchecked(workingRaw, options); }
     const effectiveOptions = representation.modern && !options.compileCurrent && !options.compiledPlanHeader
-        ? { ...options, compileCurrent: true, compiledPlanHeader: require('./lib/reader-record-format').compiledPlanHeader(representation) }
+        ? { ...options, compileCurrent: true, compiledPlanHeader: readerFormat.compiledPlanHeader(representation) }
         : options;
     const result = require('./lib/reader-proof-format').withDraftRepresentation(representation, effectiveOptions, () =>
         require('./lib/reader-table-pdf-evidence').withArtifacts(effectiveOptions.structuredArtifacts,
         effectiveOptions.arxivId, () => withReaderSourceQuoteEvidence(effectiveOptions.structuredArtifacts,
-            effectiveOptions.arxivId, () => parseApiReaderArticleResultUnchecked(raw, effectiveOptions))));
-    const draft = require('./lib/reader-repair').parseRecoveryDraft(raw);
+            effectiveOptions.arxivId, () => parseApiReaderArticleResultUnchecked(workingRaw, effectiveOptions))));
+    const draft = require('./lib/reader-repair').parseRecoveryDraft(workingRaw);
     const current = currentReaderFactDailySource();
     if (current && draft && options.sourceText === current.source.text
         && stableFingerprint(options.structuredArtifacts) === stableFingerprint(current.source.structuredArtifacts)) {
@@ -2146,8 +2159,12 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     } catch (error) {
         throw new Error(`读者文章 JSON 无法解析: ${error.message}`);
     }
-    const inputDraftSha256 = crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
     const readerFormat = require('./lib/reader-record-format');
+    if (options?.allowCurrentDraftFingerprintTypoNormalization === true) {
+        const checked = readerFormat.normalizeCurrentDraftFingerprintTypo(value);
+        if (checked.typoFixed) value = checked.normalized;
+    }
+    const inputDraftSha256 = crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
     const format = readerFormat.draftFormat(value);
     readerFormat.assertRequiredProfile(format, options);
     const integrated = format.profile === readerFormat.INTEGRATED;
@@ -2705,8 +2722,11 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         editorialProfile,
         skipTableCommentaryAlignment: true
     };
+    const runReaderEditorialQuality = view => validateReaderEditorialQuality(
+        view, normalizedSections, { ...qualityOptions, tableContextText: article }
+    );
     let qualityArticle = qualityView();
-    let quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
+    let quality = runReaderEditorialQuality(qualityArticle);
     // 概念 bridge 的表层是带计划签名的内容，术语必须逐字节保住，最后的 bridge 重新绑定
     // （findReaderBridgeParagraph）才能对上。数字修复由问题触发，却做的是全局模式替换，
     // 因此会改写术语内部的子串——比如「下一位置预测预训练」里的「一位」被换成「1位」，
@@ -2740,13 +2760,13 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     if (repairableSurfaceIssues.length > 0) {
         article = withProtectedBridgeSurfaces(article, repairableSurfaceIssues);
         qualityArticle = qualityView();
-        quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
+        quality = runReaderEditorialQuality(qualityArticle);
     }
     article = restoreReaderSectionHeadings(article, normalizedSections);
     article = removeDuplicateReaderLongSentences(article);
     article = separateApiReaderTableBlocks(article);
     qualityArticle = qualityView();
-    quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
+    quality = runReaderEditorialQuality(qualityArticle);
     const finalSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
         || (issue.code === 'quantitative_chinese_numeral'
@@ -2755,7 +2775,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     if (finalSurfaceIssues.length > 0) {
         article = withProtectedBridgeSurfaces(article, finalSurfaceIssues);
         qualityArticle = qualityView();
-        quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
+        quality = runReaderEditorialQuality(qualityArticle);
     }
     // 全局数字修复也可能碰到标题里匹配上的短语。最后一次修复做完之后、表格和图绑定去查
     // 这些确切的小节标题之前，把单独归一化过的计划锚点恢复回来。
@@ -2764,7 +2784,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     // 问题的偏移量描述的是注入之前的样子。注入原始 TeX 会改动后面的偏移，所以那些依赖
     // 上下文的豁免要对着产生诊断的那份确切文本复现，而不是渲染后的公式副本。
     qualityArticle = qualityView();
-    quality = validateReaderEditorialQuality(qualityArticle, normalizedSections, qualityOptions);
+    quality = runReaderEditorialQuality(qualityArticle);
     // 文章到这里已经过了所有正文和结构清理。在这个绑定原文之前的最后一道边界上重新绑定
     // 选中的 artifact 表格，后面的归一化就动不了已签名的 PDF 单元字节；直接调绑定的调用
     // 方仍保持严格，拒绝任何乱改。
@@ -5402,7 +5422,18 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     let paidCandidate = candidate;
                     if (!repairContext) {
                         paidCandidate = null;
-                        try { paidCandidate = repair.parseRepairableDraft(extractJsonObjectText(paidRaw)); }
+                        try {
+                            let paidDraftJson = extractJsonObjectText(paidRaw);
+                            try {
+                                const parsedPaid = JSON.parse(paidDraftJson);
+                                const checked = require('./lib/reader-record-format').normalizeCurrentDraftFingerprintTypo(parsedPaid);
+                                if (checked.typoFixed) {
+                                    console.log(`    [deep] 自动纠正当前 reader-draft schemaFingerprint 单字符抄写偏差 (${checked.editKind})`);
+                                    paidDraftJson = JSON.stringify(checked.normalized);
+                                }
+                            } catch (_) { /* 交给 parseRepairableDraft 处理 */ }
+                            paidCandidate = repair.parseRepairableDraft(paidDraftJson);
+                        }
                         catch (_) { /* Raw paid content is retained; parsing cannot replace the storage fault. */ }
                     }
                     try { repair.saveFailedCandidate(candidateDirectory, identity, {
@@ -5539,6 +5570,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 patchApplied = true;
                 patchRejectionFeedback = '';
             } else {
+                try {
+                    const parsedObj = JSON.parse(extractJsonObjectText(raw));
+                    const checked = require('./lib/reader-record-format').normalizeCurrentDraftFingerprintTypo(parsedObj);
+                    if (checked.typoFixed) {
+                        console.log(`    [deep] 自动纠正当前 reader-draft schemaFingerprint 单字符抄写偏差 (${checked.editKind})`);
+                        raw = JSON.stringify(checked.normalized);
+                    }
+                } catch (_) { /* 交给 parseRepairableDraft 与后续错误处理 */ }
                 candidate = repair.parseRepairableDraft(extractJsonObjectText(raw));
             }
             normalizeCandidate();
@@ -6035,9 +6074,18 @@ async function prepareConferenceReaderSavedRequestInput(paper, sourceDetails,
 
 function buildReaderRequestMessages(prompt, visibilityNotice, imageBlocks) {
     // 将静态提示与稳定原文证据 + imageBlocks 置于前面以提升 KV 前缀缓存命中，
-    // 把每轮变化的“代码校验反馈 / 上一版完整 JSON 草稿”挪到 imageBlocks 之后。
+    // 把每轮变化的反馈、授权目标与草稿后缀挪到 imageBlocks 之后。
     const text = String(prompt || '');
-    const splitMarkers = ['\n代码校验反馈：', '\n上一版完整 JSON 草稿'];
+    const splitMarkers = [
+        '\n代码校验反馈：',
+        '\n上一版完整 JSON 草稿',
+        '\n允许修改的内容与当前草稿SHA：',
+        '\n当前授权目标（只允许修改此处列出的 targetOrdinal，并严格匹配各目标 valueType）：',
+        '\n当前授权目标：',
+        '\n核验反馈（逐项消除下列问题）：',
+        '\n核验反馈：',
+        '\n当前检查和修法：'
+    ];
     let splitIdx = -1;
     for (const marker of splitMarkers) {
         const idx = text.indexOf(marker);
@@ -15356,23 +15404,47 @@ async function checkAndFixMethodSection(paper, analysis, sourceText, preparedEvi
 }
 
 /**
- * 检查文本中是否包含表格省略标记
+ * 检查文本中是否包含表格省略标记（命中时返回具体标记，否则返回 null）
  */
-function hasOmissionMarkers(text) {
-    if (!text) return false;
-    const markers = [
+function findTableOmissionMarker(text, { hasTable = hasMarkdownTable(text) } = {}) {
+    if (!text) return null;
+    const explicitMarkers = [
         '此处省略',
+        '其余省略',
+        '部分省略',
+        '略去其余',
+        '其余略',
+        '表格略',
+        '数据略',
         '表格数据与论文一致',
+        '详见原文表',
+        '见原文表',
         '详见原文',
         '详见论文',
         '表格详见',
         '数据详见',
-        '省略',
-        '详见表',
-        '（见表',
-        '(见表',
+        '详见原表'
     ];
-    return markers.some(m => text.includes(m));
+    for (const marker of explicitMarkers) {
+        if (text.includes(marker)) return marker;
+    }
+    const tableOmissionRe = /(?:表格|数据|其余|部分|中间|后续|完整(?:结果|表格|数据))(?:均|已|被|在此|暂)?(?<![不未无没非])省略|(?<![不未无没非])省略(?:其余|部分|了?(?:其余|部分|完整)?(?:表格|数据|行|列|结果|细节|多项))/;
+    const regexMatch = text.match(tableOmissionRe);
+    if (regexMatch) return regexMatch[0];
+    if (!hasTable) {
+        const missingTableCitationMarkers = ['详见表', '（见表', '(见表'];
+        for (const marker of missingTableCitationMarkers) {
+            if (text.includes(marker)) return marker;
+        }
+    }
+    return null;
+}
+
+/**
+ * 检查文本中是否包含表格省略标记
+ */
+function hasOmissionMarkers(text, options) {
+    return Boolean(findTableOmissionMarker(text, options));
 }
 
 /**
@@ -15394,11 +15466,11 @@ function hasExplicitTableReference(text) {
     return /\b(?:table|tbl)\.?\s*(?:[a-z]?\d+|[ivxlcdm]+)\b|表\s*[（(]?\s*(?:\d+|[一二三四五六七八九十百零]+)\s*[)）]?/i.test(text);
 }
 
-function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
+function getExperimentTableRepairIssue(analysis, textForAnalysis) {
     const resultsSection = extractResultsSection(analysis);
-    if (!resultsSection) return false;
+    if (!resultsSection) return null;
     const hasTable = hasMarkdownTable(resultsSection);
-    const hasOmission = hasOmissionMarkers(resultsSection);
+    const omissionMarker = findTableOmissionMarker(resultsSection, { hasTable });
     const hasTableReference = hasExplicitTableReference(resultsSection);
     const sourceHasTables = sourceTextLikelyHasTables(textForAnalysis);
 
@@ -15412,7 +15484,21 @@ function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
         sourceText: textForAnalysis,
         enforceTableCommentaryAlignment: true
     });
-    return hasOmission || Boolean(depthIssue) || (!hasTable && hasTableReference && sourceHasTables);
+    const reasons = [];
+    if (omissionMarker) {
+        reasons.push(`实验结果包含表格省略或外引占位标记“${omissionMarker}”，请补齐完整 Markdown 实验表格并移除省略占位表述`);
+    }
+    if (depthIssue) {
+        reasons.push(depthIssue);
+    }
+    if (!hasTable && hasTableReference && sourceHasTables) {
+        reasons.push('实验结果正文引用了论文表格且原文包含实验表格，但当前未嵌入可读 Markdown 实验表格');
+    }
+    return reasons.length > 0 ? reasons.join('；') : null;
+}
+
+function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
+    return Boolean(getExperimentTableRepairIssue(analysis, textForAnalysis));
 }
 
 /**
@@ -15420,23 +15506,25 @@ function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
  * 出现省略标记或未通过表格检查时，会调用模型；
  * 正文引用了表格、原文也有表格线索，但正文未展示表格时，也会调用模型。
  */
-async function checkAndFixTables(paper, analysis, sourceText, preparedEvidence = null) {
+async function checkAndFixTables(paper, analysis, sourceText, preparedEvidence = null, { callModelFn = callModel } = {}) {
     const resultsSection = extractResultsSection(analysis);
     if (!resultsSection) return analysis;
-    if (!analysisNeedsExperimentTableRepair(analysis, sourceText)) return analysis;
+    const issue = getExperimentTableRepairIssue(analysis, sourceText);
+    if (!issue) return analysis;
 
-    console.log(`    [deep] 🔍 检测到实验结果可能缺少表格，触发补充...`);
+    console.log(`    [deep] 🔍 检测到实验表格问题，触发补充（${issue}）...`);
 
     const prompt = appendPrimaryFactReviewPrompt(loadPrompt(currentTextStagePromptPath('tableRepair'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         resultsSection,
+        tableIssue: issue || '',
         textForAnalysis: typeof preparedEvidence === 'string'
             ? preparedEvidence
             : buildStageEvidenceContext('tableRepair', analysis, sourceText)
     }), 'tableRepair', paper);
 
-    const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
+    const fixedSection = await callModelFn([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
         { usageContext: { stage: 'tableRepair' },
                 ...(resolveRepairRequestPolicy('tableRepair')
                     ? { repairThinkingMode: resolveRepairRequestPolicy('tableRepair').thinkingMode } : {}) });
@@ -15805,5 +15893,6 @@ module.exports = {
     coalesceExcessCohesiveReaderSections,
     normalizeApiReaderDraftPreOrder,
     resolveApiReaderTargetEditorialProfile,
-    buildApiReaderMechanicalContract
+    buildApiReaderMechanicalContract,
+    buildReaderRequestMessages
 };

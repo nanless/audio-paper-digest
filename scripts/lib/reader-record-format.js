@@ -37,17 +37,131 @@ function resolveSchemaEditorialProfile(schema) {
     if (schema?.editorialProfile === COHESIVE_EDITORIAL) return COHESIVE_EDITORIAL;
     return LEGACY_INTEGRATED;
 }
-function draftFormat(value) {
-    const tagField = value && Object.hasOwn(value, 'contract') ? 'contract' : 'version';
-    if (!codec.hasValidHeader(value, 'reader-draft', tagField)) throw new Error('读者文章格式头未登记或字段混用');
-    const raw = value[tagField];
-    const header = codec.recordHeader(raw, 'reader-draft', value.schemaFingerprint);
-    const profile = codec.format(raw, 'reader-draft', value.schemaFingerprint);
-    const current = codec.isCurrentHeader(value, 'reader-draft', tagField);
+const LOWER_HEX_64 = /^[a-f0-9]{64}$/;
+const LOWER_HEX_63_65 = /^[a-f0-9]{63,65}$/;
+const RESERVED_NON_MODERN_HEADER_FIELDS = Object.freeze(['version', 'schemaVersion', 'policyVersion']);
+const DRAFT_ARRAY_FIELDS = Object.freeze(['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings']);
+
+function hexEditDistanceIsOne(candidate, expected) {
+    if (typeof candidate !== 'string' || typeof expected !== 'string') return false;
+    if (!LOWER_HEX_63_65.test(candidate) || !LOWER_HEX_64.test(expected)) return false;
+    if (candidate === expected) return false;
+    const lenDiff = candidate.length - expected.length;
+    if (lenDiff === 0) {
+        let diffs = 0;
+        for (let i = 0; i < expected.length; i += 1) {
+            if (candidate[i] !== expected[i]) {
+                diffs += 1;
+                if (diffs > 1) return false;
+            }
+        }
+        return diffs === 1;
+    }
+    if (Math.abs(lenDiff) === 1) {
+        const shorter = lenDiff < 0 ? candidate : expected;
+        const longer = lenDiff < 0 ? expected : candidate;
+        let i = 0;
+        let j = 0;
+        let skipped = false;
+        while (i < shorter.length && j < longer.length) {
+            if (shorter[i] === longer[j]) {
+                i += 1;
+                j += 1;
+            } else {
+                if (skipped) return false;
+                skipped = true;
+                j += 1;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+function hasValidCurrentDraftTopLevelShape(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.getPrototypeOf(value) !== Object.prototype) return false;
+    const allowed = new Set(['contract', 'schemaFingerprint', ...DRAFT_FIELDS, ...STRUCTURED_OPTIONAL_DRAFT_FIELDS]);
+    if (Object.keys(value).some(key => !allowed.has(key))) return false;
+    if (!DRAFT_FIELDS.every(key => Object.hasOwn(value, key))) return false;
+    if (typeof value.readerTitle !== 'string' || typeof value.oneSentenceThesis !== 'string') return false;
+    if (DRAFT_ARRAY_FIELDS.some(field => !Array.isArray(value[field]))) return false;
+    if (Object.hasOwn(value, 'implementationSpecs')) {
+        const specs = value.implementationSpecs;
+        if (!specs || typeof specs !== 'object' || Array.isArray(specs)
+            || Object.getPrototypeOf(specs) !== Object.prototype) return false;
+    }
+    return true;
+}
+
+// Strictly opt-in live-response normalization for 1-char lowercase-hex copy
+// typos on the CURRENT reader-draft schemaFingerprint. Never mutates the input,
+// never promotes historical/unknown/mixed headers, and never weakens cold replay.
+function normalizeCurrentDraftFingerprintTypo(value) {
+    const current = codec.recordHeader(codec.contract('reader-draft'), 'reader-draft');
+    const originalFingerprint = value && typeof value === 'object' && !Array.isArray(value)
+        && Object.hasOwn(value, 'schemaFingerprint') ? value.schemaFingerprint : undefined;
+    const unchanged = {
+        normalized: value,
+        typoFixed: false,
+        originalFingerprint,
+        canonicalFingerprint: null,
+        editKind: null
+    };
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.getPrototypeOf(value) !== Object.prototype) return unchanged;
+    if (!Object.hasOwn(value, 'contract') || value.contract !== current.contract) return unchanged;
+    if (RESERVED_NON_MODERN_HEADER_FIELDS.some(field => Object.hasOwn(value, field))) return unchanged;
+    if (typeof originalFingerprint !== 'string') return unchanged;
+    if (originalFingerprint === current.schemaFingerprint) {
+        return {
+            normalized: value,
+            typoFixed: false,
+            originalFingerprint,
+            canonicalFingerprint: current.schemaFingerprint,
+            editKind: null
+        };
+    }
+    // Never rewrite any already-registered historical reader-draft header.
+    if (codec.hasValidHeader(value, 'reader-draft', 'contract')) return unchanged;
+    if (!hexEditDistanceIsOne(originalFingerprint, current.schemaFingerprint)) return unchanged;
+    if (!hasValidCurrentDraftTopLevelShape(value)) return unchanged;
+    const editKind = originalFingerprint.length < current.schemaFingerprint.length ? 'deletion'
+        : originalFingerprint.length > current.schemaFingerprint.length ? 'insertion' : 'substitution';
+    return {
+        normalized: { ...value, schemaFingerprint: current.schemaFingerprint },
+        typoFixed: true,
+        originalFingerprint,
+        canonicalFingerprint: current.schemaFingerprint,
+        editKind
+    };
+}
+
+function draftFormat(value, options = {}) {
+    let target = value;
+    let fingerprintTypoFixed = false;
+    let originalFingerprint = null;
+    if (options?.allowCurrentDraftFingerprintTypoNormalization === true) {
+        const checked = normalizeCurrentDraftFingerprintTypo(value);
+        if (checked.typoFixed) {
+            target = checked.normalized;
+            fingerprintTypoFixed = true;
+            originalFingerprint = checked.originalFingerprint;
+        }
+    }
+    const tagField = target && Object.hasOwn(target, 'contract') ? 'contract' : 'version';
+    if (!codec.hasValidHeader(target, 'reader-draft', tagField)) throw new Error('读者文章格式头未登记或字段混用');
+    const raw = target[tagField];
+    const header = codec.recordHeader(raw, 'reader-draft', target.schemaFingerprint);
+    const profile = codec.format(raw, 'reader-draft', target.schemaFingerprint);
+    const current = codec.isCurrentHeader(target, 'reader-draft', tagField);
     const modern = Object.hasOwn(header, 'schemaFingerprint');
-    const schema = modern ? codec.declaredSchema(raw, 'reader-draft', value.schemaFingerprint) : null;
+    const schema = modern ? codec.declaredSchema(raw, 'reader-draft', target.schemaFingerprint) : null;
     const editorialProfile = profile !== INTEGRATED ? profile : resolveSchemaEditorialProfile(schema);
-    return { raw, header, profile, current, modern, editorialProfile };
+    return {
+        raw, header, profile, current, modern, editorialProfile,
+        ...(fingerprintTypoFixed ? { fingerprintTypoFixed: true, originalFingerprint } : {})
+    };
 }
 function isIntegratedDraft(value) {
     try { return draftFormat(value).profile === INTEGRATED; } catch { return false; }
@@ -175,6 +289,6 @@ function draftHeaderForSavedPlan(plan) {
 module.exports = { INTEGRATED, COMPACT, STRUCTURED_EDITORIAL, STRUCTURED_V5_EDITORIAL, HISTORICAL_STRUCTURED_EDITORIALS, COHESIVE_EDITORIAL, LEGACY_INTEGRATED,
     OLD_DRAFT_FP, OLD_PLAN_FP, V4_DRAFT_FP, V4_PLAN_FP, V5_DRAFT_FP, V5_PLAN_FP, DRAFT_FIELDS, STRUCTURED_OPTIONAL_DRAFT_FIELDS,
     IMPLEMENTATION_SPEC_KEYS, OPTIONAL_IMPLEMENTATION_SPEC_KEYS, isStructuredEditorial, isCohesiveEditorial, isModernEditorialProfile,
-    draftFormat, isIntegratedDraft, draftFields, profileForOptions, assertRequiredProfile, compiledPlanHeader,
+    draftFormat, hexEditDistanceIsOne, normalizeCurrentDraftFingerprintTypo, isIntegratedDraft, draftFields, profileForOptions, assertRequiredProfile, compiledPlanHeader,
     storedPlanFormat, storedPlanHeader, planEditorialProfile, effectiveEditorialProfile, isIntegratedPlan,
     isStructuredContract, compilationOptionsForSavedPlan, draftHeaderForSavedPlan };

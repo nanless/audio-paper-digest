@@ -50,7 +50,7 @@ test('actual paid saved candidate still fails strict public source parsing when 
         allowDeterministicQuoteRepair: false, allowDeterministicUnsupportedClaimPruning: true,
         enforceResourceAvailabilityClaims: true, verifiedResourceIdentity: saved.resourceIdentity,
         structuredArtifacts: saved.structuredArtifacts, sourceText: saved.sourceText
-    }), /tableBindings\[2\].*关键数字缺少 exact quote\/cell 证据: 8, 2/);
+    }), /tableBindings\[2\].*关键数字缺少 exact quote\/cell 证据: 8；.*missing=8\b/);
 });
 
 test('first-turn full fallback is !recovered, whereas the same saved payload resumes existing local repair without resetting 1/1', () => {

@@ -27,15 +27,16 @@
 <paper_input>
 论文标题：{title}
 arXiv ID：{arxivId}
+
+论文原文：
+
+{textForAnalysis}
+
 当前结构或内容问题：{missingSections}
 上一次结构校验反馈：{validationFeedback}
 
 已有分析：
 
 {existingAnalysis}
-
-论文原文：
-
-{textForAnalysis}
 </paper_input>
 ~~~~

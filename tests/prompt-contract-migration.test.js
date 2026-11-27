@@ -80,7 +80,7 @@ test('current templates preserve original text apart from the declared changes; 
             assert.match(text, /实验表格不符合数量、行列和解释要求/);
             assert.match(text, /核心摘要用 10–26 句完整中文句子，汉字与中文标点合计 700–1400 个/);
             assert.match(text, /核心实验数字主要集中在摘要和实验结果中/);
-            assert.match(text, /<paper_input>[\s\S]*\{existingAnalysis\}[\s\S]*\{textForAnalysis\}[\s\S]*<\/paper_input>/);
+            assert.match(text, /<paper_input>[\s\S]*\{textForAnalysis\}[\s\S]*\{missingSections\}[\s\S]*\{validationFeedback\}[\s\S]*\{existingAnalysis\}[\s\S]*<\/paper_input>/);
         } else if (current === 'prompts/current/deep-analysis.md') {
             const text = actual.toString();
             assert.notEqual(text, originalBytes.toString());
@@ -113,7 +113,7 @@ test('current templates preserve original text apart from the declared changes; 
             assert.match(text, /摘要正文写 10–26 句，汉字与中文标点合计 700–1400 个/);
             assert.match(text, /### 核心代价、适用边界与深读导览/);
             assert.match(text, /不要把 `0\.85` 写成 `85\.00` 或 `85%`。/);
-            assert.match(text, /<paper_input>[\s\S]*\{existingSummary\}[\s\S]*\{textForAnalysis\}[\s\S]*<\/paper_input>/);
+            assert.match(text, /<paper_input>[\s\S]*\{textForAnalysis\}[\s\S]*\{existingSummary\}[\s\S]*\{summaryIssue\}[\s\S]*<\/paper_input>/);
         } else if (current === 'prompts/current/gap-fill.md') {
             const text = actual.toString();
             assert.notEqual(text, originalBytes.toString());

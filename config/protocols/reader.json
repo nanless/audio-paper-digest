@@ -490,7 +490,8 @@
           "minimum": 1,
           "maximum": 8
         },
-        "authority": "private-normal-source-and-paid-request-required"
+        "authority": "private-normal-source-and-paid-request-required",
+        "templateLayout": "static-prefix-v2"
       },
       "historical": [
         {
@@ -499,6 +500,25 @@
           "header": {
             "contract": "reader-target-ordinal-patch-v1",
             "version": 1
+          }
+        },
+        {
+          "tag": "reader-target-ordinal-patch",
+          "variant": "bounded-existing-nodes",
+          "header": {
+            "contract": "reader-target-ordinal-patch",
+            "schemaFingerprint": "334889bc92083a45f374ac667bbb4580aa703ae3a2ef7df1001e2df41e7cb84d"
+          },
+          "schema": {
+            "fields": [
+              "requestToken",
+              "replacements"
+            ],
+            "limits": {
+              "minimum": 1,
+              "maximum": 8
+            },
+            "authority": "private-normal-source-and-paid-request-required"
           }
         }
       ]

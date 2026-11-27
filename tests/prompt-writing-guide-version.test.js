@@ -75,7 +75,13 @@ test('讲解增强保留机器章节、Reader来源声明及普通局部补丁�
     const originalPatch = oldRepair.slice(oldRepair.indexOf('没有明确的原子操作时'));
     const expectedPatch = originalPatch.replace('{"version":1,', JSON.stringify(header).slice(0, -1) + ',');
     assert.notEqual(expectedPatch, originalPatch);
-    assert.equal(repair.slice(repair.indexOf('没有明确的原子操作时')), expectedPatch);
+    const protoAnchor = '本轮确实涉及的结构与来源操作协议：';
+    const expectedStaticPatch = expectedPatch.slice(0, expectedPatch.indexOf(protoAnchor)).trimEnd();
+    const expectedProtoBlock = expectedPatch.slice(expectedPatch.indexOf(protoAnchor));
+    assert.ok(repair.includes(expectedStaticPatch), 'static JSON patch schema & rules must remain verbatim');
+    assert.ok(repair.indexOf(expectedStaticPatch) < repair.indexOf('<repair_input>'), 'static JSON patch schema & rules must precede <repair_input> for KV prefix caching');
+    assert.equal(repair.slice(repair.indexOf(protoAnchor)), expectedProtoBlock);
+    assert.ok(repair.indexOf('</repair_input>') < repair.indexOf(protoAnchor));
     for (const text of [article, repair]) {
         const slash = String.fromCharCode(92);
         const token = text.split(/\s+/).find(word => word.split(slash).join('') === 'nn');

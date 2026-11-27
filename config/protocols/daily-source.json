@@ -166,13 +166,46 @@
         ],
         "selectionProfiles": [
           "unchanged-excerpt",
-          "codepoint-safe-excerpt"
+          "codepoint-safe-excerpt",
+          "codepoint-safe-excerpt-v2"
         ]
       },
       "historical": [
         {
           "tag": "official-modality-scope-v1",
           "variant": "unicode-safe-official-excerpt"
+        },
+        {
+          "tag": "official-modality-scope",
+          "variant": "unicode-safe-official-excerpt",
+          "header": {
+            "contract": "official-modality-scope",
+            "schemaFingerprint": "f2dc6a7f5da235c9abfde9e5330d3d30fef9a3e95b0aad318b4ede542004ad28"
+          },
+          "schema": {
+            "source": [
+              "candidateInputSha256",
+              "rootDir",
+              "arxivId",
+              "generation",
+              "sourceManifestSha256",
+              "textSha256",
+              "pdfSha256",
+              "runtimeSha256",
+              "officialUrl",
+              "source"
+            ],
+            "excerpt": [
+              "batchDate",
+              "text",
+              "selectedTextSha256",
+              "selectionProfile"
+            ],
+            "selectionProfiles": [
+              "unchanged-excerpt",
+              "codepoint-safe-excerpt"
+            ]
+          }
         }
       ]
     },

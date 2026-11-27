@@ -4741,12 +4741,16 @@ function validateExecutiveAbstractSurfaceStructure(rawSummary) {
 }
 
 function hasExecutiveMethodArchitecture(contentBody) {
-    const componentPattern = /(?:编码器|解码器|声码器|分词器|量化器|转换器|变换器|Transformer|Conformer|Mamba|UNet|扩散|流匹配|注意力|网络|主干|骨干|适配器|投影层|投影头|模块|分支|前端|后端|分类头|回归头|预测头|判别器|生成器|检索器|规划器|求解器|滤波器|估计器|识别器|合成器|谱均衡|引擎|探针|矩阵|子空间|表征|特征|嵌入|隐状态|隐变量|码本|令牌|token|掩码|掩膜|损失|目标函数|正则|采样器|蒸馏|知识图谱|大模型|智能体|工具链|后台工具|对话系统|管线|流水线)/giu;
-    const actionPattern = /(?:输入|接收|提取|编码|映射|投影|压缩|量化|池化|聚合|融合|拼接|注入|调制|对齐|检索|筛选|路由|分解|预测|估计|重构|重建|解码|合成|生成|输出|优化|更新|训练|微调|冻结|约束|抑制|消除|解耦|提炼|写入|记录|组装|重写)/giu;
+    const componentPattern = /(?:编码器|解码器|声码器|分词器|量化器|转换器|变换器|Transformer|Conformer|Mamba|UNet|扩散|流匹配|注意力|网络|主干|骨干|适配器|投影层|投影头|模块|分支|前端|后端|分类头|回归头|预测头|判别器|生成器|检索器|规划器|求解器|滤波器|估计器|识别器|合成器|谱均衡|引擎|探针|矩阵|子空间|表征|特征|嵌入|隐状态|隐变量|码本|令牌|token|掩码|掩膜|损失|目标函数|正则|采样器|蒸馏|知识图谱|大模型|智能体|工具链|后台工具|对话系统|管线|流水线|仿真器|模拟器|编排器|评测协议|评分准则|任务契约|评测基准|基准集|日志|录音|访谈|统计检验)/giu;
+    const actionPattern = /(?:输入|接收|提取|编码|映射|投影|压缩|量化|池化|聚合|融合|拼接|注入|调制|对齐|检索|筛选|路由|分解|预测|估计|重构|重建|解码|合成|生成|输出|优化|更新|训练|微调|冻结|约束|抑制|消除|解耦|提炼|写入|记录|组装|重写|划分|扩展|调度|核查|实例化|计分|复核|刻画|校验|采集|整理|标注)/giu;
+    const leadingContrastPrefix = /^(?:(?:与|跟|同|相比于?|相较于?|较之|不同于|区别于)[^，,。；;]{0,40}(?:现有|已有|传统|以往|先前|主流)[^，,。；;]{0,30}[，,]\s*)/u;
     const deniedSentence = /(?:假设|假想|假定|设想|如果|预计|预期|可能|未来实验|计划采用|第三方|他人研究|先前工作|相关工作|现有(?:主流|方法|方案|路线|编解码器|模型|系统|工作)|传统(?:方法|方案|路线|指标|编解码器|模型|系统|工作)|以往(?:方法|方案|路线|模型|工作|研究)|主流(?:方法|方案|路线|编解码器|模型)|任务需要将|任务以[^。]{1,48}为输入)/u;
     for (const paragraph of String(contentBody || '').split(/\n\s*\n/u)) {
         const sentences = paragraph.split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
-        const validSentences = sentences.filter(s => s.length <= CORE_SUMMARY_MAX_METHOD_SENTENCE_CHARS && !deniedSentence.test(s));
+        const validSentences = sentences
+            .filter(s => s.length <= CORE_SUMMARY_MAX_METHOD_SENTENCE_CHARS)
+            .map(s => s.replace(leadingContrastPrefix, '').trim())
+            .filter(s => s && !deniedSentence.test(s));
         if (!validSentences.length) continue;
         const joined = validSentences.join('。');
         const components = new Set([...joined.matchAll(componentPattern)].map(m => m[0].toLowerCase()));
@@ -5067,7 +5071,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/(?:不|未)(?:被|直接|主要|实际|真正|仅|只|也|还|曾|能|会|再|尚)*\s*(?:用于|用来|用以)/.test(clause)
     ));
     const problemKeywordPattern = useExecutiveAbstract
-        ? /(?:问题|难点|瓶颈|症结|失效|缺陷|受限|局限|挑战|任务|目标|输入|输出|旨在|针对|解决|误选|错分|偏差|风险)/
+        ? /(?:问题|难点|瓶颈|症结|失效|缺陷|受限|局限|挑战|任务|目标|输入|输出|旨在|针对|解决|误选|错分|偏差|风险|障碍|缺口|不足|丢弃|鲁棒性|难以|无法)/
         : /(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)/;
     if (!problemKeywordPattern.test(contentBody) && !concretePurpose && !hasConcreteCompressionPurpose(contentBody) && !hasConcreteAcousticSimulationPurpose(contentBody, sourceText)) {
         issues.push('缺少任务问题、输入输出或实际难点');
@@ -5158,17 +5162,54 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         const groundedIssue = validateCoreSummarySourceGroundedClaims(rawExtractedSummary, sourceText);
         if (groundedIssue) issues.push(groundedIssue);
     }
+    const leadingContrastPrefix = /^\s*(?:(?:与|跟|同|相比于?|相较于?|较之|不同于|区别于)[^，,。；;]{0,40}(?:现有|已有|传统|以往|先前|主流)[^，,。；;]{0,30}[，,]\s*)/u;
     const priorMethodSentencePattern = /(?:现有|已有|传统|以往|先前|主流)(?:主流)?[^。！？!?\n]{0,28}(?:方法|方案|路线|模型|系统|编解码器|指标|代理|工作|研究)/u;
     const technicalBoundaryCompoundPattern = /(?:训练与冻结|冻结与更新|冻结与微调|训练|冻结|音素|音节|词|字|帧|分块|切分|窗口|时序|频带|声学|决策|分类|判别|模块|层间|梯度|相位|周期|起止|静音|语音活动)边界/gu;
     const boundaryBody = useExecutiveAbstract
         ? contentBody
             .replace(technicalBoundaryCompoundPattern, ' ')
-            .split(/(?<=[。！？!?\n])/u)
-            .filter(sentence => !priorMethodSentencePattern.test(sentence))
-            .join('')
+            .split(/\n\s*\n/u)
+            .map((paragraph, index, all) => (
+                paragraph
+                    .split(/(?<=[。！？!?\n])/u)
+                    .map(sentence => (index === all.length - 1 ? sentence.replace(leadingContrastPrefix, '') : sentence))
+                    .filter(sentence => !priorMethodSentencePattern.test(sentence))
+                    .join('')
+            ))
+            .join('\n\n')
         : contentBody;
-    const explicitBoundary = /(?:边界|局限|适用|失败|尚未|尚不覆盖|未覆盖|未验证|外推|仅限|受限)/.test(boundaryBody)
-        && !(useExecutiveAbstract && /(?:任何场景都适用|所有条件下均成立|不会失效|不存在局限|无适用限制)/u.test(contentBody));
+    const executiveNoLimitDisclaimer = useExecutiveAbstract
+        && /(?:任何场景都适用|所有条件下均成立|不会失效|不存在局限|无适用限制)/u.test(contentBody);
+    const boundaryParagraphs = boundaryBody.split(/\n\s*\n/u);
+    const conclusionFramedPattern = /(?:结论|上述(?:结论|同时提升|提升|增益|结果|发现)|研究(?:结果|发现)|该(?:结论|结果|发现)|本(?:研究|文)的?(?:结论|结果|发现))/u;
+    const methodConstraintPhrasePattern = /(?:延迟|显存|实时|算力|内存|带宽|码率|功耗|预算)[^，,；;。！？!?\n]{0,10}约束下[^，,；;。！？!?\n]{0,20}(?:提出|实现|解码|运行|部署|完成|工作|设计|构造)/gu;
+    const executiveExplicitBoundary = useExecutiveAbstract && !executiveNoLimitDisclaimer
+        && boundaryParagraphs.some((paragraph, paragraphIndex) => {
+            const isLastParagraph = paragraphIndex === boundaryParagraphs.length - 1;
+            return paragraph.split(/[。！？!?\n]/u).some(sentence => {
+                const trimmedSentence = sentence.trim();
+                if (!trimmedSentence) return false;
+                if (/(?:并非仅在|不是仅在|并非仅见|不限于|不会漏检|不易漏检|不存在域差异)/u.test(trimmedSentence)) {
+                    return false;
+                }
+                if (/(?:成立于|成立依赖|成立前提|域差异|易漏检|依赖[^。！？!?\n]{0,12}前提)/u.test(trimmedSentence)) {
+                    return true;
+                }
+                const inBoundaryContext = isLastParagraph || conclusionFramedPattern.test(trimmedSentence);
+                if (inBoundaryContext) {
+                    const scopedSentence = trimmedSentence
+                        .replace(/仅在(?:训练|预训练|微调|推理|解码)阶段/gu, '')
+                        .replace(methodConstraintPhrasePattern, '');
+                    if (/(?:仅见|仅在|约束下)/u.test(scopedSentence)) {
+                        return true;
+                    }
+                }
+                return /(?:仍|明显|显著|大幅|仍旧|依旧)?落后(?!于?(?:本文|本方法|本研究|本工作|本系统|所提))/u.test(trimmedSentence)
+                    && !/(?:既有|基线|对照|现有|传统|先前|以往)[^，,。；;]{0,32}落后/u.test(trimmedSentence);
+            });
+        });
+    const explicitBoundary = (/(?:边界|局限|适用|失败|尚未|尚不覆盖|未覆盖|未验证|外推|仅限|受限)/.test(boundaryBody)
+        && !executiveNoLimitDisclaimer) || executiveExplicitBoundary;
     const separatedUnverifiedBoundary = /(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)/.test(boundaryBody);
     const conditionalFailure = /(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)/.test(boundaryBody);
     const conditionalMetricFailure = boundaryBody.split(/[，,；;。！？!?\n]/u).some(clause =>

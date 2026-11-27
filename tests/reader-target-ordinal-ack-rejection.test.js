@@ -142,11 +142,19 @@ test('the ordinal rejection feedback carries the three machine-format requiremen
     assert.equal(deep.readerPatchRejectionPromptTail(null, { ordinal: true }), '');
 });
 
-test('the ordinal prompt template and contract bytes are unchanged', () => {
-    // 提示词模板参与 TEMPLATE_SHA 与既有付费记录的冷核重放，格式要求只能进反馈。
-    assert.equal(ordinal.TEMPLATE_SHA, '686238be8444925c79d37f5808bc5a7cb1b56c5151eed9329213eb350720283e');
+test('historical ordinal prompt template bytes remain cold-replay-exact while current schema upgrades to static-prefix-v2', () => {
+    // 历史 334889bc... 模板字节参与既有付费记录（2026-11-03..2026-11-27）的冷核重放，必须逐字保持不变。
+    const priorHeader = format.priorModernWireHeader();
+    assert.equal(priorHeader.schemaFingerprint, '334889bc92083a45f374ac667bbb4580aa703ae3a2ef7df1001e2df41e7cb84d');
+    assert.equal(format.templateSha(priorHeader), '686238be8444925c79d37f5808bc5a7cb1b56c5151eed9329213eb350720283e');
+    assert.ok(!format.template(priorHeader).includes('裸 JSON'));
+    assert.equal(format.templateSha(format.oldWireHeader()), 'b8eaceefa73682f94c351e348f390ad4e89e04363de760473f10a892bc78f122');
+    // 当前协议升级为 static-prefix-v2：新指纹与新模板 SHA 与历史严格分离。
     assert.equal(ordinal.CONTRACT, format.wireHeader().contract);
-    assert.ok(!format.template().includes('裸 JSON'));
+    assert.equal(ordinal.TEMPLATE_SHA, format.templateSha());
+    assert.notEqual(format.wireHeader().schemaFingerprint, priorHeader.schemaFingerprint);
+    assert.notEqual(ordinal.TEMPLATE_SHA, '686238be8444925c79d37f5808bc5a7cb1b56c5151eed9329213eb350720283e');
+    assert.ok(format.template().includes('裸 JSON'));
 });
 
 test('/implementationSpecs is admitted as an ordinary existing object node in ordinal patches', () => {

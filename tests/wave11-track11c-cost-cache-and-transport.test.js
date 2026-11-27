@@ -492,6 +492,8 @@ describe('Wave 11 Track 11C: equal-weight paper-sticky account affinity & scorec
 
     it('records accountId, mirrors append-only daily JSONL index, supports default/fast/canonical modes without mtime time-bomb, and never leaks hashes', () => {
         const dir = makeTempDir('pd-scorecard-');
+        const prevShardByDate = process.env.PD_LLM_USAGE_SHARD_BY_DATE;
+        process.env.PD_LLM_USAGE_SHARD_BY_DATE = '0';
         try {
             const usageDir = path.join(dir, 'llm-usage');
             const fakeAccountIdA = getAccountId('sk-secret-key-alpha');
@@ -555,10 +557,28 @@ describe('Wave 11 Track 11C: equal-weight paper-sticky account affinity & scorec
             assert.equal(loadedDefault.source, 'daily-index+usage-dir');
             assert.equal(loadedDefault.events.length, 2);
 
-            // Fast mode reads daily-index only
+            // Fast mode on flat usageDir reads daily-index only
             const loadedFast = loadEventsForDates(usageDir, [todayBj], { fast: true });
             assert.equal(loadedFast.source, 'daily-index-fast');
             assert.equal(loadedFast.events.length, 2);
+
+            // Fast mode on date-sharded usageDir reads daily-index + date-shard subdirectory
+            const shardedUsageDir = path.join(dir, 'llm-usage-sharded');
+            recordLlmUsage({
+                protocol: 'openai_responses',
+                model: 'muse-spark-1.3-contributor',
+                request: { input: [{ role: 'user', content: 'sharded' }], max_output_tokens: 1000 },
+                response: { status: 'completed', output_text: 'ok', usage: { input_tokens: 200, output_tokens: 40 } },
+                statusCode: 200,
+                durationMs: 600,
+                transportStarted: true,
+                context: { stage: 'dailyFilter', paperId: '2611.00003' },
+                accountId: fakeAccountIdA,
+                at: `${todayBj}T10:10:00+08:00`
+            }, { directory: shardedUsageDir, shardByDate: true });
+            const loadedFastSharded = loadEventsForDates(shardedUsageDir, [todayBj], { fast: true });
+            assert.equal(loadedFastSharded.source, 'daily-index+date-shard-fast');
+            assert.equal(loadedFastSharded.events.length, 1);
 
             // Canonical mode scans usageDir authoritatively without mtime cutoff (finds 2025-01-15 despite today's mtime!)
             const loadedCanonicalOld = loadEventsForDates(usageDir, ['2025-01-15'], { canonical: true });
@@ -579,6 +599,8 @@ describe('Wave 11 Track 11C: equal-weight paper-sticky account affinity & scorec
             assert.ok(!serialized.includes(fakeAccountIdB), 'must never expose stable accountId B');
             assert.ok(!/[a-f0-9]{64}/i.test(serialized), 'must never expose 64-hex credential fingerprints');
         } finally {
+            if (prevShardByDate === undefined) delete process.env.PD_LLM_USAGE_SHARD_BY_DATE;
+            else process.env.PD_LLM_USAGE_SHARD_BY_DATE = prevShardByDate;
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });

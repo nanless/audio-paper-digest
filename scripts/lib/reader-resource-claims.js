@@ -1533,6 +1533,73 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             && bounded(/原文写了数据集和代码公开链接/gu)
             && sourceAffirms(/Our dataset and code are publicly avail-\n[^\n]{0,180}\n\s*able\s+at:/gu)
             && /但本次只依据论文文本，不能确认链接当前可用，因此不能写成已公开可用/u.test(value)) return true;
+        // (a) 明确指向作者/官方后续发布的待定免责（如“权重可下载与代码可运行需以作者后续发布为准”），
+        // 仅豁免该闭合待定子句；必须包含明确的未来/待定限定，禁止归属/否定待定前缀与同句集体代词肯定尾巴。
+        const pendingReleaseProp = '(?:(?:模型)?权重(?:可下载|下载|可获取|开源|公开|可用)|(?:源)?代码(?:可运行|开源|公开|可用|可下载|可访问)|(?:数据(?:集)?|语料(?:库)?)(?:可获取|可下载|公开|开源|可用)|(?:端到端)?系统可(?:直接|一键)?运行|演示可(?:访问|听|用)|复现材料可(?:获取|用))';
+        const pendingReleaseDeferral = new RegExp(
+            '(?:' + pendingReleaseProp + '(?:\\s*[、与和及或]\\s*' + pendingReleaseProp + '){0,3})'
+            + '(?:均|都)?(?:'
+            + '(?:需|仍需|应|要)以(?:作者(?:团队)?|论文(?:作者)?|官方|项目(?:团队|组)?)?(?:后续|日后|未来|正式){1,2}(?:发布|开源|公开|上线|提供)为准'
+            + '|(?:有待|仍待|尚待|等待)(?:作者(?:团队)?|论文(?:作者)?|官方|项目(?:团队|组)?)?(?:后续|日后|未来|正式){1,2}(?:发布|开源|公开|上线|提供)'
+            + ')(?=[，,。！？!?；;]|$)',
+            'gu'
+        );
+        for (const span of value.matchAll(pendingReleaseDeferral)) {
+            if (!contains(span) || !safeRecoverySpan(span)) continue;
+            if (/(?:已(?:经)?|现已|当前已|目前已)(?:开源|公开|发布|上线|可用)/u.test(span[0])) continue;
+            const beforeClause = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);
+            if (/(?:不再认为|不再需要|无需|不必|并非|不是|本文|本论文|本研究|本工作|本项目|作者)/u.test(beforeClause)) continue;
+            const rawTail = value.slice(span.index + span[0].length);
+            const tail = rawTail.split(/[。！？!?；;]/u)[0];
+            const followup = rawTail.replace(/^[\s，,:：；;]+/u, '')
+                .replace(/^(?:但是?|不过|然而|可是|而)[\s，,:：；;]*/u, '');
+            const noNegGap = '(?:(?!(?:尚未|并未|暂未|没有|无法|未能|不能|不可|并非|不是|未|无|不))[^。！？!?；;])';
+            if (new RegExp(`(?:但|而|不过|然而|可是)[^。！？!?；;]{0,20}(?:二者|三者|两者|这[二两三]项|它们|这些资源|上述资源|全部|所有|均已|都已|现已)${noNegGap}{0,24}(?:开源|公开|开放|可用|可下载|可获取)`, 'u').test(tail)
+                || new RegExp(`(?:它们|二者|三者|两者|这[二两三]项|这些资源|上述资源|全部|所有|均已|都已|现已)${noNegGap}{0,28}(?:开源|公开|开放|可用|可下载|可获取)`, 'u').test(tail)
+                || new RegExp(`^(?:(?:它们|二者|三者|两者|这[二两三]项|这些资源|上述资源|全部|所有|均已|都已|现已)${noNegGap}{0,28}(?:开源|公开|开放|可用|可下载|可获取|发布|提供)|(?:目前|当前|现)?(?:均|都|全部|所有)?(?:已经|现已|已)(?:正式)?(?:开源|公开|开放|可用|可下载|可获取|发布|提供))`, 'u').test(followup)) {
+                continue;
+            }
+            return true;
+        }
+        // (b) 部分否定（“并非全部/并非所有数据集都有公开音频可因果重算/可获取”）说明外部语料不全开放，
+        // 严格限定名词与动作尾，拒绝并列转折/第二发布动词、作者归属以及同句后续的肯定子集分句。
+        if (type === 'dataset') {
+            const partialDatasetMediaNoun = '(?:(?:原始|完整|对应|配套)?(?:音频|语音|波形|录音|视频|标注|标签|文本|信号|样本|文件|数据|语料|内容))';
+            const partialDatasetUseTail = '(?:可(?:以)?(?:用于|直接)?(?:因果重算|重算|复算|核验|评测|评估|验证|对齐|获取|下载|访问|使用|用))';
+            const partialDatasetNegation = new RegExp(
+                '(?:并非|不是)(?:全部|所有|每个|每一个)(?:(?:训练|测试|评测|验证|已有|既有|外部|第三方|所用|相关)的?)?(?:数据集|语料库|语料)(?:都|均)?(?:'
+                + '(?:有|具备|提供|包含|附带|存在)(?:公开|开源|开放|可下载|可获取|可访问|可用)(?:的)?' + partialDatasetMediaNoun + partialDatasetUseTail + '?'
+                + '|(?:已|现已|是|为)?(?:公开|开源|开放|可下载|可获取|可访问|可用)(?:的)?(?:' + partialDatasetMediaNoun + ')?' + partialDatasetUseTail + '?'
+                + ')(?=[，,。！？!?；;]|$)',
+                'gu'
+            );
+            const affirmativeSubsetTail = /(?:但|而|不过|然而|可是|只有|仅|其余|其中)(?:(?!(?:尚未|并未|暂未|没有|无法|未能|不能|不可|并非|不是|未|无|不))[^。！？!?；;]){0,24}(?:已经|现已|均已|都已|已)?(?:公开|开源|开放|可下载|可获取|可用)/u;
+            for (const span of value.matchAll(partialDatasetNegation)) {
+                if (!contains(span) || !safeRecoverySpan(span)) continue;
+                const before = value.slice(0, span.index).split(/[。！？!?；;，,]/u).at(-1);
+                if (/(?:本文|本论文|本研究|本工作|本项目|作者(?:团队)?|论文作者|项目团队|我们|自建|新建|自有|新发布)/u.test(before + span[0])) continue;
+                const tailSentence = value.slice(span.index + span[0].length).split(/[。！？!?；;]/u)[0];
+                if (affirmativeSubsetTail.test(tailSentence)) continue;
+                return true;
+            }
+        }
+        // (c) 评测协议中的模型选择表述（“其余指标可用各自最优检查点”/“按指标选最优检查点”）
+        // 里的“可用”意为“可选用”，并非声称模型权重已公开下载；必须带明确评测/指标前缀，
+        // 禁止指代词“该”以及同分句中的归属/提供/加载/部署/推理表述。
+        if (type === 'model') {
+            const evalBestCheckpoint = /(?:(?:(?:其余|其他|各个?|每(?:个|项|一)?|不同|对应|下游|各项|上述)?(?:指标|任务|子集|基准|评测|评估|测试)(?:上|中|时)?|评测时|评估时|测试时|验证时|模型选择时)可用(?:各自|对应|相应|不同|单独|单指标|每指标|验证集|开发集)?(?:的)?(?:最优|最佳|最好)(?:的)?检查点|按(?:各自|每个?|各|不同)?指标(?:分别)?(?:选|选择|选取|挑|挑选|取|采用|使用|可用)[^。！？!?；;，,]{0,16}(?:最优|最佳|最好)(?:的)?检查点)/gu;
+            for (const span of value.matchAll(evalBestCheckpoint)) {
+                if (!contains(span) || !safe(span)) continue;
+                const clauseBefore = value.slice(0, span.index).split(/[。！？!?；;，,]/u).at(-1);
+                const clauseAfter = value.slice(span.index + span[0].length).split(/[。！？!?；;，,]/u)[0];
+                const localClause = clauseBefore + span[0] + clauseAfter;
+                const sentenceTail = value.slice(span.index + span[0].length).split(/[。！？!?；;]/u)[0];
+                if (/(?:本文|本论文|本研究|本工作|本项目|作者|我们|读者|用户|提供|已有|加载|部署|推理|开源|公开|开放|发布|下载|获取|访问|上传|托管)/u.test(localClause)) continue;
+                if (/该/u.test(span[0])) continue;
+                if (/(?:读者|用户)[^。！？!?；;]{0,20}(?:加载|部署|推理|下载|获取)/u.test(sentenceTail)) continue;
+                return true;
+            }
+        }
         return false;
     };
     const hasUnqualifiedTypeAffirmative = (
@@ -1606,9 +1673,24 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const nearestMentions = nearbyMentions.filter(mention => (
                 mentionDistance(mention) === minimumDistance
             ));
-            const associatedTypes = coordinatedResourceTypes(
+            let associatedTypes = coordinatedResourceTypes(
                 segment, nearbyMentions, nearestMentions
             );
+            // 「并非全部数据集都有公开音频，但其余均已公开可下载」这类省略复指的肯定子集尾巴，
+            // 前一分句已给出数据集部分否定、当前分句以转折/子集词开头且无局部否定时，
+            // 必须绑定回 dataset 拒绝，防止通过逗号断开资源名词绕过部分否定检查。
+            if (type === 'dataset' && !mentions.length && commaBefore >= 0) {
+                const previousChineseComma = value.lastIndexOf('，', commaBefore - 1);
+                const previousAsciiComma = value.lastIndexOf(',', commaBefore - 1);
+                const previousStart = Math.max(previousChineseComma, previousAsciiComma) + 1;
+                const previousSegment = value.slice(previousStart, commaBefore);
+                const localPrefix = segment.slice(0, localMatchIndex);
+                if (/(?:并非|不是)(?:全部|所有|每个|每一个)[^。！？!?；;，,]{0,20}(?:数据集|语料库|语料)/u.test(previousSegment)
+                    && /^\s*(?:但|而|不过|然而|可是|只有|仅|其余|其中)/u.test(localPrefix)
+                    && !/(?:尚未|并未|暂未|没有|无法|未能|不能|不可|并非|不是|未|无|不(?!过))/u.test(localPrefix)) {
+                    associatedTypes = new Set([...associatedTypes, 'dataset']);
+                }
+            }
             if (!associatedTypes.has(type)) continue;
             // “不能否认作者已开源/代码可下载”是肯定；省略归属者也不能
             // 由后面的普通否定或概念守卫吞掉，明确的缺失否定仍保留。
@@ -1617,6 +1699,10 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             if (/(?:不能|无法|不可|不应)(?:否认|否定)[^。！？!?；;，,]{0,16}(?:作者|本文|本论文|本研究|本工作)?[^。！？!?；;，,]{0,40}$/u.test(assertionPrefix)
                 && !/(?:尚未|并未|未曾|没有|未公开|未发布|未确认|未验证|未发现|未找到|不存在|尚无)/u.test(assertionPrefix)) return true;
             if (/(?:不能|无法|不可|不应)(?:说|声称|断言|认为)(?:证据)?不支持(?:作者|本文|本论文|本研究|本工作)?$/u.test(assertionPrefix)) return true;
+            if (/(?:不再|并不|不是|并非|不能|无法|不可|不应)(?:认为|觉得|需要|须|必|再|等待)|无需|不必/u.test(assertionPrefix)
+                && /(?:以(?:作者(?:团队)?|论文(?:作者)?|官方|项目(?:团队|组)?)?(?:后续|日后|未来|正式){0,2}(?:发布|开源|公开|上线|提供)为准|(?:有待|仍待|尚待|等待)(?:作者(?:团队)?|论文(?:作者)?|官方|项目(?:团队|组)?)?(?:后续|日后|未来|正式){0,2}(?:发布|开源|公开|上线|提供))/u.test(segment)) {
+                return true;
+            }
             if (isBoundedResourceMeaningNonClaim(value, type, match.index, match.index + match[0].length, { qualificationResource })
                 || isThirdPartyTypeAttribution(segment, type, mentions, localMatchIndex, localMatchEnd)
                 || isDataSourceRepositoryAttribution(segment, type)

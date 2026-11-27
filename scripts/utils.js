@@ -743,14 +743,15 @@ function normalizeReasoningEffort(value, model) {
 // dailyFilter、publish.text 维持 low，publish.figure 及结构/摘要/表格/方法局部修补维持 medium。
 // PD_TIERED_REASONING_EFFORT=0 可关闭。
 const STAGE_REASONING_EFFORT_TIERS = Object.freeze({
-    // minimal tier: 纯机械抽取、标签挑选、术语桥补全与 JSON 载荷修补
+    // minimal tier: 纯机械抽取、标签挑选、术语桥补全、JSON 载荷修补与纯摘要日更初筛
     openSourceScan: 'minimal',
     tagSelection: 'minimal',
     apiReaderConceptTerms: 'minimal',
     apiReaderImageProbe: 'minimal',
     repair_review_payload: 'minimal',
     'historical-source-tag-classification': 'minimal',
-    // low tier: 日更筛选、会议筛选、历史标签复核与发布文本审查
+    dailyFilterAbstractOnly: 'minimal',
+    // low tier: 带官方全文取证的日更筛选、会议筛选、历史标签复核与发布文本审查
     dailyFilter: 'low',
     'conference-filter': 'low',
     'historical-source-tag-classification-review': 'low',

@@ -10,6 +10,7 @@ const daily = require('../scripts/lib/daily-fresh-source-plan');
 const fresh = require('../scripts/lib/fresh-analysis-context');
 const engine = require('../scripts/analysis-engine');
 const usage = require('../scripts/lib/llm-usage');
+const { listUsageLedgerFiles } = require('../scripts/lib/llm-usage-ledger');
 const replay = require('../scripts/lib/saved-scoring-audit-replay');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const ref = filename => ({ path: filename, sha256: sha(fs.readFileSync(filename)) });
@@ -67,7 +68,7 @@ async function fixture(t) {
         { ...common, kind: 'request', at: '2026-10-23T00:00:01.500Z', outcome: 'completed', statusCode: 200,
             transportStarted: true, outputTextSha256: sha('original raw response') } ];
     for (const event of events) usage.writeLlmUsageEvent(event, { directory: Config.FILES.llmUsageDir });
-    const ledger = fs.readdirSync(Config.FILES.llmUsageDir).map(name => ref(path.join(Config.FILES.llmUsageDir,name)));
+    const ledger = listUsageLedgerFiles(Config.FILES.llmUsageDir).map(entry => ref(entry.file));
     const started = ledger.find(r => JSON.parse(fs.readFileSync(r.path)).kind === 'request_started');
     const completed = ledger.find(r => JSON.parse(fs.readFileSync(r.path)).kind === 'request');
     const batch = { batchDate: plan.batchDate, dailyFreshSourceRun: daily.dailyFreshSourceReference(plan), papers: [original] };

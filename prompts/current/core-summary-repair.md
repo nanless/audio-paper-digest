@@ -40,14 +40,15 @@
 <paper_input>
 论文标题：{title}
 论文 ID：{arxivId}
-当前摘要问题：{summaryIssue}
+
+论文原文证据：
+
+{textForAnalysis}
 
 当前核心摘要：
 
 {existingSummary}
 
-论文原文证据：
-
-{textForAnalysis}
+当前摘要问题：{summaryIssue}
 </paper_input>
 ~~~

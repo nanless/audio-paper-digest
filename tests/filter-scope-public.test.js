@@ -88,16 +88,24 @@ function officialSources(counts, text = 'The model has an audio tokenizer and ev
 test('scope windows preserve complete mathematical Unicode code points and bind the corrected selection', async t => {
     fixture(t);
     const candidate = paper('2610.90091');
-    const text = 'a'.repeat(23999) + '𝐱' + ('audio 𝐲 speech 𝛽 '.repeat(11000));
+    const text = 'a'.repeat(11999) + '𝐱' + 'b'.repeat(11998) + '𝐱' + ('audio 𝐲 speech 𝛽 '.repeat(11000));
     assert.equal(text.isWellFormed(), true);
     const evidence = await scope.captureFilterScopeEvidence(candidate, batchDate, officialSources({ text: 0, pdf: 0 }, text));
     assert.equal(evidence.text.isWellFormed(), true);
-    assert.ok(evidence.text.length <= scope.MAX_SCOPE_CHARACTERS);
-    assert.equal(evidence.selectionProfile, 'codepoint-safe-excerpt');
+    assert.ok(evidence.text.length <= scope.MAX_SCOPE_CHARACTERS_V2);
+    assert.equal(evidence.selectionProfile, 'codepoint-safe-excerpt-v2');
     assert.equal(evidence.selectedTextSha256, crypto.createHash('sha256').update(evidence.text).digest('hex'));
     scope.assertFilterScopeEvidence(candidate, evidence, batchDate);
     const corrupt = { ...evidence, text: evidence.text + '\ud835' };
     assert.throws(() => scope.assertFilterScopeEvidence(candidate, corrupt, batchDate), /来源四文件/);
+    // 冷重放兼容：历史 120K codepoint-safe-excerpt 档案仍通过 assertFilterScopeEvidence
+    const legacyStored = require('../scripts/lib/fresh-arxiv-rewrite-source.js').readFreshArxivRewriteSource({
+        rootDir: evidence.rootDir, arxivId: candidate.arxivId, generation: 1
+    });
+    const legacyEvidence = scope.buildFilterScopeEvidence(candidate, batchDate, legacyStored, { profile: 'v1' });
+    assert.equal(legacyEvidence.selectionProfile, 'codepoint-safe-excerpt');
+    assert.ok(legacyEvidence.text.length <= scope.MAX_SCOPE_CHARACTERS);
+    assert.equal(scope.assertFilterScopeEvidence(candidate, legacyEvidence, batchDate), legacyEvidence);
 });
 
 test('unaffected scope selection retains its input version and safely samples varying Unicode boundaries', async t => {
@@ -105,12 +113,24 @@ test('unaffected scope selection retains its input version and safely samples va
     const candidate = paper('2610.90092');
     const evidence = await scope.captureFilterScopeEvidence(candidate, batchDate,
         officialSources({ text: 0, pdf: 0 }, 'audio and speech '.repeat(11000)));
-    assert.equal(evidence.selectionProfile, 'unchanged-excerpt');
+    assert.equal(evidence.selectionProfile, 'codepoint-safe-excerpt-v2');
+    assert.ok(evidence.text.length <= scope.MAX_SCOPE_CHARACTERS_V2);
+    // 冷重放兼容：历史 120K unchanged-excerpt 档案仍通过 assertFilterScopeEvidence
+    const legacyStored = require('../scripts/lib/fresh-arxiv-rewrite-source.js').readFreshArxivRewriteSource({
+        rootDir: evidence.rootDir, arxivId: candidate.arxivId, generation: 1
+    });
+    const legacyUnchanged = scope.buildFilterScopeEvidence(candidate, batchDate, legacyStored, { profile: 'v1' });
+    assert.equal(legacyUnchanged.selectionProfile, 'unchanged-excerpt');
+    assert.ok(legacyUnchanged.text.length <= scope.MAX_SCOPE_CHARACTERS);
+    assert.equal(scope.assertFilterScopeEvidence(candidate, legacyUnchanged, batchDate), legacyUnchanged);
     for (let prefix = 0; prefix < 12; prefix++) {
         const text = 'x'.repeat(prefix) + '𝐱𝛽 audio speech '.repeat(12000);
         const selected = scope.selectScopeText(text);
         assert.equal(selected.isWellFormed(), true, `prefix ${prefix}`);
-        assert.ok(selected.length <= scope.MAX_SCOPE_CHARACTERS);
+        assert.ok(selected.length <= scope.MAX_SCOPE_CHARACTERS_V2);
+        const selectedV1 = scope.selectScopeText(text, { profile: 'v1' });
+        assert.equal(selectedV1.isWellFormed(), true, `v1 prefix ${prefix}`);
+        assert.ok(selectedV1.length <= scope.MAX_SCOPE_CHARACTERS);
     }
 });
 test('旧范围证明和已有封存来源可按原字节复用', async t => {
