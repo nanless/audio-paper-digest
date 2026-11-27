@@ -1257,6 +1257,55 @@ class RepoRenameAndHardeningTest(unittest.TestCase):
                     M.run_hugo(repo, generation)
             self.assertEqual(len(seen_cmds), 1)
             self.assertIn('--noBuildLock', seen_cmds[0])
+            self.assertIn('--minify', seen_cmds[0])
+            with mock.patch.object(M.shutil, 'which', return_value='/usr/bin/hugo'), \
+                    mock.patch.object(M.subprocess, 'run', side_effect=fake_run):
+                with self.assertRaisesRegex(M.ConferencePublicationError, '超时'):
+                    M.run_hugo(repo, generation, minify=False)
+            self.assertEqual(len(seen_cmds), 2)
+            self.assertNotIn('--minify', seen_cmds[1])
+
+    def test_verify_reviewed_publication_urls_bridges_unminified_only_when_exact(self):
+        reviewed = [{
+            'path': 'content/posts/demo.md',
+            'sourceSha256': 'a' * 64,
+            'url': 'https://example.org/posts/demo/',
+            'projectionSha256': 'b' * 64,
+            'pageIdentitySha256': 'c' * 64,
+            'formulaCount': 0,
+        }]
+        minified = [{**reviewed[0], 'pageIdentitySha256': 'd' * 64}]
+        generation = {'baseHead': '1' * 40, 'files': [], 'imageFiles': []}
+        calls = []
+
+        def fake_verify(pages, images, gen):
+            calls.append(pages[0]['pageIdentitySha256'])
+            if pages[0]['pageIdentitySha256'] == 'c' * 64:
+                raise ValueError('线上标题、H1或多级研究分类与已审HTML不一致')
+            return {'status': 'passed', 'checks': [{'url': pages[0]['url']}]}
+
+        def fake_run_hugo(repo, gen, *, minify=True):
+            return {'pages': minified if minify else reviewed}
+
+        with mock.patch.object(M, 'verify_conference_publication_urls', side_effect=fake_verify), \
+                mock.patch.object(M, 'run_hugo', side_effect=fake_run_hugo):
+            res = M.verify_reviewed_publication_urls(Path('/tmp/blog'), reviewed, [], generation, '2' * 40, '3' * 40)
+        self.assertEqual(res['status'], 'passed')
+        self.assertEqual(calls, ['c' * 64, 'd' * 64])
+
+        # Negative: if minified changes visible projectionSha256, bridge must refuse.
+        tampered_min = [{**minified[0], 'projectionSha256': 'e' * 64}]
+        with mock.patch.object(M, 'verify_conference_publication_urls', side_effect=fake_verify), \
+                mock.patch.object(M, 'run_hugo', side_effect=lambda repo, gen, *, minify=True: {'pages': tampered_min if minify else reviewed}):
+            with self.assertRaisesRegex(ValueError, '线上标题、H1或多级研究分类与已审HTML不一致'):
+                M.verify_reviewed_publication_urls(Path('/tmp/blog'), reviewed, [], generation, '2' * 40, '3' * 40)
+
+        # Negative: if plain re-render does not match reviewed pageIdentitySha256, bridge must refuse.
+        tampered_plain = [{**reviewed[0], 'pageIdentitySha256': 'f' * 64}]
+        with mock.patch.object(M, 'verify_conference_publication_urls', side_effect=fake_verify), \
+                mock.patch.object(M, 'run_hugo', side_effect=lambda repo, gen, *, minify=True: {'pages': minified if minify else tampered_plain}):
+            with self.assertRaisesRegex(ValueError, '线上标题、H1或多级研究分类与已审HTML不一致'):
+                M.verify_reviewed_publication_urls(Path('/tmp/blog'), reviewed, [], generation, '2' * 40, '3' * 40)
 
     def test_same_blog_and_image_repo_locks_do_not_deadlock_in_generate_reverify_push(self):
         from contextlib import contextmanager

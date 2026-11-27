@@ -1841,7 +1841,7 @@ def export_baseline(repo, base, destination, *, _ancestors=()):
 export_review_tree = export_baseline
 
 
-def run_hugo(repo, generation):
+def run_hugo(repo, generation, *, minify=True):
     hugo = shutil.which('hugo')
     if not hugo:
         raise ConferencePublicationError('review 需要 Hugo')
@@ -1881,11 +1881,16 @@ def run_hugo(repo, generation):
             except (ValueError, OSError) as exc:
                 raise ConferencePublicationError('Hugo Figure 无法解码为 PNG') from exc
         env = build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
+        hugo_cmd = [hugo, '--source', str(source), '--destination', str(output),
+                    '--contentDir', str(content), '--noBuildLock',
+                    '--cacheDir', str(root / 'cache'), '--environment', 'production', '--quiet']
+        if minify:
+            # 生产站点（build-site.js）启用 --minify，本地审核必须使用相同输出模式，
+            # 避免标签区跨标签换行被压缩导致线上 pageIdentitySha256 漂移。
+            hugo_cmd.append('--minify')
         try:
             result = subprocess.run(
-                [hugo, '--source', str(source), '--destination', str(output),
-                 '--contentDir', str(content), '--noBuildLock',
-                 '--cacheDir', str(root / 'cache'), '--environment', 'production', '--quiet'],
+                hugo_cmd,
                 cwd=source, env=env, capture_output=True, text=True, timeout=300, check=False)
         except (subprocess.TimeoutExpired, OSError) as exc:
             raise ConferencePublicationError('Hugo gate 构建超时或无法执行（请在隔离目录检查 Hugo 诊断）') from exc
@@ -2438,6 +2443,44 @@ def write_push_commit_receipt(conference_id, process_id, generation, receipt, co
     return payload
 
 
+def _bridge_unminified_review_pages(repo, generation, reviewed_pages, commit, image_commit):
+    """兼容 --minify 对齐前已推送的历史 review receipt。
+
+    仅当同一已提交 commit 在无 --minify 下逐页复现原 review receipt 的
+    projectionSha256 与 pageIdentitySha256，且开启 --minify 后可见正文与公式计数完全
+    不变时，才返回该 commit 在 --minify 下的页面投影供线上 GET 验收。"""
+    if not commit or not reviewed_pages or not any('pageIdentitySha256' in p for p in reviewed_pages):
+        return None
+    render_generation = {**generation, 'baseHead': commit, 'renderTree': commit,
+                         'renderImageTree': image_commit}
+    plain_pages = run_hugo(repo, render_generation, minify=False)['pages']
+    minified_pages = run_hugo(repo, render_generation, minify=True)['pages']
+    if len(plain_pages) != len(reviewed_pages) or len(minified_pages) != len(reviewed_pages):
+        return None
+    for reviewed, plain, minified in zip(reviewed_pages, plain_pages, minified_pages):
+        if any(reviewed.get(k) != plain.get(k)
+               for k in ('path', 'sourceSha256', 'url', 'projectionSha256', 'pageIdentitySha256', 'formulaCount')):
+            return None
+        if any(reviewed.get(k) != minified.get(k)
+               for k in ('path', 'sourceSha256', 'url', 'projectionSha256', 'formulaCount')):
+            return None
+        if minified.get('pageIdentitySha256') == reviewed.get('pageIdentitySha256'):
+            return None
+    return minified_pages
+
+
+def verify_reviewed_publication_urls(repo, pages, image_records, generation, commit, image_commit):
+    try:
+        return verify_conference_publication_urls(pages, image_records, generation)
+    except ValueError as exc:
+        if '线上标题、H1或多级研究分类与已审HTML不一致' not in str(exc):
+            raise
+        bridged = _bridge_unminified_review_pages(repo, generation, pages, commit, image_commit)
+        if not bridged:
+            raise
+        return verify_conference_publication_urls(bridged, image_records, generation)
+
+
 def accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote):
     """只有实际部署的字节通过 GET 验收之后，才签完成凭证。"""
     existing = publication_dir(conference_id, process_id) / 'publish.json'
@@ -2446,8 +2489,8 @@ def accept_publication(conference_id, process_id, generation, receipt, commit, i
         validate_publication(generation, receipt, published, commit, image_commit)
         return published
     try:
-        acceptance = verify_conference_publication_urls(receipt['hugo']['pages'],
-                                                         generation['imageFiles'], generation)
+        acceptance = verify_reviewed_publication_urls(
+            blog_repo(), receipt['hugo']['pages'], generation['imageFiles'], generation, commit, image_commit)
     except Exception as exc:
         # 绝不把传输层异常文本写出去：重定向地址和代理里可能带密钥。
         raise ConferencePublicationError('远端已推送，但实际 URL 验收未通过；可重试 verify') from exc
@@ -2534,7 +2577,8 @@ def fresh_online_acceptance(directory, repo, images, generation, published, mech
         write_exact(intent_path, json_bytes(intent))
     failure = None
     try:
-        acceptance = verify_conference_publication_urls(mechanical['pages'], image_files, generation)
+        acceptance = verify_reviewed_publication_urls(
+            repo, mechanical['pages'], image_files, generation, commit, image_commit)
         expected_urls = {p['url'] for p in mechanical['pages']} | {
             f'{IMAGE_BASE_URL}/{r["path"]}' for r in image_files} | {
             url for url, _ in conference_sidecar_urls(mechanical['pages'], generation)}
