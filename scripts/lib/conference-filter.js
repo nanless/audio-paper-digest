@@ -83,7 +83,7 @@ const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
     'ismir-2026': 'International Society for Music Information Retrieval',
     'waspaa-2025': 'IEEE Workshop on Applications of Signal Processing to Audio and Acoustics'
 });
-const CORE_AUDIO_CONFERENCE_FAMILY_LABELS = Object.freeze({
+const PRIOR_CORE_AUDIO_CONFERENCE_FAMILY_LABELS = Object.freeze({
     asru: 'IEEE Automatic Speech Recognition and Understanding Workshop',
     chime: 'CHiME Speech Separation and Recognition',
     dafx: 'Digital Audio Effects',
@@ -98,6 +98,35 @@ const CORE_AUDIO_CONFERENCE_FAMILY_LABELS = Object.freeze({
     speechprosody: 'Speech Prosody',
     waspaa: 'IEEE Workshop on Applications of Signal Processing to Audio and Acoustics'
 });
+const CORE_AUDIO_CONFERENCE_FAMILY_LABELS = Object.freeze({
+    asru: 'IEEE Automatic Speech Recognition and Understanding Workshop',
+    'audio-aaai': 'Audio-Centric AI (Audio-AAAI)',
+    avsp: 'Auditory-Visual Speech Processing',
+    chime: 'CHiME Speech Separation and Recognition',
+    dafx: 'Digital Audio Effects',
+    dc: 'ISCA Doctoral Consortium',
+    dcase: 'Detection and Classification of Acoustic Scenes and Events',
+    icmc: 'International Computer Music Conference',
+    impactspeech: 'Impact of Speech Technology',
+    interspeech: 'Interspeech',
+    ismir: 'International Society for Music Information Retrieval',
+    iwsds: 'Spoken Dialogue Systems Technology',
+    iwslt: 'Spoken Language Translation',
+    jep: 'Speech Studies (Journées d’Études sur la Parole)',
+    mlcslm: 'Multilingual Conversational Speech Language Model',
+    nime: 'New Interfaces for Musical Expression',
+    nlp4musa: 'NLP for Music and Audio',
+    odyssey: 'Speaker and Language Recognition',
+    salma: 'Speech and Audio Language Models',
+    sigdial: 'SIGDIAL Discourse and Dialogue',
+    sigul: 'Under-resourced Languages and Speech',
+    smc: 'Sound and Music Computing',
+    speakable: 'Speech Language Models in Low-Resource Settings',
+    speechprosody: 'Speech Prosody',
+    trustaudio: 'Trustworthy Speech and Audio AI',
+    waspaa: 'IEEE Workshop on Applications of Signal Processing to Audio and Acoustics',
+    wochat: 'Workshop on Chatbots and Agentic Technologies (ISCA)'
+});
 const CORE_AUDIO_CONFERENCE_IDS = Object.freeze(Object.keys(CORE_AUDIO_CONFERENCE_LABELS).sort());
 function resolveCoreAudioConferenceLabel(conferenceId) {
     const id = String(conferenceId || '').trim().toLowerCase();
@@ -105,7 +134,7 @@ function resolveCoreAudioConferenceLabel(conferenceId) {
     if (Object.prototype.hasOwnProperty.call(CORE_AUDIO_CONFERENCE_LABELS, id)) {
         return CORE_AUDIO_CONFERENCE_LABELS[id];
     }
-    const match = /^([a-z]+)-(\d{4})$/.exec(id);
+    const match = /^([a-z0-9]+(?:-[a-z0-9]+)*)-(\d{4})$/.exec(id);
     if (!match) return null;
     const [, family, yearText] = match;
     const year = Number(yearText);
@@ -144,6 +173,13 @@ const PRIOR_LLM_FILTER_POLICY = JSON.stringify({
     ...FILTER_CONFIG_BINDING_BASE,
     coreAudioConferenceLabels: PRIOR_CORE_AUDIO_CONFERENCE_LABELS
 });
+const PRIOR_2026_VERTICAL_FAMILY_FILTER_POLICY = JSON.stringify({
+    prompt: 'filter:first-fenced-block',
+    parser: DAILY_DECISION_PARSER_CONTRACT,
+    ...FILTER_CONFIG_BINDING_BASE,
+    coreAudioConferenceFamilyLabels: PRIOR_CORE_AUDIO_CONFERENCE_FAMILY_LABELS,
+    dailyFilterPrefilterSha256: dailyFilterPrefilter.DAILY_FILTER_PREFILTER_SHA256
+});
 const LLM_FILTER_POLICY = JSON.stringify({
     prompt: 'filter:first-fenced-block',
     parser: DAILY_DECISION_PARSER_CONTRACT,
@@ -179,6 +215,7 @@ function exact(value, fields, label) {
 function sha256(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
 const LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(LLM_FILTER_POLICY, 'utf8'));
 const PRIOR_LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(PRIOR_LLM_FILTER_POLICY, 'utf8'));
+const PRIOR_2026_VERTICAL_FAMILY_FILTER_POLICY_SHA256 = sha256(Buffer.from(PRIOR_2026_VERTICAL_FAMILY_FILTER_POLICY, 'utf8'));
 const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
 // 核心音频会议及其标签也参与筛选策略的 SHA 计算。恢复时保留下列旧策略 SHA，
 // 因为已保存的状态和请求记录仍对应标签扩充前的策略。
@@ -186,14 +223,23 @@ const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
 // '382af440…' = interspeech-2026 加入 core-audio 标签之前的策略；
 // '11b277a5…' = 最初的 2026 会议标签之前的策略。
 // 只兼容同一运行预算与会议身份下的固定旧词表策略，不接受任意外来版本。
+// 'd5dc1c86…'（默认 maxTokens=1000）与 'bf7194bc…'（本机 maxTokens=12000）= 扩充 2026 垂直音频/语音/音乐会议家族标签之前的策略。
+const PRIOR_2026_VERTICAL_FAMILY_PINNED_SHAS = Object.freeze([
+    'd5dc1c860ac7ca5d94ab187153f0cf1259da546662e6b5476c6f0c494b075f1b',
+    'bf7194bce90917fb2df5e04f8c4b4fa7de35814c1be539304f7cf4267c9049fb'
+]);
 const LEGACY_KEYWORD_FILTER_POLICY_SHA256 = new Set([
     ...historicalWorkflows.previousKeywordPolicyHashes(),
-    PRIOR_LLM_FILTER_POLICY_SHA256
+    PRIOR_LLM_FILTER_POLICY_SHA256,
+    PRIOR_2026_VERTICAL_FAMILY_FILTER_POLICY_SHA256,
+    ...PRIOR_2026_VERTICAL_FAMILY_PINNED_SHAS
 ]);
-const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
+const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([...new Set([
     ...historicalWorkflows.filterPolicyHashes(),
-    PRIOR_LLM_FILTER_POLICY_SHA256
-]);
+    PRIOR_LLM_FILTER_POLICY_SHA256,
+    PRIOR_2026_VERTICAL_FAMILY_FILTER_POLICY_SHA256,
+    ...PRIOR_2026_VERTICAL_FAMILY_PINNED_SHAS
+])]);
 const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, ...LEGACY_FILTER_POLICY_SHA256_LIST]);
 // 筛选提示词的兼容窗口。会议路径按「渲染占位符之后的首块」算 SHA，改一个字就会让
 // 旧 spec 的 promptSha256 对不上，所以提示词换版本时必须先在这里登记旧值。
@@ -1614,7 +1660,11 @@ function requestEnvelopeFromReplay({ state, paperId, discovery, replay, evidence
             ...(codec.isCurrentHeader(state, 'conference-filter')
                 ? { coreConferenceFallbackProfile: codec.recordHeader(CORE_CONFERENCE_FALLBACK_CONTRACT, 'core-audio-conferences-2026') }
                 : { coreConferenceFallbackVersion: codec.historicalContract('core-audio-conferences-2026', 'official-audio-scope') }),
-            conferenceCategoryLabel: resolveCoreAudioConferenceLabel(replay.conference.id) },
+            conferenceCategoryLabel: codec.isCurrentHeader(state, 'conference-filter')
+                ? resolveCoreAudioConferenceLabel(replay.conference.id)
+                : (Object.prototype.hasOwnProperty.call(CORE_AUDIO_CONFERENCE_LABELS, replay.conference.id)
+                    ? CORE_AUDIO_CONFERENCE_LABELS[replay.conference.id]
+                    : null) },
         metadataRecord: projected.metadataRecord };
     return { ...body, requestSha256: stableHash(body) };
 }
@@ -1735,8 +1785,13 @@ function normalizeRequestEnvelope(value) {
     const fallbackMatches = currentRequest
         ? stableHash(value.filter.coreConferenceFallbackProfile) === stableHash(codec.recordHeader(CORE_CONFERENCE_FALLBACK_CONTRACT, 'core-audio-conferences-2026'))
         : value.filter.coreConferenceFallbackVersion === codec.historicalContract('core-audio-conferences-2026', 'official-audio-scope');
+    const expectedCategoryLabel = currentRequest
+        ? resolveCoreAudioConferenceLabel(value.discovery.conference.id)
+        : (Object.prototype.hasOwnProperty.call(CORE_AUDIO_CONFERENCE_LABELS, value.discovery.conference.id)
+            ? CORE_AUDIO_CONFERENCE_LABELS[value.discovery.conference.id]
+            : null);
     if (!fallbackMatches
-        || value.filter.conferenceCategoryLabel !== (CORE_AUDIO_CONFERENCE_LABELS[value.discovery.conference.id] || null)) {
+        || value.filter.conferenceCategoryLabel !== expectedCategoryLabel) {
         fail('LLM 请求的会议类别回退映射已变化');
     }
     return clone(value);
@@ -2427,6 +2482,8 @@ module.exports = {
     LLM_TRANSPORT_RECEIPT_CONTRACT, LOCK_OWNER_CONTRACT, LOCK_STALE_MS,
     LLM_FILTER_POLICY, LLM_FILTER_PROMPT,
     LLM_FILTER_POLICY_SHA256, LLM_FILTER_PROMPT_SHA256, FILTER_CONFIG_BINDING, FILTER_CONFIG_SHA256,
+    PRIOR_2026_VERTICAL_FAMILY_FILTER_POLICY_SHA256,
+    LEGACY_FILTER_POLICY_SHA256_LIST, ACCEPTED_FILTER_POLICY_SHA256,
     LEGACY_LLM_FILTER_PROMPT_SHA256_LIST, ACCEPTED_LLM_FILTER_PROMPT_SHA256,
     DAILY_DECISION_PARSER_CONTRACT, CORE_CONFERENCE_FALLBACK_CONTRACT, CORE_AUDIO_CONFERENCE_IDS,
     CORE_AUDIO_CONFERENCE_LABELS, CORE_AUDIO_CONFERENCE_FAMILY_LABELS,
@@ -2441,7 +2498,7 @@ module.exports = {
     selectionReceiptFor, normalizeSelectionReceipt, readSelectionReceipt, loadSelectionHandle, selectionHandleSnapshot,
     stateDigest, selectionReceiptFromCheckedState,
     parseLlmDecisionText, renderDailyFilterPrompt, renderFrozenDailyFilterPrompt, conferencePromptCategories, evaluateConferenceKeywordPrefilter,
-    requestEnvelope, cumulativeUsage, endpointIdentitySha256,
+    requestEnvelope, normalizeRequestEnvelope, cumulativeUsage, endpointIdentitySha256,
     buildProductionSpec, writeFilterSpec,
     normalizeLlmIntent, normalizeTransportReceipt, advanceProductionLlmDecision,
     advanceProductionLlmDecisions, selectNextCandidate

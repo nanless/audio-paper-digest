@@ -7,12 +7,12 @@
  * - scripts/lib/official-conference-acquisition.js 受 config/workflow-historical-records.json
  *   与 tests/acquisition-parser-compatibility.test.js 的 SHA-256 逐字节锁死，绝不修改该原文件。
  * - 本伴生模块与冻结获取模块保持同等安全、流式限流、目录边界、去重键 JSON 校验与不可变凭证契约，
- *   新增对下列音频/语音/多模态核心会议的支持：
- *   - EMNLP 2026（ACL Anthology HTML：Main / Short / Findings）
- *   - ISMIR 2026（Zenodo REST API v1 分页 JSON + PDF）
- *   - DCASE 2026（Zenodo REST API v1 分页 JSON + PDF）
- *   - NeurIPS 2026（proceedings.neurips.cc 官方无查询串 HTML + PDF，完整兼容 paper-identity / postprocess）
- *   - WASPAA 2025 / ASRU 2025（IEEE 官方本地 proceedings.json 离线清单 + 本地 PDF 逐篇 SHA 封存）
+ *   新增对下列 2025/2026 音频/语音/音乐及通用 AI/NLP/CV 核心会议的支持：
+ *   - 垂直音频/语音/音乐：DCASE 2026、SMC 2026、AVSP 2026、MLCSLM 2026、WOCHAT 2026、ISCA DC 2026、
+ *     SIGDIAL 2026、IWSDS 2026、SIGUL 2026、SPEAKABLE 2026、SALMA 2026、ImpactSpeech 2026、
+ *     NLP4MusA 2026、TrustAudio 2026、Audio-AAAI 2026（PMLR v312）、ISMIR 2026、WASPAA 2025、ASRU 2025
+ *   - 通用 AI/NLP/CV：EMNLP 2026、ECCV 2026、LREC 2026、WACV 2026、IJCAI 2026、
+ *     AACL 2026、CoNLL 2026、*SEM 2026、NeurIPS 2026
  */
 
 const crypto = require('node:crypto');
@@ -134,7 +134,8 @@ function assertCanonicalPublicHttpsUrl(value, label, { allowQuery = false } = {}
     const rawPathAndQuery = text.slice(`https://${parsed.host}`.length);
     const expectedPathAndQuery = `${parsed.pathname}${parsed.search}`;
     if (parsed.pathname === '/' || rawPathAndQuery !== expectedPathAndQuery
-        || parsed.pathname.includes('//') || parsed.pathname.includes('/..') || parsed.pathname.includes('/./')) {
+        || parsed.pathname.includes('//') || parsed.pathname.includes('/..') || parsed.pathname.includes('/./')
+        || /%(?:2e|2f|5c)/i.test(parsed.pathname)) {
         fail(`${label} 必须使用规范且无目录穿越的路径`);
     }
     if (parsed.toString() !== text) fail(`${label} 必须使用规范 URL 拼写`);
@@ -180,46 +181,92 @@ function normalizePaperRecord(raw, index) {
     return record;
 }
 
-const EXTENDED_PROVIDERS = Object.freeze({
-    'emnlp-2026': Object.freeze({
-        conference: Object.freeze({ id: 'emnlp-2026', year: 2026 }),
+const ZENODO_PDF_PATH_RE = /^\/(?:(?:api\/)?records\/\d+\/files\/[^/?#]+\.pdf(?:\/content)?|api\/files\/[A-Za-z0-9-]+\/[^/?#]+\.pdf)$/i;
+
+function makeAclVolumeProvider(id, year, volumeSlug, trackLabel) {
+    const escaped = volumeSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return Object.freeze({
+        conference: Object.freeze({ id, year }),
         parser: 'acl-anthology-html',
-        indexUrl: 'https://aclanthology.org/events/emnlp-2026/',
+        indexUrl: `https://aclanthology.org/volumes/${year}.${volumeSlug}/`,
         allowedHosts: Object.freeze(['aclanthology.org']),
-        recordPath: /^\/2026\.(?:emnlp-(?:main|short)|findings-emnlp)\.\d+\/?$/,
-        pdfPath: /^\/2026\.(?:emnlp-(?:main|short)|findings-emnlp)\.\d+\.pdf$/,
+        recordPath: new RegExp(`^\\/${year}\\.${escaped}\\.\\d+\\/?$`),
+        pdfPath: new RegExp(`^\\/${year}\\.${escaped}\\.\\d+\\.pdf$`),
         volumePrefixes: Object.freeze([
-            { prefix: '2026.emnlp-main.', track: 'EMNLP 2026 Main' },
-            { prefix: '2026.emnlp-short.', track: 'EMNLP 2026 Short' },
-            { prefix: '2026.findings-emnlp.', track: 'Findings of EMNLP 2026' }
+            Object.freeze({ prefix: `${year}.${volumeSlug}.`, track: trackLabel })
         ])
-    }),
-    'ismir-2026': Object.freeze({
-        conference: Object.freeze({ id: 'ismir-2026', year: 2026 }),
+    });
+}
+
+function makeIscaProvider(id, year, dirSlug, defaultTrack) {
+    const escaped = dirSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return Object.freeze({
+        conference: Object.freeze({ id, year }),
+        parser: 'isca-html',
+        indexUrl: `https://www.isca-archive.org/${dirSlug}/index.html`,
+        allowedHosts: Object.freeze(['www.isca-archive.org']),
+        recordPath: new RegExp(`^\\/${escaped}\\/(?!(?:index|author_index|committees?|search)\\.html$)[A-Za-z0-9_-]+\\.html$`),
+        pdfPath: new RegExp(`^\\/${escaped}\\/[A-Za-z0-9_-]+\\.pdf$`),
+        defaultTrack
+    });
+}
+
+function makeZenodoProvider(id, year, community) {
+    return Object.freeze({
+        conference: Object.freeze({ id, year }),
         parser: 'zenodo-json',
-        community: 'ismir',
-        indexUrl: 'https://zenodo.org/api/records?communities=ismir&size=100&sort=mostrecent',
+        community,
+        stopBeforeYear: true,
+        indexUrl: `https://zenodo.org/api/records?communities=${community}&size=25&sort=mostrecent`,
         allowedHosts: Object.freeze(['zenodo.org']),
         apiPath: /^\/api\/records$/,
-        pdfPath: /^\/(?:(?:api\/)?records\/\d+\/files\/[^/?#]+\.pdf(?:\/content)?|api\/files\/[A-Za-z0-9-]+\/[^/?#]+\.pdf)$/i
-    }),
+        recordPath: /^\/records\/\d+$/,
+        pdfPath: ZENODO_PDF_PATH_RE
+    });
+}
+
+const EXTENDED_PROVIDERS = Object.freeze({
+    // ===== Vertical Audio / Speech / Music =====
     'dcase-2026': Object.freeze({
         conference: Object.freeze({ id: 'dcase-2026', year: 2026 }),
-        parser: 'zenodo-json',
-        community: 'dcase',
-        indexUrl: 'https://zenodo.org/api/records?communities=dcase&size=100&sort=mostrecent',
-        allowedHosts: Object.freeze(['zenodo.org']),
-        apiPath: /^\/api\/records$/,
-        pdfPath: /^\/(?:(?:api\/)?records\/\d+\/files\/[^/?#]+\.pdf(?:\/content)?|api\/files\/[A-Za-z0-9-]+\/[^/?#]+\.pdf)$/i
+        parser: 'dcase-proceedings-html',
+        indexUrl: 'https://dcase.community/workshop2026/proceedings',
+        allowedHosts: Object.freeze(['dcase.community']),
+        recordPath: /^\/workshop2026\/proceedings$/,
+        pdfPath: /^\/documents\/workshop2026\/proceedings\/DCASE2026Workshop_(?:[A-Za-z0-9._~'+-]|%[0-9A-Fa-f]{2})+_\d+\.pdf$/,
+        defaultTrack: 'DCASE 2026'
     }),
-    'neurips-2026': Object.freeze({
-        conference: Object.freeze({ id: 'neurips-2026', year: 2026 }),
-        parser: 'neurips-proceedings-html',
-        indexUrl: 'https://proceedings.neurips.cc/paper_files/paper/2026',
-        allowedHosts: Object.freeze(['proceedings.neurips.cc']),
-        recordPath: /^\/paper_files\/paper\/2026\/hash\/[A-Za-z0-9]+-Abstract-[A-Za-z0-9_]+\.html$/,
-        pdfPath: /^\/paper_files\/paper\/2026\/file\/[A-Za-z0-9]+-Paper-[A-Za-z0-9_]+\.pdf$/
+    'smc-2026': makeZenodoProvider('smc-2026', 2026, 'smc'),
+    'avsp-2026': makeIscaProvider('avsp-2026', 2026, 'avsp_2026', 'AVSP 2026'),
+    'mlcslm-2026': makeIscaProvider('mlcslm-2026', 2026, 'mlcslm_2026', 'MLCSLM 2026'),
+    'wochat-2026': makeIscaProvider('wochat-2026', 2026, 'wochat_2026', 'WOCHAT 2026'),
+    'dc-2026': makeIscaProvider('dc-2026', 2026, 'dc_2026', 'ISCA DC 2026'),
+    'sigdial-2026': makeAclVolumeProvider('sigdial-2026', 2026, 'sigdial-1', 'SIGDIAL 2026'),
+    'iwsds-2026': makeAclVolumeProvider('iwsds-2026', 2026, 'iwsds-1', 'IWSDS 2026'),
+    'sigul-2026': makeAclVolumeProvider('sigul-2026', 2026, 'sigul-1', 'SIGUL 2026'),
+    'speakable-2026': makeAclVolumeProvider('speakable-2026', 2026, 'speakable-1', 'SPEAKABLE 2026'),
+    'salma-2026': makeAclVolumeProvider('salma-2026', 2026, 'salma-1', 'SALMA 2026'),
+    'impactspeech-2026': makeAclVolumeProvider('impactspeech-2026', 2026, 'impactspeech-1', 'ImpactSpeech 2026'),
+    'nlp4musa-2026': makeAclVolumeProvider('nlp4musa-2026', 2026, 'nlp4musa-1', 'NLP4MusA 2026'),
+    'trustaudio-2026': makeAclVolumeProvider('trustaudio-2026', 2026, 'trustaudio-1', 'TrustAudio 2026'),
+    'audio-aaai-2026': Object.freeze({
+        conference: Object.freeze({ id: 'audio-aaai-2026', year: 2026 }),
+        parser: 'pmlr-html',
+        volume: 'v312',
+        indexUrl: 'https://proceedings.mlr.press/v312/',
+        allowedHosts: Object.freeze(['proceedings.mlr.press', 'raw.githubusercontent.com']),
+        recordHosts: Object.freeze(['proceedings.mlr.press']),
+        recordPath: /^\/v312\/[A-Za-z0-9_-]+\.html$/,
+        pdfPath: /^\/v312\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\.pdf$/,
+        alternatePdfAuthorities: Object.freeze([
+            Object.freeze({
+                host: 'raw.githubusercontent.com',
+                path: /^\/mlresearch\/v312\/main\/assets\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\.pdf$/
+            })
+        ]),
+        defaultTrack: 'Audio-AAAI 2026'
     }),
+    'ismir-2026': makeZenodoProvider('ismir-2026', 2026, 'ismir'),
     'waspaa-2025': Object.freeze({
         conference: Object.freeze({ id: 'waspaa-2025', year: 2025 }),
         parser: 'ieee-local-manifest',
@@ -237,6 +284,83 @@ const EXTENDED_PROVIDERS = Object.freeze({
         recordPath: /^\/document\/[1-9]\d*\/?$/,
         pdfPath: /^\/stamp\/stamp\.jsp$/,
         defaultTrack: 'ASRU 2025'
+    }),
+
+    // ===== General AI / NLP / CV =====
+    'emnlp-2026': Object.freeze({
+        conference: Object.freeze({ id: 'emnlp-2026', year: 2026 }),
+        parser: 'acl-anthology-html',
+        indexUrl: 'https://aclanthology.org/events/emnlp-2026/',
+        indexUrls: Object.freeze([
+            'https://aclanthology.org/volumes/2026.emnlp-main/',
+            'https://aclanthology.org/volumes/2026.findings-emnlp/'
+        ]),
+        allowedHosts: Object.freeze(['aclanthology.org']),
+        recordPath: /^\/2026\.(?:emnlp-(?:main|short)|findings-emnlp)\.\d+\/?$/,
+        pdfPath: /^\/2026\.(?:emnlp-(?:main|short)|findings-emnlp)\.\d+\.pdf$/,
+        volumePrefixes: Object.freeze([
+            Object.freeze({ prefix: '2026.emnlp-main.', track: 'EMNLP 2026 Main' }),
+            Object.freeze({ prefix: '2026.emnlp-short.', track: 'EMNLP 2026 Short' }),
+            Object.freeze({ prefix: '2026.findings-emnlp.', track: 'Findings of EMNLP 2026' })
+        ])
+    }),
+    'eccv-2026': Object.freeze({
+        conference: Object.freeze({ id: 'eccv-2026', year: 2026 }),
+        parser: 'eccv-virtual-json',
+        indexUrl: 'https://eccv.ecva.net/static/virtual/data/eccv-2026-orals-posters.json',
+        allowedHosts: Object.freeze(['eccv.ecva.net', 'media.eventhosts.cc']),
+        recordHosts: Object.freeze(['eccv.ecva.net']),
+        pdfHosts: Object.freeze(['media.eventhosts.cc']),
+        recordPath: /^\/virtual\/2026\/(?:oral|spotlight|poster)\/\d+$/,
+        pdfPath: /^\/Conferences\/ECCV2026\/pdfs\/\d+\.pdf$/
+    }),
+    'lrec-2026': makeAclVolumeProvider('lrec-2026', 2026, 'lrec-main', 'LREC 2026 Main'),
+    'wacv-2026': Object.freeze({
+        conference: Object.freeze({ id: 'wacv-2026', year: 2026 }),
+        parser: 'cvf-html',
+        indexUrl: 'https://openaccess.thecvf.com/WACV2026?day=all',
+        allowedHosts: Object.freeze(['openaccess.thecvf.com']),
+        recordPath: /^\/content\/WACV2026\/html\/[A-Za-z0-9._-]+\.html$/,
+        pdfPath: /^\/content\/WACV2026\/papers\/[A-Za-z0-9._-]+\.pdf$/,
+        pdfBasePath: '/content/WACV2026/papers/',
+        defaultTrack: 'WACV 2026'
+    }),
+    'ijcai-2026': Object.freeze({
+        conference: Object.freeze({ id: 'ijcai-2026', year: 2026 }),
+        parser: 'ijcai-html',
+        indexUrl: 'https://www.ijcai.org/proceedings/2026/',
+        allowedHosts: Object.freeze(['www.ijcai.org']),
+        recordPath: /^\/proceedings\/2026\/\d+\/?$/,
+        pdfPath: /^\/proceedings\/2026\/\d+\.pdf$/,
+        defaultTrack: 'IJCAI 2026'
+    }),
+    'aacl-2026': Object.freeze({
+        conference: Object.freeze({ id: 'aacl-2026', year: 2026 }),
+        parser: 'acl-anthology-html',
+        indexUrl: 'https://aclanthology.org/events/aacl-2026/',
+        indexUrls: Object.freeze([
+            'https://aclanthology.org/volumes/2026.aacl-long/',
+            'https://aclanthology.org/volumes/2026.aacl-short/',
+            'https://aclanthology.org/volumes/2026.findings-aacl/'
+        ]),
+        allowedHosts: Object.freeze(['aclanthology.org']),
+        recordPath: /^\/2026\.(?:aacl-(?:long|short)|findings-aacl)\.\d+\/?$/,
+        pdfPath: /^\/2026\.(?:aacl-(?:long|short)|findings-aacl)\.\d+\.pdf$/,
+        volumePrefixes: Object.freeze([
+            Object.freeze({ prefix: '2026.aacl-long.', track: 'AACL 2026 Long' }),
+            Object.freeze({ prefix: '2026.aacl-short.', track: 'AACL 2026 Short' }),
+            Object.freeze({ prefix: '2026.findings-aacl.', track: 'Findings of AACL 2026' })
+        ])
+    }),
+    'conll-2026': makeAclVolumeProvider('conll-2026', 2026, 'conll-main', 'CoNLL 2026'),
+    'starsem-2026': makeAclVolumeProvider('starsem-2026', 2026, 'starsem-conference', '*SEM 2026'),
+    'neurips-2026': Object.freeze({
+        conference: Object.freeze({ id: 'neurips-2026', year: 2026 }),
+        parser: 'neurips-proceedings-html',
+        indexUrl: 'https://proceedings.neurips.cc/paper_files/paper/2026',
+        allowedHosts: Object.freeze(['proceedings.neurips.cc']),
+        recordPath: /^\/paper_files\/paper\/2026\/hash\/[A-Za-z0-9]+-Abstract-[A-Za-z0-9_]+\.html$/,
+        pdfPath: /^\/paper_files\/paper\/2026\/file\/[A-Za-z0-9]+-Paper-[A-Za-z0-9_]+\.pdf$/
     })
 });
 
@@ -259,9 +383,24 @@ function implementationSha256() {
     return readStableFile(__filename, 'official-conference-acquisition-extended.js', MAX_INDEX_BYTES, { requireMode0600: false }).sha256;
 }
 
+function isAllowedIndexRedirectTarget(requestedUrl, targetUrl) {
+    if (targetUrl === requestedUrl) return true;
+    if (!requestedUrl.endsWith('/') && !requestedUrl.includes('?') && targetUrl === `${requestedUrl}/`) {
+        return true;
+    }
+    return false;
+}
+
 function validateUrlForProvider(provider, rawUrl, kind) {
+    const indexCandidates = Array.isArray(provider.indexUrls) && provider.indexUrls.length > 0
+        ? [...provider.indexUrls, ...(provider.indexUrl ? [provider.indexUrl] : [])]
+        : (provider.indexUrl ? [provider.indexUrl] : []);
+    const allowIndexQuery = (kind === 'index' || kind === 'json-index')
+        && indexCandidates.some(candidate => candidate.includes('?'));
     const cleaned = assertCanonicalPublicHttpsUrl(rawUrl, `official ${kind} URL`, {
-        allowQuery: kind === 'api' || (kind === 'pdf' && (provider.parser === 'ieee-local-manifest' || provider.parser === 'zenodo-json'))
+        allowQuery: kind === 'api'
+            || allowIndexQuery
+            || (kind === 'pdf' && (provider.parser === 'ieee-local-manifest' || provider.parser === 'zenodo-json'))
     });
     const parsed = new URL(cleaned);
     const host = parsed.hostname.toLowerCase();
@@ -269,13 +408,18 @@ function validateUrlForProvider(provider, rawUrl, kind) {
         fail(`官方请求主机不在白名单中：${host}（允许：${provider.allowedHosts.join(', ')}）`);
     }
     if (kind === 'index') {
-        const allowTrailingSlash = !provider.indexUrl.endsWith('/') && !provider.indexUrl.includes('?')
-            ? `${provider.indexUrl}/`
-            : null;
-        if (cleaned !== provider.indexUrl && cleaned !== allowTrailingSlash) {
-            fail(`官方 index URL 必须严格等于固定入口：${provider.indexUrl}`);
+        const matched = indexCandidates.some(candidate => isAllowedIndexRedirectTarget(candidate, cleaned));
+        if (!matched) {
+            fail(`官方 index URL 必须严格等于固定入口：${indexCandidates.join(', ')}`);
+        }
+    } else if (kind === 'json-index') {
+        if (cleaned !== provider.indexUrl) {
+            fail(`官方 json-index URL 必须严格等于固定入口：${provider.indexUrl}`);
         }
     } else if (kind === 'record') {
+        if (provider.recordHosts && !provider.recordHosts.includes(host)) {
+            fail(`官方 record 主机不在白名单中：${host}（允许：${provider.recordHosts.join(', ')}）`);
+        }
         if (provider.recordPath && !provider.recordPath.test(parsed.pathname)) {
             fail(`官方 record 路径不符合白名单：${parsed.pathname}`);
         }
@@ -284,12 +428,52 @@ function validateUrlForProvider(provider, rawUrl, kind) {
             fail(`官方 API 路径不符合契约：${parsed.pathname}`);
         }
         if (provider.parser === 'zenodo-json') {
-            if (parsed.searchParams.get('communities') !== provider.community) {
-                fail(`Zenodo 分页 URL 必须保留固定社区参数 communities=${provider.community}`);
+            const allowedParams = new Set(['communities', 'page', 'size', 'sort']);
+            if (provider.apiQuery) allowedParams.add('q');
+            const seenParamCounts = new Map();
+            for (const key of parsed.searchParams.keys()) {
+                if (!allowedParams.has(key)) {
+                    fail(`Zenodo 分页 URL 包含未允许的查询参数：${key}`);
+                }
+                seenParamCounts.set(key, (seenParamCounts.get(key) || 0) + 1);
+                if (seenParamCounts.get(key) > 1) {
+                    fail(`Zenodo 分页 URL 不得包含重复查询参数：${key}`);
+                }
+            }
+            const communities = parsed.searchParams.getAll('communities');
+            if (communities.length !== 1 || communities[0] !== provider.community) {
+                fail(`Zenodo 分页 URL 必须保留唯一固定社区参数 communities=${provider.community}`);
+            }
+            if (provider.stopBeforeYear) {
+                const sorts = parsed.searchParams.getAll('sort');
+                if (sorts.length !== 1 || sorts[0] !== 'mostrecent') {
+                    fail('Zenodo 早停分页 URL 必须保留固定排序参数 sort=mostrecent');
+                }
+            }
+            if (parsed.searchParams.has('page') && !/^[1-9]\d*$/.test(parsed.searchParams.get('page') || '')) {
+                fail(`Zenodo 分页 URL 的 page 参数无效：${parsed.searchParams.get('page')}`);
+            }
+            if (parsed.searchParams.has('size') && !/^[1-9]\d*$/.test(parsed.searchParams.get('size') || '')) {
+                fail(`Zenodo 分页 URL 的 size 参数无效：${parsed.searchParams.get('size')}`);
+            }
+            if (provider.apiQuery && parsed.searchParams.get('q') !== provider.apiQuery) {
+                fail('Zenodo 分页 URL 的 q 参数与固定配置不匹配');
             }
         }
     } else if (kind === 'pdf') {
-        if (provider.pdfPath && !provider.pdfPath.test(parsed.pathname)) {
+        if (provider.pdfHosts && !provider.pdfHosts.includes(host)) {
+            fail(`官方 PDF 主机不在白名单中：${host}（允许：${provider.pdfHosts.join(', ')}）`);
+        }
+        if (Array.isArray(provider.alternatePdfAuthorities) && provider.alternatePdfAuthorities.length > 0) {
+            const primaryHost = provider.recordHosts ? provider.recordHosts[0] : provider.allowedHosts[0];
+            const matchesPrimary = host === primaryHost && (!provider.pdfPath || provider.pdfPath.test(parsed.pathname));
+            const matchesAlternate = provider.alternatePdfAuthorities.some(authority => (
+                host === authority.host && authority.path.test(parsed.pathname)
+            ));
+            if (!matchesPrimary && !matchesAlternate) {
+                fail(`官方 PDF 路径不符合白名单：${host}${parsed.pathname}`);
+            }
+        } else if (provider.pdfPath && !provider.pdfPath.test(parsed.pathname)) {
             fail(`官方 PDF 路径不符合白名单：${parsed.pathname}`);
         }
         if (provider.parser === 'ieee-local-manifest') {
@@ -309,7 +493,8 @@ function validateUrlForProvider(provider, rawUrl, kind) {
 }
 
 function validateRedirectChain(provider, requestedUrl, finalUrl, redirects, kind, label) {
-    let current = validateUrlForProvider(provider, requestedUrl, kind);
+    const rootUrl = validateUrlForProvider(provider, requestedUrl, kind);
+    let current = rootUrl;
     for (const hop of redirects) {
         exact(hop, ['from', 'status', 'to'], `${label}.redirects`);
         if (![301, 302, 303, 307, 308].includes(hop.status)) {
@@ -318,7 +503,11 @@ function validateRedirectChain(provider, requestedUrl, finalUrl, redirects, kind
         if (hop.from !== current) {
             fail(`${label} 重定向链中断：期望 from=${current}，实际 ${hop.from}`);
         }
-        current = validateUrlForProvider(provider, hop.to, kind);
+        const nextUrl = validateUrlForProvider(provider, hop.to, kind);
+        if (kind === 'index' && !isAllowedIndexRedirectTarget(rootUrl, nextUrl)) {
+            fail(`${label} 官方 index 重定向偏离固定入口：期望 ${rootUrl}，实际 ${nextUrl}`);
+        }
+        current = nextUrl;
     }
     if (finalUrl !== current) {
         fail(`${label} finalUrl 与重定向链终点不一致：期望 ${current}，实际 ${finalUrl}`);
@@ -424,7 +613,7 @@ async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs 
             for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
                 const accept = kind === 'pdf'
                     ? 'application/pdf'
-                    : kind === 'api'
+                    : (kind === 'api' || kind === 'json-index')
                         ? 'application/json'
                         : 'text/html,application/xhtml+xml';
                 const response = await fetchImpl(current, {
@@ -449,6 +638,9 @@ async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs 
                         fail(`官方重定向目标不是合法 URL：${location}`);
                     }
                     const nextUrl = validateUrlForProvider(provider, resolved, kind);
+                    if (kind === 'index' && !isAllowedIndexRedirectTarget(requestedUrl, nextUrl)) {
+                        fail(`官方 index 重定向偏离固定入口：期望 ${requestedUrl}，实际 ${nextUrl}`);
+                    }
                     redirects.push({ status: response.status, from: current, to: nextUrl });
                     current = nextUrl;
                     continue;
@@ -465,7 +657,7 @@ async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs 
                 const contentType = String(response.headers?.get?.('content-type') || '').trim();
                 const okContentType = kind === 'pdf'
                     ? /^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(contentType)
-                    : kind === 'api'
+                    : (kind === 'api' || kind === 'json-index')
                         ? /^(?:application\/json|application\/vnd\.zenodo\.v1\+json)(?:\s*;|$)/iu.test(contentType)
                         : /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/iu.test(contentType);
                 if (!okContentType) {
@@ -511,61 +703,235 @@ async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs 
     fail(`official ${kind} request failed after retries`);
 }
 
+function hrefUrl(href, base) {
+    try {
+        return new URL(String(href || '').trim(), base).toString();
+    } catch (_) {
+        return null;
+    }
+}
+
+function splitAuthorLine(value) {
+    return [...new Set(
+        cleanText(value)
+            .replace(/[,;\s]+$/u, '')
+            .split(/\s*;\s*|,\s+(?:and\s+)?|\s+and\s+/u)
+            .map(cleanText)
+            .filter(Boolean)
+    )];
+}
+
+function stripBalancedParens(value) {
+    let out = '';
+    let depth = 0;
+    for (const ch of String(value || '')) {
+        if (ch === '(') depth += 1;
+        else if (ch === ')') {
+            if (depth > 0) depth -= 1;
+        } else if (depth === 0) {
+            out += ch;
+        }
+    }
+    return cleanText(out);
+}
+
+function parseDcaseAuthors(rawText) {
+    const text = cleanText(rawText);
+    if (!text) return [];
+    const parts = [];
+    let current = '';
+    let depth = 0;
+    for (const ch of text) {
+        if (ch === '(') depth += 1;
+        else if (ch === ')' && depth > 0) depth -= 1;
+        if (ch === ';' && depth === 0) {
+            parts.push(current);
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+    if (current) parts.push(current);
+    return parts
+        .map(part => stripBalancedParens(part).replace(/^and\s+/i, '').replace(/[,;\s]+$/g, '').trim())
+        .filter(Boolean);
+}
+
+function extractPublicationYear(pubDate) {
+    const m = /^(\d{4})(?:$|[-/T])/.exec(String(pubDate || '').trim());
+    return m ? Number(m[1]) : null;
+}
+
 /**
- * 解析 ACL Anthology 会议页面 HTML（EMNLP 2026：Main / Short / Findings）。
+ * 判断 Zenodo 分页是否已全部进入目标年份之前（按 sort=mostrecent 降序排列时用于安全早停）。
+ * 当记录携带 created 时间戳时，必须同时满足 created 年份 < 目标年份 与 publication_date 年份 < 目标年份，
+ * 避免 2026 年补传历史年份论文时过早终止分页。
  */
-function parseEmnlpCatalogHtml(htmlText, provider = EXTENDED_PROVIDERS['emnlp-2026']) {
-    const $ = cheerio.load(String(htmlText || ''));
-    const byId = new Map();
-    $('p.d-sm-flex').each((_, el) => {
-        const $p = $(el);
-        const $titleLink = $p.find('strong a.align-middle[href]').first();
-        const href = cleanText($titleLink.attr('href'));
-        if (!href) return;
-        let pathname;
-        try {
-            pathname = new URL(href, 'https://aclanthology.org').pathname;
-        } catch (_) {
-            return;
-        }
-        if (!provider.recordPath.test(pathname)) return;
-        const paperId = pathname.replace(/^\/|\/$/g, '');
-        if (/\.0$/.test(paperId)) return;
-        const matchedVol = provider.volumePrefixes.find(v => paperId.startsWith(v.prefix));
-        if (!matchedVol) return;
-        const title = cleanText($titleLink.text());
-        if (!title) return;
-        const authors = [];
-        $p.find('span.d-block a[href^="/people/"]').each((__, a) => {
-            const name = cleanText($(a).text());
-            if (name) authors.push(name);
-        });
-        const recordUrl = `https://aclanthology.org/${paperId}/`;
-        const pdfUrl = `https://aclanthology.org/${paperId}.pdf`;
-        const doi = `10.18653/v1/${paperId}`;
-        const abstractId = `abstract-${paperId.replace(/\./g, '--')}`;
-        const abstract = cleanText($(`#${abstractId} .card-body`).text() || $p.next('div.abstract-collapse').text());
-        if (!byId.has(paperId)) {
-            byId.set(paperId, normalizePaperRecord({
-                id: paperId,
-                title,
-                authors,
-                abstract,
-                doi,
-                track: matchedVol.track,
-                recordUrl,
-                pdfUrl,
-                pdfFile: `pdfs/${paperId}.pdf`
-            }, byId.size));
-        }
+function shouldStopZenodoPagination(parsedPage, provider) {
+    if (!provider?.stopBeforeYear || !Number.isInteger(provider?.conference?.year)) return false;
+    const hits = Array.isArray(parsedPage?.hits?.hits) ? parsedPage.hits.hits : [];
+    if (hits.length === 0) return false;
+    const anyHasCreated = hits.some(hit => hit?.created !== undefined && hit?.created !== null && String(hit.created).trim() !== '');
+    return hits.every(hit => {
+        const pubYear = extractPublicationYear(hit?.metadata?.publication_date);
+        if (pubYear === null || pubYear >= provider.conference.year) return false;
+        if (!anyHasCreated) return true;
+        const createdYear = extractPublicationYear(hit?.created);
+        return createdYear !== null && createdYear < provider.conference.year;
     });
+}
+
+/**
+ * 解析 ACL Anthology 会议/卷页面 HTML（支持单卷字符串或多卷字符串数组，兼容旧 p.d-sm-flex 与新 div.d-sm-flex）。
+ */
+function parseEmnlpCatalogHtml(htmlInput, provider = EXTENDED_PROVIDERS['emnlp-2026']) {
+    const htmlList = Array.isArray(htmlInput) ? htmlInput : [htmlInput];
+    const byId = new Map();
+    for (const htmlText of htmlList) {
+        const $ = cheerio.load(String(htmlText || ''));
+        $('p.d-sm-flex, div.d-sm-flex').each((_, el) => {
+            const $p = $(el);
+            if ($p.find('.d-sm-flex').length > 0) return;
+            const $titleLink = $p.find('strong a.align-middle[href], strong a[href]').first();
+            const href = cleanText($titleLink.attr('href'));
+            if (!href) return;
+            let parsed;
+            try {
+                parsed = new URL(href, 'https://aclanthology.org');
+            } catch (_) {
+                return;
+            }
+            if (parsed.protocol !== 'https:'
+                || parsed.hostname.toLowerCase() !== 'aclanthology.org'
+                || parsed.search
+                || parsed.hash
+                || !provider.recordPath.test(parsed.pathname)) {
+                return;
+            }
+            const paperId = parsed.pathname.replace(/^\/|\/$/g, '');
+            if (/\.0$/.test(paperId)) return;
+            const matchedVol = provider.volumePrefixes.find(v => paperId.startsWith(v.prefix));
+            if (!matchedVol) return;
+            const title = cleanText($titleLink.text());
+            if (!title) return;
+            const authors = [];
+            let $authorLinks = $p.find('span.d-block a[href^="/people/"]');
+            if ($authorLinks.length === 0) $authorLinks = $p.find('a[href^="/people/"]');
+            $authorLinks.each((__, a) => {
+                const name = cleanText($(a).text());
+                if (name) authors.push(name);
+            });
+            const recordUrl = `https://aclanthology.org/${paperId}/`;
+            const pdfUrl = `https://aclanthology.org/${paperId}.pdf`;
+            const doi = `10.18653/v1/${paperId}`;
+            const abstractId = `abstract-${paperId.replace(/\./g, '--')}`;
+            const abstract = cleanText(
+                $(`#${abstractId} .card-body`).text()
+                || $p.next('div.abstract-collapse').find('.card-body').text()
+                || $p.next('div.abstract-collapse').text()
+            );
+            if (!byId.has(paperId)) {
+                byId.set(paperId, normalizePaperRecord({
+                    id: paperId,
+                    title,
+                    authors,
+                    abstract,
+                    doi,
+                    track: matchedVol.track,
+                    recordUrl,
+                    pdfUrl,
+                    pdfFile: `pdfs/${paperId}.pdf`
+                }, byId.size));
+            }
+        });
+    }
     const papers = [...byId.values()].sort((a, b) => compareCodePoints(a.id, b.id));
     if (papers.length === 0) fail(`${provider.conference.id} HTML 目录未解析出任何有效论文`);
     return { conference: { ...provider.conference }, papers };
 }
 
 /**
- * 解析 Zenodo REST API 分页 JSON（ISMIR / DCASE 官方会议录）。
+ * 解析 DCASE Workshop 官方会议录 HTML（https://dcase.community/workshop2026/proceedings）。
+ */
+function parseDcaseProceedingsHtml(htmlText, provider = EXTENDED_PROVIDERS['dcase-2026']) {
+    const $ = cheerio.load(String(htmlText || ''));
+    const byId = new Map();
+    $('a[href]').each((_, el) => {
+        const $a = $(el);
+        const href = cleanText($a.attr('href'));
+        if (!href || !/\.pdf(?:$|[?#])/i.test(href)) return;
+        const resolvedPdfUrl = hrefUrl(href, provider.indexUrl);
+        if (!resolvedPdfUrl) return;
+        let parsedPdf;
+        try {
+            parsedPdf = new URL(resolvedPdfUrl);
+        } catch (_) {
+            return;
+        }
+        if (parsedPdf.protocol !== 'https:' || !provider.allowedHosts.includes(parsedPdf.hostname.toLowerCase())
+            || parsedPdf.search || parsedPdf.hash || !provider.pdfPath.test(parsedPdf.pathname)) {
+            return;
+        }
+        const numMatch = /_(\d+)\.pdf$/i.exec(parsedPdf.pathname);
+        if (!numMatch) return;
+        const id = `dcase${provider.conference.year}-${numMatch[1]}`;
+        let $card = $a.parents('.row, .panel, .tab, article, li')
+            .filter((__, node) => $(node).find('h4').length > 0)
+            .first();
+        if (!$card.length) {
+            $card = $a.parents('div').filter((__, node) => $(node).find('h4').length > 0).first();
+        }
+        const title = cleanText($card.find('h4 strong').first().text() || $card.find('h4').first().text());
+        if (!title) return;
+        const rawAuthors = cleanText($card.find('p em').first().text() || $card.find('em').first().text());
+        const authors = parseDcaseAuthors(rawAuthors);
+        let abstract = '';
+        const $collapseTrigger = $card.find('a[href^="#collapse-"], button[data-target^="#collapse-"], a[data-target^="#collapse-"], [data-bs-target^="#collapse-"]').first();
+        const collapseSelector = cleanText(
+            $collapseTrigger.attr('href')
+            || $collapseTrigger.attr('data-target')
+            || $collapseTrigger.attr('data-bs-target')
+        );
+        if (collapseSelector && /^#[A-Za-z0-9_-]+$/.test(collapseSelector)) {
+            const $target = $(collapseSelector);
+            abstract = cleanText(
+                $target.find('p.text-justify').text()
+                || $target.find('.panel-body p').text()
+                || $target.find('.panel-body').text()
+                || $target.text()
+            );
+        }
+        if (!abstract) {
+            abstract = cleanText(
+                $card.find('.collapse p.text-justify').text()
+                || $card.find('.collapse .panel-body p').text()
+                || $card.find('.collapse .panel-body').text()
+            );
+        }
+        const track = cleanText($card.find('.item-tag').first().text()) || provider.defaultTrack || `DCASE ${provider.conference.year}`;
+        const recordUrl = validateUrlForProvider(provider, provider.indexUrl, 'record');
+        const pdfUrl = validateUrlForProvider(provider, resolvedPdfUrl, 'pdf');
+        if (!byId.has(id)) {
+            byId.set(id, normalizePaperRecord({
+                id,
+                title,
+                authors,
+                abstract,
+                doi: null,
+                track,
+                recordUrl,
+                pdfUrl,
+                pdfFile: `pdfs/${id}.pdf`
+            }, byId.size));
+        }
+    });
+    const papers = [...byId.values()].sort((a, b) => compareCodePoints(a.id, b.id));
+    if (papers.length === 0) fail(`${provider.conference.id} DCASE 官方会议录 HTML 未解析出任何有效论文`);
+    return { conference: { ...provider.conference }, papers };
+}
+
+/**
+ * 解析 Zenodo REST API 分页 JSON（ISMIR / SMC 等官方会议录）。
  */
 function parseZenodoRecordsPages(pages, provider) {
     if (!Array.isArray(pages) || pages.length === 0) {
@@ -587,25 +953,24 @@ function parseZenodoRecordsPages(pages, provider) {
             const authors = (Array.isArray(meta.creators) ? meta.creators : [])
                 .map(c => cleanText(c?.name))
                 .filter(Boolean);
+            if (authors.length === 0) continue;
             const abstract = stripHtmlTags(meta.description || '');
             const rawDoi = cleanText(hit.doi || meta.doi || '');
             const doi = rawDoi && DOI_RE.test(rawDoi.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')) ? rawDoi : null;
             const files = Array.isArray(hit.files) ? hit.files : [];
             const pdfEntry = files.find(f => /\.pdf$/i.test(String(f?.key || f?.filename || '')));
-            const rawPdfUrl = pdfEntry?.links?.self || pdfEntry?.links?.download || '';
+            const rawPdfUrl = pdfEntry?.links?.self || pdfEntry?.links?.content || pdfEntry?.links?.download || '';
             let pdfUrl = null;
             if (rawPdfUrl) {
                 try {
-                    const parsed = new URL(rawPdfUrl);
-                    if (parsed.protocol === 'https:' && parsed.hostname.toLowerCase() === 'zenodo.org'
-                        && (!parsed.search || parsed.search === '?download=1') && !parsed.hash && !parsed.port && !parsed.username && !parsed.password
-                        && provider.pdfPath.test(parsed.pathname)) {
-                        pdfUrl = parsed.toString();
-                    }
-                } catch (_) {}
+                    const candidate = new URL(rawPdfUrl).toString();
+                    pdfUrl = validateUrlForProvider(provider, candidate, 'pdf');
+                } catch (_) {
+                    pdfUrl = null;
+                }
             }
             const id = `zenodo-${recordId}`;
-            const recordUrl = `https://zenodo.org/records/${recordId}`;
+            const recordUrl = validateUrlForProvider(provider, `https://zenodo.org/records/${recordId}`, 'record');
             const track = cleanText(meta.conference?.title || meta.conference?.acronym || `${provider.community.toUpperCase()} ${provider.conference.year}`);
             if (!byId.has(id)) {
                 byId.set(id, normalizePaperRecord({
@@ -624,6 +989,393 @@ function parseZenodoRecordsPages(pages, provider) {
     }
     const papers = [...byId.values()].sort((a, b) => compareCodePoints(a.id, b.id));
     if (papers.length === 0) fail(`${provider.conference.id} Zenodo 响应未解析出任何有效论文`);
+    return { conference: { ...provider.conference }, papers };
+}
+
+/**
+ * 解析 ISCA Archive 官方会议目录 HTML（AVSP / MLCSLM / WOCHAT / ISCA DC 等，限定论文卡片并自动跳过 Keynote 与导航链接）。
+ */
+function parseIscaCatalogHtml(htmlText, provider) {
+    const $ = cheerio.load(String(htmlText || ''));
+    const byId = new Map();
+    const $cards = $('.w3-card');
+    const $anchors = $cards.length > 0 ? $cards.find('a[href]') : $('a[href]');
+    $anchors.each((_, el) => {
+        const $a = $(el);
+        if ($a.closest('nav, header, footer').length > 0) return;
+        const resolvedRecord = hrefUrl($a.attr('href'), provider.indexUrl);
+        if (!resolvedRecord) return;
+        let parsed;
+        try {
+            parsed = new URL(resolvedRecord);
+        } catch (_) {
+            return;
+        }
+        if (parsed.protocol !== 'https:' || !provider.allowedHosts.includes(parsed.hostname.toLowerCase())
+            || parsed.search || parsed.hash || !provider.recordPath.test(parsed.pathname)) {
+            return;
+        }
+        const $card = $a.closest('.w3-card');
+        const heading = cleanText($card.find('h4').first().text());
+        if (/keynote/iu.test(heading)) return;
+        const id = path.posix.basename(parsed.pathname, '.html');
+        const titleNode = $a.find('p').first().clone();
+        titleNode.find('.w3-text-theme, br').remove();
+        const title = cleanText($a.attr('data-title') || $a.find('.title').text() || titleNode.text() || $a.text());
+        if (!title) return;
+        let authors = $a.find('.w3-text-theme').toArray()
+            .flatMap(node => splitAuthorLine($(node).text()));
+        if (!authors.length && $a.find('p br').length > 0) {
+            const pNodes = $a.find('p').first().contents().toArray();
+            const brIndex = pNodes.findIndex(node => node.type === 'tag' && node.name === 'br');
+            if (brIndex >= 0) {
+                const afterBr = pNodes.slice(brIndex + 1).map(node => $(node).text()).join(' ');
+                authors = splitAuthorLine(afterBr);
+            }
+        }
+        if (!authors.length) {
+            const $singleContainer = ($card.length && $card.find('a[href]').length === 1)
+                ? $card
+                : $a.closest('tr, li, article, p, .paper');
+            if ($singleContainer.length) {
+                authors = $singleContainer.find('[data-author], .authors .author, .authors a, [itemprop="author"], .author')
+                    .toArray()
+                    .map(node => cleanText($(node).text()))
+                    .filter(Boolean);
+            }
+        }
+        if (!authors.length) return;
+        const recordUrl = validateUrlForProvider(provider, resolvedRecord, 'record');
+        const pdfUrl = validateUrlForProvider(provider, new URL(`${id}.pdf`, provider.indexUrl).toString(), 'pdf');
+        const track = cleanText($card.attr('data-track') || heading || provider.defaultTrack || provider.conference.id);
+        if (!byId.has(id)) {
+            byId.set(id, normalizePaperRecord({
+                id,
+                title,
+                authors,
+                abstract: '',
+                doi: null,
+                track,
+                recordUrl,
+                pdfUrl,
+                pdfFile: `pdfs/${id}.pdf`
+            }, byId.size));
+        }
+    });
+    const papers = [...byId.values()].sort((a, b) => compareCodePoints(a.id, b.id));
+    if (papers.length === 0) fail(`${provider.conference.id} ISCA HTML 目录未解析出任何有效论文`);
+    return { conference: { ...provider.conference }, papers };
+}
+
+function assertPmlrPdfIdentity(provider, pdfUrl, expectedId) {
+    const parsed = new URL(pdfUrl);
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    const basename = path.posix.basename(parsed.pathname, '.pdf');
+    const parent = parts.at(-2);
+    if (basename !== expectedId || parent !== expectedId) {
+        fail(`PMLR PDF 身份与其官方 record 不一致：${expectedId}`);
+    }
+    if (parsed.hostname.toLowerCase() === 'proceedings.mlr.press' && parts[0] !== provider.volume) {
+        fail(`PMLR PDF 离开了固定卷 ${provider.volume}`);
+    }
+    if (parsed.hostname.toLowerCase() === 'raw.githubusercontent.com'
+        && (parts[0] !== 'mlresearch' || parts[1] !== provider.volume || parts[2] !== 'main' || parts[3] !== 'assets')) {
+        fail(`PMLR 原始 PDF 离开了固定仓库路径 ${provider.volume}`);
+    }
+}
+
+/**
+ * 解析 PMLR 卷目录 HTML（如 Audio-AAAI 2026 PMLR v312，支持 raw.githubusercontent.com PDF 源）。
+ */
+function parsePmlrCatalogHtml(htmlText, provider = EXTENDED_PROVIDERS['audio-aaai-2026']) {
+    const $ = cheerio.load(String(htmlText || ''));
+    const byId = new Map();
+    const $papers = $('.paper');
+    $papers.each((_, el) => {
+        const $paper = $(el);
+        const $recordLink = $paper.find('a[href]').filter((__, a) => {
+            const candidate = hrefUrl($(a).attr('href'), provider.indexUrl);
+            if (!candidate) return false;
+            try {
+                validateUrlForProvider(provider, candidate, 'record');
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }).first();
+        if (!$recordLink.length) return;
+        const recordUrl = validateUrlForProvider(provider, hrefUrl($recordLink.attr('href'), provider.indexUrl), 'record');
+        const id = path.posix.basename(new URL(recordUrl).pathname, '.html');
+        const $pdfLink = $paper.find('a[href]').filter((__, a) => {
+            const candidate = hrefUrl($(a).attr('href'), provider.indexUrl);
+            if (!candidate) return false;
+            try {
+                validateUrlForProvider(provider, candidate, 'pdf');
+                assertPmlrPdfIdentity(provider, candidate, id);
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }).first();
+        if (!$pdfLink.length) fail(`PMLR record ${id} 缺少绑定身份的官方 PDF 链接`);
+        const pdfUrl = validateUrlForProvider(provider, hrefUrl($pdfLink.attr('href'), provider.indexUrl), 'pdf');
+        const title = cleanText($paper.find('.title, .paper-title').first().text() || $recordLink.attr('data-title') || '');
+        const rawAuthors = String($paper.find('.authors, .paper-authors').first().text() || '').replace(/\u00a0/g, ' ');
+        let authors = rawAuthors
+            .split(/\s*,\s*/)
+            .map(cleanText)
+            .filter(Boolean);
+        if (!authors.length) {
+            authors = $paper.find('[itemprop="author"], .author').toArray()
+                .map(node => cleanText($(node).text()))
+                .filter(Boolean);
+        }
+        const track = cleanText($paper.attr('data-track') || provider.defaultTrack || 'Main');
+        if (!byId.has(id)) {
+            byId.set(id, normalizePaperRecord({
+                id,
+                title,
+                authors,
+                abstract: '',
+                doi: null,
+                track,
+                recordUrl,
+                pdfUrl,
+                pdfFile: `pdfs/${id}.pdf`
+            }, byId.size));
+        }
+    });
+    const papers = [...byId.values()].sort((a, b) => compareCodePoints(a.id, b.id));
+    if (papers.length === 0) fail(`${provider.conference.id} PMLR HTML 目录未解析出任何有效论文`);
+    return { conference: { ...provider.conference }, papers };
+}
+
+/**
+ * 解析 ECCV 官方虚拟会议 JSON（eccv.ecva.net/static/virtual/data/eccv-2026-orals-posters.json）。
+ */
+function parseEccvVirtualJson(jsonInput, provider = EXTENDED_PROVIDERS['eccv-2026']) {
+    const jsonObj = typeof jsonInput === 'string' ? JSON.parse(jsonInput) : jsonInput;
+    const results = Array.isArray(jsonObj?.results) ? jsonObj.results : [];
+    const byId = new Map();
+    for (const row of results) {
+        const rawId = String(row?.id ?? '').trim();
+        if (!/^\d+$/.test(rawId)) continue;
+        const id = `eccv2026-${rawId}`;
+        const title = cleanText(row.name);
+        if (!title) continue;
+        const authors = (Array.isArray(row.authors) ? row.authors : [])
+            .map(author => cleanText(typeof author === 'string' ? author : author?.fullname))
+            .filter(Boolean);
+        const rawVirtualUrl = cleanText(row.virtualsite_url);
+        if (!rawVirtualUrl) continue;
+        const resolvedRecord = hrefUrl(rawVirtualUrl, 'https://eccv.ecva.net');
+        if (!resolvedRecord) continue;
+        const recordUrl = validateUrlForProvider(provider, resolvedRecord, 'record');
+        const rawPdfUrl = cleanText(row.paper_pdf_url);
+        const pdfUrl = rawPdfUrl ? validateUrlForProvider(provider, rawPdfUrl, 'pdf') : null;
+        const abstract = stripHtmlTags(row.abstract || '');
+        const track = cleanText(row.decision || row.eventtype || 'ECCV 2026');
+        if (!byId.has(id)) {
+            byId.set(id, normalizePaperRecord({
+                id,
+                title,
+                authors,
+                abstract,
+                doi: null,
+                track,
+                recordUrl,
+                pdfUrl,
+                pdfFile: pdfUrl ? `pdfs/${id}.pdf` : null
+            }, byId.size));
+        }
+    }
+    const papers = [...byId.values()].sort((a, b) => compareCodePoints(a.id, b.id));
+    if (papers.length === 0) fail(`${provider.conference.id} ECCV JSON 目录未解析出任何有效论文`);
+    return { conference: { ...provider.conference }, papers };
+}
+
+function cvfFallbackAuthorLine($, $container) {
+    const values = [];
+    for (const node of $container.contents().toArray()) {
+        if (node.type === 'tag' && node.name === 'br') break;
+        values.push($(node).text());
+    }
+    return splitAuthorLine(values.join(' '));
+}
+
+/**
+ * 解析 CVF Open Access HTML 目录（如 WACV 2026：openaccess.thecvf.com/WACV2026?day=all）。
+ */
+function parseCvfCatalogHtml(htmlText, provider = EXTENDED_PROVIDERS['wacv-2026']) {
+    const $ = cheerio.load(String(htmlText || ''));
+    const byId = new Map();
+    $('dt.ptitle a[href], .ptitle a[href]').each((_, el) => {
+        const $a = $(el);
+        const resolvedRecord = hrefUrl($a.attr('href'), provider.indexUrl);
+        if (!resolvedRecord) return;
+        let parsedRecord;
+        try {
+            parsedRecord = new URL(resolvedRecord);
+        } catch (_) {
+            return;
+        }
+        if (parsedRecord.protocol !== 'https:'
+            || !provider.allowedHosts.includes(parsedRecord.hostname.toLowerCase())
+            || parsedRecord.search || parsedRecord.hash
+            || !provider.recordPath.test(parsedRecord.pathname)) {
+            return;
+        }
+        const recordUrl = validateUrlForProvider(provider, resolvedRecord, 'record');
+        const id = path.posix.basename(parsedRecord.pathname, '.html');
+        const title = cleanText($a.text());
+        if (!title) return;
+        const $heading = $a.closest('dt, .ptitle');
+        const $authorDd = $heading.is('dt') ? $heading.next('dd') : $heading.parent();
+        const $nextDd = $heading.is('dt') ? $authorDd.next('dd') : $();
+        let authors = $authorDd.find('form.authsearch input[name="query_author"]').toArray()
+            .map(node => cleanText($(node).attr('value')))
+            .filter(Boolean);
+        if (!authors.length) {
+            authors = $authorDd.find('form.authsearch a').toArray()
+                .map(node => cleanText($(node).text()).replace(/,+\s*$/, ''))
+                .filter(Boolean);
+        }
+        if (!authors.length) {
+            authors = $authorDd.find('[itemprop="author"], .author').toArray()
+                .map(node => cleanText($(node).text()))
+                .filter(Boolean);
+        }
+        if (!authors.length) {
+            authors = cvfFallbackAuthorLine($, $authorDd);
+        }
+        const findPdfIn = $scope => $scope.find('a[href]').filter((__, anchor) => {
+            const candidate = hrefUrl($(anchor).attr('href'), provider.indexUrl);
+            if (!candidate) return false;
+            try {
+                validateUrlForProvider(provider, candidate, 'pdf');
+                return path.posix.basename(new URL(candidate).pathname, '.pdf') === id;
+            } catch (_) {
+                return false;
+            }
+        }).first();
+        let $pdfAnchor = findPdfIn($authorDd);
+        if (!$pdfAnchor.length && $nextDd.length) $pdfAnchor = findPdfIn($nextDd);
+        const fallbackPdfUrl = `https://${parsedRecord.hostname}${provider.pdfBasePath}${id}.pdf`;
+        const pdfUrl = validateUrlForProvider(
+            provider,
+            $pdfAnchor.length ? hrefUrl($pdfAnchor.attr('href'), provider.indexUrl) : fallbackPdfUrl,
+            'pdf'
+        );
+        if (path.posix.basename(new URL(pdfUrl).pathname, '.pdf') !== id) {
+            fail(`CVF record 与 PDF 身份不一致：${id}`);
+        }
+        const track = cleanText(provider.defaultTrack || 'Main');
+        if (!byId.has(id)) {
+            byId.set(id, normalizePaperRecord({
+                id,
+                title,
+                authors,
+                abstract: '',
+                doi: null,
+                track,
+                recordUrl,
+                pdfUrl,
+                pdfFile: `pdfs/${id}.pdf`
+            }, byId.size));
+        }
+    });
+    const papers = [...byId.values()].sort((a, b) => compareCodePoints(a.id, b.id));
+    if (papers.length === 0) fail(`${provider.conference.id} CVF HTML 目录未解析出任何有效论文`);
+    return { conference: { ...provider.conference }, papers };
+}
+
+/**
+ * 解析 IJCAI 官方会议录 HTML（https://www.ijcai.org/proceedings/2026/）。
+ */
+function parseIjcaiCatalogHtml(htmlText, provider = EXTENDED_PROVIDERS['ijcai-2026']) {
+    const $ = cheerio.load(String(htmlText || ''));
+    const byId = new Map();
+    const $rows = $('.paper-row').length ? $('.paper-row') : $('.paper_wrapper');
+    $rows.each((_, el) => {
+        const $row = $(el);
+        const $pdfLink = $row.find('.paper-row__actions a[href], a[href]').filter((__, a) => {
+            const candidate = hrefUrl($(a).attr('href'), provider.indexUrl);
+            if (!candidate) return false;
+            try {
+                validateUrlForProvider(provider, candidate, 'pdf');
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }).first();
+        if (!$pdfLink.length) return;
+        const pdfUrl = validateUrlForProvider(provider, hrefUrl($pdfLink.attr('href'), provider.indexUrl), 'pdf');
+        const pdfStem = path.posix.basename(new URL(pdfUrl).pathname, '.pdf');
+        const id = `ijcai${provider.conference.year}-${pdfStem}`;
+        const $titleLink = $row.find('a.title[href], .title a[href]').first();
+        const title = cleanText($titleLink.length ? $titleLink.text() : $row.find('.title').first().text());
+        let recordUrl = null;
+        if ($titleLink.length) {
+            const titleCandidate = hrefUrl($titleLink.attr('href'), provider.indexUrl);
+            if (titleCandidate) {
+                try {
+                    recordUrl = validateUrlForProvider(provider, titleCandidate, 'record');
+                } catch (_) {
+                    recordUrl = null;
+                }
+            }
+        }
+        if (!recordUrl) {
+            const $recLink = $row.find('.paper-row__actions a[href], a[href]').filter((__, a) => {
+                const candidate = hrefUrl($(a).attr('href'), provider.indexUrl);
+                if (!candidate) return false;
+                try {
+                    validateUrlForProvider(provider, candidate, 'record');
+                    return true;
+                } catch (_) {
+                    return false;
+                }
+            }).first();
+            if ($recLink.length) {
+                recordUrl = validateUrlForProvider(provider, hrefUrl($recLink.attr('href'), provider.indexUrl), 'record');
+            }
+        }
+        if (!title || !recordUrl) return;
+        let authors = $row.find('.authors a').toArray()
+            .map(node => cleanText($(node).text()))
+            .filter(Boolean);
+        if (!authors.length) {
+            authors = cleanText($row.find('.authors').first().text())
+                .split(/\s*,\s*/)
+                .map(cleanText)
+                .filter(Boolean);
+        }
+        const rawDoiHref = cleanText($row.find('a[href*="doi.org/"]').first().attr('href'));
+        const doiCandidate = rawDoiHref ? rawDoiHref.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '').trim() : '';
+        const doi = doiCandidate && DOI_RE.test(doiCandidate) ? doiCandidate : null;
+        const track = cleanText(
+            $row.closest('.subsection').children('h3, h4').first().text()
+            || $row.closest('.section, section').children('h2, h3').first().text()
+            || $row.prevAll('h3, h2').first().text()
+            || provider.defaultTrack
+            || 'IJCAI 2026'
+        );
+        if (!byId.has(id)) {
+            byId.set(id, normalizePaperRecord({
+                id,
+                title,
+                authors,
+                abstract: '',
+                doi,
+                track,
+                recordUrl,
+                pdfUrl,
+                pdfFile: `pdfs/${id}.pdf`
+            }, byId.size));
+        }
+    });
+    const papers = [...byId.values()].sort((a, b) => compareCodePoints(a.id, b.id));
+    if (papers.length === 0) fail(`${provider.conference.id} IJCAI HTML 目录未解析出任何有效论文`);
     return { conference: { ...provider.conference }, papers };
 }
 
@@ -885,7 +1637,7 @@ function resolveSafePdfPath(paths, paper) {
 }
 
 function resolveSafeResponsePath(paths, relFile) {
-    if (typeof relFile !== 'string' || !/^responses\/(?:index\.html|page-\d{3}\.json|proceedings\.json)$/.test(relFile)) {
+    if (typeof relFile !== 'string' || !/^responses\/(?:index\.html|index\.json|vol-\d{3}\.html|page-\d{3}\.json|proceedings\.json)$/.test(relFile)) {
         fail(`响应文件相对路径不合法：${relFile}`);
     }
     const full = path.resolve(paths.root, relFile);
@@ -965,9 +1717,22 @@ function buildPdfReceipt(provider, paper, metadataSha256, {
     return { ...core, receiptSha256: stableHash(core) };
 }
 
+const SINGLE_HTML_PARSERS = Object.freeze({
+    'acl-anthology-html': parseEmnlpCatalogHtml,
+    'neurips-proceedings-html': parseNeuripsProceedingsHtml,
+    'dcase-proceedings-html': parseDcaseProceedingsHtml,
+    'isca-html': parseIscaCatalogHtml,
+    'pmlr-html': parsePmlrCatalogHtml,
+    'cvf-html': parseCvfCatalogHtml,
+    'ijcai-html': parseIjcaiCatalogHtml
+});
+
 async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, dependencies = {}) {
     const provider = providerFor(providerId);
     plannedRoot(outputRoot);
+    const hasMultiVolumes = provider.parser === 'acl-anthology-html'
+        && Array.isArray(provider.indexUrls)
+        && provider.indexUrls.length > 0;
     if (!apply) {
         return {
             command: 'catalog',
@@ -975,6 +1740,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
             providerId: provider.conference.id,
             parser: provider.parser,
             indexUrl: provider.indexUrl,
+            ...(hasMultiVolumes ? { indexUrls: [...provider.indexUrls] } : {}),
             outputRoot
         };
     }
@@ -986,7 +1752,29 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
     const responseEntries = [];
     let metadata;
 
-    if (provider.parser === 'acl-anthology-html' || provider.parser === 'neurips-proceedings-html') {
+    if (hasMultiVolumes) {
+        const htmlList = [];
+        for (let idx = 0; idx < provider.indexUrls.length; idx += 1) {
+            const volUrl = provider.indexUrls[idx];
+            const fetched = await fetchOfficialExtended({
+                provider, url: volUrl, kind: 'index', maxBytes: MAX_INDEX_BYTES
+            }, dependencies);
+            const rel = `responses/vol-${String(idx + 1).padStart(3, '0')}.html`;
+            writeExclusiveOrCompare(path.join(paths.root, rel), fetched.bytes, `${providerId} volume ${idx + 1} HTML`, MAX_INDEX_BYTES);
+            responseEntries.push({
+                file: rel,
+                sha256: sha256(fetched.bytes),
+                bytes: fetched.bytes.length,
+                requestedUrl: fetched.requestedUrl,
+                finalUrl: fetched.finalUrl,
+                redirects: fetched.redirects,
+                responseStatus: fetched.responseStatus,
+                observedAt: fetched.observedAt
+            });
+            htmlList.push(new TextDecoder('utf-8', { fatal: true }).decode(fetched.bytes));
+        }
+        metadata = parseEmnlpCatalogHtml(htmlList, provider);
+    } else if (Object.prototype.hasOwnProperty.call(SINGLE_HTML_PARSERS, provider.parser)) {
         const fetched = await fetchOfficialExtended({
             provider, url: provider.indexUrl, kind: 'index', maxBytes: MAX_INDEX_BYTES
         }, dependencies);
@@ -1003,9 +1791,27 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
             observedAt: fetched.observedAt
         });
         const htmlText = new TextDecoder('utf-8', { fatal: true }).decode(fetched.bytes);
-        metadata = provider.parser === 'acl-anthology-html'
-            ? parseEmnlpCatalogHtml(htmlText, provider)
-            : parseNeuripsProceedingsHtml(htmlText, provider);
+        metadata = SINGLE_HTML_PARSERS[provider.parser](htmlText, provider);
+    } else if (provider.parser === 'eccv-virtual-json') {
+        const fetched = await fetchOfficialExtended({
+            provider, url: provider.indexUrl, kind: 'json-index', maxBytes: MAX_INDEX_BYTES
+        }, dependencies);
+        const rel = 'responses/index.json';
+        const jsonText = new TextDecoder('utf-8', { fatal: true }).decode(fetched.bytes);
+        rejectDuplicateJsonKeys(jsonText, `${providerId} index.json`);
+        const parsedJson = JSON.parse(jsonText);
+        writeExclusiveOrCompare(path.join(paths.root, rel), fetched.bytes, `${providerId} index JSON`, MAX_INDEX_BYTES);
+        responseEntries.push({
+            file: rel,
+            sha256: sha256(fetched.bytes),
+            bytes: fetched.bytes.length,
+            requestedUrl: fetched.requestedUrl,
+            finalUrl: fetched.finalUrl,
+            redirects: fetched.redirects,
+            responseStatus: fetched.responseStatus,
+            observedAt: fetched.observedAt
+        });
+        metadata = parseEccvVirtualJson(parsedJson, provider);
     } else if (provider.parser === 'zenodo-json') {
         const pages = [];
         const seenUrls = new Set();
@@ -1033,8 +1839,12 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
                 responseStatus: fetched.responseStatus,
                 observedAt: fetched.observedAt
             });
-            const rawNext = parsedPage?.links?.next;
-            nextUrl = typeof rawNext === 'string' && rawNext.trim() ? rawNext.trim() : null;
+            if (shouldStopZenodoPagination(parsedPage, provider)) {
+                nextUrl = null;
+            } else {
+                const rawNext = parsedPage?.links?.next;
+                nextUrl = typeof rawNext === 'string' && rawNext.trim() ? rawNext.trim() : null;
+            }
         }
         if (nextUrl) {
             fail(`${providerId} Zenodo 分页超过上限 ${MAX_JSON_PAGES} 页，拒绝封存不完整目录`);
@@ -1088,7 +1898,11 @@ function validateResponseEntry(provider, entry, index, paths) {
     if (!Array.isArray(entry.redirects) || entry.redirects.length > MAX_REDIRECTS) {
         fail(`responses[${index}].redirects 非法`);
     }
-    const kind = provider.parser === 'zenodo-json' ? 'api' : 'index';
+    const kind = provider.parser === 'zenodo-json'
+        ? 'api'
+        : provider.parser === 'eccv-virtual-json'
+            ? 'json-index'
+            : 'index';
     validateRedirectChain(provider, entry.requestedUrl, entry.finalUrl, entry.redirects, kind, `responses[${index}]`);
     const requireMode0600 = provider.parser !== 'ieee-local-manifest';
     const loaded = readStableFile(full, entry.file, MAX_INDEX_BYTES, { requireMode0600 });
@@ -1141,15 +1955,42 @@ function replayCatalog(providerId, outputRoot) {
         fail(`${providerId} catalog.receipt.json 包含重复响应文件路径`);
     }
 
+    const hasMultiVolumes = provider.parser === 'acl-anthology-html'
+        && Array.isArray(provider.indexUrls)
+        && provider.indexUrls.length > 0;
     let replayedMetadata;
-    if (provider.parser === 'acl-anthology-html' || provider.parser === 'neurips-proceedings-html') {
-        if (rawResponses.length !== 1 || rawResponses[0].entry.file !== 'responses/index.html') {
+    if (hasMultiVolumes) {
+        if (rawResponses.length !== provider.indexUrls.length) {
+            fail(`${providerId} 多卷 HTML 目录必须绑定全部 ${provider.indexUrls.length} 个官方卷响应`);
+        }
+        const htmlList = [];
+        for (let idx = 0; idx < provider.indexUrls.length; idx += 1) {
+            const expectedFile = `responses/vol-${String(idx + 1).padStart(3, '0')}.html`;
+            const expectedUrl = provider.indexUrls[idx];
+            if (rawResponses[idx].entry.file !== expectedFile
+                || rawResponses[idx].entry.requestedUrl !== expectedUrl
+                || !isAllowedIndexRedirectTarget(expectedUrl, rawResponses[idx].entry.finalUrl)) {
+                fail(`${providerId} 第 ${idx + 1} 卷响应文件或 URL 不匹配：期望 ${expectedFile}`);
+            }
+            htmlList.push(new TextDecoder('utf-8', { fatal: true }).decode(rawResponses[idx].bytes));
+        }
+        replayedMetadata = parseEmnlpCatalogHtml(htmlList, provider);
+    } else if (Object.prototype.hasOwnProperty.call(SINGLE_HTML_PARSERS, provider.parser)) {
+        if (rawResponses.length !== 1 || rawResponses[0].entry.file !== 'responses/index.html'
+            || rawResponses[0].entry.requestedUrl !== provider.indexUrl
+            || !isAllowedIndexRedirectTarget(provider.indexUrl, rawResponses[0].entry.finalUrl)) {
             fail(`${providerId} HTML 目录必须绑定唯一的 responses/index.html`);
         }
         const htmlText = new TextDecoder('utf-8', { fatal: true }).decode(rawResponses[0].bytes);
-        replayedMetadata = provider.parser === 'acl-anthology-html'
-            ? parseEmnlpCatalogHtml(htmlText, provider)
-            : parseNeuripsProceedingsHtml(htmlText, provider);
+        replayedMetadata = SINGLE_HTML_PARSERS[provider.parser](htmlText, provider);
+    } else if (provider.parser === 'eccv-virtual-json') {
+        if (rawResponses.length !== 1 || rawResponses[0].entry.file !== 'responses/index.json'
+            || rawResponses[0].entry.requestedUrl !== provider.indexUrl) {
+            fail(`${providerId} JSON 目录必须绑定唯一的 responses/index.json`);
+        }
+        const jsonText = new TextDecoder('utf-8', { fatal: true }).decode(rawResponses[0].bytes);
+        rejectDuplicateJsonKeys(jsonText, `${providerId} index.json`);
+        replayedMetadata = parseEccvVirtualJson(JSON.parse(jsonText), provider);
     } else if (provider.parser === 'zenodo-json') {
         if (rawResponses.length > MAX_JSON_PAGES) {
             fail(`${providerId} Zenodo 分页数量超过上限 ${MAX_JSON_PAGES}`);
@@ -1175,11 +2016,15 @@ function replayCatalog(providerId, outputRoot) {
             const nextLink = typeof page?.links?.next === 'string' && page.links.next.trim()
                 ? page.links.next.trim()
                 : null;
+            const stopHere = shouldStopZenodoPagination(page, provider);
             if (idx < rawResponses.length - 1) {
+                if (stopHere) {
+                    fail(`${providerId} Zenodo 第 ${idx + 1} 页已触发早停条件，不应包含多余分页`);
+                }
                 if (!nextLink || rawResponses[idx + 1].entry.requestedUrl !== nextLink) {
                     fail(`${providerId} Zenodo 第 ${idx + 1} 页与第 ${idx + 2} 页分页链不匹配`);
                 }
-            } else if (nextLink) {
+            } else if (nextLink && !stopHere) {
                 fail(`${providerId} Zenodo 末页仍包含未抓取的 links.next，目录不完整`);
             }
         }
@@ -1536,8 +2381,15 @@ module.exports = {
     listProviderIds,
     validateUrlForProvider,
     fetchOfficialExtended,
+    shouldStopZenodoPagination,
     parseEmnlpCatalogHtml,
+    parseDcaseProceedingsHtml,
     parseZenodoRecordsPages,
+    parseIscaCatalogHtml,
+    parsePmlrCatalogHtml,
+    parseEccvVirtualJson,
+    parseCvfCatalogHtml,
+    parseIjcaiCatalogHtml,
     parseNeuripsProceedingsHtml,
     parseIeeeLocalManifest,
     acquireCatalog,
