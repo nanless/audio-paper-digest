@@ -85,6 +85,9 @@ def _normalize_platform_root_symlink(resolved_path: Path) -> Path:
 def normalize_usage_paper_id(value):
     if not isinstance(value, str):
         return None
+    if value.startswith('index:'):
+        date_part = value[len('index:'):]
+        return value if _valid_batch_date(date_part) else None
     arxiv = value.removeprefix('arxiv:')
     if re.fullmatch(r'(?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7})(?:v[0-9]+)?', arxiv):
         return arxiv
@@ -384,8 +387,10 @@ def begin_pending_llm_request(*, directory=None, **kwargs):
     shape = build_llm_usage_event(**kwargs)
     labels = ('runId', 'paperId', 'stage', 'unitId', 'contentAttempt', 'transportAttempt',
               'protocol', 'model', 'inputSha256', 'estimates')
+    optional_labels = ('batchDate', 'workflow', 'accountId')
     event = {**usage_event_header(), 'kind': 'request_started', 'eventId': shape['eventId'],
              'at': shape['at'], 'runtime': 'python', **{key: shape[key] for key in labels},
+             **{key: shape[key] for key in optional_labels if key in shape},
              'phase': 'authorized_before_transport', 'outcome': 'result_unknown', 'chargeState': 'unknown'}
     try:
         if directory is not None or not _running_unittest():

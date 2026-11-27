@@ -451,6 +451,10 @@ def _match_blog_review_receipt_missing(context):
     return re.search(r'审查凭证|review[_\s-]?receipt|未审查|尚未审查|没有.*审查通过', context['text'], re.IGNORECASE)
 
 
+def _match_blog_review_blocking_issues(context):
+    return re.search(r'审查仍有\s*\d+\s*个(?:未解决阻断问题|页面阻断|关联资产阻断)', context['text'])
+
+
 def _match_upstream_rate_limit(context):
     return bool(
         context['status'] == 429
@@ -654,6 +658,22 @@ _RULES = (
             'review 通过后再 push，并核对远端 main OID 与部署结果。',
         ),
         'commands': lambda context: [_review_command(_date_token(context)), _push_command(_date_token(context))],
+    },
+    {
+        'id': 'blog-review-blocking-issues',
+        'doc_ref': _DOC_THREE_WORKFLOWS,
+        'match': _match_blog_review_blocking_issues,
+        'cause': '博客严格审查发现阻断问题，本次未签发审查凭证，已保留失败集续审状态。',
+        'next_steps': (
+            '先查看同日期 blog-review-failure-<DATE>.json 与 blog-review-help-<DATE>.json 中的逐页阻断原因，区分内容问题与临时传输故障。',
+            '内容或图片问题回到 Reader/生成阶段修正后重新生成；纯临时传输失败可直接续审，已通过页面按 SHA 自动复用。',
+            '不要手改页面绕过生成清单、也不要跳过审查直接推送；全部阻断清零并签发凭证后再 push。',
+        ),
+        'commands': lambda context: [
+            _review_command(_date_token(context)),
+            _generate_command(_date_token(context)),
+            _digest_status_command(_date_token(context)),
+        ],
     },
     {
         'id': 'upstream-rate-limit',

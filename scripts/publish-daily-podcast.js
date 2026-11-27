@@ -36,6 +36,7 @@ const {
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_ANALYSIS_INPUT = path.join(PROJECT_ROOT, 'data', 'current', 'deep-analysis-result.json');
+const DEFAULT_EPISODES_DIR = path.join(PROJECT_ROOT, 'data', 'runtime', 'daily-podcast');
 const PYTHON_RUNTIME_SH = path.join(__dirname, 'python-runtime.sh');
 const INDEXTTS_SYNTH_PY = path.join(__dirname, 'indextts_synth.py');
 
@@ -209,6 +210,9 @@ function parseCliArgs(argv) {
             case '--episodes-dir':
                 opts.episodesDir = requireValue(arg, i++);
                 break;
+            case '--portal-repo':
+                opts.portalRepo = requireValue(arg, i++);
+                break;
             case '--cache-dir':
                 opts.cacheDir = requireValue(arg, i++);
                 break;
@@ -316,7 +320,8 @@ function formatUsage() {
         '  --metadata-out <path>        Override path for episode metadata JSON',
         '  --rss-out <path>             Override path for Podcast 2.0 RSS XML',
         '  --client-feed-out <path>     Override path for Wave 14.5 client feed JSON (paper-daily-podcast-feed)',
-        '  --episodes-dir <dir>         Optional directory of prior episode JSONs to merge into feeds',
+        '  --episodes-dir <dir>         Directory of prior episode JSONs to merge into feeds (default: data/runtime/daily-podcast)',
+        '  --portal-repo <dir>          Optional Hugo portal repo to sync static/feeds/podcast.xml, data/podcast-episodes.json, and static/client/podcast/feed.json',
         '  --backend <mode>             indextts2-python | indextts-http | silent-mock',
         '  --voice-prompt <wav>         Host reference WAV for IndexTTS-2.5 / 2.0',
         '  --cohost-voice-prompt <wav>  Optional cohost reference WAV',
@@ -363,15 +368,39 @@ function buildSynthCommandArgs({ scriptPath, outputAudioPath, manifestPath, cach
 }
 
 /**
- * Load prior episode metadata JSON files from episodesDir, skipping currentDate
- * and deduplicating by date (deterministic sorted filename order, keeping latest filename per date).
+ * Recursively load prior episode metadata JSON files from episodesDir (supporting both
+ * `<dateStr>/*.episode.json` subdirectories and flat `*.json` layouts), skipping currentDate
+ * and deduplicating by date in deterministic sorted relative-path order.
  */
 function loadExistingEpisodes(episodesDir, currentDate) {
     if (!episodesDir || !fs.existsSync(episodesDir)) return [];
-    const entries = fs.readdirSync(episodesDir).filter(name => name.endsWith('.json')).sort();
+    const rootDir = path.resolve(episodesDir);
+    const jsonFiles = [];
+    const walk = (dir, depth) => {
+        if (depth > 4) return;
+        let entries;
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+            return;
+        }
+        entries.sort((a, b) => a.name.localeCompare(b.name, 'en'));
+        for (const entry of entries) {
+            if (entry.isSymbolicLink()) continue;
+            if (entry.name.startsWith('.')) continue;
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                walk(fullPath, depth + 1);
+            } else if (entry.isFile() && entry.name.endsWith('.json')) {
+                const rel = path.relative(rootDir, fullPath).split(path.sep).join('/');
+                jsonFiles.push({ rel, fullPath });
+            }
+        }
+    };
+    walk(rootDir, 0);
+    jsonFiles.sort((a, b) => a.rel.localeCompare(b.rel, 'en'));
     const byDate = new Map();
-    for (const name of entries) {
-        const fullPath = path.join(episodesDir, name);
+    for (const { fullPath } of jsonFiles) {
         try {
             const parsed = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
             if (parsed
@@ -385,6 +414,47 @@ function loadExistingEpisodes(episodesDir, currentDate) {
         }
     }
     return [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date, 'en'));
+}
+
+function buildChaptersReleaseUrl({ repo, tag, chaptersFileName }) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.chapters\.json$/.test(String(chaptersFileName || ''))) {
+        throw new Error(`Invalid chapters asset filename: "${chaptersFileName}"`);
+    }
+    return `https://github.com/${repo}/releases/download/${tag}/${chaptersFileName}`;
+}
+
+function assertNotSymlinkPath(targetPath) {
+    try {
+        if (fs.lstatSync(targetPath).isSymbolicLink()) {
+            throw new Error(`Refusing to write through symlink: ${targetPath}`);
+        }
+    } catch (err) {
+        if (err?.code !== 'ENOENT') throw err;
+    }
+}
+
+function syncPodcastToPortalRepo({ portalRepo, rssXml, clientFeed }) {
+    const resolvedPortal = path.resolve(String(portalRepo || ''));
+    if (!fs.existsSync(resolvedPortal) || !fs.statSync(resolvedPortal).isDirectory()) {
+        throw new Error(`Portal repository directory does not exist: ${resolvedPortal}`);
+    }
+    const rssTarget = path.join(resolvedPortal, 'static', 'feeds', 'podcast.xml');
+    const dataEpisodesTarget = path.join(resolvedPortal, 'data', 'podcast-episodes.json');
+    const clientFeedTarget = path.join(resolvedPortal, 'static', 'client', 'podcast', 'feed.json');
+    const feedJsonText = `${JSON.stringify(clientFeed, null, 2)}\n`;
+    for (const target of [rssTarget, dataEpisodesTarget, clientFeedTarget]) {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        assertNotSymlinkPath(target);
+    }
+    writeFileAtomic(rssTarget, rssXml);
+    writeFileAtomic(dataEpisodesTarget, feedJsonText);
+    writeFileAtomic(clientFeedTarget, feedJsonText);
+    return {
+        portalRepo: resolvedPortal,
+        rssPath: rssTarget,
+        dataEpisodesPath: dataEpisodesTarget,
+        clientFeedPath: clientFeedTarget
+    };
 }
 
 function runCheckEnv({ execFileSyncFn = childProcess.execFileSync, env = process.env } = {}) {
@@ -480,9 +550,6 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     }
 
     const chaptersFileName = `${tagPrefix}-${dateStr}.chapters.json`;
-    const chaptersUrl = options.chaptersBaseUrl
-        ? `${String(options.chaptersBaseUrl).replace(/\/+$/, '')}/${chaptersFileName}`
-        : null;
 
     const topThemesLabel = (script.topThemes || [])
         .slice(0, 3)
@@ -498,7 +565,8 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     // Load prior episodes and pre-validate both today's episode metadata and full RSS XML
     // BEFORE uploading to GitHub Releases so corrupt local/prior metadata fails cleanly
     // without stranding a remote release asset.
-    const priorEpisodes = loadExistingEpisodes(options.episodesDir, dateStr);
+    const effectiveEpisodesDir = options.episodesDir === undefined ? DEFAULT_EPISODES_DIR : options.episodesDir;
+    const priorEpisodes = loadExistingEpisodes(effectiveEpisodesDir, dateStr);
     const previewRepo = resolvePodcastGitHubRepo({ repo: requestedRepo, env });
     const previewTag = buildReleaseTag(dateStr, { tagPrefix, tagGrouping, env });
     const previewAssetName = validateAssetFileName(
@@ -510,6 +578,9 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
         tag: previewTag,
         assetFileName: previewAssetName
     });
+    const previewChaptersUrl = options.chaptersBaseUrl
+        ? `${String(options.chaptersBaseUrl).replace(/\/+$/, '')}/${chaptersFileName}`
+        : (!options.localOnly ? buildChaptersReleaseUrl({ repo: previewRepo, tag: previewTag, chaptersFileName }) : null);
     const preflightMetadata = buildPodcastEpisodeMetadata({
         date: dateStr,
         title: script.title,
@@ -522,7 +593,7 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
         ttsEngine: audioManifest.ttsEngine,
         chapters: audioManifest.chapters,
         episodePageUrl: script.digestUrl,
-        chaptersUrl,
+        chaptersUrl: previewChaptersUrl,
         publishedAt,
         releaseTag: previewTag,
         githubRepo: previewRepo,
@@ -557,6 +628,12 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
         execFileSyncFn: ghExecFileSyncFn
     });
 
+    const chaptersUrl = options.chaptersBaseUrl
+        ? `${String(options.chaptersBaseUrl).replace(/\/+$/, '')}/${chaptersFileName}`
+        : (!options.localOnly
+            ? buildChaptersReleaseUrl({ repo: releaseResult.repo, tag: releaseResult.tag, chaptersFileName })
+            : null);
+
     const episodeMetadata = buildPodcastEpisodeMetadata({
         date: dateStr,
         title: script.title,
@@ -584,6 +661,25 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     const clientFeedPath = path.resolve(options.clientFeedOut || path.join(outDir, 'podcast-feed.json'));
 
     writeFileAtomic(chaptersPath, `${JSON.stringify(chaptersJson, null, 2)}\n`);
+    let chaptersUploaded = false;
+    if (releaseResult.published && !options.dryRun && !options.localOnly) {
+        ghExecFileSyncFn('gh', [
+            'release', 'upload',
+            '--repo', releaseResult.repo,
+            '--clobber',
+            '--',
+            releaseResult.tag,
+            chaptersPath
+        ], {
+            cwd: PROJECT_ROOT,
+            encoding: 'utf8',
+            shell: false,
+            timeout: 120000,
+            env: ghEnv,
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+        chaptersUploaded = true;
+    }
     writeFileAtomic(metadataPath, `${JSON.stringify(episodeMetadata, null, 2)}\n`);
 
     const allEpisodes = [episodeMetadata, ...priorEpisodes];
@@ -609,15 +705,21 @@ function runDailyPodcastPipeline(options = {}, deps = {}) {
     }
     writeFileAtomic(clientFeedPath, `${JSON.stringify(clientFeed, null, 2)}\n`);
 
+    const portalSync = options.portalRepo
+        ? syncPodcastToPortalRepo({ portalRepo: options.portalRepo, rssXml, clientFeed })
+        : null;
+
     return {
         date: dateStr,
         scriptPath,
         audioPath: audioManifest.audioPath,
         audioManifestPath,
         chaptersPath,
+        chaptersUploaded,
         metadataPath,
         rssPath,
         clientFeedPath,
+        ...(portalSync ? { portalSync } : {}),
         script,
         audioManifest,
         releaseResult,
@@ -653,7 +755,10 @@ function main(argv = process.argv.slice(2)) {
         metadataPath: result.metadataPath,
         rssPath: result.rssPath,
         clientFeedPath: result.clientFeedPath,
-        chaptersPath: result.chaptersPath
+        chaptersPath: result.chaptersPath,
+        chaptersUrl: result.episodeMetadata.chaptersUrl,
+        chaptersUploaded: result.chaptersUploaded,
+        ...(result.portalSync ? { portalSync: result.portalSync } : {})
     }, null, 2));
     return 0;
 }
@@ -677,6 +782,8 @@ module.exports = {
     formatUsage,
     buildSynthCommandArgs,
     loadExistingEpisodes,
+    DEFAULT_EPISODES_DIR,
+    syncPodcastToPortalRepo,
     runCheckEnv,
     runDailyPodcastPipeline,
     main

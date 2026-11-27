@@ -207,11 +207,28 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
         assert.deepEqual(fs.readFileSync(path.join(outputRoot, publicationId, 'review.json')), reviewedBeforeDryRun);
         assert.deepEqual(fs.readFileSync(target), next);
         assert.equal(api.activate({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'activation-rebound');
-        assert.equal(api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'published');
+        const pubResult = api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps);
+        assert.equal(pubResult.status, 'published');
         assert.equal(api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'already-published');
         const offlineStatus = api.status({ outputRoot, publicationId, blogRepo, liveRemote: false }, deps);
         assert.equal(offlineStatus.complete, false);
         assert.equal(offlineStatus.phase, 'awaiting-live-remote-verification');
+        const awaitingOnline = api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps);
+        assert.equal(awaitingOnline.complete, false);
+        assert.equal(awaitingOnline.phase, 'awaiting-online-verification');
+        assert.ok(awaitingOnline.blockers.some(b => b.code === 'pages-deploy-not-verified'));
+        assert.ok(awaitingOnline.blockers.some(b => b.code === 'web-not-verified'));
+        fs.writeFileSync(path.join(outputRoot, publicationId, 'online-verification.json'), JSON.stringify({
+            publicationId,
+            planSha256: plan.planSha256,
+            remoteVerifiedOid: pubResult.receipt.remoteVerifiedOid,
+            pagesDeployVerified: true,
+            webVerified: true,
+            checked: 1,
+            ok: 1,
+            failed: 0,
+            verifiedAt: now
+        }, null, 2));
         const status = api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps);
         assert.equal(status.complete, true);
         assert.equal(status.phase, 'published-with-visual-excluded');
@@ -820,15 +837,20 @@ test('G17 & G16: --waive-visuals 自动绑定 2026-11-02 不生图政策，statu
     api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps);
 
     const beforeOnline = api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps);
-    assert.equal(beforeOnline.complete, true);
+    assert.equal(beforeOnline.complete, false);
+    assert.equal(beforeOnline.phase, 'awaiting-online-verification');
     assert.equal(beforeOnline.pagesDeployVerified, false);
     assert.equal(beforeOnline.webVerified, false);
+    assert.ok(beforeOnline.blockers.some(b => b.code === 'pages-deploy-not-verified'));
+    assert.ok(beforeOnline.blockers.some(b => b.code === 'web-not-verified'));
 
     fs.writeFileSync(path.join(outputRoot, publicationId, 'online-verification.json'), JSON.stringify({
         publicationId, planSha256: plan.planSha256, remoteVerifiedOid: oid('f'), pagesDeployVerified: true, webVerified: true,
         checked: 1, ok: 1, failed: 0, verifiedAt: now
     }, null, 2));
     const afterOnline = api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps);
+    assert.equal(afterOnline.complete, true);
+    assert.equal(afterOnline.phase, 'published-with-visual-excluded');
     assert.equal(afterOnline.pagesDeployVerified, true);
     assert.equal(afterOnline.webVerified, true);
     assert.equal(afterOnline.stages.onlineVerification.complete, true);

@@ -2187,7 +2187,7 @@ function validateReaderNarrative(claim, readerBlocks, prefix) {
     if (narrative.length < 40 || narrative.length > 360) {
         return `${prefix}.readerNarrative 必须是 40-360 字的完整读者句，而非字段拼接`;
     }
-    if (/^(?:[^。！？!?；;]*[，,、:：|]){4,}[^。！？!?；;]*[。！？!?；;]?$/u.test(narrative)) {
+    if (/^(?:[^。！？!?；;，,、:：|]*[，,、:：|]){4,}[^。！？!?；;，,、:：|]*[。！？!?；;]?$/u.test(narrative)) {
         return `${prefix}.readerNarrative 不得用逗号/竖线罗列设置、方法、基线和数字`;
     }
     if (!/(?:高于|低于|优于|落后|相差|超过|提升|下降|改善|退化|从.{0,40}(?:到|降至|升至)|分别为|仍(?:高|低)于)/u.test(narrative)) {

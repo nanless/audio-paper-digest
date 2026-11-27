@@ -977,19 +977,28 @@ function matchesFactLocalClaimsLinear(old, value, claims) {
         }
         badLeft[i + 1] = b;
     }
-    let starts = [0];
+    let starts = (prefix.endsWith('[') || prefix.endsWith('!'))
+        ? (L > 0 && middle[0] === '[' ? [] : [0])
+        : [0];
+    if (!starts.length) return false;
     for (let groupIndex = 0; groupIndex < groups.length - 1; groupIndex++) {
         const anchor = anchors[groupIndex + 1];
         const need = groups[groupIndex].count;
+        const rightStartsBracket = anchor.startsWith('[');
+        const nextLeftEndsBracketOrBang = anchor.endsWith('[') || anchor.endsWith('!');
         const nextStarts = [];
         let ptr = 0;
         let pos = middle.indexOf(anchor, 0);
         while (pos !== -1) {
             const minStart = badLeft[pos];
             while (ptr < starts.length && starts[ptr] < minStart) ptr++;
-            if (ptr < starts.length && starts[ptr] <= pos
+            const rightSeamBad = rightStartsBracket && pos > 0
+                && (middle[pos - 1] === '[' || middle[pos - 1] === '!');
+            const nextStart = pos + anchor.length;
+            const leftSeamBad = nextLeftEndsBracketOrBang && nextStart < L && middle[nextStart] === '[';
+            if (!rightSeamBad && !leftSeamBad && ptr < starts.length && starts[ptr] <= pos
                 && nonWs[pos] - nonWs[starts[ptr]] >= need) {
-                nextStarts.push(pos + anchor.length);
+                nextStarts.push(nextStart);
             }
             pos = middle.indexOf(anchor, pos + 1);
         }
@@ -998,6 +1007,9 @@ function matchesFactLocalClaimsLinear(old, value, claims) {
     }
     const lastNeed = groups[groups.length - 1].count;
     const lastMinStart = badLeft[L];
+    if (suffix.startsWith('[') && L > 0 && (middle[L - 1] === '[' || middle[L - 1] === '!')) {
+        return false;
+    }
     for (let i = 0; i < starts.length; i++) {
         if (starts[i] >= lastMinStart) {
             return starts[i] <= L && nonWs[L] - nonWs[starts[i]] >= lastNeed;
@@ -1063,7 +1075,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
             && typeof item.value !== 'string') throw new Error('Reader patch text replacement must be a string');
         if (['/sections', '/tableBindings', '/formulaBindings', '/conceptBridges'].includes(item.path) && !Array.isArray(item.value)) {
-            throw new Error('Reader patch tableBindings replacement must be an array');
+            throw new Error(`Reader patch ${item.path.slice(1)} replacement must be an array`);
         }
         if (item.path === '/figurePlacements' && options.atomicOperation?.kind !== 'select_observed_figures_v1'
             && (!Array.isArray(options.availableFigureOrdinals)
@@ -1452,6 +1464,77 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || !(addedBinding.sourceQuotes.length || hasVerifiedPdfSourceQuotes(addedBinding))
             || Object.prototype.hasOwnProperty.call(addedBinding, 'selection')) {
             throw new Error('Reader narrative-table patch failed its atomic append/bind postconditions');
+        }
+    }
+    if (operation?.kind === 'remove_duplicate_table_v1') {
+        if (!Array.isArray(operation.requiredReplacementPaths)
+            || seen.length !== operation.requiredReplacementPaths.length
+            || operation.requiredReplacementPaths.some(pointer => !seen.includes(pointer))) {
+            throw new Error('去重删表补丁必须完整提交本轮授权的 /tableBindings 与相关小节正文');
+        }
+        if (hashDraft(merged.tableBindings) !== hashDraft(operation.expectedRemainingBindings)) {
+            throw new Error('去重删表补丁的 /tableBindings 必须仅移除指定重复项并连续重编号，其余绑定逐字保留');
+        }
+        const dupBody = String(merged.sections[operation.dupSectionIndex]?.body || '');
+        if (!dupBody.trim()) {
+            throw new Error('去重删表后的目标小节正文不能为空');
+        }
+        const beforeDupTableMarkers = String(draft.sections[operation.dupSectionIndex]?.body || '')
+            .match(/\[\[TABLE_\d+\]\]/g) || [];
+        const dupMarkerChanges = (operation.markerChanges || [])
+            .filter(change => change.sectionIndex === operation.dupSectionIndex);
+        let droppedRemovedMarker = false;
+        const expectedDupTableMarkers = [];
+        for (const marker of beforeDupTableMarkers) {
+            if (operation.removedMarker && !droppedRemovedMarker && marker === operation.removedMarker) {
+                droppedRemovedMarker = true;
+                continue;
+            }
+            expectedDupTableMarkers.push(
+                dupMarkerChanges.find(change => change.oldMarker === marker)?.newMarker || marker
+            );
+        }
+        const actualDupTableMarkers = dupBody.match(/\[\[TABLE_\d+\]\]/g) || [];
+        if (hashDraft(actualDupTableMarkers) !== hashDraft(expectedDupTableMarkers)) {
+            throw new Error(`去重删表后 ${operation.dupSectionPath} 的表格标记序列与移除/重编号要求不符（期望 ${JSON.stringify(expectedDupTableMarkers)}，实际 ${JSON.stringify(actualDupTableMarkers)}）`);
+        }
+        const beforeNonTableMarkers = String(draft.sections[operation.dupSectionIndex]?.body || '')
+            .match(/\[\[(?:FIGURE|FORMULA|CONCEPT_BRIDGE)_\d+\]\]/g) || [];
+        const afterNonTableMarkers = dupBody
+            .match(/\[\[(?:FIGURE|FORMULA|CONCEPT_BRIDGE)_\d+\]\]/g) || [];
+        if (hashDraft(beforeNonTableMarkers) !== hashDraft(afterNonTableMarkers)) {
+            throw new Error('去重删表不得增删或改变该小节中的图、公式或术语桥标记');
+        }
+        for (let index = 0; index < draft.sections.length; index += 1) {
+            if (index === operation.dupSectionIndex) continue;
+            const changes = (operation.markerChanges || []).filter(change => change.sectionIndex === index);
+            if (!changes.length) continue;
+            const expectedBody = String(draft.sections[index].body || '').replace(/\[\[TABLE_\d+\]\]/g,
+                marker => changes.find(change => change.oldMarker === marker)?.newMarker || marker);
+            if (merged.sections[index].body !== expectedBody) {
+                throw new Error('去重删表的非目标小节只可按要求重编号后续表格标记，不得改动其他正文');
+            }
+        }
+        const beforeTables = locateReaderDraftTables(draft);
+        const afterTables = locateReaderDraftTables(merged);
+        if (afterTables.length !== operation.expectedTableCount
+            || merged.tableBindings.length !== operation.expectedTableCount) {
+            throw new Error('去重删表后正文表数量与 tableBindings 数量必须精确减少 1 且保持闭合');
+        }
+        if (operation.removedMarker === null) {
+            const beforeDupTableCount = beforeTables.filter(table => table.sectionIndex === operation.dupSectionIndex).length;
+            const afterDupTableCount = afterTables.filter(table => table.sectionIndex === operation.dupSectionIndex).length;
+            if (afterDupTableCount !== beforeDupTableCount - 1) {
+                throw new Error(`去重删表后 ${operation.dupSectionPath} 的表格数量必须精确减少 1`);
+            }
+        }
+        for (const binding of operation.expectedRemainingBindings) {
+            if (!(binding?.selection || binding?.completeTable)) continue;
+            const expectedMarker = `[[TABLE_${binding.tableIndex}]]`;
+            const matches = afterTables.filter(table => table.marker === expectedMarker);
+            if (matches.length !== 1) {
+                throw new Error(`去重删表后保留绑定 ${expectedMarker} 在正文中必须精确出现 1 次`);
+            }
         }
     }
     if (options.rejectUnchanged === true && hashDraft(merged) === hashDraft(draft)) {
@@ -2237,6 +2320,130 @@ function buildMissingResultTableOperation(draft, issues) {
     };
 }
 
+function findDuplicateTableConflict(draft, issue) {
+    if (issue?.code !== 'reader_duplicate_table') return null;
+    const dupMatch = /^\/tableBindings\/(0|[1-9]\d*)$/.exec(String(issue.path || ''));
+    if (!dupMatch) return null;
+    const dupIndex = Number(dupMatch[1]);
+    const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
+    const dupBinding = bindings[dupIndex];
+    if (!dupBinding || !Number.isInteger(dupBinding.tableIndex) || dupBinding.tableIndex < 1) return null;
+    const origTableIndex = Number.isInteger(issue.duplicateOfTableIndex)
+        ? issue.duplicateOfTableIndex
+        : (() => {
+            const fromMsg = /与第\s*(\d+)\s*张表/.exec(String(issue.message || ''));
+            return fromMsg ? Number(fromMsg[1]) : null;
+        })();
+    let origIndex = origTableIndex !== null
+        ? bindings.findIndex((binding, idx) => idx !== dupIndex && binding?.tableIndex === origTableIndex)
+        : -1;
+    if (origIndex < 0) {
+        const dupOrdinal = dupBinding.completeTable?.sourceTableOrdinal
+            ?? dupBinding.selection?.sourceTableOrdinal ?? dupBinding.sourceTableOrdinal;
+        if (Number.isInteger(dupOrdinal)) {
+            origIndex = bindings.findIndex((binding, idx) => idx !== dupIndex && (
+                (binding?.completeTable?.sourceTableOrdinal
+                    ?? binding?.selection?.sourceTableOrdinal ?? binding?.sourceTableOrdinal) === dupOrdinal
+            ));
+        }
+    }
+    const origBinding = origIndex >= 0 ? bindings[origIndex] : null;
+    const tables = locateReaderDraftTables(draft);
+    const sectionPathForBinding = (binding, fallbackSectionPath = null) => {
+        if (typeof fallbackSectionPath === 'string' && /^\/sections\/\d+\/body$/.test(fallbackSectionPath)) {
+            return fallbackSectionPath;
+        }
+        if (!binding) return null;
+        if (binding.selection || binding.completeTable) {
+            const marker = `[[TABLE_${binding.tableIndex}]]`;
+            const hits = tables.filter(table => table.marker === marker);
+            if (hits.length === 1) return hits[0].path;
+        }
+        const plainTables = tables.filter(table => !table.marker && table.table);
+        const plainBindings = bindings.filter(item => item && !item.selection && !item.completeTable);
+        if (plainTables.length === plainBindings.length) {
+            const ordinal = plainBindings.indexOf(binding);
+            if (ordinal >= 0 && plainTables[ordinal]) return plainTables[ordinal].path;
+        }
+        const byIndex = tables.filter(table => table.tableIndex === binding.tableIndex);
+        return byIndex.length === 1 ? byIndex[0].path : null;
+    };
+    const dupSectionPath = sectionPathForBinding(dupBinding, issue.sectionPath);
+    const origSectionPath = origBinding ? sectionPathForBinding(origBinding) : null;
+    return { dupIndex, dupBinding, dupSectionPath, origIndex, origBinding, origSectionPath, tables };
+}
+
+function buildRemoveDuplicateTableOperation(draft, issues, options = {}) {
+    const artifactTables = Array.isArray(options.structuredArtifacts?.tables)
+        ? options.structuredArtifacts.tables : null;
+    if (!artifactTables) return null;
+    const blocking = (Array.isArray(issues) ? issues : []).filter(issue =>
+        issue?.diagnosticOnly !== true
+        && !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+        && issue?.code !== TABLE_COUNT_ISSUE_CODE && !readTableCountIssue(issue));
+    const dupIssues = blocking.filter(issue => issue?.code === 'reader_duplicate_table');
+    if (!dupIssues.length) return null;
+    const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
+    if (bindings.length < 2 || bindings.some((binding, index) => !binding || binding.tableIndex !== index + 1)) return null;
+    const usedOrdinals = new Set(bindings.map(binding =>
+        binding?.completeTable?.sourceTableOrdinal ?? binding?.selection?.sourceTableOrdinal ?? binding?.sourceTableOrdinal
+    ).filter(Number.isInteger));
+    const unusedDomTables = artifactTables.filter(table => Number.isInteger(table?.ordinal) && !usedOrdinals.has(table.ordinal));
+    if (unusedDomTables.length > 0) return null;
+    const minTables = Number.isInteger(options.minimumIntegratedTables)
+        ? options.minimumIntegratedTables
+        : Math.min(4, Math.max(0, artifactTables.length));
+    if (bindings.length - 1 < minTables) return null;
+    const conflict = findDuplicateTableConflict(draft, dupIssues[0]);
+    if (!conflict || !conflict.dupSectionPath) return null;
+    const { dupIndex, dupBinding, dupSectionPath, tables } = conflict;
+    if (tables.length !== bindings.length) return null;
+    const removedMarker = (dupBinding.selection || dupBinding.completeTable)
+        ? `[[TABLE_${dupBinding.tableIndex}]]` : null;
+    const dupSectionIndex = Number(/^\/sections\/(\d+)\/body$/.exec(dupSectionPath)[1]);
+    if (removedMarker) {
+        const occurrences = draft.sections.reduce((count, section) => count
+            + String(section?.body || '').split(removedMarker).length - 1, 0);
+        if (occurrences !== 1 || !String(draft.sections[dupSectionIndex]?.body || '').includes(removedMarker)) return null;
+    }
+    const expectedRemainingBindings = bindings
+        .filter((_binding, idx) => idx !== dupIndex)
+        .map((binding, newIdx) => ({ ...structuredClone(binding), tableIndex: newIdx + 1 }));
+    const markerChanges = [];
+    for (let oldIdx = dupIndex + 1; oldIdx < bindings.length; oldIdx += 1) {
+        const binding = bindings[oldIdx];
+        if (!(binding.selection || binding.completeTable)) continue;
+        const oldMarker = `[[TABLE_${oldIdx + 1}]]`;
+        const newMarker = `[[TABLE_${oldIdx}]]`;
+        const located = tables.filter(table => table.marker === oldMarker);
+        if (located.length !== 1) return null;
+        markerChanges.push({ sectionIndex: located[0].sectionIndex, oldMarker, newMarker });
+    }
+    const renumberedBodyPaths = [...new Set(markerChanges.map(change => `/sections/${change.sectionIndex}/body`))];
+    const requiredReplacementPaths = [...new Set(['/tableBindings', dupSectionPath, ...renumberedBodyPaths])];
+    if (requiredReplacementPaths.length > MAX_READER_PATCH_NODES) return null;
+    return {
+        kind: 'remove_duplicate_table_v1',
+        removedBindingIndex: dupIndex,
+        removedTableIndex: dupBinding.tableIndex,
+        removedMarker,
+        dupSectionIndex,
+        dupSectionPath,
+        expectedTableCount: bindings.length - 1,
+        expectedRemainingBindings,
+        markerChanges,
+        requiredReplacementPaths,
+        requiredPostconditions: [
+            `原文已无其他未展示的独立 DOM 原表，且保留 ${bindings.length - 1} 张表已满足最少表数要求；本轮原子移除重复绑定 tableBindings[${dupIndex}]`,
+            '/tableBindings 必须提交移除重复项并从 1 连续重编号后的其余绑定，保留项的所有来源字段与内容逐字不变',
+            removedMarker
+                ? `${dupSectionPath} 必须移除重复表标记 ${removedMarker}（保留合理的文字讨论），不得删改其他图、公式或术语桥标记`
+                : `${dupSectionPath} 必须移除该重复 Markdown 表格（保留合理的文字讨论），不得删改其他图、公式或术语桥标记`,
+            ...(markerChanges.length ? [`后续表格标记须同步重编号：${markerChanges.map(c => `${c.oldMarker}→${c.newMarker}`).join('、')}`] : [])
+        ]
+    };
+}
+
 function buildMissingNarrativeTableOperation(draft, issues) {
     const issue = issues.filter(item => item?.diagnosticOnly !== true).find(item => (
         !classifyTableBindingOrderIssue(item).ignoreMessageForRepair && readTableCountIssue(item)
@@ -2829,7 +3036,7 @@ function buildRepairTargets(draft, issues, options = {}) {
         ));
         const hasDeclaredStandaloneMarker = sectionIndexes.some(sectionIndex => (
             draft.sections[sectionIndex]?.kind === binding.sectionKind
-            && String(draft.sections[sectionIndex]?.body || '').split(/\n\s*\n|\\n/)
+            && String(draft.sections[sectionIndex]?.body || '').split(/\n\s*\n/)
                 .map(block => block.trim()).includes(binding.marker)
         ));
         if (!hasDeclaredStandaloneMarker) {
@@ -3051,6 +3258,26 @@ function buildRepairTargets(draft, issues, options = {}) {
             return [...paths].map(pointer => ({ path: pointer,
                 oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
         }
+    }
+    const removeDuplicateTableOp = buildRemoveDuplicateTableOperation(draft, issues, options);
+    if (removeDuplicateTableOp) {
+        const dupSectionChanges = (removeDuplicateTableOp.markerChanges || [])
+            .filter(change => change.sectionIndex === removeDuplicateTableOp.dupSectionIndex);
+        const dupRenumberSuffix = dupSectionChanges.length
+            ? `同时将本节后续表格标记重编号：${dupSectionChanges.map(change => `${change.oldMarker}→${change.newMarker}`).join('、')}。`
+            : '';
+        return removeDuplicateTableOp.requiredReplacementPaths.map(pointer => ({
+            path: pointer,
+            oldSha256: hashDraft(nodeAt(draft, pointer)),
+            value: nodeAt(draft, pointer),
+            repairInstruction: pointer === '/tableBindings'
+                ? `原子去重删表：仅移除重复的 tableBindings[${removeDuplicateTableOp.removedBindingIndex}] 并将剩余项的 tableIndex 从 1 连续重编号（精确提交：${JSON.stringify(removeDuplicateTableOp.expectedRemainingBindings)}）。`
+                : pointer === removeDuplicateTableOp.dupSectionPath
+                    ? (removeDuplicateTableOp.removedMarker
+                        ? `移除重复表标记 ${removeDuplicateTableOp.removedMarker} 并将该节对重复表的讨论自然合并或保留纯文字分析；${dupRenumberSuffix}保留其他全部标记与正确事实。`
+                        : `移除本节中的重复 Markdown 表格并将讨论自然保留为文字分析；${dupRenumberSuffix}保留其他全部标记与正确事实。`)
+                    : '仅将本节后续表格标记按新序号重编号，其余正文逐字保留。'
+        }));
     }
     const stableMissingTableOperation = buildMissingTableBindingsOperation(draft, issues);
     if (stableMissingTableOperation) return [{ path: '/tableBindings',
@@ -3321,7 +3548,7 @@ function buildRepairTargets(draft, issues, options = {}) {
             }
             continue;
         }
-        if (issue.path) add(issue.path);
+        if (issue.path && issue.code !== 'reader_length_preflight') add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
         if (issue.code === 'reader_duplicate_table') {
             if (issue.sectionPath) {
@@ -3331,6 +3558,21 @@ function buildRepairTargets(draft, issues, options = {}) {
                 const binding = idxMatch ? draft.tableBindings?.[Number(idxMatch[1])] : null;
                 for (const table of matchDraftTablesForBinding(locateReaderDraftTables(draft), binding)) {
                     add(table.path);
+                }
+            }
+            const artifactTables = Array.isArray(options.structuredArtifacts?.tables)
+                ? options.structuredArtifacts.tables : null;
+            if (artifactTables) {
+                const usedOrdinals = new Set((draft.tableBindings || []).map(binding =>
+                    binding?.completeTable?.sourceTableOrdinal ?? binding?.selection?.sourceTableOrdinal ?? binding?.sourceTableOrdinal
+                ).filter(Number.isInteger));
+                const unusedDomTables = artifactTables.filter(table => Number.isInteger(table?.ordinal) && !usedOrdinals.has(table.ordinal));
+                if (unusedDomTables.length === 0) {
+                    const conflict = findDuplicateTableConflict(draft, issue);
+                    if (conflict && conflict.origIndex >= 0) {
+                        add(`/tableBindings/${conflict.origIndex}`);
+                        if (conflict.origSectionPath) add(conflict.origSectionPath);
+                    }
                 }
             }
             continue;
@@ -3484,15 +3726,21 @@ function buildRepairTargets(draft, issues, options = {}) {
             const methodKinds = ['method_overview', 'component', 'training'];
             const onlyLengthIssues = issues.every(item => item.code === 'reader_length_preflight'
                 || /中文字数|篇幅预估/.test(String(item.message || '')));
-            const expandable = onlyLengthIssues && readerLengthShortfall(issue) > 0
+            const shortfall = readerLengthShortfall(issue);
+            const expandable = onlyLengthIssues && shortfall > 0
                 ? draft.sections.map((section, index) => ({ section, index }))
                     .filter(({ section }) => typeof section.body === 'string'
                         && !/\[\[(?:TABLE|FIGURE|FORMULA)_\d+\]\]|^\s*\|/m.test(section.body))
-                    .sort((a, b) => Number(methodKinds.includes(b.section.kind))
-                        - Number(methodKinds.includes(a.section.kind)) || b.section.body.length - a.section.body.length)
+                    .sort((a, b) => a.section.body.length - b.section.body.length
+                        || Number(methodKinds.includes(b.section.kind))
+                            - Number(methodKinds.includes(a.section.kind)))
                 : [];
-            if (expandable.length) add(`/sections/${expandable[0].index}/body`);
-            else draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
+            if (expandable.length) {
+                const desiredCount = shortfall <= 250 ? 1 : shortfall <= 700 ? 2 : 3;
+                for (const entry of expandable.slice(0, desiredCount)) {
+                    add(`/sections/${entry.index}/body`);
+                }
+            } else draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
         }
         if (!localizedComparisonUnit && /表|tableBindings|cell|quote/i.test(message)) {
             const boundIndex = /^\/tableBindings\/(\d+)$/.exec(issue.bindingPath || issue.path || '');
@@ -3896,6 +4144,7 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         || buildReindexedTableBindingsOperation(draft, issues)
         || buildMissingConceptBridgesOperation(draft, issues)
         || buildMissingFormulaBindingsOperation(draft, issues)
+        || buildRemoveDuplicateTableOperation(draft, issues, options)
         || buildMissingTableBindingsOperation(draft, issues)
         || buildMissingTailQuoteTableOperation(draft, issues)
         || buildUniqueMissingQuoteTableOperation(draft, issues)
@@ -3967,10 +4216,12 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
     const conceptGuidance = atomicOperation?.kind === 'complete_existing_concept_bridges_v1'
         ? atomicOperation.requiredPostconditions.join('；') : '';
     const lengthGuidance = issues.some(issue => readerLengthShortfall(issue) > 0)
-        ? '篇幅不足时，在允许正文内补充原文支持的机制分工或执行过程，按当前诊断缺额补足并多留至少100中文字余量；保留正确旧文，不回传仍低于下限的原段，也不复制其他小节凑数。' : '';
+        ? '篇幅不足时，在允许正文内补充原文支持的机制分工或执行过程，按当前诊断缺额补足并多留至少100中文字余量；若任意扩写小节正文超过900中文字，请补充 #### 子标题分层；保留正确旧文，不回传仍低于下限的原段，也不复制其他小节凑数。' : '';
     const supplementalSourceGuidance = scientificDoubleRenderingGuidance(draft, issues, targets, sourceText)
         + repairTableEvidenceGuidance(draft, issues, targets, sourceText, options);
     const targetGuidance = lengthGuidance + conceptGuidance + (atomicOperation?.kind === 'add_existing_tail_quote_table_v1'
+        ? atomicOperation.requiredPostconditions.join('；') + '。' : '')
+        + (atomicOperation?.kind === 'remove_duplicate_table_v1'
         ? atomicOperation.requiredPostconditions.join('；') + '。' : '')
         + (atomicOperation?.kind === 'select_observed_figures_v1'
         ? '本轮特别允许figurePlacements缩为1–4条本次已见像素的原声明，其余数组数量不变。必须同步按来源改写全部授权小节，保留必要事实及表格公式术语标记；不得机械删图丢弃解释。' : '')
@@ -4486,6 +4737,6 @@ module.exports = { readTopLevelMembers, READER_VERSION_METADATA_KIND, buildReade
     validationFailureHasNoProgress, readerAttemptLimit, canContinueRevalidatedIssuesWithinBudget, isSafeExistingReaderPatchContext,
     validateImplementationAllowance,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
-    sectionReorganizationOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
+    sectionReorganizationOperation, buildRemoveDuplicateTableOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
     buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, repairTableEvidenceGuidance, loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate,
     retireFailedCandidate, hasUnusedImplementationAllowance, isCandidateEnvelope, candidateEnvelopeHeader, pdfSourceQuoteFailure };

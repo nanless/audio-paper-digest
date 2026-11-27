@@ -592,9 +592,19 @@ function getDailyOperatorOrRetainedCandidateRefreshBlockReason(paper, plan, opti
 }
 
 const CONTROLLED_READER_RECOVERY_HINT =
-    '请改用受控恢复入口：npm run batch -- --fact-feedback-file <file>，'
-    + '或 npm run batch -- --reader-signed-corrections <manifest> --fact-feedback-file <file> / '
-    + 'npm run batch -- --reader-operator-corrections <manifest>。';
+    '请改用受控恢复入口：先用 npm run fact-feedback:new 生成受控事实反馈文件，再运行 '
+    + 'npm run batch -- --fact-feedback-file <FILE> --reader-fact-local'
+    + '（或整篇受控恢复 npm run batch -- --fact-feedback-file <FILE>；'
+    + '或 npm run batch -- --reader-signed-corrections <manifest> --fact-feedback-file <FILE> / '
+    + 'npm run batch -- --reader-operator-corrections <manifest>）。';
+
+function formatControlledReaderRecoveryHint(options = {}) {
+    const feedbackFile = Array.isArray(options?.factFeedbackFiles) && options.factFeedbackFiles.length === 1
+        && typeof options.factFeedbackFiles[0] === 'string' && options.factFeedbackFiles[0].trim()
+        ? options.factFeedbackFiles[0].trim()
+        : '<FILE>';
+    return CONTROLLED_READER_RECOVERY_HINT.replace(/<FILE>/g, feedbackFile);
+}
 
 function assertMayRefreshDailyReaderRecord(paper, plan, options = {}) {
     const reason = getDailyOperatorOrRetainedCandidateRefreshBlockReason(paper, plan, options);
@@ -602,7 +612,7 @@ function assertMayRefreshDailyReaderRecord(paper, plan, options = {}) {
     const requested = normalizedId(paper) || '未知论文';
     const error = new Error(
         `${requested} ${reason}，不能直接使用 api:reader:refresh（refresh-api-reader.js）覆盖，`
-        + `否则会丢失事实审查证明与过期快照并导致 validate:data 失败。${CONTROLLED_READER_RECOVERY_HINT}`
+        + `否则会丢失事实审查证明与过期快照并导致 validate:data 失败。${formatControlledReaderRecoveryHint(options)}`
     );
     error.code = 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN';
     error.retryable = false;
@@ -631,7 +641,7 @@ function assertBatchTargetsMayRefreshDailyReader(payload, entryPlan, targetIds, 
     const summary = blocked.map(item => `${item.id}（${item.reason}）`).join('；');
     const error = new Error(
         `批量刷新包含不能直接通过 api:reader:refresh 覆盖的日更论文：${summary}。`
-        + `直接刷新会丢失事实审查证明与过期快照并导致 validate:data 失败；本次未发起任何模型请求。${CONTROLLED_READER_RECOVERY_HINT}`
+        + `直接刷新会丢失事实审查证明与过期快照并导致 validate:data 失败；本次未发起任何模型请求。${formatControlledReaderRecoveryHint(options)}`
     );
     error.code = 'DAILY_OPERATOR_READER_REFRESH_FORBIDDEN';
     error.retryable = false;
@@ -1180,5 +1190,7 @@ module.exports = {
     finishReviewedPrimaryReaderRefresh,
     getDailyOperatorOrRetainedCandidateRefreshBlockReason,
     assertMayRefreshDailyReaderRecord,
+    CONTROLLED_READER_RECOVERY_HINT,
+    formatControlledReaderRecoveryHint,
     MAX_REFRESH_CONCURRENCY
 };

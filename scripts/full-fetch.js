@@ -2713,7 +2713,9 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     console.log(`  - 合并后总计: ${result.papers.length} 篇`);
     if (result.stats.remainingFailed > 0) console.log(`  - 尚未完成: ${result.stats.remainingFailed} 篇`);
     if (analysisStats) {
-        const avgSec = analysisStats.durationTotal > 0 ? (analysisStats.durationTotal / 1000 / (analysisStats.success + analysisStats.failed)).toFixed(1) : '0';
+        const attemptedCount = (analysisStats.success || 0) + (analysisStats.failed || 0);
+        const avgSec = analysisStats.durationTotal > 0 && attemptedCount > 0
+            ? (analysisStats.durationTotal / 1000 / attemptedCount).toFixed(1) : '0';
         console.log(`  - 本次分析统计: 成功 ${formatAnalysisCount(analysisStats.success)} 篇 | 失败 ${formatAnalysisCount(analysisStats.failed)} 篇 | 跳过 ${formatAnalysisCount(analysisStats.skipped)} 篇 | 平均 ${avgSec} 秒/篇`);
         const sourceSummary = formatAnalysisSources(analysisStats.sourceCounts);
         if (sourceSummary) console.log(`  - 文本来源: ${sourceSummary}`);

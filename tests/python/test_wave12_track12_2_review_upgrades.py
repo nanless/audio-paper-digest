@@ -86,15 +86,36 @@ class Wave12Track122ReviewUpgradeTests(unittest.TestCase):
         input_pos = prompt.index('<image_review_input>')
         self.assertGreater(input_pos / len(prompt), 0.75)
 
-        # Digest cover review conditionally includes Rule 4
-        cover_captured = []
+        # Ordinary summary-page paper thumbnails keep byte-identical static prefix and omit cover rules
+        summary_thumb_captured = []
         with mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'muse-spark-1.3-contributor'}), \
                 mock.patch.object(pub, '_load_review_image', return_value=pixels), \
+                mock.patch.object(pub, 'call_llm_api', side_effect=lambda p, **kw: (summary_thumb_captured.append(p), deplot_response)[1]):
+            passed_summary, _ = pub.multimodal_review_images(content, '每日论文汇总 2026-11-26', required=True)
+        self.assertTrue(passed_summary)
+        self.assertNotIn('汇总封面', summary_thumb_captured[0])
+        self.assertNotIn('TOP 10', summary_thumb_captured[0])
+        self.assertEqual(
+            prompt[:prompt.index('<image_review_input>')],
+            summary_thumb_captured[0][:summary_thumb_captured[0].index('<image_review_input>')],
+        )
+
+        # Actual digest cover appends cover guidance AFTER </image_review_input> while keeping static prefix byte-identical
+        cover_captured = []
+        cover_content = '汇总封面。\n![今日封面](/audio-research-portal/images/digest-covers/2026-11-26/cover.png)\n导读。'
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'muse-spark-1.3-contributor'}), \
+                mock.patch.object(pub, '_load_review_image', return_value=pixels), \
+                mock.patch.object(pub, '_digest_cover_review_expectation', return_value='\n  汇总封面确定性上下文'), \
                 mock.patch.object(pub, 'call_llm_api', side_effect=lambda p, **kw: (cover_captured.append(p), deplot_response)[1]):
-            passed_cover, _ = pub.multimodal_review_images(content, '每日论文汇总 2026-11-26', required=True)
+            passed_cover, _ = pub.multimodal_review_images(cover_content, '每日论文汇总 2026-11-26', required=True)
         self.assertTrue(passed_cover)
-        self.assertIn('汇总封面', cover_captured[0])
-        self.assertIn('TOP 10', cover_captured[0])
+        self.assertEqual(
+            prompt[:prompt.index('<image_review_input>')],
+            cover_captured[0][:cover_captured[0].index('<image_review_input>')],
+        )
+        cover_tail = cover_captured[0][cover_captured[0].index('</image_review_input>'):]
+        self.assertIn('汇总封面', cover_tail)
+        self.assertIn('TOP 10', cover_tail)
 
 
 if __name__ == '__main__':

@@ -48,8 +48,20 @@ function normalizePlatformRootSymlink(resolvedPath) {
     return resolvedPath;
 }
 
+const VALID_WORKFLOWS = new Set(['daily', 'conference', 'history']);
+
+function normalizeWorkflow(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return VALID_WORKFLOWS.has(trimmed) ? trimmed : null;
+}
+
 function normalizeUsagePaperId(value) {
     if (typeof value !== 'string') return null;
+    if (/^index:\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const datePart = value.slice('index:'.length);
+        return validBatchDate(datePart) ? value : null;
+    }
     const arxiv = value.replace(/^arxiv:/, '');
     if (/^(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?$/.test(arxiv)) return arxiv;
     const parts = value.split(':');
@@ -64,7 +76,7 @@ function normalizeUsagePaperId(value) {
 
 function usagePaperKey(value) {
     const id = normalizeUsagePaperId(value);
-    return id && !id.startsWith('conference:') ? id.replace(/v\d+$/, '') : id;
+    return id && !id.startsWith('conference:') && !id.startsWith('index:') ? id.replace(/v\d+$/, '') : id;
 }
 
 function normalizeLlmUsage(protocol, body) {
@@ -92,12 +104,14 @@ function withLlmUsageContext(context, callback) {
 function usageContext(context = {}) {
     const value = { ...(scope.getStore() || {}), ...context };
     const batchDate = validBatchDate(value.batchDate);
+    const workflow = normalizeWorkflow(value.workflow);
     return {
         runId: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(String(value.runId || '')) ? value.runId : null,
         paperId: normalizeUsagePaperId(value.paperId),
         stage: label(value.stage) || 'unknown', unitId: digest(value.unitId),
         contentAttempt: count(value.contentAttempt), transportAttempt: count(value.transportAttempt),
-        ...(batchDate ? { batchDate } : {})
+        ...(batchDate ? { batchDate } : {}),
+        ...(workflow ? { workflow } : {})
     };
 }
 

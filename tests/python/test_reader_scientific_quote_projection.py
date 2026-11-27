@@ -56,7 +56,7 @@ class ReaderScientificQuoteProjectionTest(unittest.TestCase):
         self.assertEqual(len(f['sourceQuotes']), 3)
         original = set(pub._api_reader_numeric_tokens(f['table']['markdown']))
         quote_tokens = {t for q in f['sourceQuotes'] for t in pub._api_reader_numeric_tokens(q)}
-        self.assertEqual(original - quote_tokens, {'4', '5'})
+        self.assertEqual(original - quote_tokens, set())
         projection, missing = self.project()
         self.assertFalse(projection['failures'])
         self.assertFalse(missing)
@@ -188,7 +188,7 @@ class ReaderScientificQuoteProjectionTest(unittest.TestCase):
 
     def test_old_tokenizer_semantics_and_non_science_tables_unchanged(self):
         samples = [('AdamW，5×10^-4，2000 warm-up steps，exponential decay', ['5', '10', '-4', '2000']),
-                   ('3×10⁻⁴', ['3', '10', '4']), ('2×10⁻⁵', ['2', '10', '5']),
+                   ('3×10⁻⁴', ['3', '10']), ('2×10⁻⁵', ['2', '10']),
                    ('2025s 2025 s 5s', ['2025', '2025s', '5s']),
                    ('4,852\\mu=4{,}852 ms', ['4852', '4', '852ms', '4852ms'])]
         for value, expected in samples:

@@ -681,7 +681,8 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
             analysisSha256: run.analysisSha256, productionAuthorized: true, recovered: true };
     }
     let finalPaper = loaded.analysis.papers[0];
-    await analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory, paperId: loaded.run.paperId,
+    const { withLlmUsageContext } = require('./llm-usage.js');
+    await withLlmUsageContext({ workflow: 'conference' }, () => analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory, paperId: loaded.run.paperId,
         readerPdfSourceHandle, sourceDetails: loaded.source.sourceDetails,
         ...(overrides.readerRetryEpoch !== undefined
             ? { readerRetryEpoch: overrides.readerRetryEpoch } : {}) }, () => engine.analyzeBatch([finalPaper], {
@@ -709,7 +710,7 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
             }
         },
         paperLockOptions: conferencePaperLockOptions(engine)
-    }));
+    })));
     const current = readJson(analysisFile); const status = current.status === 'complete' ? 'complete' : 'partial';
     let run;
     if (status === 'complete') {
@@ -1271,8 +1272,9 @@ async function prepareGrantedRecoverySeed(failed, authority, withFailedSource, d
         captured = clone(paper); throw stopAtCore;
     };
     try {
-        await require('./analysis-stop-control').withModelRequestsForbidden(() => withFailedSource(() =>
-            deep.analyzePaperDeep(candidate, { replayLatestCoreSummaryDiagnostic: true })));
+        await require('./llm-usage.js').withLlmUsageContext({ workflow: 'conference' }, () =>
+            require('./analysis-stop-control').withModelRequestsForbidden(() => withFailedSource(() =>
+                deep.analyzePaperDeep(candidate, { replayLatestCoreSummaryDiagnostic: true }))));
     } catch (error) {
         if (error !== stopAtCore) {
             const stop = require('./analysis-stop-control');
@@ -1648,7 +1650,8 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
         const analysisFile = path.join(loaded.directory, 'analysis.json');
         replaceJson(analysisFile, current, loaded.analysisFileSha256);
         try {
-            paper = await analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory,
+            paper = await require('./llm-usage.js').withLlmUsageContext({ workflow: 'conference' }, () =>
+                analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory,
                 readerPdfSourceHandle, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails, readerRetryEpoch: 1 }, () => withGrant(() =>
                 loaded.revision.mode === 'normal-analysis'
                     ? withNormalAnalysisSlot(async () => {
@@ -1703,7 +1706,10 @@ async function continueConferenceRevision({ loaded, parent, planHandle, sourceRo
                                 ...(loaded.readerReview ? { reviewFeedback: loaded.readerReview.modelFeedback,
                                     preserveScientificUpstream: true,
                                     revisionSeed: loaded.readerReview.revisionSeed,
-                                    readerReviewParentSeedHandle: loaded.readerReview.parentSeedHandle } : {}) })));
+                                    readerReviewParentSeedHandle: loaded.readerReview.parentSeedHandle } : {})
+                        })
+                )
+            ));
             if (loaded.readerReview) require('./conference-reader-review-maintenance')
                 .assertReaderOutput(loaded, paper, parent.analysis.papers[0]);
             // Core and classification may never be rewritten by a Reader revision.

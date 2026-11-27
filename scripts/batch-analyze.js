@@ -46,15 +46,89 @@ const { assertKnownCliArguments } = require('./lib/cli-arguments.js');
 // 严格参数白名单：未知 --flag（例如少写 s 的 --retry-failed-reader）直接
 // 报用法，不能静默忽略后退化成普通批量分析。
 function assertKnownBatchAnalyzeArguments(argv = process.argv.slice(2)) {
-    return assertKnownCliArguments(argv, {
-        booleanFlags: ['--retry-failed-readers', '--refresh-reader-diagnostics'],
+    const positionals = assertKnownCliArguments(argv, {
+        booleanFlags: [
+            '--retry-failed-readers', '--refresh-reader-diagnostics',
+            '--reader-fact-local', '--reader-fact-local=auto'
+        ],
         valueFlags: ['--fact-feedback-file', '--reader-operator-corrections',
             '--reader-signed-corrections', '--reader-retry-manifest'],
         repeatableValueFlags: ['--fact-feedback-file'],
         usage: 'npm run batch -- [--retry-failed-readers --reader-retry-manifest FILE] '
             + '[--refresh-reader-diagnostics] [--fact-feedback-file FILE ...] '
+            + '[--reader-fact-local | --reader-fact-local=auto] '
             + '[--reader-operator-corrections FILE] [--reader-signed-corrections FILE]'
     });
+    if (argv.includes('--reader-fact-local') && argv.includes('--reader-fact-local=auto')) {
+        throw new Error('--reader-fact-local 与 --reader-fact-local=auto 不能同时使用');
+    }
+    return positionals;
+}
+
+// 仅在显式开启 --reader-fact-local=auto 时执行 6 项只读预检，全部通过才启用单句局部修订。
+function evaluateReaderFactLocalAuto(paper, feedback, dailySourcePlan, context = {}) {
+    const {
+        operatorManifestPath, signedManifestPath, explicitManifest, options = {}
+    } = context;
+    if (!feedback || !savedFacts.readerOnlyFeedback(feedback)) {
+        return { eligible: false, reason: 'not_reader_only_feedback' };
+    }
+    if (operatorManifestPath !== undefined || signedManifestPath !== undefined
+        || explicitManifest || options.analyzeFn || options.analyzeBatch) {
+        return { eligible: false, reason: 'conflicting_mode_or_custom_analyzer' };
+    }
+    if (!Array.isArray(feedback.rejectedReaderClaims) || feedback.rejectedReaderClaims.length === 0) {
+        return { eligible: false, reason: 'empty_rejected_reader_claims' };
+    }
+    const engine = require('./analysis-engine');
+    const deep = require('./deep-analyzer');
+    const repair = require('./lib/reader-repair');
+    const { MAX_READER_PATCH_NODES } = require('./lib/reader-patch-limits');
+    if (engine.getIncompleteAnalysisContentReason(paper) !== null
+        || !engine.hasValidIntegratedApiReaderRecords(paper)) {
+        return { eligible: false, reason: 'incomplete_or_unsigned_parent_reader' };
+    }
+    try {
+        const source = dailyFreshSources.readDailyFreshSource(dailySourcePlan, paper);
+        const bound = factReview.validateFeedback(feedback, dailySourcePlan, paper);
+        const parent = savedFacts.readSavedFeedback(paper, dailySourcePlan);
+        const checkInScope = () => {
+            const effectiveFeedback = factReview.reviewFeedback('apiReaderArticle', normalizedId(paper)).trim();
+            if (!deep.hasReviewedReaderFactLocalSeed(paper, source.text, effectiveFeedback)) {
+                return { eligible: false, reason: 'missing_reviewed_fact_local_seed' };
+            }
+            const seed = deep.prepareApiReaderRevisionSeed(paper, source.text, effectiveFeedback, {
+                readerFactLocalRevision: true
+            });
+            const signedRecoveryDraft = require('./lib/signed-reader-recovery-draft').convert(seed);
+            const coverageIssues = repair.assertReaderFactLocalCoverage(
+                signedRecoveryDraft, feedback.rejectedReaderClaims
+            );
+            const allCovered = feedback.rejectedReaderClaims.every(claim => coverageIssues.some(issue =>
+                issue.claim === claim || issue.originalClaim === claim));
+            if (!allCovered) {
+                return { eligible: false, reason: 'incomplete_claim_coverage' };
+            }
+            const paths = [...new Set(coverageIssues.map(issue => issue.path))];
+            if (paths.length < 1 || paths.length > MAX_READER_PATCH_NODES) {
+                return { eligible: false, reason: 'path_count_out_of_bounds', pathCount: paths.length };
+            }
+            return { eligible: true, paths };
+        };
+        return dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, () => {
+            if (engine.paperAnalysisLockHeld(paper)) {
+                if (parent) {
+                    const parentBound = factReview.validateFeedback(parent.feedback, dailySourcePlan, parent.paper);
+                    return factReview.withFactReview(parentBound, () =>
+                        factReview.withReaderFactReview(bound, paper, checkInScope));
+                }
+                return factReview.withReaderFactReview(bound, paper, checkInScope);
+            }
+            return factReview.withFactReview(bound, checkInScope);
+        });
+    } catch (error) {
+        return { eligible: false, reason: error?.message || 'auto_preflight_failed' };
+    }
 }
 
 function parseFactFeedbackFiles(argv = process.argv.slice(2)) {
@@ -144,9 +218,21 @@ async function reconcileCompletedFailureMarkers(resultPath, entryPlan, feedbacks
 }
 
 async function main(options = {}) {
-    assertKnownBatchAnalyzeArguments();
+    const cliArgs = process.argv.slice(2);
+    assertKnownBatchAnalyzeArguments(cliArgs);
     if (options.readerFactLocalRevision !== undefined && typeof options.readerFactLocalRevision !== 'boolean')
         throw new Error('Reader事实局部模式必须为布尔值');
+    if (options.readerFactLocalAuto !== undefined && typeof options.readerFactLocalAuto !== 'boolean')
+        throw new Error('Reader事实局部自动模式必须为布尔值');
+    const cliFactLocal = cliArgs.includes('--reader-fact-local');
+    const cliFactLocalAuto = cliArgs.includes('--reader-fact-local=auto');
+    const readerFactLocalRevision = options.readerFactLocalRevision !== undefined
+        ? options.readerFactLocalRevision : cliFactLocal;
+    const readerFactLocalAuto = options.readerFactLocalAuto === true
+        || (options.readerFactLocalRevision === undefined && cliFactLocalAuto);
+    if (readerFactLocalRevision && readerFactLocalAuto) {
+        throw new Error('--reader-fact-local 与 --reader-fact-local=auto 不能同时使用');
+    }
     if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean') {
         throw new Error('长文恢复检查设置必须为 true 或 false。');
     }
@@ -203,7 +289,7 @@ async function main(options = {}) {
     const prepare = current => dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
         readJsonFileStrict(Config.FILES.filteredPapers), { label: 'batch recovery' });
     // 先只读核验整组反馈，再改写运行状态；后一个文件不合法时，前一个也不能开始请求。
-    if (options.readerFactLocalRevision === true && (!feedbacks.size
+    if (readerFactLocalRevision === true && (!feedbacks.size
         || [...feedbacks.values()].some(feedback => !savedFacts.readerOnlyFeedback(feedback))
         || operatorManifestPath !== undefined || signedManifestPath !== undefined || explicitManifest
         || options.analyzeFn || options.analyzeBatch))
@@ -240,7 +326,7 @@ async function main(options = {}) {
         return feedback ? !hasCompletedBoundFactFeedback(p, feedback, dailySourcePlan)
             : !isSuccessfulAnalysisRecord(p) || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan);
     }).filter(p => !missingFactContext(p));
-    if (options.readerFactLocalRevision === true && notAnalyzed.some(p => !feedbacks.has(normalizedId(p))))
+    if (readerFactLocalRevision === true && notAnalyzed.some(p => !feedbacks.has(normalizedId(p))))
         throw new Error('Reader事实局部模式不能包含没有显式Reader反馈的其它失败论文');
     console.log(`本次处理论文: ${notAnalyzed.length}`);
     if (feedbacks.size) console.log(`其中 ${feedbacks.size} 篇带有已核验的事实反馈；只有同反馈全部纠正并通过检查的论文才跳过。`);
@@ -358,6 +444,7 @@ async function main(options = {}) {
         saveInterval: 0,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
+            readerFactLocalRevision,
             analyze: (paper, sourceOptions) => {
                 if (signedCorrections) return require('./lib/daily-reader-signed-correction').apply(signedCorrections, paper);
                 const normalAnalyze = recoveryOptions => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper, {
@@ -367,14 +454,27 @@ async function main(options = {}) {
                 const grant = explicitRounds.get(normalizedId(paper));
                 // Reader恢复可直接刷新正文，不必调用整篇分析回调；新轮范围须覆盖整个恢复入口。
                 const recover = () => {
+                    const paperFeedback = feedbacks.get(normalizedId(paper));
                     if (!grant && !operatorManifestPath && !signedManifestPath
                         && !options.analyzeFn && !options.analyzeBatch
-                        && !feedbacks.has(normalizedId(paper))) {
+                        && !paperFeedback) {
                         const saved = dailyFreshSources.savedPaidFingerprintOperatorCheckpoint(dailySourcePlan, paper);
                         if (saved) return saved;
                     }
+                    let effectiveSourceOptions = sourceOptions;
+                    if (readerFactLocalAuto && !readerFactLocalRevision && paperFeedback) {
+                        const autoCheck = evaluateReaderFactLocalAuto(paper, paperFeedback, dailySourcePlan, {
+                            operatorManifestPath, signedManifestPath, explicitManifest, options
+                        });
+                        if (autoCheck.eligible) {
+                            console.log(`   [reader-fact-local=auto] ${normalizedId(paper)} 满足全部 6 项条件（${autoCheck.paths.length} 个节点），启用单句局部修订`);
+                            effectiveSourceOptions = { ...sourceOptions, readerFactLocalRevision: true };
+                        } else {
+                            console.log(`   [reader-fact-local=auto] ${normalizedId(paper)} 回退普通 Reader 恢复（原因: ${autoCheck.reason}）`);
+                        }
+                    }
                     return savedFacts.analyzeWithRecoveredFeedback(paper, dailySourcePlan, normalAnalyze,
-                        feedbacks.get(normalizedId(paper)), sourceOptions);
+                        paperFeedback, effectiveSourceOptions);
                 };
                 if (operatorManifestPath !== undefined && grant) throw new Error('人工修正不能混用收费重试授权');
                 return grant ? readerExplicitRound.withExplicitRound(paper, grant, recover) : recover();
@@ -531,4 +631,4 @@ if (require.main === module) {
 
 module.exports = { reconcileCompletedFailureMarkers, hasCompletedBoundFactFeedback,
     getBatchAnalysisRunSummary, main, parseFactFeedbackFiles, finalizeBatchZeroWorkState,
-    assertKnownBatchAnalyzeArguments };
+    assertKnownBatchAnalyzeArguments, evaluateReaderFactLocalAuto };

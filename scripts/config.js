@@ -346,10 +346,28 @@ const HISTORICAL_CONFERENCE_CONFIG = {
         || path.join(require('os').homedir(), 'code/github_repos/iclr2026-paper-scraper'))
 };
 
+const DEFAULT_BLOG_BASE_PATH = '/audio-research-portal';
+
+function resolveBlogBasePath(value = process.env.PAPER_DIGEST_BLOG_BASE_PATH) {
+    const raw = value === undefined ? DEFAULT_BLOG_BASE_PATH : value;
+    if (typeof raw !== 'string') {
+        throw new Error('PAPER_DIGEST_BLOG_BASE_PATH 必须是站内路径');
+    }
+    const normalized = raw.replace(/\/+$/, '');
+    if (raw.startsWith('//') || (normalized && (
+        !/^\/[A-Za-z0-9._~/-]*$/.test(normalized)
+        || normalized.includes('//')
+        || normalized.split('/').some(part => part === '.' || part === '..')
+    ))) {
+        throw new Error('PAPER_DIGEST_BLOG_BASE_PATH 不是安全站内路径');
+    }
+    return normalized;
+}
+
 const PUBLISH_CONFIG = {
     blogRepo: BLOG_REPO,
     contentDir: path.join(BLOG_REPO, 'content', 'posts'),
-    basePath: process.env.PAPER_DIGEST_BLOG_BASE_PATH || '/audio-research-portal'
+    basePath: resolveBlogBasePath(process.env.PAPER_DIGEST_BLOG_BASE_PATH)
 };
 
 // ═══════════════════════════════════════════════════════
@@ -358,9 +376,11 @@ const PUBLISH_CONFIG = {
 
 function applyEnvOverrides() {
     const readPositiveInt = (name) => {
-        if (!process.env[name]) return null;
-        const val = parseInt(process.env[name], 10);
-        return !Number.isNaN(val) && val > 0 ? val : null;
+        if (process.env[name] === undefined || process.env[name] === '') return null;
+        const raw = String(process.env[name]).trim();
+        if (!/^\d+$/.test(raw)) return null;
+        const val = Number.parseInt(raw, 10);
+        return Number.isSafeInteger(val) && val > 0 ? val : null;
     };
     const readNonNegativeInt = (name) => {
         if (process.env[name] === undefined || process.env[name] === '') return null;
@@ -594,15 +614,21 @@ function applyEnvOverrides() {
         ANALYSIS_CONFIG.imageInsertionMax = imageInsertionMax;
     }
     if (process.env.PD_SCORING_AUDIT_TEMPERATURE !== undefined) {
-        const value = Number(process.env.PD_SCORING_AUDIT_TEMPERATURE);
-        if (Number.isFinite(value) && value >= 0 && value <= 1) {
-            ANALYSIS_CONFIG.scoringAuditTemperature = value;
+        const raw = String(process.env.PD_SCORING_AUDIT_TEMPERATURE).trim();
+        if (raw !== '') {
+            const value = Number(raw);
+            if (Number.isFinite(value) && value >= 0 && value <= 1) {
+                ANALYSIS_CONFIG.scoringAuditTemperature = value;
+            }
         }
     }
     if (process.env.PD_IMAGE_PLAN_TEMPERATURE !== undefined) {
-        const value = Number(process.env.PD_IMAGE_PLAN_TEMPERATURE);
-        if (Number.isFinite(value) && value >= 0 && value <= 1) {
-            ANALYSIS_CONFIG.imagePlanTemperature = value;
+        const raw = String(process.env.PD_IMAGE_PLAN_TEMPERATURE).trim();
+        if (raw !== '') {
+            const value = Number(raw);
+            if (Number.isFinite(value) && value >= 0 && value <= 1) {
+                ANALYSIS_CONFIG.imagePlanTemperature = value;
+            }
         }
     }
     if (process.env.PAPER_DIGEST_ENABLE_FILE_LOGS === '1' || process.env.PD_ENABLE_FILE_LOGS === '1') {
@@ -635,5 +661,6 @@ module.exports = {
     FILES,
     ARCHIVE_CONFIG,
     PUBLISH_CONFIG,
-    HISTORICAL_CONFERENCE_CONFIG
+    HISTORICAL_CONFERENCE_CONFIG,
+    resolveBlogBasePath
 };

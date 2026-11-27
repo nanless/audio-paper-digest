@@ -1086,7 +1086,7 @@ def can_replace_conference_target(target, data, conference_id, kind):
                     and re.fullmatch(r'conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+', paper_id) is not None
                     and target.parent.name == 'conference-' + sha_bytes(paper_id.encode())[:24]
                     and SHA_RE.fullmatch(str(citation.get('sourceSha256') or '')) is not None
-                    and citation.get('contract') == 'researcher-sidecars-v1')
+                    and protocols.has_valid_header(citation, 'researcher-sidecars'))
         except (ConferencePublicationError, ValueError, KeyError, TypeError):
             return False
     try:
@@ -2185,15 +2185,23 @@ def review_pages(repo, records, workers=None, *, figure_review_contexts=None):
     # Only explicit, durably recorded content rejections are collected. Provider,
     # storage, changed bytes and corrupt receipts still escape the worker and
     # stop new dispatch while already-started reviews settle and save passes.
-    # Start the unique long aggregate while other page lanes are available.
-    # Keep the same global page/request bound; chunks inside each lane stay serial.
+    # Review paper pages BEFORE aggregate pages so zero-warning passed images
+    # populate verified_paper_images for aggregate deduplication.
     # Restore original generation order before receipts/full-batch SHA construction.
-    ordered_records = sorted(enumerate(records), key=lambda pair: (pair[1].get('kind') != 'aggregate', pair[0]))
-    scheduled = [record for _, record in ordered_records]
-    dispatched_results = run_bounded_llm_tasks(scheduled, _collect_page, workers)
-    if len(dispatched_results) != len(scheduled):
-        raise ConferencePublicationError('会议逐页审查返回集合不完整')
-    results = [result for _, result in sorted(zip((index for index, _ in ordered_records), dispatched_results))]
+    ordered_records = sorted(enumerate(records), key=lambda pair: (pair[1].get('kind') == 'aggregate', pair[0]))
+    non_aggregate_pairs = [pair for pair in ordered_records if pair[1].get('kind') != 'aggregate']
+    aggregate_pairs = [pair for pair in ordered_records if pair[1].get('kind') == 'aggregate']
+    indexed_results = {}
+    for phase_pairs in (non_aggregate_pairs, aggregate_pairs):
+        if not phase_pairs:
+            continue
+        phase_scheduled = [record for _, record in phase_pairs]
+        phase_results = run_bounded_llm_tasks(phase_scheduled, _collect_page, workers)
+        if len(phase_results) != len(phase_scheduled):
+            raise ConferencePublicationError('会议逐页审查返回集合不完整')
+        for (index, _), result in zip(phase_pairs, phase_results):
+            indexed_results[index] = result
+    results = [indexed_results[index] for index in range(len(records))]
     failures = [result for result in results if result.get('passed') is not True]
     if failures:
         body = {**current_header('conference-page-content-review-batch-failure'),
@@ -2355,6 +2363,81 @@ def verify_conference_publication_urls(pages, image_records, generation):
     return {**result, 'checks': checks}
 
 
+def remote_identities_equivalent(actual_identity, expected_identity, *, repo=None):
+    if not isinstance(actual_identity, str) or not isinstance(expected_identity, str):
+        return False
+    if actual_identity == expected_identity:
+        return True
+    try:
+        snapshot = remote_snapshot(repo or blog_repo())
+    except Exception:
+        return False
+    return remote_identity_matches(snapshot, actual_identity) and remote_identity_matches(snapshot, expected_identity)
+
+
+def push_commit_receipt_path(conference_id, process_id):
+    return publication_dir(conference_id, process_id) / 'push-commit.json'
+
+
+def validate_push_commit_receipt(conference_id, process_id, generation, receipt, pushed, *, repo=None, images=None):
+    if not isinstance(pushed, dict):
+        raise ConferencePublicationError('push-commit receipt 格式无效')
+    check_self_hash(pushed, 'pushCommitSha256')
+    commit = pushed.get('publicationCommit')
+    image_commit = pushed.get('imagePublicationCommit')
+    if pushed.get('contract') != 'conference-blog-push-commit' or pushed.get('version') != 1 \
+            or pushed.get('conferenceId') != conference_id or pushed.get('processId') != process_id \
+            or pushed.get('generationSha256') != generation['generationSha256'] \
+            or pushed.get('reviewSha256') != receipt['reviewSha256'] \
+            or pushed.get('baseHead') != generation['baseHead'] \
+            or pushed.get('imageBaseHead') != generation['imageBaseHead'] \
+            or pushed.get('files') != generation['files'] \
+            or pushed.get('imageFiles') != generation['imageFiles'] \
+            or not re.fullmatch(r'[0-9a-f]{40}', str(commit or '')) \
+            or not re.fullmatch(r'[0-9a-f]{40}', str(image_commit or '')) \
+            or pushed.get('remoteVerifiedOid') != commit \
+            or pushed.get('imageRemoteVerifiedOid') != image_commit \
+            or not remote_identities_equivalent(pushed.get('remoteIdentitySha256'), generation['remoteIdentitySha256'], repo=repo) \
+            or not remote_identities_equivalent(pushed.get('imageRemoteIdentitySha256'), generation['imageRemoteIdentitySha256'], repo=images or image_repo()):
+        raise ConferencePublicationError('push-commit receipt 与 generation/review 不闭合')
+    return pushed
+
+
+def write_push_commit_receipt(conference_id, process_id, generation, receipt, commit, image_commit,
+                              remote, image_remote, *, repo=None, images=None):
+    path = push_commit_receipt_path(conference_id, process_id)
+    if path.exists():
+        existing = read_json(path)
+        validate_push_commit_receipt(
+            conference_id, process_id, generation, receipt, existing, repo=repo, images=images)
+        if existing.get('publicationCommit') != commit or existing.get('imagePublicationCommit') != image_commit:
+            raise ConferencePublicationError('已存在绑定不同提交的 push-commit receipt')
+        return existing
+    body = {
+        'contract': 'conference-blog-push-commit',
+        'version': 1,
+        'conferenceId': conference_id,
+        'processId': process_id,
+        'generationSha256': generation['generationSha256'],
+        'reviewSha256': receipt['reviewSha256'],
+        'publicationCommit': commit,
+        'imagePublicationCommit': image_commit,
+        'remoteName': 'origin',
+        'remoteVerifiedOid': remote['remoteMain'],
+        'imageRemoteVerifiedOid': image_remote['remoteMain'],
+        'baseHead': generation['baseHead'],
+        'imageBaseHead': generation['imageBaseHead'],
+        'files': generation['files'],
+        'imageFiles': generation['imageFiles'],
+        'remoteIdentitySha256': remote['remoteIdentitySha256'],
+        'imageRemoteIdentitySha256': image_remote['remoteIdentitySha256'],
+        'pushedAt': datetime.now(timezone.utc).isoformat(),
+    }
+    payload = {**body, 'pushCommitSha256': stable(body)}
+    write_exact(path, json_bytes(payload))
+    return payload
+
+
 def accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote):
     """只有实际部署的字节通过 GET 验收之后，才签完成凭证。"""
     existing = publication_dir(conference_id, process_id) / 'publish.json'
@@ -2396,7 +2479,7 @@ def validate_publication(generation, review_receipt, published, commit, image_co
             or published.get('reviewSha256') != review_receipt['reviewSha256'] \
             or published.get('imagePublicationCommit') != image_commit \
             or published.get('remoteVerifiedOid') != commit \
-            or published.get('remoteIdentitySha256') != generation['remoteIdentitySha256'] \
+            or not remote_identities_equivalent(published.get('remoteIdentitySha256'), generation['remoteIdentitySha256']) \
             or acceptance.get('status') != 'passed' or not has_mechanical_gate_format(acceptance) \
             or {c.get('url') for c in acceptance.get('checks', [])} != expected_urls:
         raise ConferencePublicationError('发布 receipt 或线上验收集合无效')
@@ -2434,6 +2517,7 @@ def online_attempts(directory):
 def fresh_online_acceptance(directory, repo, images, generation, published, mechanical, commit, image_commit):
     """每次显式 verify 都开一次可留档的尝试，绝不复用旧的 GET 结果。"""
     image_files = publication_image_files(generation)
+    # 仅在分配序号与写入 intent 期间持仓库锁，发起在线 HTTP GET 前必须释放锁。
     with shared_publication_repository_locks(
             repo, images,
             blog_owner='conference-online-reverify',
@@ -2448,29 +2532,29 @@ def fresh_online_acceptance(directory, repo, images, generation, published, mech
                 'startedAt': datetime.now(timezone.utc).isoformat(), 'status': 'pending'}
         intent = {**body, 'intentSha256': stable(body)}
         write_exact(intent_path, json_bytes(intent))
-        failure = None
-        try:
-            acceptance = verify_conference_publication_urls(mechanical['pages'], image_files, generation)
-            expected_urls = {p['url'] for p in mechanical['pages']} | {
-                f'{IMAGE_BASE_URL}/{r["path"]}' for r in image_files} | {
-                url for url, _ in conference_sidecar_urls(mechanical['pages'], generation)}
-            if acceptance.get('status') != 'passed' or not has_mechanical_gate_format(acceptance) \
-                    or {c.get('url') for c in acceptance.get('checks', [])} != expected_urls:
-                raise ConferencePublicationError('线上再验收集合不闭合')
-            verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
-            if has_image_repository_proof(generation):
-                verify_published_tree(images, image_commit, generation['imageRemoteIdentitySha256'], image_files)
-        except Exception as exc:
-            failure = exc
-            # 不保存本次核验失败的异常文本，因为其中可能含密钥。
-            acceptance = {'status': 'failed', 'errorCode': 'online_verification_failed'}
-        result_body = {**current_header('conference-online-acceptance-result'),
-                       'intentSha256': intent['intentSha256'], 'publishSha256': published['publishSha256'],
-                       'checkedAt': datetime.now(timezone.utc).isoformat(), 'urlAcceptance': acceptance}
-        write_exact(intent_path.with_name(f'attempt-{number:08d}.result.json'),
-                    json_bytes({**result_body, 'acceptanceSha256': stable(result_body)}))
-        if failure is not None:
-            raise ConferencePublicationError('最新在线 GET 验收失败，已保存独立失败凭证；原 publish 保持不变') from failure
+    failure = None
+    try:
+        acceptance = verify_conference_publication_urls(mechanical['pages'], image_files, generation)
+        expected_urls = {p['url'] for p in mechanical['pages']} | {
+            f'{IMAGE_BASE_URL}/{r["path"]}' for r in image_files} | {
+            url for url, _ in conference_sidecar_urls(mechanical['pages'], generation)}
+        if acceptance.get('status') != 'passed' or not has_mechanical_gate_format(acceptance) \
+                or {c.get('url') for c in acceptance.get('checks', [])} != expected_urls:
+            raise ConferencePublicationError('线上再验收集合不闭合')
+        verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
+        if has_image_repository_proof(generation):
+            verify_published_tree(images, image_commit, generation['imageRemoteIdentitySha256'], image_files)
+    except Exception as exc:
+        failure = exc
+        # 不保存本次核验失败的异常文本，因为其中可能含密钥。
+        acceptance = {'status': 'failed', 'errorCode': 'online_verification_failed'}
+    result_body = {**current_header('conference-online-acceptance-result'),
+                   'intentSha256': intent['intentSha256'], 'publishSha256': published['publishSha256'],
+                   'checkedAt': datetime.now(timezone.utc).isoformat(), 'urlAcceptance': acceptance}
+    write_exact(intent_path.with_name(f'attempt-{number:08d}.result.json'),
+                json_bytes({**result_body, 'acceptanceSha256': stable(result_body)}))
+    if failure is not None:
+        raise ConferencePublicationError('最新在线 GET 验收失败，已保存独立失败凭证；原 publish 保持不变') from failure
 
 
 def apply_online_snapshot(directory, published, mechanical, result, *, fresh=False):
@@ -2564,16 +2648,16 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
             render_generation = {**generation, 'baseHead': commit, 'renderTree': commit,
                                  'renderImageTree': image_commit}
             mechanical = run_hugo(repo, render_generation)
-            try:
-                acceptance = verify_conference_publication_urls(mechanical['pages'], image_files, generation)
-            except Exception as exc:
-                raise ConferencePublicationError('legacy 实际 URL 验收未通过；旧发布凭证保持不变') from exc
-            verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
-            if has_image_repository_proof(generation):
-                verify_published_tree(images, image_commit, generation['imageRemoteIdentitySha256'], image_files)
-            body = {**current_header('conference-legacy-publication-verification'),
-                    'publishSha256': published['publishSha256'], 'hugo': mechanical, 'urlAcceptance': acceptance}
-            write_exact(proof_path, json_bytes({**body, 'verificationSha256': stable(body)}))
+        try:
+            acceptance = verify_conference_publication_urls(mechanical['pages'], image_files, generation)
+        except Exception as exc:
+            raise ConferencePublicationError('legacy 实际 URL 验收未通过；旧发布凭证保持不变') from exc
+        verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
+        if has_image_repository_proof(generation):
+            verify_published_tree(images, image_commit, generation['imageRemoteIdentitySha256'], image_files)
+        body = {**current_header('conference-legacy-publication-verification'),
+                'publishSha256': published['publishSha256'], 'hugo': mechanical, 'urlAcceptance': acceptance}
+        write_exact(proof_path, json_bytes({**body, 'verificationSha256': stable(body)}))
     if os.path.lexists(proof_path):
         proof = read_json(proof_path)
         check_self_hash(proof, 'verificationSha256')
@@ -2615,6 +2699,44 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
         return published_state(conference_id, process_id, repo, images, result, verify_urls=verify_urls)
     if not (publication_dir(conference_id, process_id) / 'generation.json').exists():
         return result
+    push_receipt_file = push_commit_receipt_path(conference_id, process_id)
+    if push_receipt_file.exists():
+        # 已在持锁期间落盘 push-commit.json：即使解锁后 origin/main 前进，也通过祖先提交与 blob 核验完成验收，绝不卡死。
+        generation = load_generation(conference_id, process_id)
+        receipt = load_review(conference_id, process_id)
+        check_self_hash(generation, 'generationSha256')
+        check_self_hash(receipt, 'reviewSha256')
+        validate_review(generation, receipt, current=False)
+        pushed = read_json(push_receipt_file)
+        validate_push_commit_receipt(
+            conference_id, process_id, generation, receipt, pushed, repo=repo, images=images)
+        commit = pushed['publicationCommit']
+        image_commit = pushed['imagePublicationCommit']
+        verify_own_commit(repo, commit, generation['baseHead'], generation['files'])
+        verify_own_commit(images, image_commit, generation['imageBaseHead'], generation['imageFiles'])
+        verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
+        verify_published_tree(images, image_commit, generation['imageRemoteIdentitySha256'], generation['imageFiles'])
+        if external_image_generation(generation) and (receipt.get('contentReview') or {}).get('status') == 'passed':
+            layers['semanticReview'] = 'passed'
+        layers['htmlMechanical'] = 'passed'
+        layers['remoteOid'] = 'passed'
+        result.update(publicationCommit=commit, imagePublicationCommit=image_commit, nextAction='verify')
+        existing = publication_dir(conference_id, process_id) / 'publish.json'
+        if verify_urls:
+            require_publication_figure_view_ready(generation)
+            # 在线 URL 核验不持共享仓库锁。
+            accept_publication(
+                conference_id, process_id, generation, receipt, commit, image_commit,
+                {'remoteMain': commit, 'remoteIdentitySha256': pushed['remoteIdentitySha256']},
+            )
+        if existing.exists():
+            published = read_json(existing)
+            validate_publication(generation, receipt, published, commit, image_commit)
+            layers['onlineUrls'] = 'passed'
+            result.update(status='complete', complete=True, nextAction=None,
+                          publicationCommit=commit, imagePublicationCommit=image_commit)
+            result['onlineUrlEvidence'].update(status='passed', receiptPath=str(existing))
+        return result
     generation, snapshot, image_snapshot = validate_generation(conference_id, process_id, repo, images, verify_author_sources=False)
     if not (publication_dir(conference_id, process_id) / 'review.json').exists():
         result['nextAction'] = 'review'
@@ -2639,7 +2761,7 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
     result['nextAction'] = 'verify'
     existing = publication_dir(conference_id, process_id) / 'publish.json'
     if verify_urls:
-        # 让凭证创建与 push 串行化，跨多个工作区也一样。
+        # 仅在本地仓库快照校验期间持锁；长耗时在线 HTTP GET 核验前先释放锁。
         with shared_publication_repository_locks(
                 repo, images,
                 blog_owner=f'conference-verify:{conference_id}',
@@ -2648,8 +2770,8 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
             require_publication_figure_view_ready(generation)
             if current != snapshot or current_images != image_snapshot:
                 raise ConferencePublicationError('verify 期间远端状态变化，请重试')
-            accept_publication(conference_id, process_id, generation, receipt,
-                               snapshot['head'], image_snapshot['head'], snapshot)
+        accept_publication(conference_id, process_id, generation, receipt,
+                           snapshot['head'], image_snapshot['head'], snapshot)
     if existing.exists():
         published = read_json(existing)
         validate_publication(generation, receipt, published, snapshot['head'], image_snapshot['head'])
@@ -2762,6 +2884,34 @@ def push(conference_id, process_id, *, dry_run=False, wait_deploy=True):
     if (publication_dir(conference_id, process_id) / 'publish.json').exists():
         # 再次运行 push 时只读取已发布状态；只有显式 verify 才重新发起线上 GET。
         return status(conference_id, process_id)
+    push_receipt_file = push_commit_receipt_path(conference_id, process_id)
+    if not dry_run and push_receipt_file.exists():
+        # 已在持锁期间完成 Git 推送并落盘 push-commit.json；直接核验祖先与 blob 后继续等待部署与线上验收。
+        generation = load_generation(conference_id, process_id)
+        receipt = load_review(conference_id, process_id)
+        check_self_hash(generation, 'generationSha256')
+        check_self_hash(receipt, 'reviewSha256')
+        validate_review(generation, receipt, current=False)
+        pushed = read_json(push_receipt_file)
+        validate_push_commit_receipt(
+            conference_id, process_id, generation, receipt, pushed, repo=repo, images=images)
+        commit = pushed['publicationCommit']
+        image_commit = pushed['imagePublicationCommit']
+        verify_own_commit(repo, commit, generation['baseHead'], generation['files'])
+        verify_own_commit(images, image_commit, generation['imageBaseHead'], generation['imageFiles'])
+        verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
+        verify_published_tree(images, image_commit, generation['imageRemoteIdentitySha256'], generation['imageFiles'])
+        require_publication_figure_view_ready(generation)
+        if wait_deploy:
+            wait_for_pages_deploy(repo, commit, conference_id=conference_id, process_id=process_id)
+        accept_publication(
+            conference_id, process_id, generation, receipt, commit, image_commit,
+            {'remoteMain': commit, 'remoteIdentitySha256': pushed['remoteIdentitySha256']},
+        )
+        print(json.dumps({'status': 'complete', 'complete': True, 'publicationCommit': commit,
+                          'completionScope': 'mechanical-html+remote-oid+online-urls',
+                          'semanticReview': 'passed', 'visualInspection': 'not_performed'}))
+        return
     with shared_publication_repository_locks(
             repo, images,
             blog_owner=f'conference-push:{conference_id}',
@@ -2817,12 +2967,16 @@ def push(conference_id, process_id, *, dry_run=False, wait_deploy=True):
         image_commit = commit_delta(
             images, generation['imageFiles'], generation['imageBaseHead'],
             generation['imageRemoteIdentitySha256'], f'发布 {conference_id} 会议图片')
-        push_delta(images, generation['imageFiles'], generation['imageBaseHead'],
-                   generation['imageRemoteIdentitySha256'], image_commit)
+        image_remote = push_delta(images, generation['imageFiles'], generation['imageBaseHead'],
+                                  generation['imageRemoteIdentitySha256'], image_commit)
         commit = commit_delta(repo, generation['files'], generation['baseHead'],
                               generation['remoteIdentitySha256'], f'发布 {conference_id} 会议论文及汇总')
         remote = push_delta(repo, generation['files'], generation['baseHead'],
                             generation['remoteIdentitySha256'], commit)
+        # 在释放共享仓库锁之前，原子落盘 push-commit.json，避免后续等待部署超时且 origin/main 前进时卡死。
+        write_push_commit_receipt(
+            conference_id, process_id, generation, receipt, commit, image_commit,
+            remote, image_remote, repo=repo, images=images)
     # Git 提交、推送与远端 OID 核验均已落定，先释放仓库锁再等待 Pages 部署与线上 URL 验收。
     if wait_deploy:
         wait_for_pages_deploy(repo, commit, conference_id=conference_id, process_id=process_id)

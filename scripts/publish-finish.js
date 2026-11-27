@@ -40,6 +40,58 @@ function parseDateArg(argv = []) {
     return date;
 }
 
+const OID_RE = /^[0-9a-f]{40}$/i;
+
+function normalizeOid(value) {
+    return typeof value === 'string' && OID_RE.test(value) ? value.toLowerCase() : null;
+}
+
+function readVerifiedDailyWebArtifact({ date, currentDir = CURRENT, manifestSha, receiptCommit } = {}) {
+    const artifactFile = path.join(currentDir, `web-verification-${date}.json`);
+    if (!date || !fs.existsSync(artifactFile)) {
+        return { verified: false, artifactPath: artifactFile, reason: 'missing' };
+    }
+    try {
+        const web = JSON.parse(fs.readFileSync(artifactFile, 'utf8'));
+        const normalizedReceiptCommit = normalizeOid(receiptCommit);
+        const normalizedWebOid = normalizeOid(web.publicationOid);
+        const deploy = web.deploy && typeof web.deploy === 'object' ? web.deploy : null;
+        const countsValid = (web.failed === undefined || web.failed === 0)
+            && (web.checked === undefined || (Number.isInteger(web.checked) && web.checked > 0))
+            && (web.ok === undefined || web.checked === undefined || web.ok === web.checked);
+        const verified = require('./verify-web').hasVerificationArtifactFormat(web)
+            && web.date === date
+            && Boolean(normalizedReceiptCommit)
+            && normalizedWebOid === normalizedReceiptCommit
+            && Boolean(manifestSha)
+            && web.generationManifestSha256 === manifestSha
+            && web.partial === false
+            && deploy?.status === 'completed'
+            && deploy?.conclusion === 'success'
+            && deploy?.jobVerified !== false
+            && countsValid;
+        if (!verified) {
+            return { verified: false, artifactPath: artifactFile, reason: 'mismatch' };
+        }
+        return {
+            verified: true,
+            artifactPath: artifactFile,
+            date,
+            publicationOid: normalizedWebOid,
+            deployOid: normalizeOid(web.deployOid) || normalizeOid(deploy?.oid) || normalizedWebOid,
+            deployStatus: deploy.status,
+            deployConclusion: deploy.conclusion,
+            expected: Number.isInteger(web.expected) ? web.expected : null,
+            checked: Number.isInteger(web.checked) ? web.checked : null,
+            ok: Number.isInteger(web.ok) ? web.ok : null,
+            failed: Number.isInteger(web.failed) ? web.failed : 0,
+            verifiedAt: web.verifiedAt || web.createdAt || null
+        };
+    } catch (_) {
+        return { verified: false, artifactPath: artifactFile, reason: 'invalid' };
+    }
+}
+
 function main(argv = process.argv.slice(2), options = {}) {
     try { require('./env-loader').requireExternalRuntime('publish-finish.js'); } catch (error) { console.error(`[publish-finish] ${error.message}`); return 1; }
 
@@ -60,23 +112,8 @@ function main(argv = process.argv.slice(2), options = {}) {
             const receiptFile = path.join(currentDir, `blog-review-receipt-${date}.json`);
             const receipt = fs.existsSync(receiptFile) ? JSON.parse(fs.readFileSync(receiptFile, 'utf8')) : null;
             const receiptCommit = receipt && (receipt.publicationCommit || receipt.remoteVerifiedOid) || null;
-            const oidPattern = /^[0-9a-f]{40}$/i;
-            const normalizeOid = value => (typeof value === 'string' && oidPattern.test(value) ? value.toLowerCase() : null);
-            const webArtifact = path.join(currentDir, `web-verification-${date}.json`);
-            let webOk = false;
-            if (fs.existsSync(webArtifact)) {
-                try {
-                    const web = JSON.parse(fs.readFileSync(webArtifact, 'utf8'));
-                    const normalizedReceiptCommit = normalizeOid(receiptCommit);
-                    const normalizedWebOid = normalizeOid(web.publicationOid);
-                    webOk = require('./verify-web').hasVerificationArtifactFormat(web)
-                        && web.date === date
-                        && Boolean(normalizedReceiptCommit)
-                        && normalizedWebOid === normalizedReceiptCommit
-                        && web.generationManifestSha256 === manifestSha && web.partial === false
-                        && web.deploy?.status === 'completed' && web.deploy.conclusion === 'success';
-                } catch (_) { webOk = false; }
-            }
+            const webCheck = readVerifiedDailyWebArtifact({ date, currentDir, manifestSha, receiptCommit });
+            const webOk = webCheck.verified;
             const visualSha = shaOf(visualManifestPath(date, currentDir));
             const coverSha = shaOf(coverManifestPath(date, currentDir));
             const valid = validateWaiver(data, { date, manifestSha, receiptCommit, receiptSha: shaOf(receiptFile),
@@ -101,7 +138,7 @@ function main(argv = process.argv.slice(2), options = {}) {
     return 0;
 }
 
-module.exports = { validateWaiver, visualManifestPath, coverManifestPath, main };
+module.exports = { validateWaiver, visualManifestPath, coverManifestPath, readVerifiedDailyWebArtifact, main };
 
 if (require.main === module) {
     try { process.exitCode = main(); } catch (error) { console.error(`[publish-finish] ${error.message}`); process.exitCode = 1; }

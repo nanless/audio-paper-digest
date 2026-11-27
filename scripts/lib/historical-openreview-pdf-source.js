@@ -153,48 +153,103 @@ async function readResponseBytes(response, maxBytes) {
     return Buffer.concat(chunks, total);
 }
 
+const TRANSIENT_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS = 500;
+const MAX_RETRY_DELAY_MS = 30000;
+
+function parseRetryAfterMs(headers) {
+    const raw = headers?.get?.('retry-after');
+    if (!raw) return null;
+    const trimmed = String(raw).trim();
+    if (/^\d+$/.test(trimmed)) {
+        const seconds = Number(trimmed);
+        return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1000, MAX_RETRY_DELAY_MS) : null;
+    }
+    const parsedDate = Date.parse(trimmed);
+    if (Number.isFinite(parsedDate)) {
+        return Math.min(Math.max(0, parsedDate - Date.now()), MAX_RETRY_DELAY_MS);
+    }
+    return null;
+}
+
+function retryDelayMs(attempt, baseDelayMs, randomFn, retryAfterMs = null) {
+    if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+        return Math.min(MAX_RETRY_DELAY_MS, Math.round(retryAfterMs));
+    }
+    const exp = Math.min(MAX_RETRY_DELAY_MS, baseDelayMs * (2 ** attempt));
+    const jitter = 0.75 + 0.5 * (typeof randomFn === 'function' ? randomFn() : Math.random());
+    return Math.min(MAX_RETRY_DELAY_MS, Math.max(0, Math.round(exp * jitter)));
+}
+
 async function defaultFetchPdf({ url, forumId, maxBytes = MAX_PDF_BYTES, maxRedirects = MAX_REDIRECTS,
-    timeoutMs = REQUEST_TIMEOUT_MS } = {}, dependencies = {}) {
+    timeoutMs = REQUEST_TIMEOUT_MS, maxRetries } = {}, dependencies = {}) {
     const detectProxy = dependencies.detectProxy || detectHttpConnectProxyUrl;
     const proxyUrl = detectProxy(); if (!proxyUrl) fail('project HTTP CONNECT proxy is required');
     const dispatcher = (dependencies.createDispatcher || createProxyDispatcher)(proxyUrl);
     const fetchImpl = dependencies.fetchImpl || globalThis.fetch;
     if (typeof fetchImpl !== 'function') fail('fetch 不可用');
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref?.();
-    const redirects = []; let current = validateDownloadUrl(url, forumId);
-    try {
-        for (let count = 0; count <= maxRedirects; count += 1) {
-            const response = await fetchImpl(current, { method: 'GET', redirect: 'manual', dispatcher,
-                signal: controller.signal, headers: { Accept: 'application/pdf',
-                    'User-Agent': 'audio-paper-digest-history/1.0' } });
-            if ([301, 302, 303, 307, 308].includes(response.status)) {
-                await response.body?.cancel?.().catch(() => {});
-                if (count >= maxRedirects) fail('OpenReview PDF 超出重定向次数上限');
-                const location = response.headers?.get?.('location'); if (!location) fail('OpenReview 重定向缺少 Location');
-                const next = validateDownloadUrl(new URL(location, current).toString(), forumId);
-                redirects.push({ from: current, to: next, status: response.status }); current = next; continue;
+    const initialUrl = validateDownloadUrl(url, forumId);
+    const retriesRaw = maxRetries ?? dependencies.maxRetries ?? DEFAULT_MAX_RETRIES;
+    const totalRetries = Number.isInteger(retriesRaw) ? Math.max(0, Math.min(retriesRaw, 5)) : DEFAULT_MAX_RETRIES;
+    const baseDelayMs = Number.isFinite(dependencies.retryBaseDelayMs) && dependencies.retryBaseDelayMs >= 0
+        ? dependencies.retryBaseDelayMs
+        : DEFAULT_RETRY_BASE_DELAY_MS;
+    const sleep = dependencies.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const randomFn = dependencies.random || Math.random;
+
+    for (let attempt = 0; attempt <= totalRetries; attempt += 1) {
+        const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref?.();
+        const redirects = []; let current = initialUrl;
+        let transientRetry = null;
+        try {
+            for (let count = 0; count <= maxRedirects; count += 1) {
+                const response = await fetchImpl(current, { method: 'GET', redirect: 'manual', dispatcher,
+                    signal: controller.signal, headers: { Accept: 'application/pdf',
+                        'User-Agent': 'audio-paper-digest-history/1.0' } });
+                if ([301, 302, 303, 307, 308].includes(response.status)) {
+                    await response.body?.cancel?.().catch(() => {});
+                    if (count >= maxRedirects) fail('OpenReview PDF 超出重定向次数上限');
+                    const location = response.headers?.get?.('location'); if (!location) fail('OpenReview 重定向缺少 Location');
+                    const next = validateDownloadUrl(new URL(location, current).toString(), forumId);
+                    redirects.push({ from: current, to: next, status: response.status }); current = next; continue;
+                }
+                if (response.status !== 200) {
+                    const retryAfterMs = parseRetryAfterMs(response.headers);
+                    await response.body?.cancel?.().catch(() => {});
+                    if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt < totalRetries) {
+                        transientRetry = { retryAfterMs };
+                        break;
+                    }
+                    fail(`OpenReview PDF returned HTTP ${response.status}`);
+                }
+                const contentType = String(response.headers?.get?.('content-type') || '');
+                if (!validPdfContentType(contentType)) {
+                    await response.body?.cancel?.().catch(() => {});
+                    fail('OpenReview PDF 响应的 Content-Type 非法');
+                }
+                const bytes = await readResponseBytes(response, maxBytes);
+                return { bytes, requestedUrl: url, finalUrl: current, redirects,
+                    contentType, responseStatus: response.status };
             }
-            if (response.status !== 200) {
-                await response.body?.cancel?.().catch(() => {});
-                fail(`OpenReview PDF returned HTTP ${response.status}`);
+            if (!transientRetry) fail('OpenReview PDF 超出重定向次数上限');
+        } catch (error) {
+            if (error instanceof HistoricalOpenreviewPdfSourceError) throw error;
+            if (attempt < totalRetries) {
+                transientRetry = { retryAfterMs: null };
+            } else {
+                if (error?.name === 'AbortError') fail('OpenReview PDF request timed out');
+                const reason = String(error?.cause?.code || error?.code || error?.message || 'network error')
+                    .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 160);
+                fail(`OpenReview PDF network request failed: ${reason}`);
             }
-            const contentType = String(response.headers?.get?.('content-type') || '');
-            if (!validPdfContentType(contentType)) {
-                await response.body?.cancel?.().catch(() => {});
-                fail('OpenReview PDF 响应的 Content-Type 非法');
-            }
-            const bytes = await readResponseBytes(response, maxBytes);
-            return { bytes, requestedUrl: url, finalUrl: current, redirects,
-                contentType, responseStatus: response.status };
+        } finally { clearTimeout(timer); }
+        if (transientRetry) {
+            const delayMs = retryDelayMs(attempt, baseDelayMs, randomFn, transientRetry.retryAfterMs);
+            if (delayMs > 0) await sleep(delayMs);
         }
-        fail('OpenReview PDF 超出重定向次数上限');
-    } catch (error) {
-        if (error instanceof HistoricalOpenreviewPdfSourceError) throw error;
-        if (error?.name === 'AbortError') fail('OpenReview PDF request timed out');
-        const reason = String(error?.cause?.code || error?.code || error?.message || 'network error')
-            .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 160);
-        fail(`OpenReview PDF network request failed: ${reason}`);
-    } finally { clearTimeout(timer); }
+    }
+    fail('OpenReview PDF request failed after retries');
 }
 
 function pathsFor({ pdfRoot, receiptRoot, forumId, create = false } = {}) {

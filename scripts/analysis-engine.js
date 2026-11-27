@@ -2749,6 +2749,13 @@ async function analyzePaperWithRetry(paper, options = {}) {
                                     && finalCheckpoint.acquisitionSourceSha256 === sourceSha256) {
                                     paper.analysisStageCheckpoints = finalCheckpoint.checkpoints;
                                 }
+                                if (pendingFeedbackComplete
+                                    && require('./lib/completed-reader-upstream').completedReaderUpstream(candidate, source)) {
+                                    paper.analysis = candidate.analysis;
+                                    if (Object.hasOwn(analyzed, 'parsed') && analyzed.parsed !== undefined) {
+                                        paper.parsed = analyzed.parsed;
+                                    }
+                                }
                             }
                         } catch (_) {
                             // 来源不完整时不创建新的恢复正文，原失败原因仍由正常流程保存。

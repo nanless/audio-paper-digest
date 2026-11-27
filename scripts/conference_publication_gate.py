@@ -1466,7 +1466,17 @@ def safe_transport():
 
 
 def fetch_public(url):
+    import http.client
     import urllib3
+    from pinned_http_transport import (
+        COOLDOWN_TRIGGER_HTTP_STATUSES,
+        TransientHttpStatusError,
+        get_origin_gate,
+        is_origin_cooldown_exception,
+        jittered_exponential_backoff,
+        ordered_candidate_addresses,
+        parse_retry_after_seconds,
+    )
     from project_env import get_required_fetch_proxy
 
     shared = safe_transport()
@@ -1476,49 +1486,87 @@ def fetch_public(url):
     current = public_url(url)
     for _ in range(4):
         addresses = shared._validate_public_image_url(current)
+        candidate_addresses = ordered_candidate_addresses(addresses)
+        if not candidate_addresses:
+            raise ValueError('URL 验收缺少可用的已校验公网地址')
         parsed = urlparse(current)
+        origin_gate = get_origin_gate(current)
         redirected = False
         for transport_attempt in range(FETCH_TRANSPORT_ATTEMPTS):
-            pinned = shared._pinned_https_url(parsed, sorted(addresses)[0])
+            target_address = candidate_addresses[transport_attempt % len(candidate_addresses)]
+            pinned = shared._pinned_https_url(parsed, target_address)
             manager = urllib3.ProxyManager(proxy, cert_reqs='CERT_REQUIRED',
                                            assert_hostname=parsed.hostname, server_hostname=parsed.hostname,
                                            retries=False)
             response = None
             try:
                 remaining = shared._remaining_deadline_seconds(deadline, '会议 URL 验收')
-                response = manager.request('GET', pinned, headers={'Host': parsed.netloc},
-                                           redirect=False, preload_content=False, retries=False,
-                                           timeout=urllib3.Timeout(connect=min(15, remaining), read=min(15, remaining)))
-                shared._validate_response_peer_with_transport(response, addresses, proxy_addresses)
-                if response.status in {301, 302, 303, 307, 308}:
-                    location = response.headers.get('Location')
-                    if not location:
-                        raise ValueError('URL 重定向缺少 Location')
-                    current = public_url(urljoin(current, location))
-                    redirected = True
-                    break
-                if response.status != 200:
-                    raise ValueError(f'URL 验收 HTTP {response.status}（期望 200）')
-                chunks, size = [], 0
-                while True:
-                    shared._remaining_deadline_seconds(deadline, '会议 URL 验收')
-                    chunk = response.read(65536)
-                    if not chunk:
+                with origin_gate.slot(
+                    deadline=deadline,
+                    sleep_fn=time.sleep,
+                    monotonic_fn=time.monotonic,
+                ):
+                    remaining = shared._remaining_deadline_seconds(deadline, '会议 URL 验收')
+                    response = manager.request('GET', pinned, headers={'Host': parsed.netloc},
+                                               redirect=False, preload_content=False, retries=False,
+                                               timeout=urllib3.Timeout(connect=min(15, remaining), read=min(15, remaining)))
+                    shared._validate_response_peer_with_transport(response, addresses, proxy_addresses)
+                    if response.status in {301, 302, 303, 307, 308}:
+                        location = response.headers.get('Location')
+                        if not location:
+                            raise ValueError('URL 重定向缺少 Location')
+                        current = public_url(urljoin(current, location))
+                        redirected = True
                         break
-                    size += len(chunk)
-                    if size > MAX_BYTES:
-                        raise ValueError(f'URL 验收响应过大：已读取 {size} 字节，上限 {MAX_BYTES}')
-                    chunks.append(chunk)
-                return {'url': current, 'body': b''.join(chunks),
-                        'contentType': response.headers.get('Content-Type', '').split(';')[0].lower()}
-            except (urllib3.exceptions.HTTPError, OSError):
-                # GitHub 的 raw 节点偶尔会重置 CONNECT 隧道或关掉 TLS 连接，
-                # 而对象本身完全正常。只重试传输层失败，且不超出该 URL 原有的
-                # 绝对截止时间；HTTP 状态、摘要、重定向和 HTML 错误一律直接判失败。
-                if transport_attempt >= FETCH_TRANSPORT_ATTEMPTS - 1:
-                    raise
+                    if response.status in COOLDOWN_TRIGGER_HTTP_STATUSES:
+                        retry_after = response.headers.get('Retry-After') if hasattr(response.headers, 'get') else None
+                        origin_gate.record_transient_failure(
+                            status=response.status,
+                            retry_after=retry_after,
+                            headers=response.headers,
+                            now_monotonic=time.monotonic(),
+                        )
+                        raise TransientHttpStatusError(response.status, retry_after)
+                    if response.status != 200:
+                        raise ValueError(f'URL 验收 HTTP {response.status}（期望 200）')
+                    chunks, size = [], 0
+                    while True:
+                        shared._remaining_deadline_seconds(deadline, '会议 URL 验收')
+                        chunk = response.read(65536)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > MAX_BYTES:
+                            raise ValueError(f'URL 验收响应过大：已读取 {size} 字节，上限 {MAX_BYTES}')
+                        chunks.append(chunk)
+                    return {'url': current, 'body': b''.join(chunks),
+                            'contentType': response.headers.get('Content-Type', '').split(';')[0].lower()}
+            except (TransientHttpStatusError, urllib3.exceptions.HTTPError, OSError, http.client.HTTPException) as exc:
+                # 瞬时传输故障与 HTTP 429/502/503/504 在本 URL 绝对截止时间内按
+                # 抖动指数退避 + Retry-After + 地址轮转重试；其余 4xx/内容错误直接失败。
+                if isinstance(exc, TransientHttpStatusError):
+                    if transport_attempt >= FETCH_TRANSPORT_ATTEMPTS - 1:
+                        raise ValueError(f'URL 验收 HTTP {exc.status}（期望 200）') from exc
+                else:
+                    if is_origin_cooldown_exception(exc):
+                        origin_gate.record_transient_failure(exc, now_monotonic=time.monotonic())
+                    if transport_attempt >= FETCH_TRANSPORT_ATTEMPTS - 1:
+                        raise
                 remaining = shared._remaining_deadline_seconds(deadline, '会议 URL 验收')
-                time.sleep(min(0.5 * (2 ** transport_attempt), max(0.0, remaining - 0.01)))
+                max_sleep = max(0.0, remaining - 0.01)
+                backoff = jittered_exponential_backoff(
+                    transport_attempt, remaining_seconds=max_sleep,
+                )
+                retry_after_sec = (
+                    parse_retry_after_seconds(exc.retry_after)
+                    if isinstance(exc, TransientHttpStatusError) and exc.retry_after else None
+                )
+                sleep_seconds = min(
+                    max(backoff, retry_after_sec or 0.0),
+                    max_sleep,
+                )
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
             finally:
                 if response is not None:
                     response.close()

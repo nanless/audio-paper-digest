@@ -248,7 +248,7 @@ test('batchDate 仅保留合法日历日期；macOS /var 或 /tmp 别名路径�
     const rawRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-macos-alias-'));
     t.after(() => fs.rmSync(rawRoot, { recursive: true, force: true }));
     const ledgerDir = path.join(rawRoot, 'ledger');
-    assert.equal(writeLlmUsageEvent({ ...valid }, { directory: ledgerDir }), true);
+    assert.equal(writeLlmUsageEvent({ ...valid }, { directory: ledgerDir, shardByDate: false }), true);
     assert.equal(fs.readdirSync(ledgerDir).filter(name => name.endsWith('.json')).length, 1);
 
     const { preserveResponse } = require('../scripts/lib/llm-response-recovery.js');
@@ -256,4 +256,17 @@ test('batchDate 仅保留合法日历日期；macOS /var 或 /tmp 别名路径�
     const parsed = JSON.parse(fs.readFileSync(saved.filename, 'utf8'));
     assert.equal(parsed.event, null);
     assert.equal(saved.eventId, null);
+});
+
+test('workflow 字段与 index:YYYY-MM-DD 汇总页 paperId 与 Python 侧保持一致', () => {
+    const llmUsage = require('../scripts/lib/llm-usage.js');
+    for (const wf of ['daily', 'conference', 'history']) {
+        const ctx = withLlmUsageContext({ workflow: wf, paperId: 'index:2026-11-27', stage: 'publish.text' }, () => llmUsage.usageContext());
+        assert.equal(ctx.workflow, wf);
+        assert.equal(ctx.paperId, 'index:2026-11-27');
+        assert.equal(llmUsage.usagePaperKey(ctx.paperId), 'index:2026-11-27');
+    }
+    const invalidWf = withLlmUsageContext({ workflow: 'unknown', paperId: 'index:2026-02-30' }, () => llmUsage.usageContext());
+    assert.equal(Object.hasOwn(invalidWf, 'workflow'), false);
+    assert.equal(invalidWf.paperId, null);
 });

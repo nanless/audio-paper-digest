@@ -261,7 +261,7 @@ function implementationSha256() {
 
 function validateUrlForProvider(provider, rawUrl, kind) {
     const cleaned = assertCanonicalPublicHttpsUrl(rawUrl, `official ${kind} URL`, {
-        allowQuery: kind === 'api' || (kind === 'pdf' && provider.parser === 'ieee-local-manifest')
+        allowQuery: kind === 'api' || (kind === 'pdf' && (provider.parser === 'ieee-local-manifest' || provider.parser === 'zenodo-json'))
     });
     const parsed = new URL(cleaned);
     const host = parsed.hostname.toLowerCase();
@@ -296,6 +296,10 @@ function validateUrlForProvider(provider, rawUrl, kind) {
             const arnumber = parsed.searchParams.get('arnumber') || '';
             if (!/^[1-9]\d*$/.test(arnumber) || parsed.search !== `?arnumber=${arnumber}`) {
                 fail(`IEEE 官方 PDF URL 必须包含规范的 ?arnumber=<digits>：${cleaned}`);
+            }
+        } else if (provider.parser === 'zenodo-json') {
+            if (parsed.search && parsed.search !== '?download=1') {
+                fail(`Zenodo 官方 PDF URL 仅允许空查询或 ?download=1：${cleaned}`);
             }
         }
     } else {
@@ -356,7 +360,36 @@ async function readResponseBytes(response, maxBytes, label) {
     return Buffer.concat(chunks, total);
 }
 
-async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs = REQUEST_TIMEOUT_MS }, dependencies = {}) {
+const TRANSIENT_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_FETCH_MAX_RETRIES = 3;
+const DEFAULT_FETCH_RETRY_BASE_DELAY_MS = 500;
+const MAX_FETCH_RETRY_DELAY_MS = 30000;
+
+function parseRetryAfterMs(headers) {
+    const raw = headers?.get?.('retry-after');
+    if (!raw) return null;
+    const trimmed = String(raw).trim();
+    if (/^\d+$/.test(trimmed)) {
+        const seconds = Number(trimmed);
+        return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1000, MAX_FETCH_RETRY_DELAY_MS) : null;
+    }
+    const parsedDate = Date.parse(trimmed);
+    if (Number.isFinite(parsedDate)) {
+        return Math.min(Math.max(0, parsedDate - Date.now()), MAX_FETCH_RETRY_DELAY_MS);
+    }
+    return null;
+}
+
+function computeJitteredRetryDelayMs(attempt, baseDelayMs, randomFn, retryAfterMs = null) {
+    if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+        return Math.min(MAX_FETCH_RETRY_DELAY_MS, Math.round(retryAfterMs));
+    }
+    const exp = Math.min(MAX_FETCH_RETRY_DELAY_MS, baseDelayMs * (2 ** attempt));
+    const factor = 0.75 + 0.5 * (typeof randomFn === 'function' ? randomFn() : Math.random());
+    return Math.min(MAX_FETCH_RETRY_DELAY_MS, Math.max(0, Math.round(exp * factor)));
+}
+
+async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs = REQUEST_TIMEOUT_MS, maxRetries } = {}, dependencies = {}) {
     const requestedUrl = validateUrlForProvider(provider, url, kind);
     const fetchImpl = dependencies.fetch || dependencies.fetchImpl || globalThis.fetch;
     if (typeof fetchImpl !== 'function') fail('当前运行时缺少 fetch 实现');
@@ -372,83 +405,110 @@ async function fetchOfficialExtended({ provider, url, kind, maxBytes, timeoutMs 
         dispatcher = (dependencies.createDispatcher || utils.createProxyDispatcher)(proxyUrl);
     }
 
-    let current = requestedUrl;
-    const redirects = [];
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    timer.unref?.();
-    try {
-        for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-            const accept = kind === 'pdf'
-                ? 'application/pdf'
-                : kind === 'api'
-                    ? 'application/json'
-                    : 'text/html,application/xhtml+xml';
-            const response = await fetchImpl(current, {
-                method: 'GET',
-                redirect: 'manual',
-                ...(dispatcher ? { dispatcher } : {}),
-                signal: controller.signal,
-                headers: {
-                    Accept: accept,
-                    'User-Agent': 'audio-research-workbench-official-conference/2.0'
+    const retriesRaw = maxRetries ?? dependencies.maxRetries ?? DEFAULT_FETCH_MAX_RETRIES;
+    const totalRetries = Number.isInteger(retriesRaw) ? Math.max(0, Math.min(retriesRaw, 5)) : DEFAULT_FETCH_MAX_RETRIES;
+    const retryBaseDelayMs = Number.isFinite(dependencies.retryBaseDelayMs) && dependencies.retryBaseDelayMs >= 0
+        ? dependencies.retryBaseDelayMs
+        : DEFAULT_FETCH_RETRY_BASE_DELAY_MS;
+    const sleep = dependencies.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const randomFn = dependencies.random || Math.random;
+
+    for (let attempt = 0; attempt <= totalRetries; attempt += 1) {
+        let current = requestedUrl;
+        const redirects = [];
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        timer.unref?.();
+        let transientRetry = null;
+        try {
+            for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+                const accept = kind === 'pdf'
+                    ? 'application/pdf'
+                    : kind === 'api'
+                        ? 'application/json'
+                        : 'text/html,application/xhtml+xml';
+                const response = await fetchImpl(current, {
+                    method: 'GET',
+                    redirect: 'manual',
+                    ...(dispatcher ? { dispatcher } : {}),
+                    signal: controller.signal,
+                    headers: {
+                        Accept: accept,
+                        'User-Agent': 'audio-research-workbench-official-conference/2.0'
+                    }
+                });
+                if ([301, 302, 303, 307, 308].includes(response.status)) {
+                    await response.body?.cancel?.();
+                    if (hop >= MAX_REDIRECTS) fail('官方响应超过重定向上限');
+                    const location = response.headers?.get?.('location');
+                    if (!location) fail('官方重定向缺少 Location 头');
+                    let resolved;
+                    try {
+                        resolved = new URL(location, current).toString();
+                    } catch (_) {
+                        fail(`官方重定向目标不是合法 URL：${location}`);
+                    }
+                    const nextUrl = validateUrlForProvider(provider, resolved, kind);
+                    redirects.push({ status: response.status, from: current, to: nextUrl });
+                    current = nextUrl;
+                    continue;
                 }
-            });
-            if ([301, 302, 303, 307, 308].includes(response.status)) {
-                await response.body?.cancel?.();
-                if (hop >= MAX_REDIRECTS) fail('官方响应超过重定向上限');
-                const location = response.headers?.get?.('location');
-                if (!location) fail('官方重定向缺少 Location 头');
-                let resolved;
-                try {
-                    resolved = new URL(location, current).toString();
-                } catch (_) {
-                    fail(`官方重定向目标不是合法 URL：${location}`);
+                if (response.status !== 200) {
+                    const retryAfterMs = parseRetryAfterMs(response.headers);
+                    await response.body?.cancel?.();
+                    if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt < totalRetries) {
+                        transientRetry = { retryAfterMs };
+                        break;
+                    }
+                    fail(`official ${kind} returned HTTP ${response.status}`);
                 }
-                const nextUrl = validateUrlForProvider(provider, resolved, kind);
-                redirects.push({ status: response.status, from: current, to: nextUrl });
-                current = nextUrl;
-                continue;
+                const contentType = String(response.headers?.get?.('content-type') || '').trim();
+                const okContentType = kind === 'pdf'
+                    ? /^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(contentType)
+                    : kind === 'api'
+                        ? /^(?:application\/json|application\/vnd\.zenodo\.v1\+json)(?:\s*;|$)/iu.test(contentType)
+                        : /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/iu.test(contentType);
+                if (!okContentType) {
+                    await response.body?.cancel?.();
+                    fail(`官方 ${kind} 响应 Content-Type 无效：${contentType || '(empty)'}`);
+                }
+                const buf = await readResponseBytes(response, maxBytes, `官方 ${kind} 响应`);
+                if (kind === 'pdf' && buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
+                    fail('官方 PDF 响应缺少 %PDF- 文件头');
+                }
+                const observedAt = (dependencies.now || (() => new Date().toISOString()))();
+                return {
+                    bytes: buf,
+                    requestedUrl,
+                    finalUrl: current,
+                    redirects,
+                    responseStatus: response.status,
+                    contentType,
+                    observedAt
+                };
             }
-            if (response.status !== 200) {
-                await response.body?.cancel?.();
-                fail(`official ${kind} returned HTTP ${response.status}`);
+            if (!transientRetry) {
+                fail('官方响应超过重定向上限');
             }
-            const contentType = String(response.headers?.get?.('content-type') || '').trim();
-            const okContentType = kind === 'pdf'
-                ? /^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(contentType)
-                : kind === 'api'
-                    ? /^(?:application\/json|application\/vnd\.zenodo\.v1\+json)(?:\s*;|$)/iu.test(contentType)
-                    : /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/iu.test(contentType);
-            if (!okContentType) {
-                await response.body?.cancel?.();
-                fail(`官方 ${kind} 响应 Content-Type 无效：${contentType || '(empty)'}`);
+        } catch (error) {
+            if (error instanceof OfficialConferenceAcquisitionExtendedError) throw error;
+            if (attempt < totalRetries) {
+                transientRetry = { retryAfterMs: null };
+            } else {
+                if (error?.name === 'AbortError') fail(`official ${kind} request timed out`);
+                const reason = String(error?.cause?.code || error?.code || error?.message || 'network error')
+                    .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 160);
+                fail(`official ${kind} request failed: ${reason}`);
             }
-            const buf = await readResponseBytes(response, maxBytes, `官方 ${kind} 响应`);
-            if (kind === 'pdf' && buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
-                fail('官方 PDF 响应缺少 %PDF- 文件头');
-            }
-            const observedAt = (dependencies.now || (() => new Date().toISOString()))();
-            return {
-                bytes: buf,
-                requestedUrl,
-                finalUrl: current,
-                redirects,
-                responseStatus: response.status,
-                contentType,
-                observedAt
-            };
+        } finally {
+            clearTimeout(timer);
         }
-        fail('官方响应超过重定向上限');
-    } catch (error) {
-        if (error instanceof OfficialConferenceAcquisitionExtendedError) throw error;
-        if (error?.name === 'AbortError') fail(`official ${kind} request timed out`);
-        const reason = String(error?.cause?.code || error?.code || error?.message || 'network error')
-            .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 160);
-        fail(`official ${kind} request failed: ${reason}`);
-    } finally {
-        clearTimeout(timer);
+        if (transientRetry) {
+            const delayMs = computeJitteredRetryDelayMs(attempt, retryBaseDelayMs, randomFn, transientRetry.retryAfterMs);
+            if (delayMs > 0) await sleep(delayMs);
+        }
     }
+    fail(`official ${kind} request failed after retries`);
 }
 
 /**
@@ -538,7 +598,7 @@ function parseZenodoRecordsPages(pages, provider) {
                 try {
                     const parsed = new URL(rawPdfUrl);
                     if (parsed.protocol === 'https:' && parsed.hostname.toLowerCase() === 'zenodo.org'
-                        && !parsed.search && !parsed.hash && !parsed.port && !parsed.username && !parsed.password
+                        && (!parsed.search || parsed.search === '?download=1') && !parsed.hash && !parsed.port && !parsed.username && !parsed.password
                         && provider.pdfPath.test(parsed.pathname)) {
                         pdfUrl = parsed.toString();
                     }
@@ -1474,6 +1534,8 @@ module.exports = {
     hasProvider,
     providerFor,
     listProviderIds,
+    validateUrlForProvider,
+    fetchOfficialExtended,
     parseEmnlpCatalogHtml,
     parseZenodoRecordsPages,
     parseNeuripsProceedingsHtml,

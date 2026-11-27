@@ -262,8 +262,37 @@ async function readResponseBytes(response, maxBytes) {
     return Buffer.concat(chunks, total);
 }
 
+const TRANSIENT_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS = 500;
+const MAX_RETRY_DELAY_MS = 30000;
+
+function parseRetryAfterMs(headers) {
+    const raw = headers?.get?.('retry-after');
+    if (!raw) return null;
+    const trimmed = String(raw).trim();
+    if (/^\d+$/.test(trimmed)) {
+        const seconds = Number(trimmed);
+        return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds * 1000, MAX_RETRY_DELAY_MS) : null;
+    }
+    const parsedDate = Date.parse(trimmed);
+    if (Number.isFinite(parsedDate)) {
+        return Math.min(Math.max(0, parsedDate - Date.now()), MAX_RETRY_DELAY_MS);
+    }
+    return null;
+}
+
+function retryDelayMs(attempt, baseDelayMs, randomFn, retryAfterMs = null) {
+    if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+        return Math.min(MAX_RETRY_DELAY_MS, Math.round(retryAfterMs));
+    }
+    const exp = Math.min(MAX_RETRY_DELAY_MS, baseDelayMs * (2 ** attempt));
+    const jitter = 0.75 + 0.5 * (typeof randomFn === 'function' ? randomFn() : Math.random());
+    return Math.min(MAX_RETRY_DELAY_MS, Math.max(0, Math.round(exp * jitter)));
+}
+
 async function defaultFetchPdf({ profile, maxBytes = MAX_PDF_BYTES, maxRedirects = MAX_REDIRECTS,
-    timeoutMs = REQUEST_TIMEOUT_MS } = {}, dependencies = {}) {
+    timeoutMs = REQUEST_TIMEOUT_MS, maxRetries } = {}, dependencies = {}) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 5 || maxBytes > MAX_PDF_BYTES
         || !Number.isSafeInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > MAX_REDIRECTS
         || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) {
@@ -277,49 +306,74 @@ async function defaultFetchPdf({ profile, maxBytes = MAX_PDF_BYTES, maxRedirects
     const fetchImpl = dependencies.fetchImpl || globalThis.fetch;
     if (typeof fetchImpl !== 'function') fail('fetch 不可用');
     const arxivOriginGate = dependencies.arxivOriginGate || sharedArxivOriginGate;
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref?.();
     const requestedUrl = validateProfileUrl(normalizedProfile.requestedUrl, normalizedProfile);
-    const redirects = []; let current = requestedUrl;
-    try {
-        for (let count = 0; count <= maxRedirects; count += 1) {
-            const arxivTarget = isArxivHostUrl(current);
-            const requestOptions = { method: 'GET', redirect: 'manual', dispatcher,
-                signal: controller.signal, headers: { Accept: 'application/pdf',
-                    'User-Agent': 'audio-paper-digest-history/1.0' } };
-            const response = arxivTarget
-                ? await arxivOriginGate.run(() => fetchImpl(current, requestOptions), { label: 'historical-icml-alternate-pdf' })
-                : await fetchImpl(current, requestOptions);
-            if (arxivTarget && (response.status === 429 || response.status === 403)) {
-                arxivOriginGate.recordRateLimitResponse?.(response.headers);
+    const retriesRaw = maxRetries ?? dependencies.maxRetries ?? DEFAULT_MAX_RETRIES;
+    const totalRetries = Number.isInteger(retriesRaw) ? Math.max(0, Math.min(retriesRaw, 5)) : DEFAULT_MAX_RETRIES;
+    const baseDelayMs = Number.isFinite(dependencies.retryBaseDelayMs) && dependencies.retryBaseDelayMs >= 0
+        ? dependencies.retryBaseDelayMs
+        : DEFAULT_RETRY_BASE_DELAY_MS;
+    const sleep = dependencies.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const randomFn = dependencies.random || Math.random;
+
+    for (let attempt = 0; attempt <= totalRetries; attempt += 1) {
+        const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref?.();
+        const redirects = []; let current = requestedUrl;
+        let transientRetry = null;
+        try {
+            for (let count = 0; count <= maxRedirects; count += 1) {
+                const arxivTarget = isArxivHostUrl(current);
+                const requestOptions = { method: 'GET', redirect: 'manual', dispatcher,
+                    signal: controller.signal, headers: { Accept: 'application/pdf',
+                        'User-Agent': 'audio-paper-digest-history/1.0' } };
+                const response = arxivTarget
+                    ? await arxivOriginGate.run(() => fetchImpl(current, requestOptions))
+                    : await fetchImpl(current, requestOptions);
+                if (arxivTarget && (response.status === 429 || response.status === 403)) {
+                    arxivOriginGate.recordRateLimitResponse?.(response.headers);
+                }
+                if ([301, 302, 303, 307, 308].includes(response.status)) {
+                    await response.body?.cancel?.().catch(() => {});
+                    if (count >= maxRedirects) fail('备用 PDF 超出重定向次数上限');
+                    const location = response.headers?.get?.('location');
+                    if (!location) fail('备用 PDF 重定向缺少 Location');
+                    const next = validateProfileUrl(new URL(location, current).toString(), normalizedProfile);
+                    redirects.push({ from: current, to: next, status: response.status }); current = next; continue;
+                }
+                if (response.status !== 200) {
+                    const retryAfterMs = parseRetryAfterMs(response.headers);
+                    await response.body?.cancel?.().catch(() => {});
+                    if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt < totalRetries) {
+                        transientRetry = { retryAfterMs };
+                        break;
+                    }
+                    fail(`alternate PDF returned HTTP ${response.status}`);
+                }
+                const contentType = String(response.headers?.get?.('content-type') || '');
+                if (!validPdfContentType(contentType)) {
+                    await response.body?.cancel?.().catch(() => {});
+                    fail('备用 PDF 响应的 Content-Type 非法');
+                }
+                const bytes = await readResponseBytes(response, maxBytes);
+                return { bytes, requestedUrl, finalUrl: current, redirects, contentType, responseStatus: response.status };
             }
-            if ([301, 302, 303, 307, 308].includes(response.status)) {
-                await response.body?.cancel?.().catch(() => {});
-                if (count >= maxRedirects) fail('备用 PDF 超出重定向次数上限');
-                const location = response.headers?.get?.('location');
-                if (!location) fail('备用 PDF 重定向缺少 Location');
-                const next = validateProfileUrl(new URL(location, current).toString(), normalizedProfile);
-                redirects.push({ from: current, to: next, status: response.status }); current = next; continue;
+            if (!transientRetry) fail('备用 PDF 超出重定向次数上限');
+        } catch (error) {
+            if (error instanceof HistoricalIcmlAlternatePdfSourceError) throw error;
+            if (attempt < totalRetries) {
+                transientRetry = { retryAfterMs: null };
+            } else {
+                if (error?.name === 'AbortError') fail('alternate PDF request timed out');
+                const reason = String(error?.cause?.code || error?.code || error?.message || 'network error')
+                    .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 160);
+                fail(`alternate PDF network request failed: ${reason}`);
             }
-            if (response.status !== 200) {
-                await response.body?.cancel?.().catch(() => {});
-                fail(`alternate PDF returned HTTP ${response.status}`);
-            }
-            const contentType = String(response.headers?.get?.('content-type') || '');
-            if (!validPdfContentType(contentType)) {
-                await response.body?.cancel?.().catch(() => {});
-                fail('备用 PDF 响应的 Content-Type 非法');
-            }
-            const bytes = await readResponseBytes(response, maxBytes);
-            return { bytes, requestedUrl, finalUrl: current, redirects, contentType, responseStatus: response.status };
+        } finally { clearTimeout(timer); }
+        if (transientRetry) {
+            const delayMs = retryDelayMs(attempt, baseDelayMs, randomFn, transientRetry.retryAfterMs);
+            if (delayMs > 0) await sleep(delayMs);
         }
-        fail('备用 PDF 超出重定向次数上限');
-    } catch (error) {
-        if (error instanceof HistoricalIcmlAlternatePdfSourceError) throw error;
-        if (error?.name === 'AbortError') fail('alternate PDF request timed out');
-        const reason = String(error?.cause?.code || error?.code || error?.message || 'network error')
-            .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 160);
-        fail(`alternate PDF network request failed: ${reason}`);
-    } finally { clearTimeout(timer); }
+    }
+    fail('alternate PDF request failed after retries');
 }
 
 function pathsFor({ pdfRoot, receiptRoot, forumId, create = false } = {}) {

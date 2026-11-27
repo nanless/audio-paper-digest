@@ -404,6 +404,22 @@ const RULES = [
         commands: context => [REVIEW_COMMAND(dateToken(context)), PUSH_COMMAND(dateToken(context))]
     },
     {
+        id: 'blog-review-blocking-issues',
+        docRef: DOC_THREE_WORKFLOWS,
+        match: ({ text }) => /审查仍有\s*\d+\s*个(?:未解决阻断问题|页面阻断|关联资产阻断)/.test(text),
+        cause: '博客严格审查发现阻断问题，本次未签发审查凭证，已保留失败集续审状态。',
+        nextSteps: [
+            '先查看同日期 blog-review-failure-<DATE>.json 与 blog-review-help-<DATE>.json 中的逐页阻断原因，区分内容问题与临时传输故障。',
+            '内容或图片问题回到 Reader/生成阶段修正后重新生成；纯临时传输失败可直接续审，已通过页面按 SHA 自动复用。',
+            '不要手改页面绕过生成清单、也不要跳过审查直接推送；全部阻断清零并签发凭证后再 push。'
+        ],
+        commands: context => [
+            REVIEW_COMMAND(dateToken(context)),
+            GENERATE_COMMAND(dateToken(context)),
+            DIGEST_STATUS_COMMAND(dateToken(context))
+        ]
+    },
+    {
         id: 'upstream-rate-limit',
         docRef: DOC_TROUBLESHOOTING,
         match: ({ text, codes, status }) => status === 429 || RATE_LIMIT_PATTERN.test(text)

@@ -856,7 +856,7 @@ function loadBoundStructuredManualSourceText(filePath, batchDate, paper, paperIn
         return { required: true, error: `${prefix} 的受控全文路径不可读: ${error.message}` };
     }
     const relativePath = path.relative(realRoot, realSourcePath);
-    if (!relativePath || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+    if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
         return { required: true, error: `${prefix} 的全文路径越出同批次受控目录` };
     }
     let sourceBuffer;

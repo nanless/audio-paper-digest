@@ -143,11 +143,27 @@ function classifyPage(relativePath, frontmatter) {
     return { scope, kind: isSummary ? 'summary' : 'paper', date, paperId: canonicalPaperId, arxivId: arxivId || null };
 }
 
+function isValidEmptyDailySummary(record, standards) {
+    if (record.kind !== 'summary' || record.scope !== 'daily') return false;
+    const fm = record.frontmatter || {};
+    const body = String(record.body || '');
+    const hasZeroPapersMarker = /共分析\s*\*\*0\*\*\s*篇论文/.test(body)
+        || body.includes('今日没有新论文')
+        || String(fm.description || '').trim() === '今日没有新论文';
+    const hasEmptyTags = !Array.isArray(fm.tags) || fm.tags.length === 0;
+    const hasReaderQuality = fm.paper_digest_reader_quality === standards.readerQualityContract;
+    const hasLegacyTaxonomy = Object.keys(fm).some(key => key.startsWith('paper_digest_taxonomy_'));
+    return hasZeroPapersMarker && hasEmptyTags && hasReaderQuality && !hasLegacyTaxonomy;
+}
+
 function evaluatePageOutdatedReasons(record, standards) {
     const { frontmatter, body, parseError, kind } = record;
     const reasons = [];
     if (parseError || !frontmatter) {
         reasons.push(parseError || 'missing-frontmatter');
+        return reasons;
+    }
+    if (isValidEmptyDailySummary(record, standards)) {
         return reasons;
     }
     // 检查受控词表 SHA（单篇与汇总页通用）
@@ -264,8 +280,13 @@ function buildRecommendedCommands(report) {
                 'npm run history:inventory -- --apply --ledger <LEDGER_NAME.json> --receipt <RECEIPT_NAME.json>',
                 'npm run history:inputs -- --apply --conference-manifest <CONFERENCE_MANIFEST_JSON> --inventory <INVENTORY_JSON> --blog-root <BLOG_REPO> --name scoped-conference.json',
                 'npm run history:plan -- --apply --catalog <CATALOG_JSON> --inventory <INVENTORY_JSON> --conference-projections <PROJECTION_JSON>',
+                'npm run history:sources -- --apply --plan <PLAN_JSON> --queue conference',
                 'npm run history:run -- --apply --plan <PLAN_JSON> --queue conference',
+                'npm run history:aggregate -- aggregate --apply --plan-file <PLAN_JSON> --registry-file <REGISTRY_JSON> --projection-file <PROJECTION_JSON> --conference <CONFERENCE_KEY>',
                 'npm run history:publication -- plan --apply --publication-id <UUID> --plan-file <PLAN_JSON> --registry-file <REGISTRY_JSON> --projection-file <PROJECTION_JSON> --waive-visuals',
+                'npm run history:publication -- generate --apply --publication-id <UUID> --plan-file <PLAN_JSON> --registry-file <REGISTRY_JSON> --projection-file <PROJECTION_JSON> --waive-visuals',
+                'npm run history:publication -- review --apply --publication-id <UUID>',
+                'npm run history:publication -- publish --apply --publication-id <UUID>',
                 'npm run verify:web -- --historical-publication-id <UUID> --wait'
             ]
         });

@@ -145,6 +145,25 @@ function main(argv = process.argv.slice(2)) {
             effortItem.detail = mismatches.join('；');
         }
     }
+    const chunkItem = items.find(item => item.name === 'PD_BLOG_REVIEW_CHUNK_CHARS');
+    const rawChunkChars = String(entries.PD_BLOG_REVIEW_CHUNK_CHARS ?? '').trim();
+    if (chunkItem && chunkItem.ok === 'ok' && rawChunkChars) {
+        const chunkChars = Number.parseInt(rawChunkChars, 10);
+        if (Number.isSafeInteger(chunkChars) && chunkChars < 12000) {
+            chunkItem.ok = 'warn';
+            chunkItem.detail = `整数 ${chunkChars}（偏小，建议 >= 12000，默认 20000）`;
+            chunkItem.hint = '分块过小会导致单页高频切块并降低 prompt 前缀缓存命中率';
+        }
+    }
+    const shardItem = items.find(item => item.name === 'PD_LLM_USAGE_SHARD_BY_DATE');
+    const rawShard = String(entries.PD_LLM_USAGE_SHARD_BY_DATE ?? '').trim();
+    if (shardItem && shardItem.ok === 'ok' && rawShard !== '1') {
+        shardItem.ok = 'warn';
+        shardItem.detail = rawShard
+            ? `布尔值 ${rawShard}（未开启按日分片，建议设为 1）`
+            : '未配置（默认 0，建议设为 1 开启按北京时间日期分片）';
+        shardItem.hint = '开启 PD_LLM_USAGE_SHARD_BY_DATE=1 可避免 data/runtime/llm-usage/ 单目录文件持续膨胀';
+    }
     const counts = items.reduce((acc, item) => ({ ...acc, [item.ok]: (acc[item.ok] || 0) + 1 }), {});
     const result = {
         envFile: options.envFile,

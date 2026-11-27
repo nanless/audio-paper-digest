@@ -369,7 +369,24 @@ function requestPinnedHttpsPage(parsedUrl, target, options = {}) {
     });
 }
 
-async function fetchPage(url, options = {}) {
+const TRANSIENT_FETCH_STATUSES = new Set([502, 503, 504]);
+const DEFAULT_FETCH_PAGE_RETRIES = 2;
+const DEFAULT_FETCH_PAGE_RETRY_BASE_MS = 250;
+
+function isRetryableFetchPageError(error) {
+    if (!error) return false;
+    if (error.name === 'AbortError' || error.name === 'TimeoutError') return false;
+    const message = String(error.message || '');
+    if (message.includes('网页核验') || message.includes('拒绝') || message.includes('私网')
+        || message.includes('非公网') || message.includes('保留') || message.includes('禁止')
+        || message.includes('超出上限') || message.includes('超过上限') || message.includes('仅允许')
+        || message.includes('主机名') || message.includes('URL')) {
+        return false;
+    }
+    return true;
+}
+
+async function fetchPageOnce(url, options = {}) {
     const fetchImpl = options.fetchImpl || globalThis.fetch;
     const isDefaultFetch = !options.fetchImpl || options.fetchImpl === globalThis.fetch;
     const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 20000;
@@ -416,9 +433,41 @@ async function fetchPage(url, options = {}) {
         }
         break;
     }
+    const status = Number(response?.status || 0);
+    if (TRANSIENT_FETCH_STATUSES.has(status)) {
+        try { await response.body?.cancel?.(); } catch { /* ignore */ }
+        return { status, title: null, finalUrl: response.url || (isDefaultFetch && currentUrl !== String(url) ? currentUrl : null), transient: true };
+    }
     const html = await readBoundedResponseText(response, maxBytes);
     const finalUrl = response.url || (isDefaultFetch && currentUrl !== String(url) ? currentUrl : null);
-    return { status: response.status, title: titleOf(html), finalUrl };
+    return { status: response.status, title: titleOf(html), finalUrl, transient: false };
+}
+
+async function fetchPage(url, options = {}) {
+    const maxRetries = Number.isInteger(options.maxRetries)
+        ? Math.max(0, Math.min(options.maxRetries, 3))
+        : DEFAULT_FETCH_PAGE_RETRIES;
+    const baseDelayMs = Number.isFinite(options.retryBaseDelayMs) && options.retryBaseDelayMs >= 0
+        ? options.retryBaseDelayMs
+        : DEFAULT_FETCH_PAGE_RETRY_BASE_MS;
+    const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const randomFn = options.random || Math.random;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        try {
+            const outcome = await fetchPageOnce(url, options);
+            if (!outcome.transient || attempt >= maxRetries || options.signal?.aborted) {
+                return { status: outcome.status, title: outcome.title, finalUrl: outcome.finalUrl };
+            }
+        } catch (error) {
+            if (attempt >= maxRetries || options.signal?.aborted || !isRetryableFetchPageError(error)) {
+                throw error;
+            }
+        }
+        const delayMs = Math.round(baseDelayMs * (2 ** attempt) * (0.75 + 0.5 * randomFn()));
+        if (delayMs > 0) await sleep(delayMs);
+    }
+    return fetchPageOnce(url, options).then(({ status, title, finalUrl }) => ({ status, title, finalUrl }));
 }
 
 function atomicWriteJson(targetPath, value) {
@@ -514,13 +563,18 @@ async function verify(date, options = {}) {
     await Promise.all(workers);
     const failed = results.filter(item => !item.ok).length + (results.length === 0 ? 1 : 0);
     const ok = results.filter(item => item.ok).length;
+    const publicationOid = options.publicationOid !== undefined
+        ? (options.publicationOid ? String(options.publicationOid).toLowerCase() : null)
+        : (options.deployOid ? String(options.deployOid).toLowerCase() : null);
+    const resolvedDeployOid = options.deployOid ? String(options.deployOid).toLowerCase() : null;
     const summary = {
         ...formats.recordHeader(ARTIFACT_FORMAT, ARTIFACT_FORMAT),
         createdAt: new Date().toISOString(),
         date,
         partial: failed > 0 || results.length === 0 || results.length < expected,
         deploy: options.deploy || null,
-        publicationOid: options.deployOid || null,
+        publicationOid,
+        ...(resolvedDeployOid ? { deployOid: resolvedDeployOid } : {}),
         generationManifestSha256,
         expected,
         checked: results.length,
@@ -1079,6 +1133,7 @@ function parseVerifyArgs(argv = []) {
         allowPartial: false,
         receipt: null,
         wait: false,
+        autoDeploy: false,
         waitSeconds: DEFAULT_WAIT_SECONDS,
         pollIntervalMs: 10000,
         workflowSource: false,
@@ -1098,6 +1153,7 @@ function parseVerifyArgs(argv = []) {
             options.publicationRoot = rootDir;
         } else if (value === '--limit') options.limit = Number(argv[++index]);
         else if (value === '--deploy') { const oid = argv[++index] || ''; if (!/^[0-9a-f]{40}$/i.test(oid)) throw new Error('--deploy 必须是 40 位十六进制 OID'); options.deploy = oid.toLowerCase(); }
+        else if (value === '--auto-deploy') options.autoDeploy = true;
         else if (value === '--workflow-source') options.workflowSource = true;
         else if (value === '--json') options.json = true;
         else if (value === '--timeout-ms') options.timeoutMs = Number(argv[++index]) || 20000;
@@ -1166,65 +1222,138 @@ function validateHistoricalRemoteOid(remote) {
     return resolved ? resolved.toLowerCase() : null;
 }
 
-function verifyHistoricalDeployOidBinding({ deployOid, recordedOid, plan, blogRepo, spawnSyncImpl = defaultSpawnSync } = {}) {
+function readGitBlobsBatch(blogRepo, specs, spawnSyncImpl = defaultSpawnSync) {
+    if (!specs.length) return new Map();
+    const input = `${specs.join('\n')}\n`;
+    const result = spawnSyncImpl('git', ['-C', blogRepo, 'cat-file', '--batch'], {
+        input,
+        encoding: null,
+        timeout: 60000,
+        maxBuffer: 256 * 1024 * 1024
+    });
+    if (!result || result.error || result.status !== 0) {
+        throw new Error(`git cat-file --batch 执行失败：${result?.error?.message || result?.status}`);
+    }
+    const buf = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(String(result.stdout || ''), 'utf8');
+    const out = new Map();
+    let offset = 0;
+    for (const spec of specs) {
+        const nl = buf.indexOf(0x0a, offset);
+        if (nl === -1) throw new Error(`git cat-file --batch 输出提前截断：${spec}`);
+        const header = buf.subarray(offset, nl).toString('utf8');
+        offset = nl + 1;
+        if (header.endsWith(' missing')) {
+            out.set(spec, null);
+            continue;
+        }
+        const parts = header.split(' ');
+        const type = parts[1];
+        const size = Number.parseInt(parts[2], 10);
+        if (type !== 'blob' || !Number.isInteger(size) || size < 0 || offset + size > buf.length) {
+            throw new Error(`git cat-file --batch 返回非法对象头：${spec}`);
+        }
+        out.set(spec, buf.subarray(offset, offset + size));
+        offset += size;
+        if (buf[offset] === 0x0a) offset += 1;
+    }
+    return out;
+}
+
+function manifestFilesForDeployBinding(manifestObj) {
+    if (!manifestObj || typeof manifestObj !== 'object') return [];
+    const byPath = new Map();
+    const addEntry = item => {
+        if (!item || typeof item !== 'object') return;
+        const filePath = item.path || item.relativePath || item.file || null;
+        if (typeof filePath !== 'string' || !filePath.trim()) return;
+        const sha = typeof item.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(item.sha256)
+            ? item.sha256.toLowerCase()
+            : (typeof item.contentSha256 === 'string' && /^[0-9a-f]{64}$/i.test(item.contentSha256)
+                ? item.contentSha256.toLowerCase()
+                : null);
+        byPath.set(filePath, {
+            path: filePath,
+            ...(sha ? { sha256: sha } : {}),
+            ...(item.deleted === true || item.operation === 'delete' ? { deleted: true } : {})
+        });
+    };
+    if (Array.isArray(manifestObj.files)) manifestObj.files.forEach(addEntry);
+    if (Array.isArray(manifestObj.pages)) manifestObj.pages.forEach(addEntry);
+    if (manifestObj.index) addEntry(manifestObj.index);
+    if (Array.isArray(manifestObj.papers)) manifestObj.papers.forEach(addEntry);
+    return [...byPath.values()];
+}
+
+function verifyDeployOidBinding({ deployOid, recordedOid, files = [], blogRepo, spawnSyncImpl = defaultSpawnSync, label = '发布' } = {}) {
     const candidate = String(deployOid || '').trim().toLowerCase();
     if (!/^[0-9a-f]{40}$/.test(candidate)) {
         throw new Error('--deploy 必须是 40 位十六进制 OID');
     }
     if (!recordedOid) {
-        throw new Error('历史发布缺少远端发布凭证 OID，拒绝用 --deploy 绕过发布绑定');
+        throw new Error(`${label}缺少远端发布凭证 OID，拒绝用 --deploy 绕过发布绑定`);
     }
     const recorded = String(recordedOid).toLowerCase();
     if (candidate === recorded) return candidate;
     if (typeof blogRepo !== 'string' || !blogRepo.trim() || !fs.existsSync(blogRepo)) {
-        throw new Error(`--deploy OID (${candidate}) 与历史发布远端 OID (${recorded}) 不一致，且缺少可核验祖先提交的博客仓库`);
+        throw new Error(`--deploy OID (${candidate}) 与${label}远端 OID (${recorded}) 不一致，且缺少可核验祖先提交的博客仓库`);
     }
     const gitOpts = { encoding: 'utf8', timeout: 30000 };
     const ancestry = spawnSyncImpl('git', ['-C', blogRepo, 'merge-base', '--is-ancestor', recorded, candidate], gitOpts);
     if (!ancestry || ancestry.error || ancestry.status !== 0) {
-        throw new Error(`--deploy OID (${candidate}) 不是历史发布提交 (${recorded}) 的有效后续提交`);
+        throw new Error(`--deploy OID (${candidate}) 不是${label}提交 (${recorded}) 的有效后续提交`);
     }
-    const files = Array.isArray(plan?.files) ? plan.files : [];
-    for (const file of files) {
-        if (!file || typeof file.path !== 'string' || !file.path) continue;
+    const validFiles = (Array.isArray(files) ? files : []).filter(file => file && typeof file.path === 'string' && file.path);
+    if (validFiles.length === 0) {
+        throw new Error(`${label}清单缺少可核验文件，拒绝接受后续提交 (${candidate})`);
+    }
+    const specs = [];
+    for (const file of validFiles) {
+        specs.push(`${candidate}:${file.path}`);
+        if (!(file.deleted === true || file.operation === 'delete')
+            && !(typeof file.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(file.sha256))) {
+            specs.push(`${recorded}:${file.path}`);
+        }
+    }
+    const blobs = readGitBlobsBatch(blogRepo, specs, spawnSyncImpl);
+    for (const file of validFiles) {
+        const candidateBytes = blobs.get(`${candidate}:${file.path}`);
         if (file.deleted === true || file.operation === 'delete') {
-            const exists = spawnSyncImpl('git', ['-C', blogRepo, 'cat-file', '-e', `${candidate}:${file.path}`], gitOpts);
-            if (exists && !exists.error && exists.status === 0) {
-                throw new Error(`--deploy 提交 (${candidate}) 恢复了历史发布已删除文件：${file.path}`);
+            if (candidateBytes !== null && candidateBytes !== undefined) {
+                throw new Error(`--deploy 提交 (${candidate}) 恢复了${label}已删除文件：${file.path}`);
             }
             continue;
         }
-        const blob = spawnSyncImpl('git', ['-C', blogRepo, 'cat-file', 'blob', `${candidate}:${file.path}`], {
-            encoding: null,
-            timeout: 30000,
-            maxBuffer: 32 * 1024 * 1024
-        });
-        if (!blob || blob.error || blob.status !== 0) {
-            throw new Error(`--deploy 提交 (${candidate}) 缺少历史发布已审文件：${file.path}`);
+        if (!candidateBytes) {
+            throw new Error(`--deploy 提交 (${candidate}) 缺少${label}已审文件：${file.path}`);
         }
-        const bytes = Buffer.isBuffer(blob.stdout) ? blob.stdout : Buffer.from(String(blob.stdout || ''), 'utf8');
-        const actualSha = crypto.createHash('sha256').update(bytes).digest('hex');
+        const actualSha = crypto.createHash('sha256').update(candidateBytes).digest('hex');
         if (typeof file.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(file.sha256)) {
             if (actualSha !== file.sha256.toLowerCase()) {
-                throw new Error(`--deploy 提交 (${candidate}) 修改了历史发布已审页面字节：${file.path}`);
+                throw new Error(`--deploy 提交 (${candidate}) 修改了${label}已审页面字节：${file.path}`);
             }
         } else {
-            const baseBlob = spawnSyncImpl('git', ['-C', blogRepo, 'cat-file', 'blob', `${recorded}:${file.path}`], {
-                encoding: null,
-                timeout: 30000,
-                maxBuffer: 32 * 1024 * 1024
-            });
-            if (!baseBlob || baseBlob.error || baseBlob.status !== 0) {
-                throw new Error(`无法读取历史发布提交 (${recorded}) 的基准字节：${file.path}`);
+            const baseBytes = blobs.get(`${recorded}:${file.path}`);
+            if (!baseBytes) {
+                throw new Error(`无法读取${label}提交 (${recorded}) 的基准字节：${file.path}`);
             }
-            const baseBytes = Buffer.isBuffer(baseBlob.stdout) ? baseBlob.stdout : Buffer.from(String(baseBlob.stdout || ''), 'utf8');
             const baseSha = crypto.createHash('sha256').update(baseBytes).digest('hex');
             if (actualSha !== baseSha) {
-                throw new Error(`--deploy 提交 (${candidate}) 修改了历史发布已审页面字节：${file.path}`);
+                throw new Error(`--deploy 提交 (${candidate}) 修改了${label}已审页面字节：${file.path}`);
             }
         }
     }
     return candidate;
+}
+
+function verifyHistoricalDeployOidBinding({ deployOid, recordedOid, plan, blogRepo, spawnSyncImpl = defaultSpawnSync } = {}) {
+    return verifyDeployOidBinding({
+        deployOid,
+        recordedOid,
+        files: Array.isArray(plan?.files) ? plan.files : [],
+        blogRepo,
+        spawnSyncImpl,
+        label: '历史发布'
+    });
 }
 
 async function verifyHistoricalPublication(publicationId, options = {}) {
@@ -1450,23 +1579,56 @@ async function runVerifyWebCli(argv = [], deps = {}) {
         printError('[verify-web] --date 必须是 YYYY-MM-DD');
         return 2;
     }
-    if (options.wait && !options.deploy) {
-        printError('[verify-web] --wait 需要同时提供 --deploy OID');
-        return 2;
-    }
-    if (options.workflowSource && !options.deploy) {
-        printError('[verify-web] --workflow-source 需要同时提供 --deploy OID');
-        return 2;
-    }
 
     let deploy = null;
     try {
-        // 先校验生成清单存在，避免 --wait 长时间轮询后才因缺少清单失败。
+        // 先校验生成清单与审查凭证绑定，避免 --wait 长时间轮询后才因缺少/不匹配清单或凭证失败。
         const manifestFile = path.join(currentDir, `blog-generation-manifest-${options.date}.json`);
         if (!fs.existsSync(manifestFile)) throw new Error(`找不到生成清单：${manifestFile}`);
+        const manifestRaw = fs.readFileSync(manifestFile);
+        const manifestSha256 = crypto.createHash('sha256').update(manifestRaw).digest('hex');
+        const manifestObj = JSON.parse(manifestRaw.toString('utf8'));
+        let receiptPath = options.receipt;
+        if (!receiptPath) {
+            const candidate = path.join(currentDir, `blog-review-receipt-${options.date}.json`);
+            if (fs.existsSync(candidate)) receiptPath = candidate;
+        }
+        let receipt = null;
+        let recordedOid = null;
+        if (receiptPath) {
+            if (!fs.existsSync(receiptPath)) throw new Error(`审查凭证不存在：${receiptPath}`);
+            receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+            const bound = validateReceiptBinding({ receipt, manifestSha256 });
+            recordedOid = bound.receiptOid.toLowerCase();
+        }
+        let resolvedDeployOid = null;
         if (options.deploy) {
+            if (recordedOid) {
+                resolvedDeployOid = verifyDeployOidBinding({
+                    deployOid: options.deploy,
+                    recordedOid,
+                    files: manifestFilesForDeployBinding(manifestObj),
+                    blogRepo: deps.blogRepo || env.PAPER_DIGEST_BLOG_REPO || require('./config.js').PUBLISH_CONFIG.blogRepo,
+                    spawnSyncImpl,
+                    label: '日更发布'
+                });
+            } else {
+                resolvedDeployOid = options.deploy;
+            }
+        } else if (recordedOid && (options.wait || options.workflowSource || options.autoDeploy || !options.allowPartial)) {
+            resolvedDeployOid = recordedOid;
+        }
+        if (options.wait && !resolvedDeployOid) {
+            printError('[verify-web] --wait 需要提供 --deploy OID 或存在有效的日更审查凭证');
+            return 2;
+        }
+        if (options.workflowSource && !resolvedDeployOid) {
+            printError('[verify-web] --workflow-source 需要提供 --deploy OID 或存在有效的日更审查凭证');
+            return 2;
+        }
+        if (resolvedDeployOid) {
             if (options.wait) {
-                const waited = await waitForDeploy(options.deploy, {
+                const waited = await waitForDeploy(resolvedDeployOid, {
                     spawnSync: spawnSyncImpl,
                     repository: options.repository || deployRepository(env),
                     env,
@@ -1478,7 +1640,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
                 if (options.json) {
                     // --json 模式下每个轮询快照单独一行，保证每行都能 JSON.parse。
                     for (const snapshot of waited.snapshots) {
-                        print(JSON.stringify({ type: 'deploy', oid: options.deploy, ...snapshot }));
+                        print(JSON.stringify({ type: 'deploy', oid: resolvedDeployOid, ...snapshot }));
                     }
                 } else {
                     for (const snapshot of waited.snapshots) {
@@ -1488,7 +1650,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
                     }
                 }
             } else {
-                deploy = deployStatus(options.deploy, {
+                deploy = deployStatus(resolvedDeployOid, {
                     spawnSync: spawnSyncImpl,
                     repository: options.repository || deployRepository(env),
                     env
@@ -1498,7 +1660,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
         // --workflow-source：在 HTTP 核验前确认该提交对应的 Pages run、workflow 源文件与 job/step 序列。
         let workflow = null;
         if (options.workflowSource) {
-            workflow = verifyWorkflowSource(options.deploy, {
+            workflow = verifyWorkflowSource(resolvedDeployOid, {
                 spawnSync: spawnSyncImpl,
                 repository: options.repository || deployRepository(env),
                 env,
@@ -1518,7 +1680,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
                 }
             };
             if (options.json) {
-                print(JSON.stringify({ type: 'workflow-source', oid: options.deploy, ...workflow }));
+                print(JSON.stringify({ type: 'workflow-source', oid: resolvedDeployOid, ...workflow }));
             } else if (workflow.verified) {
                 print(`[verify-web] workflow 源：${workflow.workflowSource.sha256} @ ${workflow.workflowSource.commit}；`
                     + `${workflow.jobs.map(job => `${job.role}(${job.requiredSteps.map(step => step.name).join('→')})`).join(' / ')} 通过`);
@@ -1536,24 +1698,15 @@ async function runVerifyWebCli(argv = [], deps = {}) {
             timeoutMs: options.timeoutMs,
             limit: options.limit,
             deploy,
-            deployOid: options.deploy,
+            publicationOid: recordedOid || resolvedDeployOid || null,
+            deployOid: resolvedDeployOid || null,
             allowLoopbackHttp,
             noWrite: true
         });
-        // 自动绑定当前批次的审查凭证（存在时强制），防止旧 OID/旧清单被当成验收证据。
-        let receiptPath = options.receipt;
-        if (!receiptPath) {
-            const candidate = path.join(currentDir, `blog-review-receipt-${options.date}.json`);
-            if (fs.existsSync(candidate)) receiptPath = candidate;
+        if (manifestSha256 && summary.generationManifestSha256 !== manifestSha256) {
+            throw new Error('核验期间生成清单发生变化，请重新核验');
         }
-        if (receiptPath) {
-            if (!fs.existsSync(receiptPath)) throw new Error(`审查凭证不存在：${receiptPath}`);
-            validateReceiptBinding({
-                receipt: JSON.parse(fs.readFileSync(receiptPath, 'utf8')),
-                manifestSha256: summary.generationManifestSha256,
-                deployOid: options.deploy
-            });
-        } else {
+        if (!receiptPath) {
             summary.partial = true; // 无审查凭证不能作为完整验收证据
         }
         const deployOk = Boolean(deploy && deploy.available && deploy.status === 'completed' && deploy.conclusion === 'success' && deploy.jobVerified === true);
@@ -1567,7 +1720,7 @@ async function runVerifyWebCli(argv = [], deps = {}) {
             if (deploy) {
                 print(JSON.stringify({
                     type: 'deploy-final',
-                    oid: options.deploy,
+                    oid: resolvedDeployOid,
                     deploy
                 }));
             }
@@ -1634,6 +1787,7 @@ module.exports = {
     loadHistoricalPublicationContext,
     historicalOnlineVerificationPath,
     validateHistoricalRemoteOid,
+    verifyDeployOidBinding,
     verifyHistoricalDeployOidBinding,
     verifyHistoricalPublication,
     deployRepository,

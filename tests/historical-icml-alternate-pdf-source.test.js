@@ -254,9 +254,9 @@ test('默认下载器在重定向/非200/非法类型时释放响应体，并对
     }), /重定向/);
     assert.equal(c1.canceled, 1);
 
-    // 2) HTTP 429 时 cancel 响应体并登记 Retry-After
+    // 2) HTTP 429 时 cancel 响应体并登记 Retry-After（maxRetries: 0 验证单次释放行为）
     const c2 = { canceled: 0 };
-    await assert.rejects(api.defaultFetchPdf({ profile }, {
+    await assert.rejects(api.defaultFetchPdf({ profile, maxRetries: 0 }, {
         detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}), arxivOriginGate: fakeGate,
         fetchImpl: async () => ({ status: 429, headers: { get: k => k === 'retry-after' ? '15' : null }, body: makeCancelBody(c2) })
     }), /HTTP 429/);
@@ -271,4 +271,33 @@ test('默认下载器在重定向/非200/非法类型时释放响应体，并对
     }), /Content-Type/);
     assert.equal(c3.canceled, 1);
     assert.equal(gateCalls.length, 3);
+    // arxivOriginGate.run 不应收到非函数的 { label } 第二参数
+    assert.ok(gateCalls.every(arg => arg === undefined));
+});
+
+test('默认下载器对瞬时 429/503/网络错误有界重试且恢复后成功返回 PDF', async () => {
+    const profile = api.profileForForum(TTS.forumId);
+    const sleeps = [];
+    let calls = 0;
+    const pdfBytes = Buffer.from('%PDF-1.7\nrecovered');
+    const result = await api.defaultFetchPdf({ profile, maxRetries: 3 }, {
+        detectProxy: () => 'http://127.0.0.1:7890',
+        createDispatcher: () => ({}),
+        arxivOriginGate: { async run(fn) { return fn(); } },
+        sleep: async ms => { sleeps.push(ms); },
+        random: () => 0.5,
+        fetchImpl: async () => {
+            calls += 1;
+            if (calls === 1) return { status: 429, headers: { get: k => k === 'retry-after' ? '1' : null }, body: { cancel: async () => {} } };
+            if (calls === 2) throw Object.assign(new Error('socket reset'), { code: 'ECONNRESET' });
+            return {
+                status: 200,
+                headers: { get: k => k === 'content-type' ? 'application/pdf' : null },
+                arrayBuffer: async () => pdfBytes
+            };
+        }
+    });
+    assert.equal(calls, 3);
+    assert.equal(sleeps.length, 2);
+    assert.equal(result.bytes.toString(), pdfBytes.toString());
 });

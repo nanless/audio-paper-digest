@@ -1334,6 +1334,7 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
         });
     };
     const active = directContext.getDirectRewriteAnalysisContext();
+    const { withLlmUsageContext } = require('./llm-usage.js');
     if (active) {
         // runDirectRewrite 持有外层作用域，好让会议 PDF 的页面像素一路
         // 用到 Reader 生成结束。以前在这里重新进入 AsyncLocalStorage，
@@ -1342,7 +1343,7 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
             || active.sourceSnapshotSha256 !== sourceDescriptor.sourceSnapshotSha256) {
             fail('default analysis was called under another direct source scope');
         }
-        await runEngine();
+        await withLlmUsageContext({ workflow: 'history' }, runEngine);
     } else {
         const materializerDeps = item.route.kind === 'arxiv-fresh-fetch'
             ? { ...dependencies,
@@ -1354,9 +1355,9 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
             : [];
         const downloadPrimaryImage = item.route.kind === 'arxiv-fresh-fetch'
             ? (url => ephemeralArxivPrimaryImageDownloader(item.route.arxivId, url, dependencies)) : undefined;
-        await directContext.withDirectRewriteAnalysisSource({ paperId: item.paperId, route: item.route.kind,
+        await withLlmUsageContext({ workflow: 'history' }, () => directContext.withDirectRewriteAnalysisSource({ paperId: item.paperId, route: item.route.kind,
             sourceDetails, sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256, readerAttemptsDir,
-            materializeReaderFigures, downloadPrimaryImage, deferReaderCandidateCommit: true }, runEngine);
+            materializeReaderFigures, downloadPrimaryImage, deferReaderCandidateCommit: true }, runEngine));
     }
     directContext.assertNoPersistentFigureFields(result);
     return result;

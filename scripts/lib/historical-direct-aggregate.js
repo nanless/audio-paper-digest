@@ -757,7 +757,10 @@ function renderAggregate(scope, key, members, options = {}) {
         if (!concept) fail(`汇总 ${scope}:${key} 包含当前词表外的标签：${label}`);
         return { id: concept.id, facet: concept.facet, label: concept.preferredLabel.zh };
     };
-    const conceptLink = concept => `[#${md(concept.label)}](/audio-research-portal/papers/?concept=${encodeURIComponent(concept.id)})`;
+    const configuredBasePath = String(require('../config.js').PUBLISH_CONFIG?.basePath || '/audio-research-portal')
+        .replace(/^\/+|\/+$/g, '');
+    const normalizedBasePath = configuredBasePath ? `/${configuredBasePath}` : '';
+    const conceptLink = concept => `[#${md(concept.label)}](${normalizedBasePath}/papers/?concept=${encodeURIComponent(concept.id)})`;
     const records = members.map(member => ({ registryVersion: tagCatalogIdentity(catalog),
         registrySha256: catalog.registrySha256, concepts: member.canonical.labels.map(selectedConcept) }));
     // 与会议汇总复用已有有界 Python 桥，一次投影整批，避免逐篇启动进程。

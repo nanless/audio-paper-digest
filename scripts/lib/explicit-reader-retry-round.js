@@ -220,6 +220,39 @@ function exhaustedInitialFullWithoutLocalDraft(payload, paper) {
                 } catch (__) { return false; }
             }
         }
+        const trailingCommaPosMatch = payload.issues
+            .map(issue => String(issue.message || '').match(
+                /^读者文章 JSON 无法解析: Expected double-quoted property name in JSON at position (\d+)/))
+            .find(Boolean);
+        const hasTrailingCommaIssue = Boolean(trailingCommaPosMatch) || payload.issues.some(issue =>
+            /^读者文章 JSON 无法解析: (?:Expected double-quoted property name|Unexpected token '?\]'?)/.test(issue.message || ''));
+        if (hasTrailingCommaIssue) {
+            if (trailingCommaPosMatch) {
+                const pos = Number(trailingCommaPosMatch[1]);
+                if (Number.isSafeInteger(pos) && pos > 0 && pos < payload.rawDraft.length
+                    && (payload.rawDraft[pos] === '}' || payload.rawDraft[pos] === ']')) {
+                    let commaPos = pos - 1;
+                    while (commaPos >= 0 && /\s/.test(payload.rawDraft[commaPos])) commaPos -= 1;
+                    if (commaPos >= 0 && payload.rawDraft[commaPos] === ',') {
+                        try {
+                            const value = JSON.parse(`${payload.rawDraft.slice(0, commaPos)}${payload.rawDraft.slice(commaPos + 1)}`);
+                            return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+                        } catch (__) { return false; }
+                    }
+                }
+                return false;
+            }
+            const candidates = [...trimmed.matchAll(/,(\s*[}\]])/g)];
+            if (candidates.length >= 1 && candidates.length <= 32) {
+                for (const match of candidates) {
+                    const commaPos = match.index;
+                    try {
+                        const value = JSON.parse(`${trimmed.slice(0, commaPos)}${trimmed.slice(commaPos + 1)}`);
+                        if (value && typeof value === 'object' && !Array.isArray(value)) return true;
+                    } catch (__) { /* try next candidate */ }
+                }
+            }
+        }
         return false;
     }
 }
@@ -292,7 +325,7 @@ function beginExplicitRound(directory, identity, recovered, paper) {
                 && old.attempts < (old.explicitReaderRetryRound?.maxResponses || 6)
                 && old.noProgress < 2 && old.validationFailureStreak < 2
                 && !exhaustedInitialFullWithoutLocalDraft(old, paper))) {
-            throw new Error('Reader 候选仍有合法尝试或并非经过校验的失败');
+            throw retryInputError('READER_RETRY_NOT_EXHAUSTED', 'Reader 候选仍有合法尝试或并非经过校验的失败');
         }
         const originalFile = path.join(directory, `${grant.originalIdentitySha256}.json`);
         const audits = recovered?.readerRecoveryRevisions || [];
@@ -671,4 +704,4 @@ function hasPreparedOrScopedRound(directory, identity) {
 
 module.exports = { hasPreparedOrScopedRound, isBaseRound, isLocalGrant, CONTRACT, LOCAL_REPAIR_CONTRACT, PARENT_RECOVERY_CONTRACT: parentRecovery.CONTRACT, withExplicitLocalRepairRound, assertGrant, withExplicitRound, beginExplicitRound,
     withPhysicalBudget, consumePhysicalRequest, validatePersistedRound, restoreExplicitRoundOriginalDraft,
-    sameRoundIdentityAfterPublicMigration };
+    sameRoundIdentityAfterPublicMigration, exhaustedInitialFullWithoutLocalDraft };

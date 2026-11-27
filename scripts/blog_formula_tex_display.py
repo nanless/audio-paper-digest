@@ -1098,13 +1098,13 @@ _READER_TEX_STYLE_NAMES = re.compile(
 
 
 def _reader_tex_cell_canonical(value):
-    text = unicodedata.normalize('NFKC', str(value or ''))
+    text = unicodedata.normalize('NFKC', '' if value is None else str(value))
     text = re.sub(r'[\u200b\u200c\u200d\u2060\ufeff\u2061\u2062]', '', text)
     return re.sub(r'\s+', '', text.replace('−', '-')).strip()
 
 
 def _reader_tex_plain(value):
-    output = str(value or '')
+    output = '' if value is None else str(value)
     if '\\' not in output and not re.search(r'[_^]\{', output) and '{,}' not in output:
         return output
     output = re.sub(r'\\[,;:!]', '', output)
@@ -1141,7 +1141,7 @@ def _reader_tex_align_tail(plain, canonical_prefix):
 
 
 def _fold_reader_tex_cell_duplicate(value):
-    text = str(value or '')
+    text = '' if value is None else str(value)
     # 可见文字后面又跟一段 `{}_{...}^{...}` 上下标副本时，只要副本里的字符
     # 全部已在可见部分出现，就丢弃副本（vv-MF∅CFGmSTFT{}_{\mathrm{mSTFT}}^{...}）。
     dual = re.fullmatch(r'(.*?)\{\}_\{(.+)\}\^\{(.+)\}', text, re.S)
@@ -1168,6 +1168,14 @@ def _fold_reader_tex_cell_duplicate(value):
         if len(canonical_prefix) == 1 and canonical_plain == canonical_prefix \
                 and suffix.startswith('\\'):
             return prefix
+        # 与 JS reader-source-display.js:187-229 保持完全一致的分支顺序：
+        # 先检查剥离开头装饰符后的实体前缀，再检查单字符符号+余下文字，最后检查紧邻词元副本。
+        stripped_prefix = re.sub(r'^[^0-9A-Za-z\u4e00-\u9fff]+', '', canonical_prefix)
+        if len(stripped_prefix) >= 2 and stripped_prefix != canonical_prefix \
+                and canonical_plain.startswith(stripped_prefix):
+            tail = _reader_tex_align_tail(plain, stripped_prefix)
+            if tail is not None and re.match(r'[\s(（\[,:：;；↑↓→←↔±×%°+\-]', tail):
+                return prefix + tail
         # 单字符符号前缀 + 副本继续给出余下文字（Δ\DeltaIC → ΔIC）。
         if len(canonical_prefix) == 1 and len(canonical_plain) > 1 \
                 and canonical_plain.startswith(canonical_prefix) \
@@ -1180,7 +1188,7 @@ def _fold_reader_tex_cell_duplicate(value):
         # 副本只重复「紧邻的那个词元」时也折叠：整格开头还有正文
         #（Aligned temporal granularity (†:f×8{}^{\dagger}\!:{f}\times 8）。
         # 纯文本还原会在符号与数字之间插入空格（‡:f× 4），比较时统一去空白。
-        squeeze = lambda value: re.sub(r'\s+', '', str(value or ''))
+        squeeze = lambda raw_value: re.sub(r'\s+', '', '' if raw_value is None else str(raw_value))
         trailing_match = re.search(r'[)）】\],.;；]+$', plain)
         trailing = trailing_match.group(0) if trailing_match else ''
         core = plain[:len(plain) - len(trailing)] if trailing else plain
@@ -1202,14 +1210,6 @@ def _fold_reader_tex_cell_duplicate(value):
                 before = head[:at] if at > 0 else ''
                 if not before or not re.search(r'[A-Za-z0-9\u4e00-\u9fff]$', before):
                     return prefix + trailing
-        # 前缀可能带「+ 」「· 「」这类装饰符号，TeX 副本只复制了实体部分；
-        # 去掉开头非字母数字后再比一次（n∼𝒰0,1n\sim\mathcal{U}_{0,1}）。
-        stripped_prefix = re.sub(r'^[^0-9A-Za-z\u4e00-\u9fff]+', '', canonical_prefix)
-        if len(stripped_prefix) >= 2 and stripped_prefix != canonical_prefix \
-                and canonical_plain.startswith(stripped_prefix):
-            tail = _reader_tex_align_tail(plain, stripped_prefix)
-            if tail is not None and re.match(r'[\s(（\[,:：;；↑↓→←↔±×%°+\-]', tail):
-                return prefix + tail
         if canonical_plain == canonical_prefix:
             return prefix
         if len(canonical_prefix) > len(canonical_plain) and canonical_prefix.endswith(canonical_plain):
@@ -1299,7 +1299,7 @@ def _collapse_parenthesized_signed_double_write(text):
         start, end = match.start(), match.end()
         if start > 0:
             prev = source[start - 1]
-            if unicodedata.category(prev)[0] in ('L', 'N') or prev in r'_^.\])}+−=*×÷-/' + '\x00':
+            if unicodedata.category(prev)[0] in ('L', 'N') or prev in '_^\\.])}+−=*×÷-/\x00':
                 return match.group(0)
         if end < len(source):
             nxt = source[end]
@@ -1316,18 +1316,18 @@ def _collapse_parenthesized_signed_double_write(text):
 
 
 def _strip_leading_empty_link_cell_prefix(value):
-    return _LEADING_EMPTY_LINK_CELL_PREFIX_RE.sub('', str(value or ''), count=1)
+    return _LEADING_EMPTY_LINK_CELL_PREFIX_RE.sub('', '' if value is None else str(value), count=1)
 
 
 def _strip_leading_booktabs_rule_cell_prefix(value):
-    text = str(value or '')
+    text = '' if value is None else str(value)
     if _STANDALONE_BOOKTABS_RULE_CELL_RE.match(text):
         return ''
     return _LEADING_BOOKTABS_RULE_CELL_PREFIX_RE.sub('', text, count=1)
 
 
 def _project_reader_cell_tex_display_body(value):
-    output = str(value or '')
+    output = '' if value is None else str(value)
     # LaTeXML 脚注残留：n/a11footnotemark: 1 → n/a（在任何提前返回之前处理）。
     output = re.sub(r'(\S*?)\s*11footnotemark:\s*\d+(?![\d.])', r'\1', output)
     output = re.sub(r'\s*\(\s*\)', '', output)
@@ -1428,7 +1428,7 @@ def _project_reader_cell_tex_display_body(value):
 
 
 def _project_reader_cell_tex_display(value):
-    output = str(value or '')
+    output = '' if value is None else str(value)
     output = re.sub(r'(\S*?)\s*11footnotemark:\s*\d+(?![\d.])', r'\1', output)
     output = re.sub(r'\s*\(\s*\)', '', output)
     if '\\anon[' in output:

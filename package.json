@@ -23,6 +23,8 @@
     "api:reader:refresh": "node scripts/workspace-role.js exec daily -- node scripts/refresh-api-reader.js",
     "recover": "node scripts/recover.js",
     "manifest:new": "node scripts/manifest-new.js",
+    "fact-feedback:new": "node scripts/workspace-role.js exec daily -- node scripts/fact-feedback-new.js",
+    "reader-retry:new": "node scripts/workspace-role.js exec daily -- node scripts/reader-retry-new.js",
     "table:check": "node scripts/table-check.js",
     "papers:compact": "node scripts/workspace-role.js exec daily -- node scripts/compact-papers-ledger.js",
     "podcast:generate": "node scripts/workspace-role.js exec daily -- node scripts/publish-daily-podcast.js",
@@ -99,12 +101,16 @@
     "doctor": "node scripts/doctor.js",
     "config:check": "node scripts/config-check.js",
     "docs:check": "node scripts/docs-consistency.js",
+    "scripts:index:check": "node scripts/generate-scripts-index.js --check",
     "validate:data": "node scripts/validate-data-files.js",
     "impact": "node scripts/impact.js",
     "verify": "node scripts/verify-project.js",
     "test": "node --test --test-concurrency=1 tests/*.test.js manual/tests/*.test.js",
     "test:default": "node --test --test-concurrency=1 tests/*.test.js",
-    "test:compat": "node --test --test-concurrency=1 manual/tests/*.test.js"
+    "test:compat": "node --test --test-concurrency=1 manual/tests/*.test.js",
+    "test:python": "bash scripts/python-runtime.sh -m unittest discover -s tests/python -p 'test_*.py' && bash scripts/python-runtime.sh -m unittest discover -s manual/tests/python -p 'test_*.py' && bash scripts/python-runtime.sh -m unittest discover -s tests -p 'reader_pdf_*_test.py'",
+    "test:client:macos": "VERIFY_PROJECT_DISABLE_FILE_LOGS=1 bash apps/macos/test.sh",
+    "test:client:android": "bash -euo pipefail -c 'for s in apps/android/Tests/*.test.py; do bash scripts/python-runtime.sh \"$s\"; done; node --test apps/android/AssetsChannel.test.mjs && (cd apps/android && ./gradlew :app:testDebugUnitTest :app:lintDebug --no-daemon)'"
   },
   "keywords": [
     "arxiv",

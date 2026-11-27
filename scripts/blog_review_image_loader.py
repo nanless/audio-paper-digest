@@ -14,6 +14,8 @@ if __name__ == '__main__':
     raise SystemExit('This pure helper is imported by the normal publisher, not a direct CLI.')
 
 import base64
+import contextlib
+import contextvars
 import hashlib
 import http.client
 import io
@@ -24,6 +26,7 @@ import re
 import socket
 import stat
 import sys
+import threading
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
@@ -34,6 +37,15 @@ _SHARED_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SHARED_SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SHARED_SCRIPTS_DIR)
 
+from pinned_http_transport import (  # noqa: E402
+    RETRYABLE_IMAGE_HTTP_STATUSES,
+    TransientHttpStatusError,
+    get_origin_gate,
+    is_origin_cooldown_exception,
+    jittered_exponential_backoff,
+    ordered_candidate_addresses,
+    parse_retry_after_seconds,
+)
 from project_env import get_required_fetch_proxy  # noqa: E402
 from public_network_policy import (  # noqa: E402
     PublicNetworkPolicyError,
@@ -45,6 +57,14 @@ from public_network_policy import (  # noqa: E402
     select_validated_public_ip,
 )
 from publish_common import PublishDataValidationError  # noqa: E402
+
+
+class TransientImageFetchError(TransientHttpStatusError):
+    """可重试的图片 HTTP 429/5xx 错误，允许带退避与源站冷却重试。"""
+
+    def __init__(self, status: int, retry_after: str | None = None):
+        super().__init__(status, retry_after, message=f'图片下载 HTTP {int(status)}')
+
 
 REVIEW_IMAGE_MIME_TYPES = {
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
@@ -58,6 +78,37 @@ _IMAGE_REPO_SUFFIX_MIME = {
     '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
     '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
 }
+# 限制并发 Playwright Chromium SVG 光栅化进程数，防止多页面/多图并发拉起过多无头浏览器。
+_SVG_RASTERIZER_SEMAPHORE = threading.BoundedSemaphore(2)
+_REVIEW_IMAGE_CACHE_LOCK = threading.Lock()
+_ACTIVE_REVIEW_IMAGE_CACHE: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    'review_image_url_cache', default=None,
+)
+
+
+@contextlib.contextmanager
+def review_image_cache_scope():
+    """为单次博客审查运行启用线程安全的已验证 URL 字节缓存；嵌套调用复用外层缓存，退出最外层后自动释放。"""
+    existing = _ACTIVE_REVIEW_IMAGE_CACHE.get()
+    if existing is not None:
+        yield existing
+        return
+    cache: dict = {}
+    token = _ACTIVE_REVIEW_IMAGE_CACHE.set(cache)
+    try:
+        yield cache
+    finally:
+        with _REVIEW_IMAGE_CACHE_LOCK:
+            cache.clear()
+        _ACTIVE_REVIEW_IMAGE_CACHE.reset(token)
+
+
+def clear_review_image_cache() -> None:
+    """显式清空当前审查运行的已验证图片 URL 字节缓存。"""
+    cache = _ACTIVE_REVIEW_IMAGE_CACHE.get()
+    if cache is not None:
+        with _REVIEW_IMAGE_CACHE_LOCK:
+            cache.clear()
 
 
 def _hook(hooks: Mapping | None, name: str, default=None):
@@ -311,6 +362,9 @@ def read_pinned_review_image(
                 'raw': b'',
                 'pinned_address': target_address,
             }
+        if status in RETRYABLE_IMAGE_HTTP_STATUSES:
+            retry_after = headers.get('Retry-After') if hasattr(headers, 'get') else None
+            raise TransientImageFetchError(status, retry_after)
         if status < 200 or status >= 300:
             raise err_cls(f'图片下载 HTTP {status}')
         media_type = str(headers.get('Content-Type') or '').split(';', 1)[0].strip().lower()
@@ -428,6 +482,14 @@ def download_review_image(
     recovery_sentinel = _hook(hooks, '_RASTER_RECOVERY_SOURCE_READ', _RASTER_RECOVERY_SOURCE_READ)
 
     proxy = proxy_fn()
+    is_recovery_read = _recovery_source_read is recovery_sentinel
+    active_cache = _ACTIVE_REVIEW_IMAGE_CACHE.get()
+    cache_key = (url, str(proxy or ''), is_recovery_read)
+    if active_cache is not None:
+        with _REVIEW_IMAGE_CACHE_LOCK:
+            cached_payload = active_cache.get(cache_key)
+        if cached_payload is not None:
+            return dict(cached_payload)
     proxy_addresses = resolve_proxy_fn(proxy)
     deadline_seconds = bounded_fn(
         'PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS',
@@ -440,24 +502,57 @@ def download_review_image(
             resolved_addresses = validate_url_fn(current)
             result = None
             transient_error = None
-            candidate_addresses = sorted(
-                resolved_addresses,
-                key=lambda value: (ipaddress.ip_address(value).version, value),
-            )
+            candidate_addresses = ordered_candidate_addresses(resolved_addresses)
+            origin_gate = get_origin_gate(current)
             for target_address in candidate_addresses:
                 for transport_attempt in range(4):
                     try:
-                        result = read_pinned_fn(
-                            current, resolved_addresses, proxy, proxy_addresses, deadline,
-                            target_address=target_address,
-                        )
+                        with origin_gate.slot(
+                            deadline=deadline,
+                            sleep_fn=time_mod.sleep,
+                            monotonic_fn=time_mod.monotonic,
+                        ):
+                            result = read_pinned_fn(
+                                current, resolved_addresses, proxy, proxy_addresses, deadline,
+                                target_address=target_address,
+                            )
                         break
                     except Exception as exc:
                         import urllib3
-                        if isinstance(exc, (OSError, http.client.HTTPException, urllib3.exceptions.HTTPError)):
+                        if isinstance(exc, (
+                            TransientImageFetchError,
+                            OSError,
+                            http.client.HTTPException,
+                            urllib3.exceptions.HTTPError,
+                        )):
                             transient_error = exc
-                            if transport_attempt < 3 and time_mod.monotonic() < deadline:
-                                time_mod.sleep(0.5 * (transport_attempt + 1))
+                            now_mono = time_mod.monotonic()
+                            retry_after_sec = None
+                            if isinstance(exc, TransientImageFetchError):
+                                origin_gate.record_transient_failure(
+                                    status=exc.status,
+                                    retry_after=exc.retry_after,
+                                    now_monotonic=now_mono,
+                                )
+                                if exc.retry_after:
+                                    retry_after_sec = parse_retry_after_seconds(exc.retry_after)
+                            elif is_origin_cooldown_exception(exc):
+                                origin_gate.record_transient_failure(
+                                    exc, now_monotonic=now_mono,
+                                )
+                            remaining_budget = deadline - time_mod.monotonic()
+                            if transport_attempt < 3 and remaining_budget > 0:
+                                max_sleep = max(0.0, remaining_budget - 0.01)
+                                backoff = jittered_exponential_backoff(
+                                    transport_attempt,
+                                    remaining_seconds=max_sleep,
+                                )
+                                sleep_seconds = min(
+                                    max(backoff, retry_after_sec or 0.0),
+                                    max_sleep,
+                                )
+                                if sleep_seconds > 0:
+                                    time_mod.sleep(sleep_seconds)
                                 continue
                             break
                         raise
@@ -476,21 +571,31 @@ def download_review_image(
             raw = result['raw']
             media_type = result['media_type']
             validate_sig_fn(media_type, raw)
-            if _recovery_source_read is recovery_sentinel:
+            if is_recovery_read:
                 if media_type != 'image/png':
                     raise err_cls('显式坏 PNG 恢复只接受原 PNG MIME。')
-                return {'media_type': media_type, 'raw': raw}
+                payload = {'media_type': media_type, 'raw': raw}
+                if active_cache is not None:
+                    with _REVIEW_IMAGE_CACHE_LOCK:
+                        active_cache[cache_key] = dict(payload)
+                return payload
             if media_type == 'image/svg+xml':
                 raw = rasterize_svg_fn(raw)
                 media_type = 'image/png'
             media_type, raw = prepare_raster_fn(media_type, raw)
-            return {
+            payload = {
                 'media_type': media_type,
                 'data': base64.b64encode(raw).decode('ascii'),
             }
+            if active_cache is not None:
+                with _REVIEW_IMAGE_CACHE_LOCK:
+                    active_cache[cache_key] = dict(payload)
+            return payload
         raise err_cls('图片重定向次数过多')
     except err_cls:
         raise
+    except TransientImageFetchError as exc:
+        raise err_cls(f'图片下载失败: HTTP {exc.status}') from exc
     except Exception as exc:
         try:
             import urllib3.exceptions as _urllib3_exc
@@ -699,64 +804,39 @@ def rasterize_svg_for_review(raw: bytes, *, hooks: Mapping | None = None) -> byt
         )
     try:
         from playwright.sync_api import sync_playwright
-        with sync_playwright() as playwright:
-            launch_options: dict = {'headless': True}
-            expected_executable = Path(playwright.chromium.executable_path)
-            if not expected_executable.is_file():
-                cache_roots = [
-                    Path.home() / 'Library' / 'Caches' / 'ms-playwright',
-                    Path.home() / '.cache' / 'ms-playwright',
-                ]
-                candidates = []
-                for cache_root in cache_roots:
-                    if cache_root.is_symlink() or not cache_root.is_dir():
-                        continue
-                    for pattern in (
-                        'chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell',
-                        'chromium_headless_shell-*/chrome-headless-shell-*/headless_shell',
-                    ):
-                        for candidate in cache_root.glob(pattern):
-                            resolved = candidate.resolve()
-                            try:
-                                resolved.relative_to(cache_root.resolve())
-                            except ValueError:
-                                continue
-                            if candidate.is_symlink() or not resolved.is_file() \
-                                    or not os.access(resolved, os.X_OK):
-                                continue
-                            candidates.append(resolved)
-                if candidates:
-                    launch_options['executable_path'] = str(sorted(candidates)[-1])
-            browser = playwright.chromium.launch(**launch_options)
-            try:
-                context = browser.new_context(
-                    viewport={'width': 1600, 'height': 1200},
-                    java_script_enabled=False,
-                    offline=True,
-                )
-                page = context.new_page()
-                page.route('**/*', lambda route: route.abort())
-                page.set_content(html, wait_until='load', timeout=30_000)
-                locator = page.locator('body > #pd-review-figure')
-                box = locator.bounding_box()
-                scale = 1
-                if box and box.get('width', 0) > 0 and box.get('height', 0) > 0:
-                    max_side = max(box['width'], box['height'])
-                    min_side = min(box['width'], box['height'])
-                    if max_side < 800:
-                        scale = min(
-                            3,
-                            max(1, int(1600 // box['width'])),
-                            max(1, int(1200 // box['height'])),
-                        )
-                    elif min_side < 320 and (max_side / min_side) >= 3.0:
-                        # 极窄长横幅架构图（如 1200x240）用 2x HiDPI 避免小字模糊。
-                        scale = 2
-                if scale > 1:
-                    context.close()
+        with _SVG_RASTERIZER_SEMAPHORE:
+            with sync_playwright() as playwright:
+                launch_options: dict = {'headless': True}
+                expected_executable = Path(playwright.chromium.executable_path)
+                if not expected_executable.is_file():
+                    cache_roots = [
+                        Path.home() / 'Library' / 'Caches' / 'ms-playwright',
+                        Path.home() / '.cache' / 'ms-playwright',
+                    ]
+                    candidates = []
+                    for cache_root in cache_roots:
+                        if cache_root.is_symlink() or not cache_root.is_dir():
+                            continue
+                        for pattern in (
+                            'chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell',
+                            'chromium_headless_shell-*/chrome-headless-shell-*/headless_shell',
+                        ):
+                            for candidate in cache_root.glob(pattern):
+                                resolved = candidate.resolve()
+                                try:
+                                    resolved.relative_to(cache_root.resolve())
+                                except ValueError:
+                                    continue
+                                if candidate.is_symlink() or not resolved.is_file() \
+                                        or not os.access(resolved, os.X_OK):
+                                    continue
+                                candidates.append(resolved)
+                    if candidates:
+                        launch_options['executable_path'] = str(sorted(candidates)[-1])
+                browser = playwright.chromium.launch(**launch_options)
+                try:
                     context = browser.new_context(
                         viewport={'width': 1600, 'height': 1200},
-                        device_scale_factor=scale,
                         java_script_enabled=False,
                         offline=True,
                     )
@@ -764,11 +844,37 @@ def rasterize_svg_for_review(raw: bytes, *, hooks: Mapping | None = None) -> byt
                     page.route('**/*', lambda route: route.abort())
                     page.set_content(html, wait_until='load', timeout=30_000)
                     locator = page.locator('body > #pd-review-figure')
-                png = locator.screenshot(
-                    type='png', animations='disabled', timeout=30_000,
-                )
-            finally:
-                browser.close()
+                    box = locator.bounding_box()
+                    scale = 1
+                    if box and box.get('width', 0) > 0 and box.get('height', 0) > 0:
+                        max_side = max(box['width'], box['height'])
+                        min_side = min(box['width'], box['height'])
+                        if max_side < 800:
+                            scale = min(
+                                3,
+                                max(1, int(1600 // box['width'])),
+                                max(1, int(1200 // box['height'])),
+                            )
+                        elif min_side < 320 and (max_side / min_side) >= 3.0:
+                            # 极窄长横幅架构图（如 1200x240）用 2x HiDPI 避免小字模糊。
+                            scale = 2
+                    if scale > 1:
+                        context.close()
+                        context = browser.new_context(
+                            viewport={'width': 1600, 'height': 1200},
+                            device_scale_factor=scale,
+                            java_script_enabled=False,
+                            offline=True,
+                        )
+                        page = context.new_page()
+                        page.route('**/*', lambda route: route.abort())
+                        page.set_content(html, wait_until='load', timeout=30_000)
+                        locator = page.locator('body > #pd-review-figure')
+                    png = locator.screenshot(
+                        type='png', animations='disabled', timeout=30_000,
+                    )
+                finally:
+                    browser.close()
     except Exception as exc:
         raise err_cls(f'SVG 安全栅格化失败: {exc}') from exc
     if not png or len(png) > max_bytes:

@@ -3,9 +3,9 @@
 本文件由 `node scripts/generate-scripts-index.js` 根据 `scripts/` 目录自动生成，列出全部受版本控制的 `.js` 与 `.py` 运行时文件。
 架构分工与常用入口见 [脚本指南](README.md)（[English](README.en.md)）；旧记录兼容与独立人工审查位于 `manual/scripts/`。
 
-总计：**475** 个运行时文件（顶层 Node 91 · 顶层 Python 97 · `lib/` 内部库 287）。
+总计：**478** 个运行时文件（顶层 Node 93 · 顶层 Python 98 · `lib/` 内部库 287）。
 
-## 顶层 Node 入口与共享模块（91）
+## 顶层 Node 入口与共享模块（93）
 
 | 文件 | 职责摘要 |
 |---|---|
@@ -41,6 +41,7 @@
 | `env-loader.js` | Node 流程入口或共享模块 |
 | `evaluate-keyword-prefilter.js` | Node 流程入口或共享模块 |
 | `export-review-failure-manifest.js` | 为两种必须手写、没有生成器的 JSON 清单导出只读骨架： |
+| `fact-feedback-new.js` | 根据当前日更分析结果与封存四来源生成经 validateFeedback 校验的受控事实反馈文件（0600 原子写入）。 |
 | `fetch-huggingface-papers.js` | Node 流程入口或共享模块 |
 | `fetch-papers.js` | Node 流程入口或共享模块 |
 | `full-fetch.js` | Node 流程入口或共享模块 |
@@ -79,6 +80,7 @@
 | `prepare-daily-fetch-witness-recovery.js` | Node 流程入口或共享模块 |
 | `publish-daily-podcast.js` | Node 流程入口或共享模块 |
 | `publish-finish.js` | push 成功后的收尾清单：提示日更不生图登记与最终核验；不调用图像 API、不自动登记豁免。 |
+| `reader-retry-new.js` | 为已耗尽的日更 Reader 失败候选生成经 assertGrant 校验的新轮重试清单（0600 原子写入）。 |
 | `reanalyze-selected.js` | Node 流程入口或共享模块 |
 | `reanalyze.js` | Node 流程入口或共享模块 |
 | `recover-conference-process-locks.js` | Node 流程入口或共享模块 |
@@ -101,7 +103,7 @@
 | `waive-post-publish-visuals.js` | 按用户持续要求，登记本次发布不生成图片。 |
 | `workspace-role.js` | Node 流程入口或共享模块 |
 
-## 顶层 Python 入口与共享模块（97）
+## 顶层 Python 入口与共享模块（98）
 
 | 文件 | 职责摘要 |
 |---|---|
@@ -162,6 +164,7 @@
 | `pdf_author_extract.py` | 从已封存论文 PDF 第 1 页的字体与上标几何结构中确定性提取作者与机构绑定。 |
 | `pdf_figure_table_extract.py` | Deterministic PyMuPDF figure-bbox and table extractor for sealed PDF sources. |
 | `pdf-layout-extract.py` | 只有 PDF 的论文来源共用的 PyMuPDF 抽取逻辑。 |
+| `pinned_http_transport.py` | Python 侧共享固定 IP HTTPS 传输原语：源站并发门禁、共享冷却、抖动指数退避与 Retry-After 解析。 |
 | `project_env.py` | 项目内环境变量加载器。 |
 | `prompt_evidence.py` | Read current templates or SHA-pinned retired Git evidence, without writes/network. |
 | `protocol_codec.py` | 识别当前和历史格式；不修改原对象，也不授予分析或发布资格。 |

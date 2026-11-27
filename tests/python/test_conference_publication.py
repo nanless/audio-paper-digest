@@ -737,6 +737,112 @@ class GitPublicationTest(unittest.TestCase):
         for name, data in original.items():
             self.assertEqual((directory / name).read_bytes(), data)
 
+    def test_can_replace_conference_target_accepts_current_and_legacy_researcher_sidecars(self):
+        paper_id = 'conference:icassp:2026:icassp-arnumber:1234567'
+        slug = 'conference-' + publisher.sha_bytes(paper_id.encode())[:24]
+        sidecar_dir = self.blog / 'static' / 'client' / 'papers' / 'icassp-2026' / slug
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        target = sidecar_dir / 'citation.json'
+        base_payload = {
+            'paperId': paper_id,
+            'sourceKind': 'conference',
+            'sourceSha256': 'a' * 64,
+        }
+        # 1) Current de-versioned researcher-sidecars contract
+        current_citation = {**publisher.protocols.record_header('researcher-sidecars', 'researcher-sidecars'), **base_payload}
+        target.write_text(json.dumps(current_citation), encoding='utf-8')
+        self.assertTrue(publisher.can_replace_conference_target(target, b'{}', 'icassp-2026', 'sidecar'))
+
+        # 2) Legacy researcher-sidecars-v1 contract
+        legacy_citation = {**publisher.protocols.historical_header('researcher-sidecars', 'source-bound-citation'), **base_payload}
+        target.write_text(json.dumps(legacy_citation), encoding='utf-8')
+        self.assertTrue(publisher.can_replace_conference_target(target, b'{}', 'icassp-2026', 'sidecar'))
+
+        # 3) Unknown contract MUST still be rejected
+        bad_citation = {'contract': 'unknown-sidecar-v9', 'schemaVersion': 9, **base_payload}
+        target.write_text(json.dumps(bad_citation), encoding='utf-8')
+        self.assertFalse(publisher.can_replace_conference_target(target, b'{}', 'icassp-2026', 'sidecar'))
+
+    def test_push_writes_push_commit_receipt_and_verify_recovers_after_origin_main_advances(self):
+        self.prepare_flow()
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(publisher, 'run_hugo', return_value=self.gate):
+            publisher.generate(self.cid, self.pid)
+            publisher.review(self.cid, self.pid)
+            # Simulate wait_for_pages_deploy timeout AFTER push_delta succeeds and locks are released
+            with mock.patch.object(publisher, 'wait_for_pages_deploy',
+                                   side_effect=publisher.ConferencePublicationError('等待 GitHub Pages 部署超时')):
+                with self.assertRaisesRegex(publisher.ConferencePublicationError, '部署超时'):
+                    publisher.push(self.cid, self.pid)
+
+        directory = publisher.publication_dir(self.cid, self.pid)
+        push_commit_file = directory / 'push-commit.json'
+        self.assertTrue(push_commit_file.exists(), 'push-commit.json must be written atomically inside repo locks')
+        self.assertFalse((directory / 'publish.json').exists())
+        push_commit = publisher.read_json(push_commit_file)
+
+        # Advance origin/main with an unrelated commit while unlocked!
+        self.publish_second_conference()
+        self.assertNotEqual(
+            publisher.remote_snapshot(self.blog)['remoteMain'],
+            push_commit['publicationCommit'],
+        )
+
+        # Both status and verify must cleanly verify ancestry + preserved blobs (zero wedge!)
+        with contextlib.redirect_stdout(io.StringIO()):
+            st = publisher.status(self.cid, self.pid)
+            self.assertEqual(st['layers']['remoteOid'], 'passed')
+            self.assertEqual(st['nextAction'], 'verify')
+            self.assertEqual(st['publicationCommit'], push_commit['publicationCommit'])
+
+            with mock.patch.object(publisher, 'verify_publication_urls', return_value=self.acceptance):
+                verified = publisher.verify(self.cid, self.pid)
+            self.assertTrue(verified['complete'])
+            self.assertEqual(verified['publicationCommit'], push_commit['publicationCommit'])
+            self.assertTrue((directory / 'publish.json').exists())
+
+    def test_validate_publication_tolerates_portal_repo_rename_identity(self):
+        old_url = 'https://github.com/nanless/audio-paper-digest-blog.git'
+        new_url = 'https://github.com/nanless/audio-research-portal.git'
+        old_id = publisher.sha_bytes(old_url.encode('utf-8'))
+        new_id = publisher.sha_bytes(new_url.encode('utf-8'))
+        wrong_id = publisher.sha_bytes(b'https://github.com/evil/other-repo.git')
+        fake_snap = {'remoteUrl': new_url, 'remoteIdentitySha256': new_id}
+        with mock.patch.object(publisher, 'remote_snapshot', return_value=fake_snap):
+            self.assertTrue(publisher.remote_identities_equivalent(new_id, old_id, repo=self.blog))
+            self.assertTrue(publisher.remote_identities_equivalent(old_id, new_id, repo=self.blog))
+            self.assertFalse(publisher.remote_identities_equivalent(wrong_id, old_id, repo=self.blog))
+
+    def test_online_verification_releases_shared_repo_locks_before_http_gets(self):
+        self.prepare_flow()
+        lock_depth = {'count': 0}
+        lock_depth_during_http = []
+        real_locks = publisher.shared_publication_repository_locks
+
+        @contextlib.contextmanager
+        def tracking_locks(*args, **kwargs):
+            lock_depth['count'] += 1
+            try:
+                with real_locks(*args, **kwargs):
+                    yield
+            finally:
+                lock_depth['count'] -= 1
+
+        def observe_http(*_args, **_kwargs):
+            lock_depth_during_http.append(lock_depth['count'])
+            return self.acceptance
+
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(publisher, 'run_hugo', return_value=self.gate):
+            publisher.generate(self.cid, self.pid)
+            publisher.review(self.cid, self.pid)
+            with mock.patch.object(publisher, 'shared_publication_repository_locks', side_effect=tracking_locks), \
+                    mock.patch.object(publisher, 'verify_publication_urls', side_effect=observe_http):
+                publisher.push(self.cid, self.pid, wait_deploy=False)
+                # Also test fresh_online_acceptance via verify on an already-published record
+                publisher.verify(self.cid, self.pid)
+        self.assertEqual(lock_depth_during_http, [0, 0])
+
 
 class HtmlGateTest(unittest.TestCase):
     def rendered(self, body, script=''):

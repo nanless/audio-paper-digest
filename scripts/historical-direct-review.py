@@ -4,6 +4,7 @@
 import argparse
 import concurrent.futures
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -11,6 +12,7 @@ import secrets
 import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from blog_entry_loader import load_publish_to_blog
@@ -198,7 +200,38 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
     return result
 
 
-def review_page(module, page, staged_repo, checkpoint_root, protocol):
+def _fn_accepts_kwarg(fn, name):
+    if not callable(fn):
+        return False
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _is_summary_page(staged_repo, page):
+    relative = str(page.get('path') or '')
+    paper_id = str(page.get('paperId') or '')
+    if paper_id.startswith('index:'):
+        return True
+    basename = Path(relative).name
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}\.md', basename):
+        return True
+    if re.fullmatch(r'conference-[a-z0-9-]+\.md', basename):
+        return True
+    try:
+        raw = (Path(staged_repo) / relative).read_bytes()
+        head = raw[:4096].decode('utf-8', errors='ignore')
+        if re.search(r'^paper_digest_page_type:\s*["\']?(?:index|conference)["\']?\s*$', head, re.MULTILINE):
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def review_page(module, page, staged_repo, checkpoint_root, protocol, *,
+                zero_warning_paper_images=None, passed_images_lock=None, is_summary=False):
     relative = page['path']
     staged_root = Path(staged_repo).resolve()
     target = (staged_root / relative).resolve()
@@ -240,6 +273,13 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
     page_paper = page.get('paper')
     publication_figure_contexts = page.get('publicationFigureContexts')
     verified_paper_images = page.get('verifiedPaperImages')
+    chunk_fn = getattr(module, '_llm_review_post_chunk', None)
+    img_fn = getattr(module, 'multimodal_review_images', None)
+    chunk_accepts_source_note = _fn_accepts_kwarg(chunk_fn, 'source_figure_note')
+    img_accepts_paper = _fn_accepts_kwarg(img_fn, 'paper')
+    img_accepts_pub_contexts = _fn_accepts_kwarg(img_fn, 'publication_figure_contexts')
+    img_accepts_passed_registry = _fn_accepts_kwarg(img_fn, 'passed_image_registry')
+    img_accepts_verified_images = _fn_accepts_kwarg(img_fn, 'verified_paper_images')
     chunks = module.split_review_content(content, chunk_limit)
     chunk_results = []
     for index, chunk in enumerate(chunks):
@@ -250,7 +290,7 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
                 'required': True,
                 'chunk_label': f'{index + 1}/{len(chunks)}',
             }
-            if isinstance(source_figure_note, str) and source_figure_note:
+            if chunk_accepts_source_note and isinstance(source_figure_note, str) and source_figure_note:
                 chunk_kwargs['source_figure_note'] = source_figure_note
             with publish_common.with_llm_usage_context({
                 'stage': 'publish.text',
@@ -278,22 +318,39 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
                                         for item in image_matches]})
     if image_matches:
         def run_image_review():
+            clean_passed_images = {}
             image_kwargs = {'required': True, 'image_concurrency': 2}
-            if isinstance(page_paper, dict):
+            if img_accepts_paper and isinstance(page_paper, dict):
                 image_kwargs['paper'] = page_paper
-            if isinstance(publication_figure_contexts, dict):
+            if img_accepts_pub_contexts and isinstance(publication_figure_contexts, dict):
                 image_kwargs['publication_figure_contexts'] = publication_figure_contexts
+            if not is_summary and img_accepts_passed_registry:
+                image_kwargs['passed_image_registry'] = clean_passed_images
+            known_verified = {}
+            if is_summary and zero_warning_paper_images is not None:
+                if passed_images_lock is not None:
+                    with passed_images_lock:
+                        known_verified.update(zero_warning_paper_images)
+                else:
+                    known_verified.update(zero_warning_paper_images)
             if isinstance(verified_paper_images, dict):
-                image_kwargs['verified_paper_images'] = verified_paper_images
+                known_verified.update(verified_paper_images)
+            if known_verified and img_accepts_verified_images:
+                image_kwargs['verified_paper_images'] = known_verified
             with publish_common.with_llm_usage_context({
                 'stage': 'publish.figure',
                 'paperId': page_identity,
                 'workflow': 'history',
             }):
-                return dict(zip(
-                    ('passed', 'issues'),
-                    module.multimodal_review_images(content, title, **image_kwargs),
-                ))
+                img_passed, img_issues = module.multimodal_review_images(content, title, **image_kwargs)
+            if (not is_summary and img_passed is True and not img_issues
+                    and clean_passed_images and zero_warning_paper_images is not None):
+                if passed_images_lock is not None:
+                    with passed_images_lock:
+                        zero_warning_paper_images.update(clean_passed_images)
+                else:
+                    zero_warning_paper_images.update(clean_passed_images)
+            return {'passed': img_passed, 'issues': img_issues}
 
         image_result = checkpoint(
             checkpoint_root, relative, 'images', 0, image_input_sha, protocol,
@@ -353,36 +410,58 @@ def validate_semantic_protocol(value):
 
 
 def review_pages_bounded(module, pages, staged, checkpoints, protocol, concurrency):
-    """别把整个历史一次排完，先让服务故障有机会暴露。"""
+    """别把整个历史一次排完，先让服务故障有机会暴露；单篇先审、汇总后审以复用零警告图片结果。"""
     results = []
-    remaining = iter(pages)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        def submit_next():
-            page = next(remaining, None)
-            if page is None:
-                return None
-            return executor.submit(review_page, module, page, staged, checkpoints, protocol)
+    paper_pages = [page for page in pages if not _is_summary_page(staged, page)]
+    summary_pages = [page for page in pages if _is_summary_page(staged, page)]
+    passed_images_lock = threading.Lock()
+    zero_warning_paper_images = {}
+    total_pages = len(pages)
 
-        pending = {future for _ in range(min(concurrency, len(pages)))
-                   if (future := submit_next()) is not None}
-        while pending:
-            done, pending = concurrent.futures.wait(pending,
-                return_when=concurrent.futures.FIRST_COMPLETED)
-            # 先看完所有已出结果再补新任务。遇到致命错误，
-            # 执行器关闭时只等已经开工的页面。
-            completed = [future.result() for future in done]
-            for result in completed:
-                results.append(result)
-                print(json.dumps({
-                    **current_header(PROGRESS_CONTRACT),
-                    'completed': len(results), 'total': len(pages),
-                    'path': result['path'],
-                    'outcome': 'passed' if result['passed'] else 'blocked',
-                }, ensure_ascii=False, separators=(',', ':')), file=sys.stderr, flush=True)
-            for _ in done:
-                future = submit_next()
-                if future is not None:
-                    pending.add(future)
+    def run_phase(phase_pages, *, is_summary):
+        if not phase_pages:
+            return
+        remaining = iter(phase_pages)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+            def submit_next():
+                page = next(remaining, None)
+                if page is None:
+                    return None
+                return executor.submit(
+                    review_page,
+                    module,
+                    page,
+                    staged,
+                    checkpoints,
+                    protocol,
+                    zero_warning_paper_images=zero_warning_paper_images,
+                    passed_images_lock=passed_images_lock,
+                    is_summary=is_summary,
+                )
+
+            pending = {future for _ in range(min(concurrency, len(phase_pages)))
+                       if (future := submit_next()) is not None}
+            while pending:
+                done, pending = concurrent.futures.wait(pending,
+                    return_when=concurrent.futures.FIRST_COMPLETED)
+                # 先看完所有已出结果再补新任务。遇到致命错误，
+                # 执行器关闭时只等已经开工的页面。
+                completed = [future.result() for future in done]
+                for result in completed:
+                    results.append(result)
+                    print(json.dumps({
+                        **current_header(PROGRESS_CONTRACT),
+                        'completed': len(results), 'total': total_pages,
+                        'path': result['path'],
+                        'outcome': 'passed' if result['passed'] else 'blocked',
+                    }, ensure_ascii=False, separators=(',', ':')), file=sys.stderr, flush=True)
+                for _ in done:
+                    future = submit_next()
+                    if future is not None:
+                        pending.add(future)
+
+    run_phase(paper_pages, is_summary=False)
+    run_phase(summary_pages, is_summary=True)
     return results
 
 

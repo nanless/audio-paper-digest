@@ -584,14 +584,67 @@ function assertAuthorityCurrent(loadedPlan, authorityOptions, dependencies = {})
     return current;
 }
 function generationDirectory(directory) { return path.join(directory, 'generation'); }
+function deriveGenerationReviewMetadata(record, bytes = null) {
+    const producers = Array.isArray(record?.producers) ? record.producers : [];
+    const stageProducer = producers.find(p => p?.kind === 'direct-page-staging' && typeof p.paperId === 'string' && p.paperId.trim());
+    const aggProducer = producers.find(p => p?.kind === 'direct-aggregate');
+    const paperId = (typeof record?.paperId === 'string' && record.paperId.trim())
+        ? record.paperId.trim()
+        : (stageProducer
+            ? stageProducer.paperId.trim()
+            : (aggProducer?.scope === 'daily' && /^\d{4}-\d{2}-\d{2}$/.test(String(aggProducer.key || ''))
+                ? `index:${aggProducer.key}`
+                : null));
+    let sourceFigureNote = typeof record?.sourceFigureNote === 'string' && record.sourceFigureNote.trim()
+        ? record.sourceFigureNote.trim()
+        : null;
+    const paper = record?.paper && typeof record.paper === 'object' && !Array.isArray(record.paper)
+        ? clone(record.paper)
+        : null;
+    const publicationFigureContexts = record?.publicationFigureContexts
+        && typeof record.publicationFigureContexts === 'object'
+        && !Array.isArray(record.publicationFigureContexts)
+        ? clone(record.publicationFigureContexts)
+        : null;
+    if (!sourceFigureNote && bytes && String(record?.path || '').endsWith('.md')) {
+        const text = Buffer.from(bytes).toString('utf8');
+        if (/!\[[^\]]*\]\([^)]+\)/.test(text)) {
+            const isConference = String(paperId || '').startsWith('conference:')
+                || /paper_digest_conference_structure:/.test(text);
+            sourceFigureNote = isConference
+                ? '来源图注说明：正文中的插图源自会议论文封存 PDF 页面或结构化附图，请结合原图实际内容与正文图注语义逐项核对，避免把 DOM 顺序号与印刷 Figure 编号混淆。'
+                : '来源图注说明：正文中的插图源自封存论文原图，请结合原图实际内容与正文图注语义核对，区分送审图片序号与论文印刷 Figure 编号。';
+        }
+    }
+    return {
+        ...(paperId ? { paperId } : {}),
+        ...(sourceFigureNote ? { sourceFigureNote } : {}),
+        ...(paper ? { paper } : {}),
+        ...(publicationFigureContexts ? { publicationFigureContexts } : {})
+    };
+}
 function generate({ outputRoot, publicationId, authorityOptions, blogRepo, remoteName = 'origin', apply = false } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, publicationId }); const authority = assertAuthorityCurrent(loaded, authorityOptions, dependencies);
     const state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '开始生成时的博客状态');
+    const sourceBytesReader = dependencies.sourceBytes || ((item, roots) => readRegular(artifactSourcePath(item, roots)).bytes);
     validatePublishedTagCatalogs(blogRepo, authority.artifacts,
-        artifact => (dependencies.sourceBytes || ((item, roots) => readRegular(artifactSourcePath(item, roots)).bytes))(artifact, authority.roots), dependencies);
+        artifact => sourceBytesReader(artifact, authority.roots), dependencies);
     if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('博客状态与发布计划的基线不同');
-    const files = loaded.plan.files.map(record => ({ path: record.path, operation: record.operation,
-        baselineSha256: record.baselineSha256, sha256: record.sha256 }));
+    const artifactByPath = new Map(authority.artifacts.map(item => [item.path, item]));
+    const files = loaded.plan.files.map(record => {
+        const artifact = artifactByPath.get(record.path);
+        let bytes = null;
+        if (artifact && record.path.endsWith('.md')) {
+            bytes = sourceBytesReader(artifact, authority.roots);
+        }
+        return {
+            path: record.path,
+            operation: record.operation,
+            baselineSha256: record.baselineSha256,
+            sha256: record.sha256,
+            ...deriveGenerationReviewMetadata(record, bytes)
+        };
+    });
     const originalIntentPath = path.join(generationDirectory(loaded.directory), 'intent.json');
     const { intentHeader, resultHeader } = preparedHeaders(originalIntentPath,
         GENERATION_INTENT_CONTRACT, GENERATION_CONTRACT, 'original-verified-generation', loaded.plan.schemaFingerprint === undefined);
@@ -609,9 +662,9 @@ function generate({ outputRoot, publicationId, authorityOptions, blogRepo, remot
     if (!fs.existsSync(intentPath)) writeExact(intentPath, prettyBytes(intent));
     else if (!readRegular(intentPath).bytes.equals(prettyBytes(intent))) fail('准备生成文件的记录已变化');
     for (const record of loaded.plan.files) {
-        const artifact = authority.artifacts.find(item => item.path === record.path);
+        const artifact = artifactByPath.get(record.path);
         if (!artifact) fail(`待生成文件缺少来源记录：${record.path}`);
-        const bytes = (dependencies.sourceBytes || ((item, roots) => readRegular(artifactSourcePath(item, roots)).bytes))(artifact, authority.roots);
+        const bytes = sourceBytesReader(artifact, authority.roots);
         if (sha256(bytes) !== record.sha256) fail(`待生成文件的来源内容已变化：${record.path}`);
         const target = inside(root, path.posix.join('bundle', record.path), '生成文件集合');
         if (!fs.existsSync(target)) writeExact(target, bytes);
@@ -629,12 +682,26 @@ function loadGeneration(loadedPlan) {
     const root = safeRoot(generationDirectory(loadedPlan.directory), '生成目录');
     const loaded = strictJsonFile(path.join(root, 'manifest.json'), '生成清单'); const value = loaded.value;
     const body = clone(value); delete body.generationSha256;
-    const expectedFiles = loadedPlan.plan.files.map(({ path, operation, baselineSha256, sha256 }) =>
-        ({ path, operation, baselineSha256, sha256 }));
+    const expectedFiles = loadedPlan.plan.files.map(({ path: filePath, operation, baselineSha256, sha256: fileSha }) =>
+        ({ path: filePath, operation, baselineSha256, sha256: fileSha }));
+    const allowedManifestFileKeys = new Set(['path', 'operation', 'baselineSha256', 'sha256',
+        'paperId', 'sourceFigureNote', 'paper', 'publicationFigureContexts']);
+    const actualCoreFiles = Array.isArray(value.files)
+        ? value.files.map(entry => {
+            const isPlainObj = v => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+            if (!isPlainObj(entry) || Object.keys(entry).some(key => !allowedManifestFileKeys.has(key))) return null;
+            if (entry.paperId !== undefined && (typeof entry.paperId !== 'string' || !entry.paperId.trim())) return null;
+            if (entry.sourceFigureNote !== undefined && (typeof entry.sourceFigureNote !== 'string' || !entry.sourceFigureNote.trim())) return null;
+            if (entry.paper !== undefined && !isPlainObj(entry.paper)) return null;
+            if (entry.publicationFigureContexts !== undefined && !isPlainObj(entry.publicationFigureContexts)) return null;
+            return { path: entry.path, operation: entry.operation, baselineSha256: entry.baselineSha256, sha256: entry.sha256 };
+        })
+        : null;
     if (!protocols.hasValidHeader(value, GENERATION_CONTRACT) || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.planFileSha256 !== loadedPlan.fileSha256
         || value.generationSha256 !== stableHash(body) || value.fileSetSha256 !== stableHash(value.files)
-        || !Array.isArray(value.files) || stableHash(value.files) !== stableHash(expectedFiles)
+        || !Array.isArray(value.files) || actualCoreFiles.some(entry => entry === null)
+        || stableHash(actualCoreFiles) !== stableHash(expectedFiles)
         || value.authorityProofSha256 !== loadedPlan.plan.authorityProofSha256
         || value.baseHead !== loadedPlan.plan.blogBaseline.head
         || value.remoteName !== loadedPlan.plan.blogBaseline.remoteName
@@ -966,7 +1033,16 @@ function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
     const request = { ...currentHeader(SEMANTIC_REQUEST),
         publicationId: loadedPlan.plan.publicationId, generationSha256: generation.manifest.generationSha256,
         reviewProtocolFingerprint: protocol, semanticProtocol: semanticReviewProtocol(), blogRepo: path.resolve(blogRepo),
-        bundleRoot: path.resolve(generation.root, 'bundle'), files: generation.manifest.files.map(item => ({ path: item.path, sha256: item.sha256 })) };
+        bundleRoot: path.resolve(generation.root, 'bundle'),
+        files: generation.manifest.files.map(item => ({
+            path: item.path,
+            sha256: item.sha256,
+            ...(typeof item.paperId === 'string' && item.paperId ? { paperId: item.paperId } : {}),
+            ...(typeof item.sourceFigureNote === 'string' && item.sourceFigureNote ? { sourceFigureNote: item.sourceFigureNote } : {}),
+            ...(item.paper && typeof item.paper === 'object' && !Array.isArray(item.paper) ? { paper: item.paper } : {}),
+            ...(item.publicationFigureContexts && typeof item.publicationFigureContexts === 'object' && !Array.isArray(item.publicationFigureContexts)
+                ? { publicationFigureContexts: item.publicationFigureContexts } : {})
+        })) };
     request.fileSetSha256 = stableHash(request.files);
     const requestPath = path.join(loadedPlan.directory, 'semantic-review-request.json');
     if (!fs.existsSync(requestPath)) writeExact(requestPath, prettyBytes(request));
@@ -1046,7 +1122,6 @@ function review({ outputRoot, publicationId, blogRepo, remoteName = 'origin', ap
             pageResults: semantic.receipt.results, pageResultSetSha256: semantic.receipt.resultSetSha256 },
         reviewedAt: dependencies.now?.() || new Date().toISOString() };
     if (!iso(body.reviewedAt)) fail('审查时间无效'); const receipt = seal(body, 'reviewSha256');
-    if (!apply) return { status: 'dry-run', receipt };
     if (fs.existsSync(filename)) {
         preserveOriginalRecord(filename, REVIEW_CONTRACT);
         atomicReplace(filename, prettyBytes(receipt));
@@ -1545,6 +1620,117 @@ function loadPublication(loadedPlan) {
         || !iso(value.remoteVerifiedAt) || value.publicationSha256 !== stableHash(body)) fail('历史发布凭证与生成、审查、激活或提交记录不一致');
     return { receipt: value, fileSha256: loaded.fileSha256 };
 }
+const PORTAL_RENAME_SLUGS = ['nanless/audio-paper-digest-blog', 'nanless/audio-research-portal'];
+
+function portalRenameUrlAliases(pushUrl) {
+    if (typeof pushUrl !== 'string' || !pushUrl) return [];
+    const lower = pushUrl.toLowerCase();
+    const aliases = [pushUrl];
+    for (let i = 0; i < PORTAL_RENAME_SLUGS.length; i += 1) {
+        const slug = PORTAL_RENAME_SLUGS[i];
+        const alt = PORTAL_RENAME_SLUGS[1 - i];
+        const idx = lower.indexOf(slug);
+        if (idx !== -1) {
+            aliases.push(pushUrl.slice(0, idx) + alt + pushUrl.slice(idx + slug.length));
+        }
+    }
+    return [...new Set(aliases)];
+}
+
+function liveRemoteIdentityMatches(live, expectedIdentity, remoteName) {
+    if (!live || typeof expectedIdentity !== 'string') return false;
+    if (live.remoteIdentitySha256 === expectedIdentity) return true;
+    const pushUrl = typeof live.pushUrl === 'string' ? live.pushUrl : null;
+    if (!pushUrl) return false;
+    const remote = live.remoteName || remoteName || 'origin';
+    return portalRenameUrlAliases(pushUrl).some(aliasUrl => stableHash({ remote, pushUrl: aliasUrl }) === expectedIdentity);
+}
+
+function readGitBlobsBatch(blogRepo, commitOid, filePaths) {
+    if (!filePaths.length) return new Map();
+    const input = filePaths.map(filePath => `${commitOid}:${filePath}\n`).join('');
+    const result = spawnSync('git', ['-C', blogRepo, 'cat-file', '--batch'], {
+        input,
+        encoding: null,
+        maxBuffer: 256 * 1024 * 1024,
+        timeout: 60000
+    });
+    if (result.error || result.status !== 0) {
+        fail(`无法通过 git cat-file --batch 核验提交 ${commitOid} 的文件字节`);
+    }
+    const buf = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout || '');
+    const out = new Map();
+    let offset = 0;
+    for (const filePath of filePaths) {
+        const nl = buf.indexOf(0x0a, offset);
+        if (nl === -1) fail(`git cat-file --batch 输出提前截断：${filePath}`);
+        const header = buf.subarray(offset, nl).toString('utf8');
+        offset = nl + 1;
+        if (header.endsWith(' missing')) {
+            out.set(filePath, null);
+            continue;
+        }
+        const parts = header.split(' ');
+        const type = parts[1];
+        const size = Number.parseInt(parts[2], 10);
+        if (type !== 'blob' || !Number.isInteger(size) || size < 0 || offset + size > buf.length) {
+            fail(`git cat-file --batch 返回非法对象头：${filePath}`);
+        }
+        out.set(filePath, buf.subarray(offset, offset + size));
+        offset += size;
+        if (buf[offset] === 0x0a) offset += 1;
+    }
+    return out;
+}
+
+function verifyLiveRemoteAncestryAndBlobs({ blogRepo, remoteName, live, publication, plan, dependencies = {} }) {
+    let resolvedLive = live;
+    if (!liveRemoteIdentityMatches(resolvedLive, publication.remoteIdentitySha256, remoteName)) {
+        // 若调用方注入的 liveRemote 未带 pushUrl，且 blogRepo 存在，尝试补读一次 pushUrl 做改名别名核对。
+        if (!resolvedLive?.pushUrl && blogRepo && fs.existsSync(blogRepo)) {
+            try {
+                const pushUrl = runGit(blogRepo, ['remote', 'get-url', '--push', remoteName]).stdout;
+                resolvedLive = { ...resolvedLive, pushUrl };
+            } catch (_) {}
+        }
+        if (!liveRemoteIdentityMatches(resolvedLive, publication.remoteIdentitySha256, remoteName)) {
+            fail('当前远端状态已不同于凭证记录');
+        }
+    }
+    const liveOid = String(resolvedLive?.remoteOid || '').toLowerCase();
+    const pubOid = String(publication.remoteVerifiedOid || '').toLowerCase();
+    if (liveOid === pubOid) return;
+    if (!GIT_OID_RE.test(liveOid) || !GIT_OID_RE.test(pubOid)) {
+        fail('当前远端状态已不同于凭证记录');
+    }
+    const isAncestor = typeof dependencies.isAncestor === 'function'
+        ? dependencies.isAncestor(blogRepo, pubOid, liveOid)
+        : (spawnSync('git', ['-C', blogRepo, 'merge-base', '--is-ancestor', pubOid, liveOid], {
+            encoding: 'utf8',
+            timeout: 30000
+        }).status === 0);
+    if (!isAncestor) {
+        fail('当前远端状态已不同于凭证记录');
+    }
+    const files = Array.isArray(plan?.files) ? plan.files : [];
+    if (typeof dependencies.gitBlob === 'function') {
+        for (const file of files) {
+            const bytes = dependencies.gitBlob(blogRepo, liveOid, file.path);
+            if (!bytes || sha256(bytes) !== file.sha256) {
+                fail(`当前远端状态已修改已发布目标文件：${file.path}`);
+            }
+        }
+        return;
+    }
+    const blobs = readGitBlobsBatch(blogRepo, liveOid, files.map(file => file.path));
+    for (const file of files) {
+        const bytes = blobs.get(file.path);
+        if (!bytes || sha256(bytes) !== file.sha256) {
+            fail(`当前远端状态已修改已发布目标文件：${file.path}`);
+        }
+    }
+}
+
 function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null, remoteName = 'origin' } = {}, dependencies = {}) {
     let loaded;
     try { loaded = loadPlan({ outputRoot, publicationId }); }
@@ -1565,9 +1751,16 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
             const live = (dependencies.liveRemote || ((repo, remote) => {
                 const url = runGit(repo, ['remote', 'get-url', '--push', remote]).stdout;
                 const line = runGit(repo, ['ls-remote', '--exit-code', remote, 'refs/heads/main']).stdout;
-                return { remoteIdentitySha256: stableHash({ remote, pushUrl: url }), remoteOid: line.split(/\s+/)[0].toLowerCase() };
+                return { remoteName: remote, pushUrl: url, remoteIdentitySha256: stableHash({ remote, pushUrl: url }), remoteOid: line.split(/\s+/)[0].toLowerCase() };
             }))(blogRepo, remoteName);
-            if (live.remoteIdentitySha256 !== publication.remoteIdentitySha256 || live.remoteOid !== publication.remoteVerifiedOid) fail('当前远端状态已不同于凭证记录');
+            verifyLiveRemoteAncestryAndBlobs({
+                blogRepo,
+                remoteName,
+                live,
+                publication,
+                plan: loaded.plan,
+                dependencies
+            });
         }
         return { sha256: publication.publicationSha256, remoteVerifiedOid: publication.remoteVerifiedOid, liveVerified: Boolean(liveRemote) };
     }, 'publication-incomplete');
@@ -1609,10 +1802,15 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
     const terminalVisualException = ['excluded', 'waived'].includes(visual.status);
     if (!terminalVisualException) blockers.push({ code: 'visual-disposition-incomplete' });
     if (publicationOk && !liveRemote) blockers.push({ code: 'live-remote-not-verified' });
-    const complete = publicationOk && liveRemote && terminalVisualException;
+    if (publicationOk && !pagesDeployVerified) blockers.push({ code: 'pages-deploy-not-verified' });
+    if (publicationOk && !webVerified) blockers.push({ code: 'web-not-verified' });
+    const onlineVerified = pagesDeployVerified && webVerified;
+    const complete = publicationOk && liveRemote && terminalVisualException && onlineVerified;
     const phase = complete ? `published-with-visual-${visual.status}` : !generationOk ? 'planned'
         : !reviewOk ? 'generated' : !activationOk ? 'reviewed' : !publicationOk ? 'activated'
-            : !liveRemote ? 'awaiting-live-remote-verification' : 'awaiting-visual-disposition';
+            : !liveRemote ? 'awaiting-live-remote-verification'
+                : !terminalVisualException ? 'awaiting-visual-disposition'
+                    : 'awaiting-online-verification';
     return { ...protocols.recordHeader(STATUS_CONTRACT, STATUS_CONTRACT), publicationId, phase, complete,
         pagesDeployVerified, webVerified, planSha256: loaded.plan.planSha256,
         publicationPlanSha256: loaded.plan.planSha256, rewritePlanSha256: loaded.plan.authorityProof.plan.planSha256,

@@ -655,6 +655,29 @@ function buildDigestRunReport(targetDate, options = {}) {
     // 那时该说的是「推送到了远端，但凭证别处没过」，而不是「没推到远端」。
     const remoteOidVerified = Boolean(review?.publicationCommit)
         && review?.remoteVerifiedOid === review?.publicationCommit;
+    const currentDir = Config.CURRENT_DIR;
+    const generationManifestPath = path.join(currentDir, `blog-generation-manifest-${targetDate}.json`);
+    let generationManifestSha256 = null;
+    try {
+        if (fs.existsSync(generationManifestPath)) {
+            generationManifestSha256 = require('node:crypto')
+                .createHash('sha256')
+                .update(fs.readFileSync(generationManifestPath))
+                .digest('hex');
+        }
+    } catch (_) {
+        generationManifestSha256 = null;
+    }
+    const receiptCommit = remoteOidVerified ? review.publicationCommit : null;
+    const webVerificationResult = reviewComplete && remoteOidVerified
+        ? require('./publish-finish.js').readVerifiedDailyWebArtifact({
+            date: targetDate,
+            currentDir,
+            manifestSha: generationManifestSha256,
+            receiptCommit
+        })
+        : { verified: false, reason: 'publication_unverified' };
+    const webVerification = webVerificationResult.verified ? webVerificationResult : null;
     const visualsWaived = reviewComplete
         && postPublishVisualWaiverIsValid(
             visualWaiver, targetDate, publication, visualPath, coverPath
@@ -873,6 +896,7 @@ function buildDigestRunReport(targetDate, options = {}) {
             publicationCommit: review?.publicationCommit || null,
             remoteVerifiedOid: review?.remoteVerifiedOid || null
         },
+        ...(webVerification ? { webVerification } : {}),
         visuals: {
             gateComplete: visualGateComplete,
             // 核验未通过时，不能沿用清单自报的 complete。
@@ -939,7 +963,11 @@ function formatDigestRunSummary(report) {
         `  博客 ${state(report.blog.complete)} | 严格审查记录=${displayBoolean(report.blog.strictReview)} | 发布提交与已存远端提交一致=${displayBoolean(report.blog.remoteOidVerified === true)} | 发布凭证有效=${displayBoolean(report.blog.publicationVerified)}`,
         `  长图 ${report.visuals.waived ? '已豁免' : state(report.visuals.gateComplete === true)} | 状态=${displayStatus(printedVisualStatus(report.visuals))} | 清单记录的完成数=${report.visuals.complete ?? '?'}/${report.visuals.total ?? '?'} | 待处理数=${report.visuals.pending ?? '?'} | 失败数=${report.visuals.failed ?? '?'}`,
         `  封面 ${report.cover.waived ? '已豁免' : state(report.cover.complete)} | 状态=${displayStatus(printedCoverStatus(report.cover))}`,
-        '  本报告未核验网站上线：还须检查对应提交的构建和部署结果，以及全部目标网页的正式地址、HTTP 200 和标题；报告显示“完成”不表示网站已上线。'
+        ...(report.webVerification?.verified === true
+            ? [
+                `  网站上线已核验：${report.webVerification.ok ?? '?'}/${report.webVerification.checked ?? '?'} 页 HTTP 200（deploy=${report.webVerification.deployConclusion || 'success'}，oid=${String(report.webVerification.deployOid || report.webVerification.publicationOid || '').slice(0, 12)}）`
+            ]
+            : ['  本报告未核验网站上线：还须检查对应提交的构建和部署结果，以及全部目标网页的正式地址、HTTP 200 和标题；报告显示“完成”不表示网站已上线。'])
     ];
     for (const error of report.errors) lines.push(`  错误: ${error}`);
     // 文件存在却读不出来时要说出来。文件不存在不会进这个数组，也不该报成错误。
@@ -1119,7 +1147,7 @@ function formatMarkdownDailyReport(targetDate, report, summaryText) {
         ? '已豁免'
         : ({ complete: '完成', incomplete: '未完成', waived: '已豁免', missing: '缺失', pending: '待处理', failed: '失败', partial_failed: '部分失败' }[
             report.visuals?.status
-        ] || (report.postPublishVisualWaiver ? '已豁免' : '未知'));
+        ] || '未知');
     return [
         `# 音频研究日报 ${targetDate}`,
         '',

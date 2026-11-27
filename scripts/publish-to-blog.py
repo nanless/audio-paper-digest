@@ -43,7 +43,7 @@ import concurrent.futures
 import threading
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, time, signal
 from collections import Counter, OrderedDict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote, unquote, urlparse, urlsplit
@@ -804,13 +804,38 @@ def blog_publication_lock(date_str, *, timeout_seconds=30, republish_id=None):
 
 
 def get_blog_review_concurrency():
-    """独立论文页与单独汇总页文字/图片单元共用并发数；论文页内图片仍串行。"""
+    """独立论文页与汇总页分块共用并发数（默认 16，范围 1–32）；论文页内图片默认 2 路，并受进程级 LLM 并发上限约束。"""
     raw = os.environ.get("PD_BLOG_REVIEW_CONCURRENCY", "16").strip()
     try:
         value = int(raw)
     except ValueError:
         value = 16
     return min(32, max(1, value))
+
+
+def get_blog_review_llm_max_inflight():
+    """进程级发布审查 LLM 并发请求上限（默认 12，范围 1–32），防止页面并发 × 图片并发叠乘打爆单账号。"""
+    raw = os.environ.get("PD_BLOG_REVIEW_LLM_MAX_INFLIGHT", "12").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 12
+    return min(32, max(1, value))
+
+
+_BLOG_REVIEW_LLM_SEMAPHORE_LOCK = threading.Lock()
+_BLOG_REVIEW_LLM_SEMAPHORE_LIMIT = None
+_BLOG_REVIEW_LLM_SEMAPHORE = None
+
+
+def _blog_review_llm_inflight_semaphore():
+    global _BLOG_REVIEW_LLM_SEMAPHORE_LIMIT, _BLOG_REVIEW_LLM_SEMAPHORE
+    limit = get_blog_review_llm_max_inflight()
+    with _BLOG_REVIEW_LLM_SEMAPHORE_LOCK:
+        if _BLOG_REVIEW_LLM_SEMAPHORE is None or _BLOG_REVIEW_LLM_SEMAPHORE_LIMIT != limit:
+            _BLOG_REVIEW_LLM_SEMAPHORE = threading.BoundedSemaphore(limit)
+            _BLOG_REVIEW_LLM_SEMAPHORE_LIMIT = limit
+        return _BLOG_REVIEW_LLM_SEMAPHORE
 
 
 def current_image_review_mode():
@@ -866,18 +891,19 @@ def call_llm_api(
         except (TypeError, ValueError):
             timeout = 120
         timeout = min(600, max(30, timeout))
-    return call_publish_llm_api(
-        prompt,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        required=required,
-        context=context,
-        timeout=timeout,
-        max_retries=max_retries,
-        images=images,
-        use_secondary=use_secondary,
-        structured_output=structured_output,
-    )
+    with _blog_review_llm_inflight_semaphore():
+        return call_publish_llm_api(
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            required=required,
+            context=context,
+            timeout=timeout,
+            max_retries=max_retries,
+            images=images,
+            use_secondary=use_secondary,
+            structured_output=structured_output,
+        )
 
 
 @contextmanager
@@ -1820,8 +1846,9 @@ def llm_review_post(content, title="", required=False, *, paper=None):
 
     def review_chunk(index):
         label = f'{index + 1}/{len(chunks)}'
+        review_view = _strip_machine_frontmatter_for_llm_review(chunks[index])
         passed, issues = review_cached_unit(
-            'text', {'content': chunks[index], 'title': title, 'chunkLabel': label, 'required': required,
+            'text', {'content': review_view, 'title': title, 'chunkLabel': label, 'required': required,
                      'sourceFigureNote': source_figure_note},
             lambda: interpret_readonly_text_unit(chunks[index], _llm_review_post_chunk(
                 chunks[index], title, required=required, chunk_label=label,
@@ -2291,77 +2318,83 @@ def multimodal_review_images(
     load_issues = []
     reused_clean_count = 0
     context_regions = _review_image_context_regions(content, image_matches)
-    for match_index, match in enumerate(image_matches):
-        alt, url = match['alt'], match['url']
-        publication_note, expected_pixel_sha = _publication_figure_review_context_note(url, publication_figure_contexts)
-        region = context_regions[match_index]
-        nearby = content[region['start']:region['end']].strip()
-        shared = region.get('sharedPreviousExplanationLead')
-        if shared:
-            # 原段字节完整保留；只在审查输入注明双重归属，不改正文或免审此段。
-            previous = shared['previousImageIndex'] + 1
-            transition = content[shared['start']:shared['end']].strip()
-            own_context = content[shared['end']:region['end']].strip()
-            own_header = (
-                '【以下为本张图片自己的看图路径、原图、图注和解释】'
-                if '看图路径' in own_context
-                else '【以下为本张图片自己的原图、图注和解释】'
-            )
-            nearby = (
-                f'【相邻过渡段：正文前一图片 {previous} 的解释，同时用作本图导读】\n'
-                f'{transition}\n'
-                '【以上段落可能同时提及两图；明确指向前图的特征不能仅因本张像素未出现而判错。'
-                '如确实无条件声称本张图存在某特征，仍应核对并报告真实冲突；归属不明时说明局限，不猜测。】\n'
-                f'{own_header}\n'
-                f'{own_context}'
-            )
-        try:
-            image_payload = (_load_review_image(url, expected_source_sha256=expected_pixel_sha)
-                             if expected_pixel_sha else _load_review_image(url))
-        except PublishDataValidationError as exc:
-            if expected_pixel_sha:
-                # A bound asset/source failure is not a content rejection, and
-                # cannot fall back to different old remote pixels.
-                raise
-            # 使用最新来源生成的生产页可能有意不保存配图资产，
-            # 但外层 Markdown 链接里仍保留确切的官方 HTTPS 地址。
-            # 这时应审查这个有绑定关系的来源，
-            # 而不是把本地配图文件缺失当成内容失败；
-            # _load_review_image 仍检查所有 HTTPS 来源是否符合访问规则。
-            image_payload = None
-            fallback_url = _linked_image_source_url(content, match['end'])
-            if fallback_url:
-                try:
-                    image_payload = _load_review_image(fallback_url)
-                except PublishDataValidationError:
-                    image_payload = None
+    image_loader_mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    cache_cm = (
+        image_loader_mod.review_image_cache_scope()
+        if hasattr(image_loader_mod, 'review_image_cache_scope') else nullcontext()
+    )
+    with cache_cm:
+        for match_index, match in enumerate(image_matches):
+            alt, url = match['alt'], match['url']
+            publication_note, expected_pixel_sha = _publication_figure_review_context_note(url, publication_figure_contexts)
+            region = context_regions[match_index]
+            nearby = content[region['start']:region['end']].strip()
+            shared = region.get('sharedPreviousExplanationLead')
+            if shared:
+                # 原段字节完整保留；只在审查输入注明双重归属，不改正文或免审此段。
+                previous = shared['previousImageIndex'] + 1
+                transition = content[shared['start']:shared['end']].strip()
+                own_context = content[shared['end']:region['end']].strip()
+                own_header = (
+                    '【以下为本张图片自己的看图路径、原图、图注和解释】'
+                    if '看图路径' in own_context
+                    else '【以下为本张图片自己的原图、图注和解释】'
+                )
+                nearby = (
+                    f'【相邻过渡段：正文前一图片 {previous} 的解释，同时用作本图导读】\n'
+                    f'{transition}\n'
+                    '【以上段落可能同时提及两图；明确指向前图的特征不能仅因本张像素未出现而判错。'
+                    '如确实无条件声称本张图存在某特征，仍应核对并报告真实冲突；归属不明时说明局限，不猜测。】\n'
+                    f'{own_header}\n'
+                    f'{own_context}'
+                )
+            try:
+                image_payload = (_load_review_image(url, expected_source_sha256=expected_pixel_sha)
+                                 if expected_pixel_sha else _load_review_image(url))
+            except PublishDataValidationError as exc:
+                if expected_pixel_sha:
+                    # A bound asset/source failure is not a content rejection, and
+                    # cannot fall back to different old remote pixels.
+                    raise
+                # 使用最新来源生成的生产页可能有意不保存配图资产，
+                # 但外层 Markdown 链接里仍保留确切的官方 HTTPS 地址。
+                # 这时应审查这个有绑定关系的来源，
+                # 而不是把本地配图文件缺失当成内容失败；
+                # _load_review_image 仍检查所有 HTTPS 来源是否符合访问规则。
+                image_payload = None
+                fallback_url = _linked_image_source_url(content, match['end'])
+                if fallback_url and fallback_url != url:
+                    try:
+                        image_payload = _load_review_image(fallback_url)
+                    except PublishDataValidationError:
+                        image_payload = None
+                    if image_payload is not None:
+                        url = fallback_url
                 if image_payload is not None:
-                    url = fallback_url
-            if image_payload is not None:
-                pass
-            else:
-                load_issues.append({
-                    'severity': 'error' if required else 'warning',
-                    'description': f'无法加载图片内容用于多模态 review: {exc}',
-                })
+                    pass
+                else:
+                    load_issues.append({
+                        'severity': 'error' if required else 'warning',
+                        'description': f'无法加载图片内容用于多模态 review: {exc}',
+                    })
+                    continue
+            payload_data_b64 = image_payload.get('data') if isinstance(image_payload, dict) else None
+            payload_sha = hashlib.sha256(str(payload_data_b64 or '').encode('ascii')).hexdigest() if payload_data_b64 else ''
+            cover_expectation = _digest_cover_review_expectation(url)
+            # 仅对“已在同批独立论文页以 0-warning 纯净通过且像素哈希严格一致”的非封面预览图免除汇总页重复 LLM 调用；
+            # 只要论文页出现过任何 warning/error（如 2611.31735 图 3）或像素不一致，仍强制重新审查。
+            if (verified_paper_images and not cover_expectation and payload_sha
+                    and verified_paper_images.get(url) == payload_sha):
+                reused_clean_count += 1
                 continue
-        payload_data_b64 = image_payload.get('data') if isinstance(image_payload, dict) else None
-        payload_sha = hashlib.sha256(str(payload_data_b64 or '').encode('ascii')).hexdigest() if payload_data_b64 else ''
-        cover_expectation = _digest_cover_review_expectation(url)
-        # 仅对“已在同批独立论文页以 0-warning 纯净通过且像素哈希严格一致”的非封面预览图免除汇总页重复 LLM 调用；
-        # 只要论文页出现过任何 warning/error（如 2611.31735 图 3）或像素不一致，仍强制重新审查。
-        if (verified_paper_images and not cover_expectation and payload_sha
-                and verified_paper_images.get(url) == payload_sha):
-            reused_clean_count += 1
-            continue
-        # 让提示词元数据和附带的字节走同一条追加路径。
-        # 下载失败不能让后面的图片顶到前面图片的上下文上。
-        image_payloads.append(image_payload)
-        image_meta.append((url, payload_sha, bool(cover_expectation)))
-        img_summary.append(
-            f"- 图片 {len(img_summary) + 1} | alt: `{alt}` | 来源: {url[:500]}\n"
-            f"{publication_note}  正文附近上下文：\n```markdown\n{nearby}\n```{cover_expectation}"
-        )
+            # 让提示词元数据和附带的字节走同一条追加路径。
+            # 下载失败不能让后面的图片顶到前面图片的上下文上。
+            image_payloads.append(image_payload)
+            image_meta.append((url, payload_sha, bool(cover_expectation)))
+            img_summary.append(
+                f"- 图片 {len(img_summary) + 1} | alt: `{alt}` | 来源: {url[:500]}\n"
+                f"{publication_note}  正文附近上下文：\n```markdown\n{nearby}\n```{cover_expectation}"
+            )
 
     if load_issues and required:
         return False, load_issues
@@ -2372,11 +2405,10 @@ def multimodal_review_images(
 
     summary_blob = chr(10).join(img_summary)
     source_note_block = f"{source_figure_note}\n\n" if source_figure_note else ""
-    is_cover_review = any(is_cover for _, _, is_cover in image_meta) or ('汇总' in str(title or ''))
-    cover_rule_line = (
-        "4. 若图片是汇总封面，必须逐字段核对所附确定性上下文；标题、热门方向、计数、TOP 10 顺序、完整英文标题、分数和任务标签不一致均为 error。\n5. "
-        if is_cover_review
-        else "4. "
+    cover_guidance_suffix = (
+        "\n\n【汇总封面专项核查规则】\n"
+        "- 本张图片为汇总封面，`chartType` 请填写“汇总封面”。\n"
+        "- 必须逐字段核对所附确定性上下文；标题、热门方向、计数、TOP 10 顺序、完整英文标题、分数和任务标签不一致均为 error。"
     )
     prompt = f"""你是一个学术博客图片质量与视觉事实验证专家。
 
@@ -2386,7 +2418,7 @@ def multimodal_review_images(
 
 【步骤一：先结构化读图（填入输出 JSON 的 `figureObservation`）】
 在做出任何通过/失败判断之前，先客观记录本图实际像素内容：
-1. `chartType`：图类型（架构/流程图、折线图、柱状图、热力图/语谱图、波形图{'、汇总封面' if is_cover_review else ''}等）。
+1. `chartType`：图类型（架构/流程图、折线图、柱状图、热力图/语谱图、波形图等）。
 2. `axesAndScale`：逐一读取横纵坐标轴名称、刻度区间与单位，**明确核查是否为对数轴（log scale）、双纵轴（dual y-axis）或截断坐标轴**（非坐标系图写“无坐标轴”）。
 3. `legendSeries`：判断曲线或柱形的归属前，逐一核对本图图例的线型、标记、颜色与坐标分组（含实心/斜纹填充含义），不要凭颜色印象互换图例，也不要混淆大小写标签或相邻分组。
 4. `errorBarsAndUnits`：核查误差棒/置信区间；柱顶数字可能是样本计数，纵轴可能是比例，须按本图实际图注、坐标轴和分组语义区分，不能直接把计数当百分比或假定所有组共用分母。
@@ -2397,7 +2429,7 @@ def multimodal_review_images(
 2. 图片是否包含明显错误、空白、损坏、无关内容或隐私信息。
 3. 图片 alt 文本是否为空、重复或与实际像素冲突。
    概括性的任务/方法示意图标题不限定画面必须是流程图或模块框图；输入与输出的实例、频谱、音符或其他结果可用于展示任务。不能仅因 alt 没有枚举坐标轴、图层或全部细节而判为语义冲突；须指出 alt 或局部正文中的具体断言与本张像素如何矛盾，证据不足时只说明局限。该规则不豁免真实的图例、坐标、方向、数值、来源或科学内容冲突（包含对数轴、双纵轴与截断轴误读）。
-{cover_rule_line}作者文字或图注也可能与实际像素相互矛盾，不能无条件将文字当作图像事实。若局部正文无条件复述与本图冲突的结论，仍须报告具体冲突；若正文已明确归属并如实披露这种矛盾及不确定性，不要要求它强行统一成一个确定结论。
+4. 作者文字或图注也可能与实际像素相互矛盾，不能无条件将文字当作图像事实。若局部正文无条件复述与本图冲突的结论，仍须报告具体冲突；若正文已明确归属并如实披露这种矛盾及不确定性，不要要求它强行统一成一个确定结论。
 
 【格式说明与禁止误报项】
 - 博客正文中的实际图片格式为标准 Markdown：`![alt](url)`；自链接 `[![alt](url)](url)` 合法，不报普通链接格式错误
@@ -2487,6 +2519,8 @@ def multimodal_review_images(
     def review_one_image(unit):
         index, (summary, image_payload) = unit
         batch_prompt = prompt.replace(summary_blob, summary, 1)
+        if image_meta[index - 1][2]:
+            batch_prompt = batch_prompt + cover_guidance_suffix
         return review_cached_unit(
             'image', {'prompt': batch_prompt, 'images': [image_payload], 'required': required},
             lambda: review_image_batch(
@@ -12126,250 +12160,311 @@ def review_all_posts(
     index_run_id = next(iter(fresh_run_ids)) if len(fresh_run_ids) == 1 else None
 
     zero_warning_paper_images = {}
+    if selected_paths is not None and paper_slugs:
+        # 续审（Pass 2+）时，未进入本轮 selected_paths 的论文页已按内容 SHA 复用通过记录；
+        # 从持久化的 blog-review-passes / 逐页 checkpoint 中回填它们的 0-warning 纯净图片哈希，
+        # 让汇总页跳过这些已在前轮验证且像素未变的预览图。
+        try:
+            pass_records = _collect_review_pass_records(date_str)
+            page_checkpoints = _collect_review_page_checkpoints(date_str)
+            repo_root = Path(BLOG_REPO).expanduser().resolve()
+            for _arxiv_id, slug in paper_slugs.items():
+                paper_path = Path(os.path.realpath(os.path.join(content_dir, f"{date_str}-{slug}.md")))
+                if str(paper_path) in selected_paths or not paper_path.is_file():
+                    continue
+                try:
+                    _resolved_path, relative = _manifest_record(paper_path, repo_root)
+                except PublishDataValidationError:
+                    continue
+                artifact = page_artifacts.get(str(paper_path))
+                current_sha = (
+                    artifact.get('sha256')
+                    if isinstance(artifact, dict) and re.fullmatch(r'[0-9a-f]{64}', str(artifact.get('sha256') or ''))
+                    else _sha256_file(paper_path)
+                )
+                cached_rec = pass_records.get((relative, current_sha))
+                if cached_rec is None:
+                    cp = page_checkpoints.get(relative)
+                    if (
+                        isinstance(cp, dict)
+                        and cp.get('sha256') == current_sha
+                        and cp.get('passed') is True
+                        and cp.get('reviewedSha256') == current_sha
+                    ):
+                        cached_rec = cp
+                if not isinstance(cached_rec, dict):
+                    continue
+                if require_llm and cached_rec.get('imageReviewMode') != 'multimodal':
+                    continue
+                clean_map = cached_rec.get('cleanPassedImages')
+                if isinstance(clean_map, dict):
+                    for img_url, img_sha in clean_map.items():
+                        if (
+                            isinstance(img_url, str)
+                            and img_url
+                            and isinstance(img_sha, str)
+                            and re.fullmatch(r'[0-9a-f]{64}', img_sha)
+                        ):
+                            zero_warning_paper_images[img_url] = img_sha
+        except (PublishDataValidationError, OSError, ValueError):
+            pass
 
-    # 先并行审查论文独立页面，收集 0-warning 纯净通过的论文配图像素哈希，
-    # 供随后的汇总页审查在像素严格一致时跳过重复多模态调用（有 warning 的图仍重审）。
-    paper_args = [
-        (arxiv_id, slug, date_str,
-         title_map.get(normalize_publish_arxiv_id(arxiv_id), slug), require_llm,
-         content_dir, paper_map.get(normalize_publish_arxiv_id(arxiv_id)),
-         artifact_for(os.path.join(content_dir, f"{date_str}-{slug}.md")))
-        for arxiv_id, slug in paper_slugs.items()
-        if selected_paths is None or os.path.realpath(
-            os.path.join(content_dir, f"{date_str}-{slug}.md")
-        ) in selected_paths
-    ]
+    image_loader_mod = globals().get('blog_review_image_loader') or _resolve_publisher_submodule('blog_review_image_loader')
+    review_cache_cm = (
+        image_loader_mod.review_image_cache_scope()
+        if hasattr(image_loader_mod, 'review_image_cache_scope') else nullcontext()
+    )
 
-    if paper_args:
-        review_concurrency = min(get_blog_review_concurrency(), len(paper_args))
-        print(f"\n  🔀 论文页 review 并发度: {review_concurrency}")
-        def record_paper_result(args, future):
-            nonlocal total_fixed, total_blocking_issues, total_advisory_issues
-            try:
-                result = future.result()
-            except Exception as exc:
-                (_arxiv_id, slug, _date, title, _required,
-                 worker_content_dir, _paper, _page_artifact) = args
-                path = os.path.realpath(os.path.join(
-                    worker_content_dir, f'{date_str}-{slug}.md',
-                ))
+    with review_cache_cm:
+        # 先并行审查论文独立页面，收集 0-warning 纯净通过的论文配图像素哈希，
+        # 供随后的汇总页审查在像素严格一致时跳过重复多模态调用（有 warning 的图仍重审）。
+        paper_args = [
+            (arxiv_id, slug, date_str,
+             title_map.get(normalize_publish_arxiv_id(arxiv_id), slug), require_llm,
+             content_dir, paper_map.get(normalize_publish_arxiv_id(arxiv_id)),
+             artifact_for(os.path.join(content_dir, f"{date_str}-{slug}.md")))
+            for arxiv_id, slug in paper_slugs.items()
+            if selected_paths is None or os.path.realpath(
+                os.path.join(content_dir, f"{date_str}-{slug}.md")
+            ) in selected_paths
+        ]
+
+        if paper_args:
+            review_concurrency = min(get_blog_review_concurrency(), len(paper_args))
+            print(f"\n  🔀 论文页 review 并发度: {review_concurrency}")
+            def record_paper_result(args, future):
+                nonlocal total_fixed, total_blocking_issues, total_advisory_issues
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    (_arxiv_id, slug, _date, title, _required,
+                     worker_content_dir, _paper, _page_artifact) = args
+                    path = os.path.realpath(os.path.join(
+                        worker_content_dir, f'{date_str}-{slug}.md',
+                    ))
+                    print(f"\n  📄 {title[:50]}...")
+                    if getattr(exc, 'scope', None) == 'run':
+                        print(f'    ⛔ 页面审查遇到运行级错误（{type(exc).__name__}），已停止派发新任务')
+                    else:
+                        print(f'    ⚠️ review worker 基础设施异常（{type(exc).__name__}），保留为可重试失败')
+                    total_blocking_issues += 1
+                    file_results[path] = {
+                        'passed': False,
+                        'blockingCount': 1,
+                        'completed': True,
+                        'failureKind': 'transient',
+                        'issues': [{'severity': 'error', 'type': 'infrastructure',
+                                    'description': f'review worker failed ({type(exc).__name__})'}],
+                    }
+                    if result_callback:
+                        result_callback(path, file_results[path])
+                    return
+                if result is None:
+                    return
+                (
+                    path, title, fixed_count, blocking_count, advisory_count,
+                    lines, failure_kind, reviewed_sha256,
+                ) = result[:8]
+                clean_passed_images = (
+                    dict(result[9]) if len(result) > 9 and isinstance(result[9], dict) else {}
+                )
+                if blocking_count == 0 and clean_passed_images:
+                    zero_warning_paper_images.update(clean_passed_images)
                 print(f"\n  📄 {title[:50]}...")
-                if getattr(exc, 'scope', None) == 'run':
-                    print(f'    ⛔ 页面审查遇到运行级错误（{type(exc).__name__}），已停止派发新任务')
-                else:
-                    print(f'    ⚠️ review worker 基础设施异常（{type(exc).__name__}），保留为可重试失败')
+                for line in lines:
+                    print(line)
+                total_fixed += fixed_count
+                total_blocking_issues += blocking_count
+                total_advisory_issues += advisory_count
+                entry = {
+                    'passed': blocking_count == 0,
+                    'blockingCount': blocking_count,
+                    'completed': True,
+                    'failureKind': failure_kind,
+                    'reviewedSha256': reviewed_sha256,
+                    'imageReviewMode': current_image_review_mode(),
+                    'issues': result[8] if len(result) > 8 else [],
+                }
+                if blocking_count == 0 and clean_passed_images:
+                    entry['cleanPassedImages'] = clean_passed_images
+                file_results[path] = entry
+                if result_callback:
+                    result_callback(path, file_results[path])
+            run_bounded_llm_tasks(paper_args, _review_single_paper, review_concurrency,
+                                  on_result=record_paper_result)
+        elif selected_paths is not None:
+            print("\n  ℹ️ 本轮没有需要复审的论文页")
+
+        # Review 汇总页面（串行，只有 1 个，使用固定亲和键 index:<date_str>）
+        index_file = os.path.join(content_dir, f"{date_str}.md")
+        if os.path.exists(index_file) and (
+            selected_paths is None or os.path.realpath(index_file) in selected_paths
+        ):
+            print("\n  📋 汇总页面:")
+            index_key = os.path.realpath(index_file)
+            index_artifact = artifact_for(index_key)
+            if (
+                not isinstance(index_artifact, dict)
+                or index_artifact.get('path') != index_key
+                or index_artifact.get('sha256') != _sha256_file(index_file)
+            ):
+                raise PublishDataValidationError('汇总页 page artifact 缺失或已失效')
+            content = index_artifact['content']
+            # 1. 代码检查。与论文页相同，最终 review 不得修改已生成字节。
+            fixed, issues = review_and_fix_post(
+                index_file, dry_run=True, source_content=content,
+            )
+            if fixed:
+                print("    ⛔ 页面仍需修复；最终审查只读取页面，请回到生成阶段修复后再审查。")
+            remaining_code_issues = issues
+            total_blocking_issues += len(remaining_code_issues)
+            for issue in issues:
+                print(f"    ⚠️  代码层: {issue}")
+
+            # 2. LLM 文本审查
+            if fixed and not remaining_code_issues:
+                remaining_code_issues = ['最终字节需要确定性修复']
                 total_blocking_issues += 1
-                file_results[path] = {
+            if remaining_code_issues:
+                result = {
+                    'passed': False, 'completed': True, 'failureKind': 'content',
+                    'blockingCount': len(remaining_code_issues),
+                    'reviewedSha256': index_artifact['sha256'],
+                    'issues': [{'severity': 'error', 'type': 'deterministic', 'description': str(issue)}
+                               for issue in remaining_code_issues],
+                }
+                file_results[index_key] = result
+                if result_callback:
+                    result_callback(index_key, result)
+                if return_details:
+                    return total_fixed, total_blocking_issues, file_results
+                return total_fixed, total_blocking_issues
+            try:
+                with review_unit_cache(date_str, index_file, required=require_llm, paper_id=f'index:{date_str}', run_id=index_run_id):
+                    llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页", required=require_llm)
+            except PublishLLMUnavailable as exc:
+                print(f"    ⚠️ 汇总页文本审查不可用（{type(exc).__name__}），保留为可重试失败: {exc}")
+                total_blocking_issues += 1
+                result = {
                     'passed': False,
                     'blockingCount': 1,
                     'completed': True,
                     'failureKind': 'transient',
+                    'reviewedSha256': index_artifact['sha256'],
                     'issues': [{'severity': 'error', 'type': 'infrastructure',
-                                'description': f'review worker failed ({type(exc).__name__})'}],
+                                'description': f'汇总页文本审查不可用 ({type(exc).__name__}): {exc}'}],
                 }
+                file_results[index_key] = result
                 if result_callback:
-                    result_callback(path, file_results[path])
-                return
-            if result is None:
-                return
-            (
-                path, title, fixed_count, blocking_count, advisory_count,
-                lines, failure_kind, reviewed_sha256,
-            ) = result[:8]
-            if len(result) > 9 and isinstance(result[9], dict):
-                zero_warning_paper_images.update(result[9])
-            print(f"\n  📄 {title[:50]}...")
-            for line in lines:
-                print(line)
-            total_fixed += fixed_count
-            total_blocking_issues += blocking_count
-            total_advisory_issues += advisory_count
-            file_results[path] = {
-                'passed': blocking_count == 0,
-                'blockingCount': blocking_count,
-                'completed': True,
-                'failureKind': failure_kind,
-                'reviewedSha256': reviewed_sha256,
-                'imageReviewMode': current_image_review_mode(),
-                'issues': result[8] if len(result) > 8 else [],
-            }
-            if result_callback:
-                result_callback(path, file_results[path])
-        run_bounded_llm_tasks(paper_args, _review_single_paper, review_concurrency,
-                              on_result=record_paper_result)
-    elif selected_paths is not None:
-        print("\n  ℹ️ 本轮没有需要复审的论文页")
-
-    # Review 汇总页面（串行，只有 1 个，使用固定亲和键 index:<date_str>）
-    index_file = os.path.join(content_dir, f"{date_str}.md")
-    if os.path.exists(index_file) and (
-        selected_paths is None or os.path.realpath(index_file) in selected_paths
-    ):
-        print("\n  📋 汇总页面:")
-        index_key = os.path.realpath(index_file)
-        index_artifact = artifact_for(index_key)
-        if (
-            not isinstance(index_artifact, dict)
-            or index_artifact.get('path') != index_key
-            or index_artifact.get('sha256') != _sha256_file(index_file)
-        ):
-            raise PublishDataValidationError('汇总页 page artifact 缺失或已失效')
-        content = index_artifact['content']
-        # 1. 代码检查。与论文页相同，最终 review 不得修改已生成字节。
-        fixed, issues = review_and_fix_post(
-            index_file, dry_run=True, source_content=content,
-        )
-        if fixed:
-            print("    ⛔ 页面仍需修复；最终审查只读取页面，请回到生成阶段修复后再审查。")
-        remaining_code_issues = issues
-        total_blocking_issues += len(remaining_code_issues)
-        for issue in issues:
-            print(f"    ⚠️  代码层: {issue}")
-
-        # 2. LLM 文本审查
-        if fixed and not remaining_code_issues:
-            remaining_code_issues = ['最终字节需要确定性修复']
-            total_blocking_issues += 1
-        if remaining_code_issues:
-            result = {
-                'passed': False, 'completed': True, 'failureKind': 'content',
-                'blockingCount': len(remaining_code_issues),
-                'reviewedSha256': index_artifact['sha256'],
-                'issues': [{'severity': 'error', 'type': 'deterministic', 'description': str(issue)}
-                           for issue in remaining_code_issues],
-            }
-            file_results[index_key] = result
-            if result_callback:
-                result_callback(index_key, result)
-            if return_details:
-                return total_fixed, total_blocking_issues, file_results
-            return total_fixed, total_blocking_issues
-        try:
-            with review_unit_cache(date_str, index_file, required=require_llm, paper_id=f'index:{date_str}', run_id=index_run_id):
-                llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, "汇总页", required=require_llm)
-        except PublishLLMUnavailable as exc:
-            print(f"    ⚠️ 汇总页文本审查不可用（{type(exc).__name__}），保留为可重试失败: {exc}")
-            total_blocking_issues += 1
-            result = {
-                'passed': False,
-                'blockingCount': 1,
-                'completed': True,
-                'failureKind': 'transient',
-                'reviewedSha256': index_artifact['sha256'],
-                'issues': [{'severity': 'error', 'type': 'infrastructure',
-                            'description': f'汇总页文本审查不可用 ({type(exc).__name__}): {exc}'}],
-            }
-            file_results[index_key] = result
-            if result_callback:
-                result_callback(index_key, result)
-            if getattr(exc, 'scope', None) == 'run':
-                raise
-            if return_details:
-                return total_fixed, total_blocking_issues, file_results
-            return total_fixed, total_blocking_issues
-        if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
-            llm_issues = list(llm_issues or []) + [{
-                'severity': 'error',
-                'description': '汇总页文本审查明确返回未通过，但没有给出阻断原因；本次审查按失败处理。',
-            }]
-        if llm_issues:
-            for issue in llm_issues:
-                sev = issue.get('severity', 'warning')
-                desc = issue.get('description', '')
-                print(f"    模型文本审查 ({sev}): {desc}")
-        if llm_fixed_content != content:
-            readonly_issue = {
-                'severity': 'error',
-                'description': '模型建议修改最终页面；审查阶段不能写回文件，请回到生成阶段修复后重新审查。',
-            }
-            llm_issues = list(llm_issues or []) + [readonly_issue]
-            print(f"    模型文本审查 (error): {readonly_issue['description']}")
-        llm_blocking = count_blocking_review_issues(llm_issues)
-        total_blocking_issues += llm_blocking
-        total_advisory_issues += len(llm_issues) - llm_blocking
-
-        # 汇总页同样可能包含论文图片，必须经过与独立论文页一致的多模态审查；
-        # 已在同批独立论文页以 0-warning 纯净通过且像素一致的预览图可复用免重审。
-        try:
-            with review_unit_cache(date_str, index_file, required=require_llm, paper_id=f'index:{date_str}', run_id=index_run_id):
-                index_img_kwargs = {
-                    'required': require_llm,
-                    # 汇总页的图片单元仍沿用 1–5 的上限：论文页已按
-                    # PD_BLOG_REVIEW_CONCURRENCY 并行，再叠加一层大并发会直接撞限流。
-                    'image_concurrency': min(5, get_blog_review_concurrency()),
+                    result_callback(index_key, result)
+                if getattr(exc, 'scope', None) == 'run':
+                    raise
+                if return_details:
+                    return total_fixed, total_blocking_issues, file_results
+                return total_fixed, total_blocking_issues
+            if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
+                llm_issues = list(llm_issues or []) + [{
+                    'severity': 'error',
+                    'description': '汇总页文本审查明确返回未通过，但没有给出阻断原因；本次审查按失败处理。',
+                }]
+            if llm_issues:
+                for issue in llm_issues:
+                    sev = issue.get('severity', 'warning')
+                    desc = issue.get('description', '')
+                    print(f"    模型文本审查 ({sev}): {desc}")
+            if llm_fixed_content != content:
+                readonly_issue = {
+                    'severity': 'error',
+                    'description': '模型建议修改最终页面；审查阶段不能写回文件，请回到生成阶段修复后重新审查。',
                 }
-                if zero_warning_paper_images and 'verified_paper_images' in inspect.signature(multimodal_review_images).parameters:
-                    index_img_kwargs['verified_paper_images'] = zero_warning_paper_images
-                _img_passed, img_issues = multimodal_review_images(
-                    content, '汇总页', **index_img_kwargs,
-                )
-        except PublishLLMUnavailable as exc:
-            print(f"    ⚠️ 汇总页图片审查不可用（{type(exc).__name__}），保留为可重试失败: {exc}")
-            total_blocking_issues += 1
-            combined_issues = list(llm_issues or []) + [{
-                'severity': 'error', 'type': 'infrastructure',
-                'description': f'汇总页图片审查不可用 ({type(exc).__name__}): {exc}',
-            }]
-            result = {
-                'passed': False,
-                'blockingCount': count_blocking_review_issues(combined_issues) or 1,
-                'completed': True,
-                'failureKind': 'transient',
-                'reviewedSha256': index_artifact['sha256'],
-                'issues': combined_issues,
-            }
-            file_results[index_key] = result
-            if result_callback:
-                result_callback(index_key, result)
-            if getattr(exc, 'scope', None) == 'run':
-                raise
-            if return_details:
-                return total_fixed, total_blocking_issues, file_results
-            return total_fixed, total_blocking_issues
-        if _img_passed is False and count_blocking_review_issues(img_issues) == 0:
-            img_issues = list(img_issues or []) + [{
-                'severity': 'error',
-                'description': '汇总页图片审查明确返回未通过，但没有给出阻断原因；本次审查按失败处理。',
-            }]
-        if img_issues:
-            img_blocking = count_blocking_review_issues(img_issues)
-            total_blocking_issues += img_blocking
-            total_advisory_issues += len(img_issues) - img_blocking
-            for issue in img_issues:
-                sev = issue.get('severity', 'warning')
-                desc = issue.get('description', '')
-                print(f"    🖼️ 多模态 ({sev}): {desc}")
+                llm_issues = list(llm_issues or []) + [readonly_issue]
+                print(f"    模型文本审查 (error): {readonly_issue['description']}")
+            llm_blocking = count_blocking_review_issues(llm_issues)
+            total_blocking_issues += llm_blocking
+            total_advisory_issues += len(llm_issues) - llm_blocking
 
-        if not remaining_code_issues and count_blocking_review_issues(llm_issues) == 0 and count_blocking_review_issues(img_issues) == 0:
-            advisory = len(llm_issues) + len(img_issues)
-            if advisory:
-                print(f"    ✅ 无阻断问题（保留 {advisory} 个 warning/info）")
-            else:
-                print(f"    ✅ 通过 review")
-        index_reviewed_sha256 = _sha256_file(index_file)
-        if index_reviewed_sha256 != index_artifact['sha256']:
-            raise PublishDataValidationError('汇总页在只读审查期间发生变化。')
-        file_results[os.path.realpath(index_file)] = {
-            'passed': (
-                not remaining_code_issues
-                and count_blocking_review_issues(llm_issues) == 0
-                and count_blocking_review_issues(img_issues) == 0
-            ),
-            'blockingCount': (
-                len(remaining_code_issues)
-                + count_blocking_review_issues(llm_issues)
-                + count_blocking_review_issues(img_issues)
-            ),
-            'completed': True,
-            'failureKind': classify_review_failure(
-                list(remaining_code_issues) + list(llm_issues) + list(img_issues)
-            ),
-            'reviewedSha256': index_reviewed_sha256,
-            'imageReviewMode': current_image_review_mode(),
-            'issues': list(llm_issues) + list(img_issues),
-        }
-        if result_callback:
-            result_callback(os.path.realpath(index_file), file_results[os.path.realpath(index_file)])
+            # 汇总页同样可能包含论文图片，必须经过与独立论文页一致的多模态审查；
+            # 已在同批独立论文页以 0-warning 纯净通过且像素一致的预览图可复用免重审。
+            try:
+                with review_unit_cache(date_str, index_file, required=require_llm, paper_id=f'index:{date_str}', run_id=index_run_id):
+                    index_img_kwargs = {
+                        'required': require_llm,
+                        # 汇总页的图片单元仍沿用 1–5 的上限：论文页已按
+                        # PD_BLOG_REVIEW_CONCURRENCY 并行，再叠加一层大并发会直接撞限流。
+                        'image_concurrency': min(5, get_blog_review_concurrency()),
+                    }
+                    if zero_warning_paper_images and 'verified_paper_images' in inspect.signature(multimodal_review_images).parameters:
+                        index_img_kwargs['verified_paper_images'] = zero_warning_paper_images
+                    _img_passed, img_issues = multimodal_review_images(
+                        content, '汇总页', **index_img_kwargs,
+                    )
+            except PublishLLMUnavailable as exc:
+                print(f"    ⚠️ 汇总页图片审查不可用（{type(exc).__name__}），保留为可重试失败: {exc}")
+                total_blocking_issues += 1
+                combined_issues = list(llm_issues or []) + [{
+                    'severity': 'error', 'type': 'infrastructure',
+                    'description': f'汇总页图片审查不可用 ({type(exc).__name__}): {exc}',
+                }]
+                result = {
+                    'passed': False,
+                    'blockingCount': count_blocking_review_issues(combined_issues) or 1,
+                    'completed': True,
+                    'failureKind': 'transient',
+                    'reviewedSha256': index_artifact['sha256'],
+                    'issues': combined_issues,
+                }
+                file_results[index_key] = result
+                if result_callback:
+                    result_callback(index_key, result)
+                if getattr(exc, 'scope', None) == 'run':
+                    raise
+                if return_details:
+                    return total_fixed, total_blocking_issues, file_results
+                return total_fixed, total_blocking_issues
+            if _img_passed is False and count_blocking_review_issues(img_issues) == 0:
+                img_issues = list(img_issues or []) + [{
+                    'severity': 'error',
+                    'description': '汇总页图片审查明确返回未通过，但没有给出阻断原因；本次审查按失败处理。',
+                }]
+            if img_issues:
+                img_blocking = count_blocking_review_issues(img_issues)
+                total_blocking_issues += img_blocking
+                total_advisory_issues += len(img_issues) - img_blocking
+                for issue in img_issues:
+                    sev = issue.get('severity', 'warning')
+                    desc = issue.get('description', '')
+                    print(f"    🖼️ 多模态 ({sev}): {desc}")
+
+            if not remaining_code_issues and count_blocking_review_issues(llm_issues) == 0 and count_blocking_review_issues(img_issues) == 0:
+                advisory = len(llm_issues) + len(img_issues)
+                if advisory:
+                    print(f"    ✅ 无阻断问题（保留 {advisory} 个 warning/info）")
+                else:
+                    print(f"    ✅ 通过 review")
+            index_reviewed_sha256 = _sha256_file(index_file)
+            if index_reviewed_sha256 != index_artifact['sha256']:
+                raise PublishDataValidationError('汇总页在只读审查期间发生变化。')
+            file_results[os.path.realpath(index_file)] = {
+                'passed': (
+                    not remaining_code_issues
+                    and count_blocking_review_issues(llm_issues) == 0
+                    and count_blocking_review_issues(img_issues) == 0
+                ),
+                'blockingCount': (
+                    len(remaining_code_issues)
+                    + count_blocking_review_issues(llm_issues)
+                    + count_blocking_review_issues(img_issues)
+                ),
+                'completed': True,
+                'failureKind': classify_review_failure(
+                    list(remaining_code_issues) + list(llm_issues) + list(img_issues)
+                ),
+                'reviewedSha256': index_reviewed_sha256,
+                'imageReviewMode': current_image_review_mode(),
+                'issues': list(llm_issues) + list(img_issues),
+            }
+            if result_callback:
+                result_callback(os.path.realpath(index_file), file_results[os.path.realpath(index_file)])
 
     if total_fixed == 0 and total_blocking_issues == 0 and total_advisory_issues == 0:
         print("\n  ✅ 所有文件通过三层 review，无问题")
@@ -13667,7 +13762,140 @@ def _git_tracks_path(relative_path):
     return mod.git_tracks_path(relative_path, hooks=globals())
 
 
-def git_push(date_str, publish_paths, rollback_state=None):
+_VERIFIED_FILE_SHA_SCOPE = contextvars.ContextVar('verified_file_sha_scope', default=None)
+_VERIFIED_PUSH_RECEIPT_TOKENS = weakref.WeakKeyDictionary()
+
+
+class _VerifiedPushReceiptToken:
+    """仅限同一次独占锁与 replay scope 内签发的不可伪造凭证复用令牌。"""
+
+    __slots__ = ('__weakref__',)
+
+
+def _regular_file_stat_tuple(path):
+    try:
+        st = Path(path).lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
+        return None
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+@contextmanager
+def _verified_file_sha_scope():
+    existing = _VERIFIED_FILE_SHA_SCOPE.get()
+    if isinstance(existing, dict):
+        yield existing
+        return
+    cache = {}
+    token = _VERIFIED_FILE_SHA_SCOPE.set(cache)
+    try:
+        yield cache
+    finally:
+        cache.clear()
+        _VERIFIED_FILE_SHA_SCOPE.reset(token)
+
+
+def _record_verified_push_receipt(
+    *, date_str, paths, receipt_path, manifest_path, generation_manifest, verified_target_states,
+):
+    replay_state = _DAILY_PUBLICATION_REPLAY_SCOPE.get()
+    if replay_state is None:
+        return
+    receipt_p = Path(receipt_path).resolve()
+    manifest_p = Path(manifest_path).resolve()
+    receipt_stat = _regular_file_stat_tuple(receipt_p)
+    manifest_stat = _regular_file_stat_tuple(manifest_p)
+    if receipt_stat is None or manifest_stat is None:
+        return
+    input_snap = (
+        _stat_and_sha_for_input_manifest(generation_manifest, date_str)
+        if blog_formats.source_bound_generation(generation_manifest)
+        else None
+    )
+    replay_state['verified_push_receipt'] = {
+        'scope': replay_state,
+        'date': str(date_str),
+        'includeId': _ACTIVE_PUBLICATION_INCLUDE_ID,
+        'paths': [Path(p).resolve() for p in paths],
+        'manifest': _git_relative_manifest(paths),
+        'receiptPath': receipt_p,
+        'receiptStat': receipt_stat,
+        'receiptSha256': _sha256_file(receipt_p),
+        'manifestPath': manifest_p,
+        'manifestStat': manifest_stat,
+        'manifestSha256': _sha256_file(manifest_p),
+        'generationManifest': generation_manifest,
+        'inputSnap': input_snap,
+        'verifiedTargetStates': dict(verified_target_states or {}),
+    }
+
+
+def _issue_verified_push_receipt_token(date_str, paths, receipt_path):
+    replay_state = _DAILY_PUBLICATION_REPLAY_SCOPE.get()
+    if not isinstance(replay_state, dict):
+        return None
+    record = replay_state.get('verified_push_receipt')
+    if not isinstance(record, dict) or record.get('scope') is not replay_state:
+        return None
+    if (
+        record.get('date') != str(date_str)
+        or record.get('includeId') != _ACTIVE_PUBLICATION_INCLUDE_ID
+        or Path(receipt_path).resolve() != record.get('receiptPath')
+        or _git_relative_manifest(paths) != record.get('manifest')
+    ):
+        return None
+    token = _VerifiedPushReceiptToken()
+    _VERIFIED_PUSH_RECEIPT_TOKENS[token] = record
+    return token
+
+
+def _consume_verified_push_receipt_token(token, date_str, manifest):
+    if type(token) is not _VerifiedPushReceiptToken:
+        return None
+    record = _VERIFIED_PUSH_RECEIPT_TOKENS.pop(token, None)
+    replay_state = _DAILY_PUBLICATION_REPLAY_SCOPE.get()
+    if (
+        not isinstance(record, dict)
+        or replay_state is None
+        or record.get('scope') is not replay_state
+        or record.get('date') != str(date_str)
+        or record.get('includeId') != _ACTIVE_PUBLICATION_INCLUDE_ID
+        or record.get('manifest') != manifest
+    ):
+        return None
+    receipt_p = record['receiptPath']
+    manifest_p = record['manifestPath']
+    if (
+        _regular_file_stat_tuple(receipt_p) != record['receiptStat']
+        or _sha256_file(receipt_p) != record['receiptSha256']
+        or _regular_file_stat_tuple(manifest_p) != record['manifestStat']
+        or _sha256_file(manifest_p) != record['manifestSha256']
+    ):
+        return None
+    gen_manifest = record['generationManifest']
+    if blog_formats.source_bound_generation(gen_manifest):
+        expected_snap = record.get('inputSnap')
+        current_snap = _stat_and_sha_for_input_manifest(gen_manifest, date_str)
+        if expected_snap is None or current_snap is None or current_snap != expected_snap:
+            return None
+    for target_str, expected_state in (record.get('verifiedTargetStates') or {}).items():
+        target = Path(target_str)
+        if expected_state.get('deleted') is True:
+            if target.exists():
+                return None
+        else:
+            current_stat = _regular_file_stat_tuple(target)
+            if current_stat is None:
+                return None
+            if current_stat != expected_state.get('stat'):
+                if _sha256_file(target) != expected_state.get('sha256'):
+                    return None
+    return record['paths'], receipt_p
+
+
+def git_push(date_str, publish_paths, rollback_state=None, *, verified_receipt_token=None):
     """提交，把 HEAD 显式推送到 main，并核验远端对象 ID。"""
     mod = globals().get('blog_git_publication')
     if mod is None:
@@ -13691,7 +13919,11 @@ def git_push(date_str, publish_paths, rollback_state=None):
             mod = __import__('blog_git_publication')
             globals()['blog_git_publication'] = mod
     return mod.execute_git_push(
-        date_str, publish_paths, rollback_state=rollback_state, hooks=globals(),
+        date_str,
+        publish_paths,
+        rollback_state=rollback_state,
+        verified_receipt_token=verified_receipt_token,
+        hooks=globals(),
     )
 
 
@@ -14428,6 +14660,52 @@ def _stat_and_sha_for_input_manifest(manifest, date_str):
                     if not fp.is_file():
                         return None
                     files.append(fp)
+            run_id = prov.get('runId')
+            gen = prov.get('sourceGeneration')
+            if (
+                isinstance(run_id, str)
+                and re.fullmatch(
+                    r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}',
+                    run_id,
+                )
+                and type(gen) is int
+                and gen >= 1
+            ):
+                try:
+                    paper_id = _daily_fresh_normalized_paper_id(paper)
+                except Exception:
+                    return None
+                run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+                sealed_dir = run_dir / 'sources' / paper_id / f'generation-{gen:06d}'
+                for directory in (
+                    DAILY_FRESH_SOURCE_RUNS_DIR,
+                    run_dir,
+                    run_dir / 'sources',
+                    run_dir / 'sources' / paper_id,
+                    sealed_dir,
+                ):
+                    try:
+                        dst = directory.lstat()
+                    except OSError:
+                        return None
+                    if stat.S_ISLNK(dst.st_mode) or not stat.S_ISDIR(dst.st_mode):
+                        return None
+                for fp in (
+                    run_dir / 'run.json',
+                    *(
+                        sealed_dir / fname
+                        for fname in ('source-manifest.json', 'source-runtime.json', 'source.txt', 'source.pdf')
+                    ),
+                ):
+                    try:
+                        fst = fp.lstat()
+                    except OSError:
+                        return None
+                    if stat.S_ISLNK(fst.st_mode) or not stat.S_ISREG(fst.st_mode):
+                        return None
+                    files.append(fp)
+            elif 'runId' in prov or 'sourceGeneration' in prov:
+                return None
     if not files:
         return None
     snapshots = []
@@ -14461,6 +14739,8 @@ def _validate_generation_input_integrity(
     重算边界不变。
     """
     replay_state = _DAILY_PUBLICATION_REPLAY_SCOPE.get()
+    if fresh:
+        _API_READER_PAYLOAD_CACHE.clear()
     cache_key = None
     can_use_replay_cache = (
         replay_state is not None
@@ -14862,15 +15142,29 @@ def blog_runtime_fingerprint(blog_repo=None):
     if static_root.is_symlink():
         raise PublishDataValidationError(f'博客运行时禁止符号链接: {static_root}')
     if static_root.is_dir():
-        for path in static_root.rglob('*'):
-            if path.is_symlink():
-                raise PublishDataValidationError(f'博客运行时禁止符号链接: {path}')
-            if not path.is_file() or path.suffix.lower() not in static_runtime_suffixes:
-                continue
-            relative = path.relative_to(repo)
-            if any(relative.parts[:len(prefix)] == prefix for prefix in generated_prefixes):
-                continue
-            candidates.append(path)
+        for dirpath, dirnames, filenames in os.walk(static_root, followlinks=False):
+            current_dir = Path(dirpath)
+            rel_dir_parts = current_dir.relative_to(repo).parts
+            kept_dirnames = []
+            for dirname in sorted(dirnames):
+                child_dir = current_dir / dirname
+                if child_dir.is_symlink():
+                    raise PublishDataValidationError(f'博客运行时禁止符号链接: {child_dir}')
+                child_parts = (*rel_dir_parts, dirname)
+                if any(child_parts[:len(prefix)] == prefix for prefix in generated_prefixes):
+                    continue
+                kept_dirnames.append(dirname)
+            dirnames[:] = kept_dirnames
+            for filename in filenames:
+                path = current_dir / filename
+                if path.is_symlink():
+                    raise PublishDataValidationError(f'博客运行时禁止符号链接: {path}')
+                if not path.is_file() or path.suffix.lower() not in static_runtime_suffixes:
+                    continue
+                relative = path.relative_to(repo)
+                if any(relative.parts[:len(prefix)] == prefix for prefix in generated_prefixes):
+                    continue
+                candidates.append(path)
     records = []
     for path in sorted(set(candidates), key=lambda item: item.relative_to(repo).as_posix()):
         if path.is_symlink():
@@ -15850,10 +16144,17 @@ def validate_generation_manifest_file_bytes(manifest_path, date_str):
             'deleted': record['deleted'],
             'sha256': None if record['deleted'] else expected_sha,
         }
-        if _file_fingerprint(target) != expected:
+        actual_fingerprint = _file_fingerprint(target)
+        if actual_fingerprint != expected:
             raise PublishDataValidationError(
                 f'文件内容或删除状态与生成时的记录不一致：{relative}'
             )
+        if not record['deleted']:
+            sha_scope = _VERIFIED_FILE_SHA_SCOPE.get()
+            if isinstance(sha_scope, dict):
+                target_stat = _regular_file_stat_tuple(target)
+                if target_stat is not None:
+                    sha_scope[str(target)] = (target_stat, expected_sha)
     return True
 
 

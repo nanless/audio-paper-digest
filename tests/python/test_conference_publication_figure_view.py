@@ -298,7 +298,7 @@ class PublicationFigureViewTests(unittest.TestCase):
              patch.object(pub,'run_hugo',return_value={'status':'passed'}),patch.object(pub,'rewrite_unpublished_receipt') as seal, \
              patch.dict(os.environ,{'PAPER_ANALYZER_MODEL':'offline-mock-no-requests','PD_BLOG_REVIEW_CONCURRENCY':''}):
             pub.review(CONFERENCE,PROCESS)
-        self.assertEqual(dispatch,[(['aggregate','paper'],5)])
+        self.assertEqual(dispatch,[(['paper'],5),(['aggregate'],5)])
         sealed=json.loads(seal.call_args.args[1]);self.assertEqual([r['path'] for r in sealed['contentReview']['pages']],[r['path'] for r in pub.publication_page_files(g)])
         self.assertEqual(len(calls),1)
         self.assertLess(events.index('cold generation verified'),events.index('shared image review'))

@@ -604,6 +604,7 @@ def execute_git_push(
     publish_paths,
     rollback_state=None,
     *,
+    verified_receipt_token=None,
     hooks: Mapping,
 ) -> bool:
     """提交，把 HEAD 显式推送到 main，并核验远端对象 ID。"""
@@ -613,13 +614,23 @@ def execute_git_push(
     manifest = rel_manifest_fn(publish_paths)
     state = rollback_state
     try:
-        verified_paths, _verified_receipt_path = hooks['load_verified_review_receipt'](date_str)
-        # 这段必须留在 validate_git_publish_branch、索引抓取、
-        # add、commit、凭证采纳以及任何远端操作之前。凭证校验
-        # 在下面有意重复一次，作为它自己的不可变证据契约的一部分。
-        hooks['_validate_push_generation_input_integrity'](date_str)
-        if rel_manifest_fn(verified_paths) != manifest:
-            raise err_cls('git push 路径与已验证审查凭证不一致')
+        reused_verified = None
+        if verified_receipt_token is not None:
+            consume_fn = hooks.get('_consume_verified_push_receipt_token')
+            if callable(consume_fn):
+                reused_verified = consume_fn(verified_receipt_token, date_str, manifest)
+        if reused_verified is not None:
+            verified_paths, _verified_receipt_path = reused_verified
+            if rel_manifest_fn(verified_paths) != manifest:
+                raise err_cls('git push 路径与已验证审查凭证不一致')
+        else:
+            verified_paths, _verified_receipt_path = hooks['load_verified_review_receipt'](date_str)
+            # 这段必须留在 validate_git_publish_branch、索引抓取、
+            # add、commit、凭证采纳以及任何远端操作之前。凭证校验
+            # 在下面有意重复一次，作为它自己的不可变证据契约的一部分。
+            hooks['_validate_push_generation_input_integrity'](date_str)
+            if rel_manifest_fn(verified_paths) != manifest:
+                raise err_cls('git push 路径与已验证审查凭证不一致')
         receipt, receipt_path, base_head = hooks['_load_push_receipt'](date_str)
         current_head = hooks['validate_git_publish_branch']()
         if hooks.get('_ACTIVE_PUBLICATION_INCLUDE_ID') is not None:

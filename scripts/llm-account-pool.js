@@ -2386,27 +2386,7 @@ function replaceCredentialHeaders(headers, apiKey) {
     return result;
 }
 
-function isValidHttpConnectProxyUrl(rawUrl) {
-    if (typeof rawUrl !== 'string' || rawUrl.length === 0 || /[\u0000-\u0020\u007f\\]/.test(rawUrl)) return false;
-    const authMatch = /^https?:\/\/([^/?#]+)/i.exec(rawUrl);
-    if (!authMatch) return false;
-    const rawHostPort = authMatch[1].includes('@')
-        ? authMatch[1].slice(authMatch[1].lastIndexOf('@') + 1)
-        : authMatch[1];
-    if (!rawHostPort || rawHostPort.includes('%')) return false;
-    try {
-        const parsed = new URL(rawUrl);
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-        if (!parsed.hostname || parsed.port === '0') return false;
-        if (parsed.port) {
-            const portNum = Number.parseInt(parsed.port, 10);
-            if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) return false;
-        }
-        return true;
-    } catch (_) {
-        return false;
-    }
-}
+const { isValidHttpConnectProxyUrl } = require('./lib/public-network-policy');
 
 function resolveUsageProxyUrl(explicitProxyUrl, env = process.env) {
     if (explicitProxyUrl !== undefined && explicitProxyUrl !== null && explicitProxyUrl !== '') {

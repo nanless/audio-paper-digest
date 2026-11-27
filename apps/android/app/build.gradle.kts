@@ -69,7 +69,7 @@ val verifyClientProtocols = tasks.register<Exec>("verifyClientProtocols") {
     workingDir(assetRepoRoot)
     commandLine("bash", File(assetRepoRoot, "scripts/python-runtime.sh").absolutePath,
         File(assetRepoRoot, "apps/generate-client-protocols.py").absolutePath, "--check")
-    inputs.file(File(assetRepoRoot, "config/protocols/clients.json"))
+    inputs.files(fileTree(File(assetRepoRoot, "config/protocols")) { include("clients.json", "clients-*.json") })
     inputs.file(File(assetRepoRoot, "apps/generate-client-protocols.py"))
     inputs.file(file("src/main/java/com/nanless/paperdigest/protocols/ClientProtocolRegistry.generated.kt"))
 }

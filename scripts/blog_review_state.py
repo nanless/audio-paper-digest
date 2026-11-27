@@ -18,10 +18,11 @@ import copy
 import datetime
 import json
 import re
+import stat
 import subprocess
 import sys
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 _SHARED_SCRIPTS_DIR = str(Path(__file__).resolve().parent)
@@ -622,6 +623,33 @@ def validate_manual_cache_reuse(item, date_str, *, hooks: Mapping | None = None)
         return evidence
 
 
+def _valid_clean_passed_images(value):
+    """校验并规范化单页 0-warning 纯净通过的图片 URL -> payload SHA-256 映射。"""
+    if not isinstance(value, dict):
+        return {}
+    cleaned = {}
+    for url, sha in value.items():
+        if (
+            isinstance(url, str)
+            and 0 < len(url) <= 2048
+            and (url.startswith('https://') or url.startswith('/'))
+            and isinstance(sha, str)
+            and re.fullmatch(r'[0-9a-f]{64}', sha)
+        ):
+            cleaned[url] = sha
+    return dict(sorted(cleaned.items()))
+
+
+def _regular_file_stat_key(path: Path):
+    try:
+        st = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
+        return None
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
 def _valid_review_pass_record(record, repo, date_str, default_protocol=None, default_time=None, *, hooks: Mapping | None = None):
     """归一化一条历史里的文件级通过记录，不信任批次元数据。"""
     with _hooks_scope(hooks):
@@ -652,6 +680,9 @@ def _valid_review_pass_record(record, repo, date_str, default_protocol=None, def
             'reviewProtocolFingerprint': protocol,
             'imageReviewMode': image_review_mode,
         }
+        clean_images = _valid_clean_passed_images(record.get('cleanPassedImages'))
+        if clean_images:
+            result['cleanPassedImages'] = clean_images
         if 'originalReviewEvidence' in record:
             result['originalReviewEvidence'] = record['originalReviewEvidence']
         if 'reviewIdentity' in record:
@@ -760,6 +791,10 @@ def save_review_page_checkpoint(
                 else _H.current_image_review_mode()
             ),
         }
+        if passed:
+            clean_images = _valid_clean_passed_images(result.get('cleanPassedImages'))
+            if clean_images:
+                normalized_result['cleanPassedImages'] = clean_images
         if manifest_sha256 is None:
             manifest_sha256 = _H._sha256_file(manifest_path)
         if not re.fullmatch(r'[0-9a-f]{64}', str(manifest_sha256 or '')):
@@ -828,13 +863,78 @@ def _collect_review_page_checkpoints(date_str, *, hooks: Mapping | None = None):
 
 
 def clear_review_page_checkpoints(date_str, *, hooks: Mapping | None = None):
-    """只删除本日期已完成运行的临时工作分片。"""
+    """只删除本日期已完成运行的临时工作分片（含 units/ 下请求级缓存）。"""
     with _hooks_scope(hooks):
-        directory = _H.review_page_checkpoint_dir(date_str)
-        if not directory.is_dir():
+        directory = Path(_H.review_page_checkpoint_dir(date_str))
+        if directory.is_symlink() or not directory.is_dir():
             return
+        resolved_dir = directory.resolve()
+        current_dir = _H.get('CURRENT_DIR')
+        in_checkpoints_root = False
+        if current_dir is not None:
+            checkpoints_root = (Path(current_dir).expanduser().resolve() / 'blog-review-checkpoints')
+            try:
+                rel = resolved_dir.relative_to(checkpoints_root)
+                if not rel.parts:
+                    raise _H.PublishDataValidationError(
+                        f'拒绝清理 blog-review-checkpoints 根目录: {directory}'
+                    )
+                in_checkpoints_root = True
+            except ValueError:
+                pass
+        if not in_checkpoints_root:
+            if resolved_dir.parent.name != 'blog-review-checkpoints' or resolved_dir == resolved_dir.parent:
+                raise _H.PublishDataValidationError(
+                    f'拒绝清理位于 blog-review-checkpoints 之外的目录: {directory}'
+                )
         for path in directory.glob('*.json'):
+            if path.is_symlink():
+                continue
+            try:
+                path.resolve().relative_to(resolved_dir)
+            except ValueError:
+                continue
             path.unlink(missing_ok=True)
+        units_dir = directory / 'units'
+        if units_dir.is_dir() and not units_dir.is_symlink():
+            units_resolved = units_dir.resolve()
+            try:
+                units_resolved.relative_to(resolved_dir)
+            except ValueError:
+                units_resolved = None
+            if units_resolved is not None:
+                for unit_file in units_dir.glob('*.json'):
+                    if unit_file.is_symlink():
+                        continue
+                    try:
+                        unit_file.resolve().relative_to(units_resolved)
+                    except ValueError:
+                        continue
+                    unit_file.unlink(missing_ok=True)
+                for subdir in list(units_dir.iterdir()):
+                    if subdir.is_symlink() or not subdir.is_dir():
+                        continue
+                    subdir_resolved = subdir.resolve()
+                    try:
+                        subdir_resolved.relative_to(units_resolved)
+                    except ValueError:
+                        continue
+                    for unit_file in subdir.glob('*.json'):
+                        if unit_file.is_symlink():
+                            continue
+                        try:
+                            unit_file.resolve().relative_to(subdir_resolved)
+                        except ValueError:
+                            continue
+                        unit_file.unlink(missing_ok=True)
+                    try:
+                        subdir.rmdir()
+                    except OSError:
+                        pass
+                try:
+                    units_dir.rmdir()
+                except OSError:
+                    pass
         try:
             directory.rmdir()
         except OSError:
@@ -897,6 +997,11 @@ def save_review_pass_cache(date_str, publish_paths=(), file_results=None, *,
                 ),
             }
             prior = records.get((relative, reviewed_sha))
+            clean_images = _valid_clean_passed_images(result.get('cleanPassedImages'))
+            if not clean_images and isinstance(prior, dict):
+                clean_images = _valid_clean_passed_images(prior.get('cleanPassedImages'))
+            if clean_images:
+                record['cleanPassedImages'] = clean_images
             entry = manual_entries.get(relative)
             # 相同内容已有原证据时保留其原身份；新内容只记录完整核验过的真实声明。
             if prior is None and entry is not None and 'cacheReuse' not in entry:
@@ -1074,10 +1179,15 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head, *
                         'imageReviewMode': checkpoint.get(
                             'imageReviewMode', 'deterministic_only'
                         ),
+                        **(
+                            {'cleanPassedImages': _valid_clean_passed_images(checkpoint.get('cleanPassedImages'))}
+                            if _valid_clean_passed_images(checkpoint.get('cleanPassedImages'))
+                            else {}
+                        ),
                     }
                 key = str(item.resolve())
                 if cached is not None:
-                    prior_results[key] = {
+                    prior_entry = {
                         'passed': True, 'completed': True, 'failureKind': None,
                         'reviewedSha256': current['sha256'],
                         # 审查证据永久按内容寻址。
@@ -1086,6 +1196,10 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head, *
                         'reviewProtocolFingerprint': current_protocol,
                         'imageReviewMode': cached.get('imageReviewMode', 'deterministic_only'),
                     }
+                    cached_clean_images = _valid_clean_passed_images(cached.get('cleanPassedImages'))
+                    if cached_clean_images:
+                        prior_entry['cleanPassedImages'] = cached_clean_images
+                    prior_results[key] = prior_entry
                     reused_passed += 1
                     continue
                 record = (
@@ -1188,100 +1302,130 @@ def load_verified_review_receipt(date_str, *, hooks: Mapping | None = None):
         _H.validate_current_generation_template(generation_manifest)
         publication_scope_value = _H._validate_active_publication_scope(generation_manifest)
         _H.validate_generation_visual_contract(generation_manifest, date_str)
-        _H.validate_generation_manifest_file_bytes(manifest_path, date_str)
-        if blog_formats.source_bound_generation(generation_manifest):
-            _H._validate_generation_input_integrity(generation_manifest, date_str)
-        if blog_formats.source_bound_generation(generation_manifest) and (
-            not blog_formats.matches_snapshot_receipt(generation_manifest, receipt)
-            or receipt.get('generationInputFingerprint') != generation_manifest.get('inputFingerprint')
-            or receipt.get('publishedPapersFingerprint')
-            != generation_manifest.get('publishedPapersFingerprint')
-            or receipt.get('generationInputSourceReference')
-            != generation_manifest.get('inputSourceReference')
-        ):
-            raise _H.PublishDataValidationError('发布凭证中的生成输入核验记录不符合要求，或与本次生成清单不一致。')
-        if (
-            receipt.get('publicationMode') != generation_manifest.get('publicationMode')
-            or receipt.get('manualV6ProductionFingerprint')
-            != generation_manifest.get('manualV6ProductionFingerprint')
-            or receipt.get('llmApiProductionFingerprint')
-            != generation_manifest.get('llmApiProductionFingerprint')
-        ):
-            raise _H.PublishDataValidationError('发布凭证中的发布模式或正式生成记录与本次生成清单不一致。')
-        expected_visual_capability = _H._expected_post_publish_visuals(
-            generation_manifest, publication_scope_value,
-        )
-        receipt_visual_capability = receipt.get('postPublishVisuals')
-        if (
-            receipt_visual_capability is not None
-            and receipt_visual_capability != expected_visual_capability
-        ):
-            raise _H.PublishDataValidationError('发布凭证中的发布后图片任务设置与本次生成清单不一致。')
-        if receipt.get('publicationScope') != publication_scope_value:
-            raise _H.PublishDataValidationError('发布凭证中的发布范围与本次生成清单不一致。')
-        expectations = _H.generation_manifest_expectations(manifest_path, date_str)
-        records = receipt.get('files')
-        if not isinstance(records, list) or not records:
-            raise _H.PublishDataValidationError('审查凭证没有发布文件清单')
-        file_image_modes = {
-            record.get('imageReviewMode') for record in records
-            if isinstance(record, dict) and record.get('deleted') is not True
-        }
-        if not file_image_modes or not file_image_modes.issubset({'multimodal', 'deterministic_only', 'manual_semantic'}):
-            raise _H.PublishDataValidationError('发布凭证中的逐文件图片审查方式不符合要求。')
-        expected_image_mode = (
-            next(iter(file_image_modes)) if len(file_image_modes) == 1 else 'mixed'
-        )
-        image_review = receipt.get('imageReview')
-        if (
-            not isinstance(image_review, dict)
-            or image_review.get('mode') != expected_image_mode
-            or not isinstance(image_review.get('secondaryModelConfigured'), bool)
-        ):
-            raise _H.PublishDataValidationError('发布凭证中的图片审查汇总格式无效，或与逐文件审查记录不一致。')
+        sha_scope_fn = _H.get('_verified_file_sha_scope')
+        sha_scope_cm = sha_scope_fn() if callable(sha_scope_fn) else nullcontext({})
+        with sha_scope_cm as verified_file_shas:
+            _H.validate_generation_manifest_file_bytes(manifest_path, date_str)
+            if blog_formats.source_bound_generation(generation_manifest):
+                _H._validate_generation_input_integrity(generation_manifest, date_str)
+            if blog_formats.source_bound_generation(generation_manifest) and (
+                not blog_formats.matches_snapshot_receipt(generation_manifest, receipt)
+                or receipt.get('generationInputFingerprint') != generation_manifest.get('inputFingerprint')
+                or receipt.get('publishedPapersFingerprint')
+                != generation_manifest.get('publishedPapersFingerprint')
+                or receipt.get('generationInputSourceReference')
+                != generation_manifest.get('inputSourceReference')
+            ):
+                raise _H.PublishDataValidationError('发布凭证中的生成输入核验记录不符合要求，或与本次生成清单不一致。')
+            if (
+                receipt.get('publicationMode') != generation_manifest.get('publicationMode')
+                or receipt.get('manualV6ProductionFingerprint')
+                != generation_manifest.get('manualV6ProductionFingerprint')
+                or receipt.get('llmApiProductionFingerprint')
+                != generation_manifest.get('llmApiProductionFingerprint')
+            ):
+                raise _H.PublishDataValidationError('发布凭证中的发布模式或正式生成记录与本次生成清单不一致。')
+            expected_visual_capability = _H._expected_post_publish_visuals(
+                generation_manifest, publication_scope_value,
+            )
+            receipt_visual_capability = receipt.get('postPublishVisuals')
+            if (
+                receipt_visual_capability is not None
+                and receipt_visual_capability != expected_visual_capability
+            ):
+                raise _H.PublishDataValidationError('发布凭证中的发布后图片任务设置与本次生成清单不一致。')
+            if receipt.get('publicationScope') != publication_scope_value:
+                raise _H.PublishDataValidationError('发布凭证中的发布范围与本次生成清单不一致。')
+            expectations = _H.generation_manifest_expectations(manifest_path, date_str)
+            records = receipt.get('files')
+            if not isinstance(records, list) or not records:
+                raise _H.PublishDataValidationError('审查凭证没有发布文件清单')
+            file_image_modes = {
+                record.get('imageReviewMode') for record in records
+                if isinstance(record, dict) and record.get('deleted') is not True
+            }
+            if not file_image_modes or not file_image_modes.issubset({'multimodal', 'deterministic_only', 'manual_semantic'}):
+                raise _H.PublishDataValidationError('发布凭证中的逐文件图片审查方式不符合要求。')
+            expected_image_mode = (
+                next(iter(file_image_modes)) if len(file_image_modes) == 1 else 'mixed'
+            )
+            image_review = receipt.get('imageReview')
+            if (
+                not isinstance(image_review, dict)
+                or image_review.get('mode') != expected_image_mode
+                or not isinstance(image_review.get('secondaryModelConfigured'), bool)
+            ):
+                raise _H.PublishDataValidationError('发布凭证中的图片审查汇总格式无效，或与逐文件审查记录不一致。')
 
-        repo = Path(_H.BLOG_REPO).expanduser().resolve()
-        paths = []
-        seen = set()
-        for record in records:
-            if not isinstance(record, dict) or not isinstance(record.get('path'), str):
-                raise _H.PublishDataValidationError('发布凭证中的文件记录格式无效，或文件路径不是字符串。')
-            relative = Path(record['path'])
-            if relative.is_absolute():
-                raise _H.PublishDataValidationError(f'审查凭证包含非法路径: {relative}')
-            target = (repo / relative).resolve()
-            key = _H._validate_manifest_path_date(target, repo, date_str)
-            if key in seen:
-                raise _H.PublishDataValidationError(f'审查凭证包含重复路径: {key}')
-            seen.add(key)
-            if key not in expectations or expectations[key] != (record.get('deleted') is True):
-                raise _H.PublishDataValidationError(f'发布凭证中的文件路径或删除标记与本次生成清单不一致：{key}')
-            if record.get('deleted') is True:
-                if target.exists():
-                    raise _H.PublishDataValidationError(f'审查后，已确认删除的文件重新出现：{key}')
-            else:
-                expected = record.get('sha256')
-                if not target.is_file() or not re.fullmatch(r'[0-9a-f]{64}', str(expected or '')):
-                    raise _H.PublishDataValidationError(f'已审文件缺失，或凭证中的内容哈希格式无效：{key}')
-                evidence_protocol = record.get('reviewProtocolFingerprint')
-                if evidence_protocol != receipt.get('reviewProtocolFingerprint'):
-                    raise _H.PublishDataValidationError(
-                        f'逐文件凭证中的审查协议指纹与本批发布凭证不一致：{key}'
+            repo = Path(_H.BLOG_REPO).expanduser().resolve()
+            paths = []
+            seen = set()
+            verified_target_states = {}
+            for record in records:
+                if not isinstance(record, dict) or not isinstance(record.get('path'), str):
+                    raise _H.PublishDataValidationError('发布凭证中的文件记录格式无效，或文件路径不是字符串。')
+                relative = Path(record['path'])
+                if relative.is_absolute():
+                    raise _H.PublishDataValidationError(f'审查凭证包含非法路径: {relative}')
+                target = (repo / relative).resolve()
+                key = _H._validate_manifest_path_date(target, repo, date_str)
+                if key in seen:
+                    raise _H.PublishDataValidationError(f'审查凭证包含重复路径: {key}')
+                seen.add(key)
+                if key not in expectations or expectations[key] != (record.get('deleted') is True):
+                    raise _H.PublishDataValidationError(f'发布凭证中的文件路径或删除标记与本次生成清单不一致：{key}')
+                if record.get('deleted') is True:
+                    if target.exists():
+                        raise _H.PublishDataValidationError(f'审查后，已确认删除的文件重新出现：{key}')
+                    verified_target_states[str(target)] = {'deleted': True, 'stat': None, 'sha256': None}
+                else:
+                    expected = record.get('sha256')
+                    if not target.is_file() or not re.fullmatch(r'[0-9a-f]{64}', str(expected or '')):
+                        raise _H.PublishDataValidationError(f'已审文件缺失，或凭证中的内容哈希格式无效：{key}')
+                    evidence_protocol = record.get('reviewProtocolFingerprint')
+                    if evidence_protocol != receipt.get('reviewProtocolFingerprint'):
+                        raise _H.PublishDataValidationError(
+                            f'逐文件凭证中的审查协议指纹与本批发布凭证不一致：{key}'
+                        )
+                    target_stat = _regular_file_stat_key(target)
+                    cached_entry = (
+                        verified_file_shas.get(str(target))
+                        if isinstance(verified_file_shas, dict) else None
                     )
-                actual = _H._sha256_file(target)
-                if actual != expected:
-                    raise _H.PublishDataValidationError(f'文件内容在审查后发生变化，不能推送：{key}')
-            paths.append(target)
-        if seen != set(expectations):
-            raise _H.PublishDataValidationError('发布凭证中的文件集合与本次生成清单不一致。')
-        if receipt.get('reviewMode') == _H.MANUAL_REVIEW_MODE:
-            manual_review_record = receipt['reviewProvenance']
-            if manual_review_record.get('fileCount') != len(records):
-                raise _H.PublishDataValidationError('人工审查记录中的文件数量与发布凭证不一致。')
-            if manual_review_record.get('reviewedPathSetSha256') != _H._reviewed_path_set_sha256(records):
-                raise _H.PublishDataValidationError('人工审查记录中的文件集合哈希与发布凭证不一致。')
-            if manual_review_record.get('reviewProtocolFingerprint') != receipt.get('reviewProtocolFingerprint'):
-                raise _H.PublishDataValidationError('人工审查记录中的审查协议指纹与发布凭证不一致。')
-        _H._validate_render_observation_ref(receipt)
+                    if (
+                        cached_entry is not None
+                        and target_stat is not None
+                        and cached_entry[0] == target_stat
+                    ):
+                        actual = cached_entry[1]
+                    else:
+                        actual = _H._sha256_file(target)
+                    if actual != expected:
+                        raise _H.PublishDataValidationError(f'文件内容在审查后发生变化，不能推送：{key}')
+                    verified_target_states[str(target)] = {
+                        'deleted': False, 'stat': target_stat, 'sha256': actual,
+                    }
+                paths.append(target)
+            if seen != set(expectations):
+                raise _H.PublishDataValidationError('发布凭证中的文件集合与本次生成清单不一致。')
+            if receipt.get('reviewMode') == _H.MANUAL_REVIEW_MODE:
+                manual_review_record = receipt['reviewProvenance']
+                if manual_review_record.get('fileCount') != len(records):
+                    raise _H.PublishDataValidationError('人工审查记录中的文件数量与发布凭证不一致。')
+                if manual_review_record.get('reviewedPathSetSha256') != _H._reviewed_path_set_sha256(records):
+                    raise _H.PublishDataValidationError('人工审查记录中的文件集合哈希与发布凭证不一致。')
+                if manual_review_record.get('reviewProtocolFingerprint') != receipt.get('reviewProtocolFingerprint'):
+                    raise _H.PublishDataValidationError('人工审查记录中的审查协议指纹与发布凭证不一致。')
+            _H._validate_render_observation_ref(receipt)
+            recorder = _H.get('_record_verified_push_receipt')
+            if callable(recorder):
+                recorder(
+                    date_str=date_str,
+                    paths=paths,
+                    receipt_path=path,
+                    manifest_path=manifest_path,
+                    generation_manifest=generation_manifest,
+                    verified_target_states=verified_target_states,
+                )
         print(f'  ⏱ 凭证复核: {time.monotonic() - started:.2f}s')
         return paths, path

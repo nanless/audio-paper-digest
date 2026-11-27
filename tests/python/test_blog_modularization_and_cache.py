@@ -1060,8 +1060,8 @@ class BlogModularizationAndCacheTests(unittest.TestCase):
 
         # P4: blog_review_state monkeypatch & behavior parity
         with tempfile.TemporaryDirectory() as tmp:
-            ckpt_dir = Path(tmp) / 'checkpoints'
-            ckpt_dir.mkdir()
+            ckpt_dir = Path(tmp) / 'blog-review-checkpoints' / '2026-11-24'
+            ckpt_dir.mkdir(parents=True)
             (ckpt_dir / 'sample.json').write_text('{}', encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'review_page_checkpoint_dir', return_value=ckpt_dir):
                 publish_to_blog.clear_review_page_checkpoints('2026-11-24')

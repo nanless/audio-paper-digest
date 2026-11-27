@@ -248,7 +248,18 @@ def main():
                         elapsed_ms=(time.monotonic() - started) * 1000, date=date_str,
                     )
                     return
-                if not module.git_push(date_str, paths):
+                issue_token = getattr(module, '_issue_verified_push_receipt_token', None)
+                verified_token = (
+                    issue_token(date_str, paths, receipt)
+                    if callable(issue_token) else None
+                )
+                if verified_token is not None:
+                    pushed = module.git_push(
+                        date_str, paths, verified_receipt_token=verified_token,
+                    )
+                else:
+                    pushed = module.git_push(date_str, paths)
+                if not pushed:
                     raise module.PublishDataValidationError('Git 提交或推送未完成')
     except module.PublishDataValidationError as exc:
         print(f'\n❌ 博客推送失败: {exc}')

@@ -3703,16 +3703,32 @@ function hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback) {
     const stages = paper?.analysisManifest?.stages || {};
     const allStagesIntact = Object.values(stages).every(stage =>
         !stage || !['transient_failure', 'failed', 'contract_rejected'].includes(stage.status));
+    const expectedObligationSha = active?.readerOnly
+        ? active?.readerBound?.proof?.feedbackSha256
+        : (active?.readerBound?.proof?.feedbackSha256 || active?.proof?.feedbackSha256);
     const preflightFactReviewRejection = paper?.latestAnalysisAttemptErrorCode === 'DAILY_FACT_REVIEW_INTEGRITY'
         && paper?.latestAnalysisAttemptRetryable === false
         && (!paper.error || paper.error === paper.latestAnalysisAttemptError)
         && allStagesIntact
         && (!paper.analysisFactReviewObligation
-            || paper.analysisFactReviewObligation.feedbackSha256 === active?.readerBound?.proof?.feedbackSha256);
+            || paper.analysisFactReviewObligation.feedbackSha256 === expectedObligationSha);
+    const exhaustedReaderRecoveryOnIntactParent = [
+        'READER_FULL_ATTEMPTS_EXHAUSTED',
+        'READER_REPAIR_ATTEMPTS_EXHAUSTED',
+        'READER_REPAIR_NO_PROGRESS'
+    ].includes(paper?.latestAnalysisAttemptErrorCode)
+        && paper?.latestAnalysisAttemptErrorCategory === 'reader_recovery'
+        && paper?.latestAnalysisAttemptRetryable === false
+        && (!paper.error || paper.error === paper.latestAnalysisAttemptError)
+        && allStagesIntact
+        && engine.hasValidIntegratedApiReaderRecords(paper)
+        && (!paper.analysisFactReviewObligation
+            || paper.analysisFactReviewObligation.feedbackSha256 === expectedObligationSha);
     const knownPreRequestRejection = (paper?.latestAnalysisAttemptError === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR
         && paper?.latestAnalysisAttemptErrorCode === 'CONTRACT_REJECTED'
         && (!paper.error || paper.error === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR))
-        || preflightFactReviewRejection;
+        || preflightFactReviewRejection
+        || exhaustedReaderRecoveryOnIntactParent;
     if (hasFailure && !knownPreRequestRejection
         && !require('./lib/reader-fact-pre-request-recovery').isVerifiedReaderFactPreRequestSeed(paper, sourceText, reviewFeedback)
         && !hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback)) return false;
@@ -4831,10 +4847,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         catch (error) {
             if (['READER_NORMALIZATION_NOT_PERSISTED', 'READER_NORMALIZATION_CAS_CHANGED'].includes(error?.code)) throw error;
             if (ordinalPatchCompilations.length && error?.scope === 'run') throw error;
-            if (operatorCorrection) throw Object.assign(new Error('人工修正未通过完整 Reader 解析，保留原稿并停止新的 Reader 请求', {cause:error}),
+            if (operatorCorrection) throw Object.assign(new Error(`人工修正未通过完整 Reader 解析，保留原稿并停止新的 Reader 请求：${error.message}`, {cause:error}),
                 {code:'READER_OPERATOR_CORRECTION_REJECTED',retryable:false,readerIssues:error.readerIssues});
             if (recovered?.resolvedReaderCandidateReplayProof) {
-                throw Object.assign(new Error('已归档付费稿未通过当前完整解析，禁止继续模型请求', { cause: error }), {
+                throw Object.assign(new Error(`已归档付费稿未通过当前完整解析，禁止继续模型请求：${error.message}`, { cause: error }), {
                     code: 'RESOLVED_READER_REVALIDATION_REJECTED', category: 'config',
                     retryable: false, scope: 'run', modelRequestClassified: true,
                     readerIssues: error.readerIssues
@@ -4912,9 +4928,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         if (candidate && !normalizationError) {
             try {
                 const parsed = parseCandidate(JSON.stringify(candidate));
-                const result = { ...parsed, ...(versionMetadataRecoveryProof ? { metadataRecoveryProof: versionMetadataRecoveryProof } : {}), ...contentModeFields, attempts: completedAttempts,
+                const result = { ...parsed, ...(versionMetadataRecoveryProof ? { metadataRecoveryProof: versionMetadataRecoveryProof } : {}), ...contentModeFields, attempts: attempt - 1, fullAttempts, transportFailures,
                     imageEvidence, modelImagePreflightEvidenceSha256, ...(ordinalPatchCompilations.length ? { ordinalPatchCompilations } : {}),
-                    providerImageExclusions, resumedCandidate: true, draftOrderMappings };
+                    providerImageExclusions, resumedCandidate: Boolean(recovered && attempt === completedAttempts + 1), draftOrderMappings };
                 attachSavedOrdinalChain(result, { issues: currentIssues, pixelFigureOrdinals });
                 const retiredCandidate = deferOrRetireReaderCandidate(
                     result, repair, candidateDirectory, identity
@@ -4932,6 +4948,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 'reader_workflow_leakage', 'reader_awkward_translation'].includes(issue?.code))
             && candidate && repair.parseRecoveryDraft(candidate);
         const repairOptions = { availableFigureOrdinals: pixelFigureOrdinals, structuredArtifacts: options.structuredArtifacts,
+            minimumIntegratedTables,
             sourceEvidenceBudget: API_READER_EVIDENCE_MAX_CHARS,
             sourceEvidenceForBudget: budget => buildApiReaderEvidenceContext('', options.sourceText,
                 options.structuredArtifacts, getPaperArxivId(paper), readerCapabilityPolicy,
@@ -5504,7 +5521,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                         } : {}),
                         atomicOperation: repairContext.atomicOperation,
                         sourceText: options.sourceText || '',
-                        structuredArtifacts: options.structuredArtifacts
+                        structuredArtifacts: options.structuredArtifacts,
+                        minimumIntegratedTables
                     };
                     if (ordinalCapability) {
                         ordinalCompiled = ordinaryOrdinal.compile(ordinalCapability, raw, patchOptions);
@@ -13905,6 +13923,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 ...readerContentMode.fields('source-only'),
                 ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
                 attempts: readerResult.attempts,
+                fullAttempts: readerResult.fullAttempts,
+                transportFailures: readerResult.transportFailures,
                 ...(readerResult.ordinalPatchCompilations?.length ? {
                     ordinalPatchContract: require('./lib/reader-target-ordinal-patch').CONTRACT,
                     ordinalPatchCompilations: structuredClone(readerResult.ordinalPatchCompilations) } : {}),
@@ -15474,7 +15494,6 @@ module.exports = {
     sourceTextLikelyHasTables,
     analysisNeedsExperimentTableRepair,
     getPaperArxivId,
-    getPreProvidedImageUrls,
     getArxivHtmlIds,
     isSupportedImageUrl,
     safeImageLabel,
@@ -15665,7 +15684,6 @@ module.exports = {
     readerResourceClaimIssues,
     readerResourcePublicationResources,
     enforceReaderResourceClaims,
-    replayVerifiedReaderResourceIdentity,
     readerResourceClaimDraftFromArticle,
     conferenceReaderResourceClaimIssues,
     enforceConferenceReaderResourceClaims,
@@ -15692,7 +15710,6 @@ module.exports = {
     recoveryFailureStatus,
     getRepairableAnalysisStructureIssues,
     normalizeAnalysisStructure,
-    getRemainingTimeoutMs,
     getTypeAwareEvidenceGuide,
     buildTypeAwareSourceContext,
     buildTaskEvidenceContext,
@@ -15758,7 +15775,6 @@ module.exports = {
     transferDeferredReaderCandidate,
     commitDeferredReaderCandidateIfSaved,
     hasDeferredReaderCandidate,
-    saveAnalysisCheckpoint,
     shouldRetainFullTextCheckpoint,
     calculateScoringDelta,
     shouldTriggerScoringConsensus,
@@ -15791,21 +15807,3 @@ module.exports = {
     resolveApiReaderTargetEditorialProfile,
     buildApiReaderMechanicalContract
 };
-
-// 直接运行测试
-if (require.main === module) {
-    const testPaper = {
-        arxivId: process.argv[2] || '2604.00688',
-        title: process.argv[3] || 'Test Paper',
-        authors: ['Test Author'],
-        categories: ['cs.SD'],
-        abstract: 'This is a test abstract.'
-    };
-
-    analyzePaperDeep(testPaper).then(result => {
-        console.log('\n=== 分析结果 ===');
-        console.log(result.analysis);
-        console.log('\n=== 解析结果 ===');
-        console.log(JSON.stringify(parseAnalysis(result.analysis), null, 2));
-    }).catch(console.error);
-}

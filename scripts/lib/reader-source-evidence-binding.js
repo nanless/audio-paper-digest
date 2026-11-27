@@ -358,7 +358,7 @@ function normalizeReaderNumericToken(raw) {
         token = token.replace(/(\d),(\d{3})(?!\d)/g, '$1$2');
     } while (token !== previous);
     token = token.replace(/\s+/g, '').toLowerCase();
-    const match = token.match(/^([-+]?(?:\d+(?:\.\d+)?|\.\d+))(.*)$/);
+    const match = token.match(/^([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?)(.*)$/);
     if (!match) return token;
     const numStr = match[1];
     let suffix = match[2] || '';
@@ -371,8 +371,38 @@ function normalizeReaderNumericToken(raw) {
         suffix = '';
     }
     if (suffix === 'second' || suffix === 'seconds') suffix = 's';
-    // 去除无意义的尾零：2.00 -> 2, 2.50% -> 2.5%
-    return `${String(num)}${suffix}`;
+    // 去除无意义的尾零：2.00 -> 2, 2.50% -> 2.5%。极小/极大数（如 0.0000005 < 1e-6）
+    // 保留定点数写法，避免 String(num) 转为科学计数法 "5e-7" 绕过列头单位核验。
+    let normalizedNum;
+    if (num === 0) {
+        normalizedNum = '0';
+    } else {
+        const standard = String(num);
+        if (/[eE]/.test(standard)) {
+            const sciMatch = /^(-?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/.exec(standard);
+            const exp = sciMatch ? Number(sciMatch[4]) : NaN;
+            if (sciMatch && Number.isSafeInteger(exp) && Math.abs(exp) <= 100) {
+                const [, sign, intDigits, fracDigits = ''] = sciMatch;
+                const digits = `${intDigits}${fracDigits}`;
+                const decimalPos = intDigits.length + exp;
+                if (decimalPos <= 0) {
+                    const frac = `${'0'.repeat(-decimalPos)}${digits}`.replace(/0+$/, '');
+                    normalizedNum = frac ? `${sign}0.${frac}` : '0';
+                } else if (decimalPos >= digits.length) {
+                    normalizedNum = `${sign}${digits}${'0'.repeat(decimalPos - digits.length)}`;
+                } else {
+                    const left = digits.slice(0, decimalPos).replace(/^0+/, '') || '0';
+                    const right = digits.slice(decimalPos).replace(/0+$/, '');
+                    normalizedNum = right ? `${sign}${left}.${right}` : `${sign}${left}`;
+                }
+            } else {
+                normalizedNum = standard;
+            }
+        } else {
+            normalizedNum = standard;
+        }
+    }
+    return `${normalizedNum}${suffix}`;
 }
 
 function readerNumericTokens(value) {
@@ -587,7 +617,7 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes, options = {}
             const rawCell = table.rows[row]?.[column];
             const tokens = readerNumericTokens(rawCell);
             for (const token of tokens) {
-                const number = token.match(/^([-+]?\d+(?:\.\d+)?)([a-z%]*)$/i);
+                const number = token.match(/^([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?)([a-z%]*)$/i);
                 if (!number) continue;
                 const explicitExtraCellUnits = !number[2]
                     ? findExplicitExtraUnitsForValue(rawCell, number[1])

@@ -147,6 +147,14 @@ const CASES = [
         cause: /缺少与当前页面字节匹配的审查凭证/,
         commandIncludes: ['npm run blog:review -- --date', 'npm run blog:push -- --date'],
         docRef: 'docs/three-workflows.md'
+    },
+    {
+        name: '博客审查仍有阻断问题',
+        error: new Error('审查仍有 3 个页面阻断'),
+        stage: 'blog-review',
+        cause: /博客严格审查发现阻断问题/,
+        commandIncludes: ['npm run blog:review -- --date', 'npm run blog:generate -- --date', 'npm run digest:status -- --date'],
+        docRef: 'docs/three-workflows.md'
     }
 ];
 
@@ -374,6 +382,7 @@ const RULE_ID_FIXTURES = [
     ['source-sha-mismatch', { message: '分析结果中的论文来源 SHA 与 sourceSha256 不一致' }, 'deep-analysis'],
     ['generation-snapshot-stale', { message: '博客生成清单无法读取: /tmp/manifest.json' }, 'blog-push'],
     ['blog-review-receipt-missing', { message: '缺少与当前页面字节匹配的审查凭证' }, 'blog-push'],
+    ['blog-review-blocking-issues', { message: '审查仍有 2 个页面阻断与 1 个关联资产阻断（共 3 个）' }, 'blog-review'],
     ['upstream-rate-limit', { status: 429, message: 'busy' }, 'api-reader'],
     ['generic-fallback', { message: '完全未知的故障' }, 'fetch']
 ];

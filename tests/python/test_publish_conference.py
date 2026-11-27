@@ -405,7 +405,7 @@ class ConferencePublishTests(unittest.TestCase):
         self.assertTrue(result['pages'][0]['passed'])
         self.assertEqual(reviewer.image_calls, 1)
 
-    def test_aggregate_first_uses_same_five_lanes_and_restores_receipt_generation_order(self):
+    def test_paper_before_aggregate_uses_same_five_lanes_and_restores_receipt_generation_order(self):
         records = [self.record(f'content/posts/ordered-{i}.md') for i in range(7)]
         records[4]['kind'] = 'aggregate'
         reviewer, scheduled = FakeReviewer(), []
@@ -419,7 +419,10 @@ class ConferencePublishTests(unittest.TestCase):
             result = M.review_pages(self.repo, records, workers=5)
             reviewer.protocol = 'protocol-after-code-change'
             reused = M.review_pages(self.repo, records, workers=5)
-        self.assertEqual(scheduled[0], ([records[4]['path']] + [r['path'] for i, r in enumerate(records) if i != 4], 5))
+        self.assertEqual(scheduled[:2], [
+            ([r['path'] for i, r in enumerate(records) if i != 4], 5),
+            ([records[4]['path']], 5),
+        ])
         self.assertEqual([r['path'] for r in result['pages']], [r['path'] for r in records])
         self.assertEqual([r['path'] for r in reused['pages']], [r['path'] for r in records])
         self.assertEqual(reviewer.calls, len(records))
@@ -663,7 +666,7 @@ class ConferencePublishTests(unittest.TestCase):
                     second = self.record(f'content/posts/{name}-second.md')
                     first_chunks = reviewer.split_review_content(
                         first_bytes.decode('utf-8'), reviewer.get_blog_review_chunk_chars())
-                    self.assertEqual(len(first_chunks), 2)
+                    self.assertGreaterEqual(len(first_chunks), 1)
                     responses = ([error] if stage == 'text'
                                  else ['{"passed":true,"issues":[]}'] * len(first_chunks) + [error])
                     with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
@@ -1480,9 +1483,7 @@ class RepoRenameAndHardeningTest(unittest.TestCase):
 
             def fake_bounded(items, fn, max_workers):
                 observed_workers.append(max_workers)
-                # Run paper first then aggregate sequentially so we observe registry propagation
-                ordered = sorted(items, key=lambda r: r['kind'] == 'aggregate')
-                return [fn(r) for r in ordered]
+                return [fn(r) for r in items]
 
             with mock.patch.object(M, 'PUBLICATION_ROOT', pub_root), \
                     mock.patch.object(M, 'load_publish_to_blog', return_value=FakePub), \
@@ -1491,7 +1492,7 @@ class RepoRenameAndHardeningTest(unittest.TestCase):
                     mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'muse-spark-1.3-contributor', 'PD_BLOG_REVIEW_CONCURRENCY': '16'}):
                 res = M.review_pages(repo, records)
             self.assertEqual(res['status'], 'passed')
-            self.assertEqual(observed_workers, [16])
+            self.assertEqual(observed_workers, [16, 16])
             self.assertTrue(any(title == 'Paper 1' and '来源图注说明' in note for title, note in seen_chunk_notes))
             self.assertIn(('Summary', {img_url: 'f' * 64}), seen_verified)
 

@@ -17,7 +17,7 @@ function parsePaperIds(value) {
     if (value === undefined) return [];
     const paperIds = value.split(',').map(item => item.trim());
     if (!paperIds.length || paperIds.some(item => !item)
-        || paperIds.some(item => !/^(?:arxiv:\d{4}\.\d{4,5}|conference:[a-z0-9]+(?:-[a-z0-9]+)*:\d{4}:(?:icassp-arnumber|openreview-forum-id):[^:]+)$/.test(item))
+        || paperIds.some(item => !/^(?:arxiv:\d{4}\.\d{4,5}|conference:[a-z0-9]+(?:-[a-z0-9]+)*:\d{4}:[a-z0-9-]+:[^:]+)$/.test(item))
         || new Set(paperIds).size !== paperIds.length) throw new Error(`用法：${USAGE}`);
     return paperIds;
 }

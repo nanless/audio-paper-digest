@@ -732,11 +732,31 @@ function extractPaperFactBundle(paper) {
     };
 }
 
+function hasValidApiReaderArticleField(paper) {
+    if (typeof paper.apiReaderArticle !== 'string' || !paper.apiReaderArticle.trim()) return false;
+    if (typeof paper.apiReaderArticleSha256 === 'string' && /^[0-9a-f]{64}$/i.test(paper.apiReaderArticleSha256)) {
+        const actual = crypto.createHash('sha256').update(paper.apiReaderArticle, 'utf8').digest('hex');
+        if (actual !== paper.apiReaderArticleSha256.toLowerCase()) return false;
+    }
+    return true;
+}
+
 function isEligibleAnalyzedPaper(paper) {
     if (!paper || typeof paper !== 'object') return false;
     if (paper.skipped === true) return false;
-    // Unconditionally exclude errored or failed papers even if partial parsed fields exist
+    // Unconditionally exclude errored, failed, abstract-only, or fact-review-blocked papers
     if (paper.error || paper.status === 'failed' || paper.failed === true) return false;
+    if (paper.analysisMode === 'abstract_only') return false;
+    if (paper.analysisFactReviewObligation) return false;
+    if (paper.latestAnalysisAttemptError || paper.digestStatus?.latestAttemptStatus === 'analysis_failed') return false;
+    if (Object.prototype.hasOwnProperty.call(paper, 'apiReaderArticle') && !hasValidApiReaderArticleField(paper)) {
+        return false;
+    }
+    if (paper.analysisManifest && typeof paper.analysisManifest === 'object') {
+        const { isSuccessfulAnalysisRecord } = require('../analysis-engine.js');
+        if (!isSuccessfulAnalysisRecord(paper)) return false;
+        if (!hasValidApiReaderArticleField(paper)) return false;
+    }
     return Boolean(
         (paper.parsed && Object.keys(paper.parsed).length > 0)
         || (paper.apiReaderPlan && (paper.apiReaderPlan.readerTitle || paper.apiReaderPlan.oneSentenceThesis))

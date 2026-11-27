@@ -103,7 +103,7 @@ def _normalize_api_reader_numeric_token(raw):
         previous = token
         token = re.sub(r'(\d),(\d{3})(?!\d)', r'\1\2', token)
     token = re.sub(r'\s+', '', token).lower()
-    match = re.match(r'^([-+]?(?:\d+(?:\.\d+)?|\.\d+))(.*)$', token, flags=re.DOTALL)
+    match = re.match(r'^([-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?)(.*)$', token, flags=re.DOTALL)
     if not match:
         return token
     try:
@@ -119,7 +119,32 @@ def _normalize_api_reader_numeric_token(raw):
         suffix = ''
     if suffix in {'second', 'seconds'}:
         suffix = 's'
-    number_text = str(int(number)) if float(number).is_integer() else str(number)
+    if number == 0:
+        number_text = '0'
+    else:
+        standard = str(int(number)) if float(number).is_integer() and abs(number) < 1e21 else str(number)
+        if 'e' in standard or 'E' in standard:
+            sci_match = re.fullmatch(r'(-?)(\d+)(?:\.(\d+))?[eE]([+-]?\d+)', standard)
+            exp = int(sci_match.group(4)) if sci_match else None
+            if sci_match and exp is not None and abs(exp) <= 100:
+                sign = sci_match.group(1)
+                int_digits = sci_match.group(2)
+                frac_digits = sci_match.group(3) or ''
+                digits = f'{int_digits}{frac_digits}'
+                decimal_pos = len(int_digits) + exp
+                if decimal_pos <= 0:
+                    frac = f"{'0' * (-decimal_pos)}{digits}".rstrip('0')
+                    number_text = f'{sign}0.{frac}' if frac else '0'
+                elif decimal_pos >= len(digits):
+                    number_text = f"{sign}{digits}{'0' * (decimal_pos - len(digits))}"
+                else:
+                    left = digits[:decimal_pos].lstrip('0') or '0'
+                    right = digits[decimal_pos:].rstrip('0')
+                    number_text = f'{sign}{left}.{right}' if right else f'{sign}{left}'
+            else:
+                number_text = standard
+        else:
+            number_text = standard
     return f'{number_text}{suffix}'
 
 
@@ -206,7 +231,7 @@ def _reader_table_header_unit_evidence_failures(table, quotes, *, hooks: Mapping
             for row, cells in enumerate(table.get('rows', [])):
                 raw_cell = cells[column] if column < len(cells) else ''
                 for token in _H._api_reader_numeric_tokens(raw_cell):
-                    number = re.fullmatch(r'([-+]?\d+(?:\.\d+)?)([a-z%]*)', token, re.I)
+                    number = re.fullmatch(r'([-+]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)([a-z%]*)', token, re.I)
                     if not number:
                         continue
                     explicit_extra_cell_units = (
@@ -235,7 +260,7 @@ def _reader_table_header_unit_evidence_failures(table, quotes, *, hooks: Mapping
                             text = surface(sentence)
                             for declared in declared_unit.finditer(text):
                                 clause = re.split(r'\b(?:and|while|but|whereas)\b|[,，]', text[declared.end():])[0]
-                                if re.search(r'\b(?:not|no|never|unavailable|unknown|missing)\b|未报告|未提供|不可得|未知|没有', clause):
+                                if re.search(r'\b(?:not|no|never|unavailable|unknown|missing)\b|未报告|未提供|不可得|未知|没有|并非|不是|未达到|不等于|不超过', clause):
                                     continue
                                 if (_H._api_reader_numeric_tokens(clause) or [None])[0] == token:
                                     return True
@@ -458,12 +483,28 @@ def _api_reader_numeric_tokens(value, *, hooks: Mapping | None = None):
     # 千位分组分支必须吃掉逗号之后的整段数字。
     # 否则 ``10^-4,2000`` 会被截成一个凭空造出的词元
     # ``-4,200`` / ``-4200``，而不是正确解析出 ``-4`` 和 ``2000``。
+    # 与 JS reader-source-evidence-binding.js:251-305 保持同一词法口径：
+    # 不在匹配前对整段字符串做 NFKC，避免上标/下标数字（如 10⁻⁴ 的 ⁴）被提前展平为裸数字 4；
+    # 仅显式纳入 ASCII、全角数字及数学粗体/等宽数字，并在匹配后由 _normalize_api_reader_numeric_token 归一化。
     with _hooks_scope(hooks):
-        grouped_integer = r'(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)'
+        digit = r'[0-9\uFF10-\uFF19\U0001D7CE-\U0001D7FF]'
+        sign = r'[-+\uFF0D\u2212]'
+        dot = r'[.\uFF0E]'
+        percent = r'(?:\s*%|\s*\uFF05)'
+        unit = (
+            r'(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)'
+            r'(?![A-Za-z0-9_\uFF21-\uFF3A\uFF41-\uFF5A\uFF10-\uFF19])'
+        )
+        lookbehind = r'(?<![A-Za-z0-9\uFF21-\uFF3A\uFF41-\uFF5A\uFF10-\uFF19])'
+        grouped_integer = rf'(?:{digit}{{1,3}}(?:[,\uFF0C]{digit}{{3}})+(?!{digit})|{digit}+)'
+        decimal = rf'(?:{digit}*{dot}{digit}+)'
+        doubled_decimal = (
+            rf'(?:\+({decimal})\+\1|[-−－]({decimal})[-−－]\2|{sign}?({decimal})\3)(?!{digit}|{dot}{digit})'
+        )
         pattern = re.compile(
             # 损坏的小数表面整体保留，不能截成部分数字或猜测半值。
-            rf'(?<![A-Za-z0-9])(?:(?:\+(\d*\.\d+)\+\1|[-−－](\d*\.\d+)[-−－]\2|[-+−－]?(\d*\.\d+)\3)(?!\d|\.\d)|[-+−－]?(?:{grouped_integer}(?:\.\d+)?|\.\d+))'
-            r'(?:\s*%|\s*(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)(?![A-Za-z0-9_]))?',
+            rf'{lookbehind}(?:{doubled_decimal}|{sign}?(?:{grouped_integer}(?:{dot}{digit}+)?|{dot}{digit}+))'
+            rf'(?:{percent}|\s*(?:{unit}))?',
             flags=re.IGNORECASE,
         )
         # 和 Node 一样，只处理明确支持的 LaTeXML 具名颜色写法，不改引号、
@@ -487,8 +528,13 @@ def _api_reader_numeric_tokens(value, *, hooks: Mapping | None = None):
             r'±\\pm(?=(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?![A-Za-z0-9_.]))',
             lambda match: ' ' * len(match.group(0)), numeric_surface,
         )
+        numeric_surface = re.sub(
+            r'[０-９．＋－]',
+            lambda match: chr(ord(match.group(0)) - 0xFEE0),
+            numeric_surface,
+        )
         tokens = []
-        for match in pattern.finditer(unicodedata.normalize('NFKC', numeric_surface)):
+        for match in pattern.finditer(numeric_surface):
             normalized_numeric_token = _H._normalize_api_reader_numeric_token(match.group(0))
             tokens.append(normalized_numeric_token)
         # 和 Node 的 LaTeXML 统计别名完全一致。HTML 文本提取器可能

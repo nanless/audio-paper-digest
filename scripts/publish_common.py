@@ -7468,26 +7468,132 @@ def _enable_tcp_keepalive(sock):
             pass
 
 
+PUBLISH_LLM_CONNECT_TIMEOUT_SECONDS = 60.0
+PUBLISH_LLM_SSE_IDLE_TIMEOUT_SECONDS = 180.0
+
+
 class _KeepAliveHTTPConnection(http.client.HTTPConnection):
+    """将 TCP 连接 + 代理 CONNECT + TLS 握手统一限制在 60s 有效预算内，握手完成后再切换为读取/SSE 空闲超时。"""
+
+    def __init__(self, *args, connect_timeout=None, read_timeout=None, **kwargs):
+        default_connect = globals().get('PUBLISH_LLM_CONNECT_TIMEOUT_SECONDS', 60.0)
+        self._connect_timeout = default_connect if connect_timeout is None else connect_timeout
+        self._read_timeout = read_timeout
+        self._handshake_deadline = None
+        super().__init__(*args, **kwargs)
+
+    def _apply_handshake_remaining(self):
+        if self._handshake_deadline is None:
+            return
+        default_connect = globals().get('PUBLISH_LLM_CONNECT_TIMEOUT_SECONDS', 60.0)
+        remaining = self._handshake_deadline - time.monotonic()
+        if remaining <= 0:
+            err = TimeoutError(
+                f'代理 CONNECT 连接或 TLS 握手超过 {int(self._connect_timeout or default_connect)}s，已超时'
+            )
+            err.code = 'PROXY_CONNECT_TIMEOUT' if getattr(self, '_tunnel_host', None) else 'CONNECT_HANDSHAKE_TIMEOUT'
+            raise err
+        if self.sock is not None:
+            try:
+                self.sock.settimeout(max(0.05, remaining))
+            except OSError:
+                pass
+
+    def _tunnel(self):
+        default_connect = globals().get('PUBLISH_LLM_CONNECT_TIMEOUT_SECONDS', 60.0)
+        self._apply_handshake_remaining()
+        try:
+            super()._tunnel()
+        except TimeoutError as exc:
+            err = TimeoutError(
+                f'代理 CONNECT 连接或 TLS 握手超过 {int(self._connect_timeout or default_connect)}s，已超时'
+            )
+            err.code = 'PROXY_CONNECT_TIMEOUT'
+            raise err from exc
+        self._apply_handshake_remaining()
+
     def connect(self):
-        super().connect()
+        default_connect = globals().get('PUBLISH_LLM_CONNECT_TIMEOUT_SECONDS', 60.0)
+        original_timeout = self.timeout
+        effective_connect = original_timeout
+        if isinstance(self._connect_timeout, (int, float)) and self._connect_timeout > 0:
+            if isinstance(original_timeout, (int, float)) and original_timeout > 0:
+                effective_connect = min(float(original_timeout), float(self._connect_timeout))
+            else:
+                effective_connect = float(self._connect_timeout)
+        self._handshake_deadline = (
+            time.monotonic() + float(effective_connect)
+            if isinstance(effective_connect, (int, float)) and effective_connect > 0
+            else None
+        )
+        self.timeout = effective_connect
+        try:
+            try:
+                super().connect()
+            except TimeoutError as exc:
+                if not getattr(exc, 'code', None):
+                    err = TimeoutError(
+                        f'代理 CONNECT 连接或 TLS 握手超过 {int(effective_connect or default_connect)}s，已超时'
+                    )
+                    err.code = (
+                        'PROXY_CONNECT_TIMEOUT'
+                        if getattr(self, '_tunnel_host', None)
+                        else 'CONNECT_HANDSHAKE_TIMEOUT'
+                    )
+                    raise err from exc
+                raise
+        finally:
+            self.timeout = original_timeout
+            self._handshake_deadline = None
+        post_timeout = original_timeout
+        if isinstance(self._read_timeout, (int, float)) and self._read_timeout > 0:
+            if isinstance(original_timeout, (int, float)) and original_timeout > 0:
+                post_timeout = min(float(original_timeout), float(self._read_timeout))
+            else:
+                post_timeout = float(self._read_timeout)
+        if self.sock is not None and isinstance(post_timeout, (int, float)) and post_timeout > 0:
+            try:
+                self.sock.settimeout(max(0.05, float(post_timeout)))
+            except OSError:
+                pass
         _enable_tcp_keepalive(self.sock)
 
 
-class _KeepAliveHTTPSConnection(http.client.HTTPSConnection):
-    def connect(self):
-        super().connect()
-        _enable_tcp_keepalive(self.sock)
+class _KeepAliveHTTPSConnection(_KeepAliveHTTPConnection, http.client.HTTPSConnection):
+    pass
 
 
 class _KeepAliveHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, *args, connect_timeout=None, read_timeout=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        default_connect = globals().get('PUBLISH_LLM_CONNECT_TIMEOUT_SECONDS', 60.0)
+        self._connect_timeout = default_connect if connect_timeout is None else connect_timeout
+        self._read_timeout = read_timeout
+
     def http_open(self, req):
-        return self.do_open(_KeepAliveHTTPConnection, req)
+        return self.do_open(
+            _KeepAliveHTTPConnection,
+            req,
+            connect_timeout=self._connect_timeout,
+            read_timeout=self._read_timeout,
+        )
 
 
 class _KeepAliveHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, *args, connect_timeout=None, read_timeout=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        default_connect = globals().get('PUBLISH_LLM_CONNECT_TIMEOUT_SECONDS', 60.0)
+        self._connect_timeout = default_connect if connect_timeout is None else connect_timeout
+        self._read_timeout = read_timeout
+
     def https_open(self, req):
-        return self.do_open(_KeepAliveHTTPSConnection, req, context=self._context)
+        return self.do_open(
+            _KeepAliveHTTPSConnection,
+            req,
+            context=self._context,
+            connect_timeout=self._connect_timeout,
+            read_timeout=self._read_timeout,
+        )
 
 
 def _read_publish_http_error(exc):
@@ -7609,7 +7715,12 @@ def _open_publish_json_with_account_pool(
         else:
             selection = None
             selected_key = api_keys[0]
-            selected_account_id = get_account_id(selected_key) if is_opencode_go_endpoint(endpoint) else None
+            _get_account_id = globals().get('get_account_id')
+            selected_account_id = (
+                _get_account_id(selected_key)
+                if is_opencode_go_endpoint(endpoint) and callable(_get_account_id)
+                else None
+            )
         headers = build_publish_headers(api_type, selected_key)
         if is_opencode_go_endpoint(endpoint):
             headers['User-Agent'] = 'audio-paper-digest/1.0'
@@ -7628,6 +7739,7 @@ def _open_publish_json_with_account_pool(
         usage_error = None
         pending_usage = begin_pending_llm_request(
             protocol=api_type, model=model, request=payload, directory=usage_directory,
+            account_id=selected_account_id,
         )
         try:
             with opener.open(request, timeout=remaining) as response:
@@ -7647,20 +7759,34 @@ def _open_publish_json_with_account_pool(
                     remaining_read = read_deadline - time.monotonic()
                     if remaining_read <= 0:
                         raise TimeoutError(f'LLM 响应读取超过 {timeout}s 总墙钟上限')
+                    sse_idle_cap = globals().get('PUBLISH_LLM_SSE_IDLE_TIMEOUT_SECONDS', 180.0)
+                    chunk_timeout = (
+                        min(remaining_read, sse_idle_cap)
+                        if is_streamed_responses
+                        else remaining_read
+                    )
                     if raw_sock is not None and hasattr(raw_sock, 'settimeout'):
                         try:
-                            raw_sock.settimeout(max(0.05, remaining_read))
+                            raw_sock.settimeout(max(0.05, chunk_timeout))
                         except OSError:
                             pass
+                    return chunk_timeout
 
                 if is_streamed_responses and isinstance(response, http.client.HTTPResponse):
                     chunks = []
                     total_read = 0
                     while total_read <= response_limit:
-                        _tighten_read_socket_timeout()
+                        idle_budget = _tighten_read_socket_timeout()
                         want = min(65536, response_limit + 1 - total_read)
                         read_fn = getattr(response, 'read1', None)
-                        chunk = read_fn(want) if callable(read_fn) else response.read(want)
+                        try:
+                            chunk = read_fn(want) if callable(read_fn) else response.read(want)
+                        except TimeoutError as exc:
+                            if time.monotonic() < read_deadline and not getattr(exc, 'code', None):
+                                err = TimeoutError(f'SSE 流在 {int(round(idle_budget))}s 内未收到任何分片，已空闲超时')
+                                err.code = 'REQUEST_STREAM_IDLE_TIMEOUT'
+                                raise err from exc
+                            raise
                         if not chunk:
                             break
                         chunks.append(chunk)
@@ -7938,12 +8064,25 @@ def call_publish_llm_api(
             )
             # Muse Spark Contributor 有地区限制，必须使用项目 .env 的
             # HTTP CONNECT 代理。其他模型明确直连，避免误用这组代理设置。
+            connect_timeout_cap = globals().get('PUBLISH_LLM_CONNECT_TIMEOUT_SECONDS', 60.0)
+            sse_idle_cap = globals().get('PUBLISH_LLM_SSE_IDLE_TIMEOUT_SECONDS', 180.0)
+            stream_idle_timeout = (
+                sse_idle_cap
+                if (api_type == 'openai_responses' and payload.get('stream') is True)
+                else None
+            )
             if _publish_llm_requires_proxy(endpoint, model):
                 proxy = get_required_fetch_proxy()
                 opener = urllib.request.build_opener(
                     urllib.request.ProxyHandler({'http': proxy, 'https': proxy}),
-                    _KeepAliveHTTPHandler(),
-                    _KeepAliveHTTPSHandler(),
+                    _KeepAliveHTTPHandler(
+                        connect_timeout=connect_timeout_cap,
+                        read_timeout=stream_idle_timeout,
+                    ),
+                    _KeepAliveHTTPSHandler(
+                        connect_timeout=connect_timeout_cap,
+                        read_timeout=stream_idle_timeout,
+                    ),
                     _PublishLLMNoRedirectHandler(),
                 )
                 opener._pd_live_usage_sync_allowed = True
@@ -7951,8 +8090,14 @@ def call_publish_llm_api(
             else:
                 opener = urllib.request.build_opener(
                     urllib.request.ProxyHandler({}),
-                    _KeepAliveHTTPHandler(),
-                    _KeepAliveHTTPSHandler(),
+                    _KeepAliveHTTPHandler(
+                        connect_timeout=connect_timeout_cap,
+                        read_timeout=stream_idle_timeout,
+                    ),
+                    _KeepAliveHTTPSHandler(
+                        connect_timeout=connect_timeout_cap,
+                        read_timeout=stream_idle_timeout,
+                    ),
                     _PublishLLMNoRedirectHandler(),
                 )
                 opener._pd_live_usage_sync_allowed = True

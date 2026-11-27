@@ -170,7 +170,7 @@ test('OpenReview 下载器在重定向、非 200、非法类型和超长声明�
     assert.equal(c1.canceled, 1);
 
     const c2 = { canceled: 0 };
-    await assert.rejects(api.defaultFetchPdf({ url, forumId: f.forumId }, {
+    await assert.rejects(api.defaultFetchPdf({ url, forumId: f.forumId, maxRetries: 0 }, {
         detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}),
         fetchImpl: async () => ({ status: 503, headers: { get: () => null }, body: makeBody(c2) })
     }), /HTTP 503/);
