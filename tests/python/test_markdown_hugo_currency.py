@@ -144,12 +144,26 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
 
     def test_rendered_statistical_significance_stars_are_data(self):
         html = ('<table><tr><td>W = 2749, p = 0.00908**</td>'
-                '<td>p &lt; 2.2e-16***</td></tr></table>')
+                '<td>p &lt; 2.2e-16***</td><td>0.709**</td><td>-0.412***</td></tr></table>'
+                '<p>效应量 d = 0.58 达 ** 阈值。</p>')
         masked = mask_rendered_symbolic_table_cells(html)
         self.assertNotIn('0.00908**', masked)
         self.assertNotIn('2.2e-16***', masked)
+        self.assertNotIn('0.709**', masked)
+        self.assertNotIn('-0.412***', masked)
+        self.assertNotIn('达 ** 阈值', masked)
         self.assertIn('STATISTICAL_SIGNIFICANCE_STARS', masked)
         self.assertEqual(math_and_emphasis_issues(masked, 'Reader', rendered_html=True), [])
+
+        md = ('| r | p |\n| --- | --- |\n| 0.709** | .004 |\n\n'
+              '统计量 d = 0.58 达 ** 阈值。\n')
+        self.assertEqual(math_and_emphasis_issues(md, 'Reader', rendered_html=False), [])
+
+        # Negative controls: genuinely unpaired bold markers MUST still fail.
+        self.assertTrue(math_and_emphasis_issues('正文出现 **未闭合加粗', 'Reader', rendered_html=False))
+        self.assertTrue(math_and_emphasis_issues('| **0.709 | .004 |', 'Reader', rendered_html=False))
+        bad_html = mask_rendered_symbolic_table_cells('<p>正文出现 **未闭合加粗</p>')
+        self.assertTrue(math_and_emphasis_issues(bad_html, 'Reader', rendered_html=True))
 
     def test_public_html_gate_uses_cell_adapter_on_complete_reader_page(self):
         table = '<table><tr><th>翻译成本</th><th>验证成本</th></tr><tr><td>$0.2</td><td>$1.0/1000</td></tr></table>'

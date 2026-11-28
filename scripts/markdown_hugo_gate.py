@@ -1194,7 +1194,19 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
         issues.append(
             f'{label} 包含裸 $；行内公式必须使用 \\(…\\) 而非 $…$'
         )
-    bold_markers = len(re.findall(r'(?<!\\)\*\*', clean))
+    bold_clean = clean
+    if not rendered_html:
+        bold_clean = re.sub(
+            r'(\|[ \t]*[+−-]?(?:\d+(?:\.\d+)?|\.\d+))(?<!\\)\*{2,3}(?=[ \t]*\|)',
+            r'\1',
+            bold_clean,
+        )
+        bold_clean = re.sub(
+            r'((?:达|达到|满足|显著性|水平|标注|标记|符号)[ \t]+)(?<!\\)\*{2,3}(?=[ \t]*(?:阈值|显著|水平|标记|标注))',
+            r'\1',
+            bold_clean,
+        )
+    bold_markers = len(re.findall(r'(?<!\\)\*\*', bold_clean))
     if bold_markers % 2:
         issues.append(
             f'{label} Markdown 加粗标记 ** 未配对: {bold_markers} 个'
@@ -1202,8 +1214,8 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
     # Consume backslash escapes as pairs, including literal stars inside a
     # label. Otherwise adjacent labels can lend their closing/opening markers
     # to a false whitespace-only match, while a real glued closing is missed.
-    for match in re.finditer(r'\*\*(?:\\[^\n]|[^\\*\n])+\*\*', clean):
-        next_char = clean[match.end():match.end() + 1]
+    for match in re.finditer(r'\*\*(?:\\[^\n]|[^\\*\n])+\*\*', bold_clean):
+        next_char = bold_clean[match.end():match.end() + 1]
         if next_char and (
                 next_char.isalnum() or '\u3400' <= next_char <= '\u9fff'):
             issues.append(
@@ -1743,6 +1755,17 @@ def mask_rendered_symbolic_table_cells(text):
         lambda match: match.group('prefix') + 'STATISTICAL_SIGNIFICANCE_STARS',
         text,
         flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r'(<t[dh]\b[^>]*>[ \t\r\n]*[+−-]?(?:\d+(?:\.\d+)?|\.\d+))(?<!\\)\*{1,3}([ \t\r\n]*</t[dh]>)',
+        r'\1STATISTICAL_SIGNIFICANCE_STARS\2',
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r'((?:达|达到|满足|显著性|水平|标注|标记|符号)[ \t]+)(?<!\\)\*{2,3}(?=[ \t]*(?:阈值|显著|水平|标记|标注))',
+        r'\1STATISTICAL_SIGNIFICANCE_STARS',
+        text,
     )
     return re.sub(
         r'(<t[dh]\b[^>]*>)[ \t\r\n]*[*_]+[ \t\r\n]*(</t[dh]>)',
