@@ -2698,6 +2698,22 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     if (workflowLeak) {
         throw new Error(`读者文章泄漏了流程或证据元话语：${workflowLeak[0]}`);
     }
+    if (options.compileCurrent === true && Array.isArray(value.tableBindings) && Array.isArray(options.structuredArtifacts?.tables)) {
+        const readerTables = require('./lib/reader-tables');
+        for (const binding of value.tableBindings) {
+            if (binding?.sourceType !== 'artifact_table' || !Number.isInteger(binding.sourceTableOrdinal)) continue;
+            const sourceTable = options.structuredArtifacts.tables.find(item => item.ordinal === binding.sourceTableOrdinal);
+            if (!sourceTable) continue;
+            const completeEligibility = readerTables.assessReaderCompleteTableEligibility(sourceTable);
+            const hasShiftedRow = Boolean(readerTables.findShiftedPdfTableRow(
+                sourceTable.matrix,
+                Array.isArray(sourceTable.headerRows) && sourceTable.headerRows.length ? sourceTable.headerRows : [0]
+            ));
+            if (hasShiftedRow && !completeEligibility.eligible) {
+                throw new Error(readerTables.readerSourceTableError(binding.tableIndex, sourceTable, completeEligibility));
+            }
+        }
+    }
     const pdfDisplayBindings = (Array.isArray(value.tableBindings) ? value.tableBindings : [])
         .filter(binding => binding?.sourceType === 'artifact_table'
         && require('./lib/reader-table-pdf-evidence').evidence((options.structuredArtifacts?.tables || [])
@@ -5543,6 +5559,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 let patch = metadataOperation?.kind === repair.READER_VERSION_METADATA_KIND
                     ? repair.parseReaderVersionMetadataPatch(raw)
                     : ordinalCapability ? null : repair.parseReaderPatchJson(extractJsonObjectText(raw));
+                if (patch && !metadataOperation && !ordinalCapability && !conceptTermsContext
+                    && options.readerFactLocalRevision !== true && !repairContext.sectionGroupPlanContract) {
+                    const checkedPatch = repair.normalizeLiveModelNodePatchHeader(patch, repairContext.draftSha256);
+                    if (checkedPatch.typoFixed) {
+                        console.log(`    [deep] 自动纠正当前 reader-node-patch schemaFingerprint 抄写偏差 (${checkedPatch.originalFingerprint?.length || 0} chars)`);
+                        patch = checkedPatch.patch;
+                    }
+                }
                 if (conceptTermsContext) {
                     patch = repair.compileConceptTermsPatch(candidate, patch, conceptTermsContext);
                 }

@@ -13,6 +13,49 @@ const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_
 const candidateFormat = require('./reader-candidate-format');
 const patchCodec = require('./protocol-codec');
 const currentNodePatchHeader = () => patchCodec.recordHeader('reader-node-patch', 'reader-node-patch');
+function boundedHexEditDistance(a, b, maxDistance) {
+    if (Math.abs(a.length - b.length) > maxDistance) return maxDistance + 1;
+    let prev = Array.from({ length: b.length + 1 }, (_v, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+        const curr = [i];
+        let rowMin = i;
+        for (let j = 1; j <= b.length; j++) {
+            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+            const val = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+            curr[j] = val;
+            if (val < rowMin) rowMin = val;
+        }
+        if (rowMin > maxDistance) return maxDistance + 1;
+        prev = curr;
+    }
+    return prev[b.length];
+}
+// Live LLM repair responses occasionally drop/typo a few hex chars when copying the
+// 64-hex static schemaFingerprint from the top of a 100K+ char prompt while copying
+// the 64-hex per-draft draftSha256 at the bottom accurately. Normalize ONLY live
+// model responses that match exact contract, exact 64-hex draftSha256, exact 4-key
+// shape, shared 16-hex prefix, and bounded edit distance <= 8 (never historical headers
+// and never operator/manual patches).
+function normalizeLiveModelNodePatchHeader(patch, expectedDraftSha256) {
+    const current = currentNodePatchHeader();
+    const unchanged = { patch, typoFixed: false, originalFingerprint: patch?.schemaFingerprint ?? null };
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)
+        || Object.getPrototypeOf(patch) !== Object.prototype) return unchanged;
+    if (!own(patch, 'contract') || patch.contract !== current.contract) return unchanged;
+    if (!own(patch, 'schemaFingerprint') || typeof patch.schemaFingerprint !== 'string') return unchanged;
+    if (patch.schemaFingerprint === current.schemaFingerprint) return unchanged;
+    if (patchCodec.hasValidHeader(patch, 'reader-node-patch', 'contract')) return unchanged;
+    if (Object.keys(patch).sort().join(',') !== 'contract,draftSha256,replacements,schemaFingerprint') return unchanged;
+    if (typeof expectedDraftSha256 !== 'string' || patch.draftSha256 !== expectedDraftSha256) return unchanged;
+    if (!/^[a-f0-9]{56,72}$/u.test(patch.schemaFingerprint)) return unchanged;
+    if (!patch.schemaFingerprint.startsWith(current.schemaFingerprint.slice(0, 16))) return unchanged;
+    if (boundedHexEditDistance(patch.schemaFingerprint, current.schemaFingerprint, 8) > 8) return unchanged;
+    return {
+        patch: { ...patch, schemaFingerprint: current.schemaFingerprint },
+        typoFixed: true,
+        originalFingerprint: patch.schemaFingerprint
+    };
+}
 function hasCurrentSpecialPatch(response, family, bodyKeys) {
     return patchCodec.isCurrentHeader(response, family)
         && Object.keys(response).sort().join(',') === ['contract', 'schemaFingerprint', ...bodyKeys].sort().join(',');
@@ -4737,5 +4780,5 @@ module.exports = { readTopLevelMembers, READER_VERSION_METADATA_KIND, buildReade
     validateImplementationAllowance,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     sectionReorganizationOperation, buildRemoveDuplicateTableOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
-    buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, repairTableEvidenceGuidance, loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate,
+    buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeLiveModelNodePatchHeader, currentNodePatchHeader, normalizeUnavailableReaderFigures, buildRepairContext, repairTableEvidenceGuidance, loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate,
     retireFailedCandidate, hasUnusedImplementationAllowance, isCandidateEnvelope, candidateEnvelopeHeader, pdfSourceQuoteFailure };

@@ -281,3 +281,72 @@ test('conference-reader-review-maintenance traverses verified reviewReanalysisAd
         fs.rmSync(tmp, { recursive: true, force: true });
     }
 });
+
+test('normalizeLiveModelNodePatchHeader repairs bounded schemaFingerprint copy typos only when contract and draftSha256 match', () => {
+    const repair = require('../scripts/lib/reader-repair.js');
+    const expected = repair.currentNodePatchHeader();
+    const draftSha = 'a'.repeat(64);
+    const validRepl = [{ path: '/sections/0/body', oldSha256: 'b'.repeat(64), value: 'updated' }];
+
+    // Real typos observed from muse-spark-1.3-contributor on 117K-char aacl-2026 repair prompts (60-63 chars)
+    const typos = [
+        '76782f4343594e8a8ac6dbf812f2e113fbf78b5bcdf15f4ace33833d27cc',
+        '76782f4343594e8a8ac26dbf812f2e113fbf78b5bcdf15f4ace33833dd27ca',
+        '76782f4343594e8a8acb06dbf812f2e113fbf78b5dcbf15f4ace33db33dd7ca',
+        '76782f4343594e8a8acb06dbf812f2f113fbf78b5bcdf15f4ace33833dd7ca0'
+    ];
+    for (const typo of typos) {
+        const res = repair.normalizeLiveModelNodePatchHeader({
+            contract: expected.contract,
+            schemaFingerprint: typo,
+            draftSha256: draftSha,
+            replacements: validRepl
+        }, draftSha);
+        assert.equal(res.typoFixed, true, `expected typo to be repaired: ${typo}`);
+        assert.equal(res.patch.schemaFingerprint, expected.schemaFingerprint);
+    }
+
+    // Negative 1: wrong draftSha256 must NOT be repaired
+    const wrongDraft = repair.normalizeLiveModelNodePatchHeader({
+        contract: expected.contract,
+        schemaFingerprint: typos[0],
+        draftSha256: 'f'.repeat(64),
+        replacements: validRepl
+    }, draftSha);
+    assert.equal(wrongDraft.typoFixed, false);
+
+    // Negative 2: unrelated prefix or huge distance must NOT be repaired
+    const unrelated = repair.normalizeLiveModelNodePatchHeader({
+        contract: expected.contract,
+        schemaFingerprint: '0'.repeat(64),
+        draftSha256: draftSha,
+        replacements: validRepl
+    }, draftSha);
+    assert.equal(unrelated.typoFixed, false);
+
+    // Negative 3: extra unknown key must NOT be repaired
+    const extraKey = repair.normalizeLiveModelNodePatchHeader({
+        contract: expected.contract,
+        schemaFingerprint: typos[0],
+        draftSha256: draftSha,
+        replacements: validRepl,
+        extra: 1
+    }, draftSha);
+    assert.equal(extraKey.typoFixed, false);
+});
+
+test('analysis-contract recognizes explicit CER/WER/MOS versus comparisons and benchmark 5.4x speedups', () => {
+    const ac = require('../scripts/analysis-contract.js');
+    const dcSource = 'Among reference-free models, TEMOTTS is both more intelligible and more emotionally faithful. '
+        + 'It attains the lowest error rates (CER 4.08%, WER 13.11% versus 8.22/18.57 for VITS [14] and 6.88/18.34 for FastSpeech2, '
+        + 'is chosen best in 80.95% of Best–Worst Scaling comparisons for emotion-faithfulness (worst in only 1.90%), and achieves the highest MOS (3.75 ± 0.06).';
+    const smcSource = 'Table 1: FDN training benchmark on CPU. Values are mean ± standard deviation over 90 target RIRs with ten training runs per RIR.\n'
+        + 'The TD method achieves approximately 5.4× faster training compared to FS, while maintaining comparable memory footprint and achieving similar final loss values.';
+    const nonExpSource = 'This position paper outlines an open conceptual framework for acoustic design and discusses future directions without reporting empirical benchmarks.';
+    const ungroundedSpeedup = 'In principle, the module runs 2x faster on GPU hardware.';
+
+    assert.equal(ac.classifySourceQuantitativeEvidence(dcSource), true);
+    assert.equal(ac.classifySourceQuantitativeEvidence(smcSource), true);
+    assert.equal(ac.classifySourceQuantitativeEvidence(nonExpSource), false);
+    assert.equal(ac.classifySourceQuantitativeEvidence(ungroundedSpeedup), false);
+});

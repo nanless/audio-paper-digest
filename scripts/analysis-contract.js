@@ -1686,10 +1686,26 @@ function classifyGenericSourceQuantitativeEvidence(sourceText, sentences = null)
             .replace(/\b(?:source\s+)?sweeps?\s+[−+-]?\d+(?:\.\d+)?[◦°]\s*[→↔]\s*[−+-]?\d+(?:\.\d+)?[◦°]/giu, ' ')
             .replace(/\bthe other\s+[−+-]?\d+(?:\.\d+)?[◦°]\s*[→↔]\s*[−+-]?\d+(?:\.\d+)?[◦°]/giu, ' ')
             .replace(/\brandom\s+SNR\s+(?:between|from)\s+[−+-]?\d+(?:\.\d+)?\s+(?:and|to)\s+[−+-]?\d+(?:\.\d+)?\s*dB\b/giu, ' ');
-        if (!hasCoreSummaryQuantitativeEvidence(resultSentence)) return false;
         const localContext = values.slice(Math.max(0, index - 1), Math.min(values.length, index + 2)).join(' ');
-        return /(?:experiment|evaluation|result|benchmark|test set|dataset|table|metric|实验|评测|结果|基准|测试集|数据集|表格|指标)/i
-            .test(localContext)
+        const widerBenchmarkContext = values.slice(Math.max(0, index - 4), Math.min(values.length, index + 3)).join(' ');
+        const wrappedNextLine = [resultSentence, values[index + 1] || ''].join(' ');
+        const hasBenchmarkContext = /(?:experiment|evaluation|result|benchmark|test set|dataset|table|metric|实验|评测|结果|基准|测试集|数据集|表格|指标)/i
+            .test(localContext);
+        // Benchmark-grounded multiplicative speedups (e.g. "achieves approximately 5.4× faster\ntraining compared to FS")
+        // are genuine measured quantitative comparisons when accompanied by benchmark/table context within ~4 PDF lines.
+        if (/(?:experiment|evaluation|result|benchmark|test set|dataset|table|metric|实验|评测|结果|基准|测试集|数据集|表格|指标)/i.test(widerBenchmarkContext)
+            && /\b(?:achieves?|attains?|obtains?|delivers?|provides?|shows?|yields?|reaches?|runs?)\b[^。！？!?\n]{0,48}\d+(?:\.\d+)?\s*(?:×|x)\s*(?:faster|slower|speedup)\b/i.test(resultSentence)
+            && /\b(?:compared\s+(?:with|to)|versus|vs\.?|over|than)\b/i.test(wrappedNextLine)) {
+            return true;
+        }
+        if (!hasCoreSummaryQuantitativeEvidence(resultSentence)) return false;
+        return hasBenchmarkContext
+            // Explicit own measured metric comparisons (e.g. "It attains the low-\nest error rates (CER 4.08%, WER 13.11% versus ...)")
+            // are direct quantitative results even when 2-column PDF wrapping splits the verb onto the preceding line.
+            || (/\b(?:attains?|achieves?|obtains?|yields?|outperforms?)\b/i.test(localContext)
+                && !/\b(?:(?:prior|previous|earlier|related)\s+(?:work|stud(?:y|ies))|hypothetical(?:ly)?|assuming|suppose)\b/i.test(localContext)
+                && /\b(?:versus|vs\.?|compared\s+(?:with|to)|outperforming)\b/i.test(observedSentence)
+                && /\b(?:CER|WER|MOS|PESQ|STOI|SI-SDR|SDR|EER|UAR|F1|BLEU|ROUGE|FAD|CLAP|MCD|PSNR|SSIM|AUROC|AUC|mAP|accuracy|error\s+rates?)\b/i.test(observedSentence))
             // 听测结果须明确本方法、实测指标和已发生的数值变化。
             // 人数、量表、音频时长、预测及转述的旧工作不能用这条规则通过。
             || /^In (?:a|our) listening study\b[^,.;]{0,100},\s*(?:our|the proposed|this|region[- ]aware)\s+(?:method|model|system|approach|masking)\s+(?:reduces?|lowers?|improves?|increases?)\s+(?:the\s+)?(?:perceived\s+accent|accent\s+(?:ratings?|scores?))\s+from\s+[+-]?\d+(?:\.\d+)?\s+to\s+[+-]?\d+(?:\.\d+)?\b/i.test(observedSentence)

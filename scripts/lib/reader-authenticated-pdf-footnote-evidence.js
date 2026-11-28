@@ -25,6 +25,11 @@ function encodeEvidence(proof, header) {
 }
 const SHA = /^[a-f0-9]{64}$/u;
 const program = path.resolve(__dirname, '../reader_authenticated_pdf_footnote_evidence.py');
+// Pre-45472b00 exact script SHA: commit 45472b00 only added fitz.TOOLS.mupdf_display_errors/warnings(False)
+// with zero change to PDF footnote extraction logic or coordinates.
+const COMPAT_LOG_SILENCING_EXTRACTOR_SHAS = new Set([
+    'f27bfd4d5a026bb0e10fbcce3085b8db846430a08f0a5ad856d0ff90ed340e1a'
+]);
 
 function sourceFailure(cause) {
     const error = new Error('认证 PDF 脚注来源核验失败：' + String(cause?.message || cause), { cause });
@@ -119,8 +124,17 @@ function assertEvidence(resource, sourceText) {
         throw sourceFailure('资源类型或原引文与 PDF 脚注证明不一致');
     }
     const header = evidenceHeader(proof);
-    const matches = deriveCandidates(state.source.sourceText).filter(candidate => candidate.url === resource.originalUrl
-        && candidate.type === resource.type && isDeepStrictEqual(encodeEvidence(candidate.authenticatedPdfFootnoteEvidence, header), proof));
+    const matches = deriveCandidates(state.source.sourceText).filter(candidate => {
+        if (candidate.url !== resource.originalUrl || candidate.type !== resource.type) return false;
+        if (isDeepStrictEqual(encodeEvidence(candidate.authenticatedPdfFootnoteEvidence, header), proof)) return true;
+        if (COMPAT_LOG_SILENCING_EXTRACTOR_SHAS.has(proof.extractorImplementationSha256)) {
+            return isDeepStrictEqual(encodeEvidence({
+                ...candidate.authenticatedPdfFootnoteEvidence,
+                extractorImplementationSha256: proof.extractorImplementationSha256
+            }, header), proof);
+        }
+        return false;
+    });
     if (matches.length !== 1) throw sourceFailure('已保存脚注证明的编号、归属、URL、坐标或来源已变化');
     boundary(() => state.source.assertUnchanged());
     return true;

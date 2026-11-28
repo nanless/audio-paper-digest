@@ -1371,7 +1371,7 @@ module.exports = { READER_TABLE_SELECTION_CONTRACT, originalTableSelectionDomain
     READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,
     hasExplicitRepeatedScientificMeasurement, bracketedNumericVectors,
     hasSourceBoundRepeatedNumericVector, hasSourceBoundRepeatedRangeChain,
-    findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
+    findReaderTablePasteDuplication, findShiftedPdfTableRow, assessReaderTableSelectionEligibility,
     effectiveReaderTableRows, effectiveReaderTableHeaderRows, putReaderTableHeaderFirst,
     renderReaderTableSelection, readCompiledReaderTableSelection, repairUniqueReaderTableSelectionHeader,
     readerTableCellDisplay, projectReaderCellForValidation, escapeMarkdownTableCell, unescapeMarkdownTableCell,
