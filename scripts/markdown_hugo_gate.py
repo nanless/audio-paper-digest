@@ -1222,6 +1222,83 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
                 f'{label} Markdown 加粗结束符后紧贴正文，必须补空格或标点'
             )
             break
+    if not rendered_html:
+        # 检查未替换的图表/公式占位符（如 [[FIGURE_1]]）。
+        placeholder_match = re.search(r'\[\[(?:FIGURE|TABLE|FORMULA)_\d+\]\]', clean)
+        if placeholder_match:
+            issues.append(
+                f'{label} 包含未替换的渲染占位符: {placeholder_match.group(0)}'
+            )
+        # 检查未用反引号包裹的裸非标准 HTML 标签（Hugo unsafe=true 会被浏览器静默吞掉，如 <sc>、<interrupt>、<silent>）。
+        allowed_md_html_tags = frozenset({
+            'sup', 'sub', 'br', 'hr', 'details', 'summary', 'mark', 'kbd', 'abbr',
+            'small', 'del', 'ins', 'em', 'strong', 'code', 'pre', 'a', 'img',
+            'span', 'div', 'p', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
+            'ul', 'ol', 'li', 'blockquote', 'figure', 'figcaption',
+        })
+        tag_scan = re.sub(r'\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)', ' ', clean)
+        tag_scan = re.sub(r'<!--[\s\S]*?-->|<https?://[^>]+>|<mailto:[^>]+>', ' ', tag_scan)
+        raw_tags = []
+        for tag_match in re.finditer(r'</?([A-Za-z][A-Za-z0-9_-]{0,24})(?:\s[^<>]*)?/?>', tag_scan):
+            if tag_match.group(1).lower() not in allowed_md_html_tags:
+                token = tag_match.group(0)
+                if token not in raw_tags:
+                    raw_tags.append(token)
+        if raw_tags:
+            issues.append(
+                f'{label} 包含未转义的裸尖括号标签（须使用反引号包裹以免被 Hugo 吞掉）: {", ".join(raw_tags[:5])}'
+            )
+        # 检查 Markdown 表格中的断词残行与孤立续行（如 en- / vironment、dif- / ference 或首行仅含碎片词 ments）。
+        lines = base.splitlines()
+        line_idx = 0
+        while line_idx < len(lines):
+            if re.match(r'^\s*\|.*\|\s*$', lines[line_idx]):
+                block_start = line_idx
+                while line_idx < len(lines) and re.match(r'^\s*\|.*\|\s*$', lines[line_idx]):
+                    line_idx += 1
+                block = lines[block_start:line_idx]
+                sep_idx = next(
+                    (idx for idx, row_line in enumerate(block)
+                     if re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', row_line)),
+                    None,
+                )
+                if sep_idx is not None and sep_idx >= 1:
+                    data_rows = [
+                        [cell.strip() for cell in row_line.strip().strip('|').split('|')]
+                        for row_line in block[sep_idx + 1:]
+                    ]
+                    table_broken = False
+                    if data_rows:
+                        first_row = data_rows[0]
+                        non_empty_first = [cell for cell in first_row if cell]
+                        if (len(first_row) >= 3 and first_row[0] == ''
+                                and len(non_empty_first) == 1
+                                and re.fullmatch(r'[a-z]{2,15}[.,;:]?', non_empty_first[0])):
+                            issues.append(
+                                f'{label} Markdown 表格首行疑似 PDF 断行残片: {non_empty_first[0]!r}'
+                            )
+                            table_broken = True
+                    if not table_broken:
+                        for row_pos in range(len(data_rows) - 1):
+                            cur_row, nxt_row = data_rows[row_pos], data_rows[row_pos + 1]
+                            if len(cur_row) != len(nxt_row) or len(cur_row) < 2:
+                                continue
+                            empty_next = sum(1 for cell in nxt_row if not cell)
+                            if empty_next < max(1, len(nxt_row) - 2):
+                                continue
+                            for col_pos in range(len(cur_row)):
+                                if (re.search(r'[A-Za-z]{2,}-$', cur_row[col_pos])
+                                        and re.match(r'^[a-z]{2,}', nxt_row[col_pos])):
+                                    issues.append(
+                                        f'{label} Markdown 表格存在跨行断词残片: '
+                                        f'{cur_row[col_pos]!r} / {nxt_row[col_pos]!r}'
+                                    )
+                                    table_broken = True
+                                    break
+                            if table_broken:
+                                break
+            else:
+                line_idx += 1
     return issues
 
 

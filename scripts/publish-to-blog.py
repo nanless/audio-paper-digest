@@ -2386,6 +2386,60 @@ def multimodal_review_images(
             payload_data_b64 = image_payload.get('data') if isinstance(image_payload, dict) else None
             payload_sha = hashlib.sha256(str(payload_data_b64 or '').encode('ascii')).hexdigest() if payload_data_b64 else ''
             cover_expectation = _digest_cover_review_expectation(url)
+            # 硬性像素边缘截断门禁（跳过汇总封面、完整 PDF 原页及极小测试占位图）：
+            # 拦截上/下边缘切穿图框、文字或极端横条切片的残缺裁切图，防止其漏过多模态审查。
+            pub_ctx_item = publication_figure_contexts.get(url) if isinstance(publication_figure_contexts, dict) else None
+            pub_display_mode = str(((pub_ctx_item or {}).get('reviewTarget') or {}).get('displayMode') or '')
+            is_whole_pdf_page = (
+                'source-pdf-full-page' in pub_display_mode
+                or 'source-pdf-attested-source-page-only' in pub_display_mode
+                or 'source-page-view' in url
+            )
+            if payload_data_b64 and not cover_expectation and not is_whole_pdf_page:
+                try:
+                    from PIL import Image as _PILImage
+                    _raw_img_bytes = base64.b64decode(payload_data_b64, validate=True)
+                    with _PILImage.open(io.BytesIO(_raw_img_bytes)) as _pil_im:
+                        _rgb = _pil_im.convert('RGB')
+                        _w, _h = _rgb.size
+                        if _w >= 80 and _h >= 40:
+                            _px = _rgb.load()
+                            def _edge_ratio(_xs, _ys, _th):
+                                _cnt = 0
+                                _tot = 0
+                                for _yy in _ys:
+                                    for _xx in _xs:
+                                        _r, _g, _b = _px[_xx, _yy]
+                                        _tot += 1
+                                        if _r < _th or _g < _th or _b < _th:
+                                            _cnt += 1
+                                return _cnt / max(1, _tot)
+                            _l2_220 = _edge_ratio(range(min(2, _w)), range(_h), 220)
+                            _r2_220 = _edge_ratio(range(max(0, _w - 2), _w), range(_h), 220)
+                            _fullbleed = (_l2_220 > 0.25 and _r2_220 > 0.25)
+                            _t2_150 = _edge_ratio(range(_w), range(min(2, _h)), 150)
+                            _t2_220 = _edge_ratio(range(_w), range(min(2, _h)), 220)
+                            _b2_150 = _edge_ratio(range(_w), range(max(0, _h - 2), _h), 150)
+                            _t3_240 = _edge_ratio(range(_w), range(min(3, _h)), 240)
+                            _clip_reasons = []
+                            if not _fullbleed and (_t2_150 > 0.030 or _t2_220 > 0.045):
+                                _clip_reasons.append(f'顶部边缘切穿图内元素(top2_dark={_t2_150:.3f}, top2_ink={_t2_220:.3f})')
+                            if not _fullbleed and _b2_150 > 0.080:
+                                _clip_reasons.append(f'底部边缘切穿图内元素或图注(bot2_dark={_b2_150:.3f})')
+                            if (_w / _h) > 4.2 and _t3_240 > 0.15:
+                                _clip_reasons.append(f'极端窄条残切(宽高比={_w / _h:.1f}, top3_nonwhite={_t3_240:.2f})')
+                            if _clip_reasons:
+                                load_issues.append({
+                                    'severity': 'error',
+                                    'description': (
+                                        f'图片 {match_index + 1}（{url[:200]}）疑似裁切残缺：'
+                                        + '；'.join(_clip_reasons)
+                                        + '。须使用完整原图或完整 PDF 原页，不得发布被切掉上半部或下半部的残图。'
+                                    ),
+                                })
+                                continue
+                except Exception:
+                    pass
             # 仅对“已在同批独立论文页以 0-warning 纯净通过且像素哈希严格一致”的非封面预览图免除汇总页重复 LLM 调用；
             # 只要论文页出现过任何 warning/error（如 2611.31735 图 3）或像素不一致，仍强制重新审查。
             if (verified_paper_images and not cover_expectation and payload_sha
@@ -2431,7 +2485,7 @@ def multimodal_review_images(
 
 【步骤二：对照 `figureObservation` 核查以下项目】
 1. 图片内容是否可解码、清晰且与 alt 和论文局部正文语义一致。
-2. 图片是否包含明显错误、空白、损坏、无关内容或隐私信息。
+2. 图片是否包含明显错误、空白、损坏、裁切残缺、无关内容或隐私信息。**必须重点检查图片顶部与底部边缘**：若架构框、箭头、子图标题、坐标轴或图注文字在边缘被拦腰切断，或画面仅剩整幅大图的底部图例/窄条残片，必须判为 `severity: "error"`。
 3. 图片 alt 文本是否为空、重复或与实际像素冲突。
    概括性的任务/方法示意图标题不限定画面必须是流程图或模块框图；输入与输出的实例、频谱、音符或其他结果可用于展示任务。不能仅因 alt 没有枚举坐标轴、图层或全部细节而判为语义冲突；须指出 alt 或局部正文中的具体断言与本张像素如何矛盾，证据不足时只说明局限。该规则不豁免真实的图例、坐标、方向、数值、来源或科学内容冲突（包含对数轴、双纵轴与截断轴误读）。
 4. 作者文字或图注也可能与实际像素相互矛盾，不能无条件将文字当作图像事实。若局部正文无条件复述与本图冲突的结论，仍须报告具体冲突；若正文已明确归属并如实披露这种矛盾及不确定性，不要要求它强行统一成一个确定结论。

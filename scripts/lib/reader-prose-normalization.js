@@ -1339,8 +1339,21 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = [], options =
         .replace(/([同唯统单])\s*1\s*(?=[\u3400-\u9fff])/g, '$1一')
         .replace(/归\s*1\s*(?=化|后|组合|处理|权重)/g, '归一')
         .replace(
-            /(\d+)\s+(?=(?:数据集|模型|系统|方法|基线|语料库|语言|方言|条件|任务|阶段|模块|组件|分支|锚点|图|表)(?:[，。；：、\s]|$))/g,
-            '$1 个'
+            /(\d+)(\s+)((?:数据集|模型|系统|方法|基线|语料库|语言|方言|条件|任务|阶段|模块|组件|分支|锚点|图|表))(?=[，。；：、\s]|$)/g,
+            (match, num, _ws, noun, offset, whole) => {
+                // 年份（如 2023/2026）不插量词“个”。
+                if (/^(?:19\d{2}|20[0-3]\d)$/.test(num)) return match;
+                const before = whole.slice(0, offset);
+                // 紧贴拉丁字母、数字、小数点、下划线或连字符的版本号/代号不插“个”（如 BEAT2、Wav2vec 2.0、v1.1、S5、D1、ESC-50）。
+                if (/[A-Za-z0-9._-]$/.test(before)) return match;
+                const beforeTrimmed = before.trimEnd();
+                // 前接英文专名/缩写/括号缩写或序数“第”的基准与模型代号不插“个”（如 DCASE 2026、Tacotron 2、(CAS) 2023、第 2 阶段）。
+                if (/[A-Za-z0-9._-]$|\([A-Za-z0-9._-]+\)$|第$/u.test(beforeTrimmed)) return match;
+                const after = whole.slice(offset + match.length);
+                // 后接编号标签（如 任务 1、阶段 2a）不插“个”。
+                if (/^\s*[0-9A-Za-z]/.test(after)) return match;
+                return `${num} 个${noun}`;
+            }
         )
         .replace(/([\u3400-\u9fff\uE201])([-+]\d)/g, '$1 $2')
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:MWh|mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|kbps?|Mbps?|Gbps?|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')

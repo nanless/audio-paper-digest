@@ -25,7 +25,7 @@ function hasNotReleasedContext(value) {
     return RESOURCE_NOT_RELEASED.test(stripComparativeClosedSourceContrast(value));
 }
 const THIRD_PARTY_RESOURCE = /\b(?:baselines?|third[- ]party|prior\s+work|previous\s+work|other\s+(?:authors?|researchers?|projects?)|from\s+an?\s+(?:publicly\s+|openly\s+)?(?:available|released|open[- ]source|pretrained|pre-trained)\b|we\s+(?:(?:also|directly|further|additionally|only|simply|mainly|primarily|first|instead)\s+){0,2}(?:use|used|utiliz(?:e|ed)|adopt(?:ed)?|reuse[d]?|build\s+on|base\s+our\s+[a-z-]+\s+on|download(?:ed|ing)?|load(?:ed|ing)?|compar(?:e[ds]?|ing)\s+(?:with|against)|(?:follow(?:ed|ing)?|employ(?:ed|ing)?|leverag(?:e[ds]?|ing)|obtain(?:ed|ing)?)\s+(?:the\s+(?:official|public(?:ly)?|open[- ]source(?:d)?|released|available|pre-?trained|existing|original|prior|baseline|third[- ]party)|an?\s+(?:official|public(?:ly)?|open[- ]source(?:d)?|released|available|pre-?trained|existing|original|prior|baseline|third[- ]party)|their\b|its\b|from\b)|implement(?:ed)?\s+[^.,;]{0,40}\s+(?:following|based\s+on)|initializ(?:e|ed)\s+[^.,;]{0,40}\s+from|(?:fine-?tun(?:e[ds]?|ing)|adapt(?:ed|ing)?)\s+(?!our\b|this\b)(?:(?:the|an?)\s+(?:(?:official|public(?:ly)?|open[- ]source(?:d)?|released|available|pre-?trained|existing|original|prior)\s+){1,3}|(?!the\b|an?\b|its\b|their\b)[a-z][a-z0-9._-]*(?:[’']s\s+|\s+(?:using|with|from|via)\s+))|evaluat(?:e[ds]?|ing)\s+(?:(?:(?:both|several|multiple|two|three|four|five|\d+)\s+)?(?:commercial\s+and\s+)?open[- ]source|(?!our\b|this\b|these\b|the\s+proposed\b)[^.,;]{1,50}\s+(?:using|with|via|from)\b)|run\s+its\s+public|partition(?:ed)?\s+[^.;]{0,120}\s+according\s+to)|our\s+(?:pipeline|system|method|framework|approach|architecture|model|implementation|baseline|setup|workflow|experiments?)\s+(?:uses?|utiliz(?:e[ds]?)|adopts?|reuses?|builds?\s+on|follows?|employs?|leverages?|loads?|relies\s+on|depends\s+on|incorporates?|integrates?)\s+(?:the|an?)\s+(?:official|public(?:ly)?|open[- ]source(?:d)?|released|available|pre-?trained|existing|original|prior)\b|(?:is|was|are|were)\s+implemented\s+(?:using|based\s+on)\s+(?:the\s+(?:official|public|open[- ]source|released)|an?\s+(?:public|open[- ]source|official|existing|prior))\b|(?:made\s+available|released)\s+by\s+the\s+authors\s+(?:is|are)\s+used)\b|(?:第三方|基线|已有工作|先前工作|其他作者|他人)/i;
-const RESOURCE_AFFIRMATIVE = /\b(?:(?:available|released|published|open[- ]source(?:d)?)(?:\b|(?=(?:(\d{1,2})\1|\d{1,2})\b))|public\b)|\b(?:is|are)\s+(?:publicly\s+|openly\s+)?hosted\s+(?:at|on)\b|\b(?:can\s+be|is|are)\s+(?:publicly\s+|openly\s+)?(?:found|accessed|downloaded)\s+(?:at|on|via)\b|\b(?:we|authors?)\s+(?:(?:have|has)\s+)?(?:(?:publicly|openly|also|freely|hereby|jointly)\s+){0,2}(?:release[ds]?|provide[ds]?|publish(?:ed|es)?|share[ds]?|open[- ]source[ds]?)\b|(?:已|现已|公开|开源|发布|提供|可获取|可用)/i;
+const RESOURCE_AFFIRMATIVE = /\b(?:(?:available|released|published|open[- ]source(?:d)?)(?:\b|(?=(?:(\d{1,2})\1|\d{1,2})\b))|public\b)|\b(?:is|are)\s+(?:publicly\s+|openly\s+)?hosted\s+(?:at|on)\b|\b(?:can\s+be|is|are)\s+(?:publicly\s+|openly\s+)?(?:found|accessed|downloaded)\s+(?:at|on|via)\b|\b(?:we|authors?)\s+(?:(?:have|has)\s+)?(?:(?:publicly|openly|also|freely|hereby|jointly)\s+){0,2}(?:release[ds]?|provide[ds]?|publish(?:ed|es)?|share[ds]?|open[- ]source[ds]?)\b|\band\s+(?:(?:publicly|openly|also|freely|hereby|jointly)\s+){0,2}(?:release|provide|publish|share|open[- ]source)\s+our\b|(?:已|现已|公开|开源|发布|提供|可获取|可用)/i;
 const GENERIC_FIRST_PARTY_RESOURCE = /\b(?:resources?|materials?)\s+(?:for|from)\s+(?:this|our|the)\s+(?:study|work|paper|project)\s+(?:are|is)\s+(?:publicly\s+)?available\b|\b(?:we|the\s+authors?)\s+(?:(?:have|has)\s+)?(?:release[ds]?|provide[ds]?)\s+(?:the\s+)?(?:resources?|materials?)\b/i;
 const ATTACHED_FOOTNOTE_RESOURCE_LABEL = /\b\d{1,3}(?=(?:source[- ]code|codes?|codebase|implementation|software|repositor(?:y|ies)|repo|models?(?:\s+weights?)?|weights?|checkpoints?|data|datasets?|corpus|corpora|benchmarks?|demos?|demonstration|artifacts?|reproducibility|reproduction)\b)/gi;
 const TRAILING_FOOTNOTE_RESOURCE_LABEL = /(?<=\b(?:source[- ]code|codes?|codebase|implementation|software|repositor(?:y|ies)|repo|models?|weights?|checkpoints?|data|datasets?|corpus|corpora|benchmarks?|demos?|demonstration|artifacts?|reproducibility|reproduction|materials?))(?:(\d{1,2})\1|\d{1,3})\b/g;
@@ -1083,8 +1083,15 @@ function isCleanElidedLocativeClause(clauseText) {
 }
 
 function classifySingleClauseFirstPartyFacets(rawClause) {
-    const quote = String(rawClause || '').replace(/\bavail-\s*able\b/gi, 'available')
+    const quote = String(rawClause || '')
+        // 先还原 PDF 行末连字符断词（如 Ex-\ntraction -> Extraction、avail-\nable -> available），避免拆词触发未知主体误判。
+        .replace(/([A-Za-z]{2,})-\r?\n[ \t]*([a-z]{2,})/g, '$1$2')
+        .replace(/\bavail-\s*able\b/gi, 'available')
         .replace(/\s+/g, ' ').trim()
+        // 剥离行首编号小节标题（如 "6 Open Access Statement Our ..."）与行首脚注编号（如 "1All accompanying code..." / "1 1All ..."）。
+        .replace(/^\d+(?:\.\d+)*\s+(?:Open\s+Access|Data\s+Availability|Code\s+Availability|Reproducibility|Availability|Artifact)(?:\s+Statement)?\s+(?=(?:Our|We|The\s+authors?|All|Code|Data|Dataset|This)\b)/i, '')
+        .replace(/^(?:\d{1,2}\s+){1,2}(?=[A-Z])/, '')
+        .replace(/^\d{1,2}(?=(?:All|Our|The|We|Code|Data|Dataset|Benchmark|Model|Source|Accompanying|Full|Project)\b)/, '')
         .replace(ATTACHED_FOOTNOTE_RESOURCE_LABEL, '')
         .replace(TRAILING_FOOTNOTE_RESOURCE_LABEL, '')
         .replace(TRAILING_FOOTNOTE_CAP_RESOURCE_LABEL, '');
@@ -1105,7 +1112,7 @@ function classifySingleClauseFirstPartyFacets(rawClause) {
     const prefix = Number.isFinite(firstFacet) ? facetSource.slice(0, firstFacet) : '';
     // 明确命名的外部项目不能只因“code available”被归为作者资源。
     // 无归属前缀的“Code is available”保留；无法确认的命名主体按其他链接处理。
-    const unknownSubject = prefix.replace(/\b(?:our|the|this|these|all|both|an?|we|authors?|have|has|work|paper|project|release|released|releases|provide|provided|provides|publish|published|publishes|share|shared|shares|open[- ]source(?:d)?|publicly|openly|also|freely|hereby|jointly|make|made|pre-?trained|trained|pruned|distilled|quantized|fine-?tun(?:e[ds]?|ing)|compressed|full|complete|official|accompanying|associated|corresponding|source|audio|speech|music|video|evaluation|training|inference|online)\b/gi, '')
+    const unknownSubject = prefix.replace(/\b(?:our|the|this|these|all|both|an?|and|we|authors?|have|has|work|paper|project|release|released|releases|provide|provided|provides|publish|published|publishes|share|shared|shares|open[- ]source(?:d)?|publicly|openly|also|freely|hereby|jointly|make|made|pre-?trained|trained|pruned|distilled|quantized|fine-?tun(?:e[ds]?|ing)|compressed|full|complete|official|accompanying|associated|corresponding|source|audio|speech|music|video|evaluation|training|inference|online|extraction|analysis|prompting|benchmark(?:ing)?|preprocessing|postprocessing|reproduction|reproducibility|experiment(?:al)?|implementation|scripts?|anonymized|clinician[- ]labell?ed|relevant)\b/gi, '')
         .replace(/(?:本文|本研究|我们|作者|现已|已|公开|提供|的)|[\s:：,，]/gu, '');
     const prefixTrimmed = prefix.trim();
     const hasThirdPartyPossessive = /\b(?:their|his|her|its)\b/i.test(prefixTrimmed)
@@ -1114,7 +1121,7 @@ function classifySingleClauseFirstPartyFacets(rawClause) {
     const explicitAuthor = !hasThirdPartyPossessive && !hasPrefixConsumptionVerb && (
         /^(?:our\b|the\s+authors?[’']?\b|本文|本研究|我们|作者)/i.test(prefixTrimmed)
         || /^(?:we|the\s+authors?)\s+(?:(?:have|has)\s+)?(?:(?:also|hereby|publicly|openly|freely|jointly)\s+){0,2}(?:release[ds]?|provide[ds]?|publish(?:ed|es)?|share[ds]?|open[- ]source[ds]?|make|made)\b/i.test(prefixTrimmed)
-        || /^(?:we|the\s+authors?)\b[^,.;]{0,40}\bour$/i.test(prefixTrimmed)
+        || /^(?:we|the\s+authors?)\b[^,.;]{0,80}\bour$/i.test(prefixTrimmed)
     );
     if (hasThirdPartyPossessive) return ['third_party'];
     if (unknownSubject && !explicitAuthor) return ['third_party'];
@@ -2071,6 +2078,7 @@ module.exports = {
     inferContextFacetsForRetraction,
     classifyRepositoryHostFacets,
     normalizePaperSourceRepositoryToken,
+    classifySingleClauseFirstPartyFacets,
     classifyPaperSourceResourceFacets,
     paperSourceResourceFacets, resourceClassificationIsCurrent,
     paperSourceResourceQuote,

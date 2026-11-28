@@ -1275,6 +1275,13 @@ def _extract_page1_lines(page: fitz.Page) -> tuple[list[dict], list[dict], float
         if ABSTRACT_START_RE.match(row_text) or any(ABSTRACT_START_RE.match(r["text"]) for r in row_sorted):
             abstract_y = row_y
             break
+        # PMLR 等会议论文在摘要上方印有 "Editors: ..."；ISCA DC 等短文可能无 Abstract 直接以 "1. Background..." 开始
+        if row_y >= page_h * 0.16 and (
+            re.match(r"^editors?\s*[:：]", row_text, re.IGNORECASE)
+            or re.match(r"^(?:i\.|1\.?)\s+(?:background|motivation|overview|problem\s+statement)\b", row_text, re.IGNORECASE)
+        ):
+            abstract_y = row_y
+            break
         # v3: 首页 Teaser Figure 1 图注位于作者/机构区之后、摘要之前，截断以防图内文字与编号框混入机构
         if _GEOMETRIC_GUARDS_ENABLED and row_y >= page_h * 0.16 and re.match(r"^(?:Figure|Fig\.?)\s*1\s*[:.]", row_text, re.IGNORECASE):
             abstract_y = row_y
@@ -3666,6 +3673,194 @@ def _try_mode_inline_author_aff(merged_lines: list[dict]) -> tuple[list[dict], s
     return None
 
 
+def _try_mode_pmlr_stacked_authors(merged_lines: list[dict], page_w: float) -> tuple[list[dict], str] | None:
+    """Mode F: PMLR-style left-aligned stacked author/affiliation blocks (optionally with right-aligned emails)."""
+    if not merged_lines or page_w <= 0:
+        return None
+    clean_lines: list[dict] = []
+    for ln in merged_lines:
+        txt = ln["text"].strip()
+        if not txt:
+            continue
+        if ABSTRACT_START_RE.match(txt) or re.match(r"^editors?\s*[:：]", txt, re.IGNORECASE):
+            break
+        if DATE_LINE_RE.match(txt) or VENUE_OR_STATUS_RE.match(txt) or FOOTNOTE_ROLE_RE.match(txt):
+            continue
+        clean_lines.append(ln)
+    if len(clean_lines) < 3:
+        return None
+
+    # Require consistent left-aligned column near left margin (never centered headers).
+    left_xs = [ln["x0"] for ln in clean_lines]
+    base_x0 = min(left_xs)
+    if base_x0 > page_w * 0.25:
+        return None
+    if any(abs(x - base_x0) > 6.0 for x in left_xs):
+        return None
+
+    def _font_flags(ln: dict) -> tuple[bool, bool]:
+        word_spans = [
+            s for s in (ln.get("spans") or [])
+            if not s.get("is_gap") and re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", s.get("text", ""))
+        ]
+        if not word_spans:
+            return False, False
+        # Inspect left-of-wide-gap spans only so right-aligned monospace emails don't mask author bold style
+        left_spans = []
+        for s in (ln.get("spans") or []):
+            if s.get("is_gap") and float(s.get("gap_pt", 0.0)) >= 25.0:
+                break
+            if re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", s.get("text", "")):
+                left_spans.append(s)
+        target_spans = left_spans or word_spans
+        is_bold = any(
+            (int(s.get("flags", 0)) & 16) != 0 or "bold" in str(s.get("font", "")).lower()
+            for s in target_spans
+        )
+        is_italic = any(
+            (int(s.get("flags", 0)) & 2) != 0
+            or "ital" in str(s.get("font", "")).lower()
+            or "obliq" in str(s.get("font", "")).lower()
+            for s in target_spans
+        )
+        return is_bold, is_italic
+
+    def _split_wide_gap_email(ln: dict) -> tuple[str, bool]:
+        spans = ln.get("spans") or []
+        gap_idx = next(
+            (i for i, s in enumerate(spans) if s.get("is_gap") and float(s.get("gap_pt", 0.0)) >= 25.0),
+            None,
+        )
+        if gap_idx is None:
+            return ln["text"].strip(), False
+        left_txt = _clean_ws("".join(s.get("text", "") for s in spans[:gap_idx]))
+        right_txt = _clean_ws("".join(s.get("text", "") for s in spans[gap_idx + 1:]))
+        if "@" in right_txt:
+            return left_txt, True
+        return ln["text"].strip(), False
+
+    _subunit_re = re.compile(
+        r"\b(?:dept\.?|department|school|college|faculty|division|center|centre|lab|labs|laborator(?:y|ies)|"
+        r"group|chair|program|unit|sribd|stms|isir|institute\s+of\s+acoustics|smart\s+nation)\b",
+        re.IGNORECASE,
+    )
+    _parent_org_re = re.compile(
+        r"\b(?:univ(?:ersit[yéèêiäöüa-z]*|ersidad|ersidade|ersit[àá]|ersit[äa]t)?|"
+        r"chinese\s+academy\s+of\s+sciences|ircam|cnrs|sorbonne|a[\s⋆*]star)\b",
+        re.IGNORECASE,
+    )
+    _template_stub_re = re.compile(r"^\s*Affiliation\s+line\s+\d+\s*$", re.IGNORECASE)
+    _trailing_template_stub_re = re.compile(r"\s+Affiliation\s+line\s+\d+\s*$", re.IGNORECASE)
+
+    groups: list[tuple[list[str], list[str]]] = []
+    cur_authors: list[str] = []
+    cur_aff_raw: list[str] = []
+    saw_wide_email = False
+    saw_bold_author_italic_aff = False
+
+    def _flush_group() -> bool:
+        nonlocal cur_authors, cur_aff_raw
+        if not cur_authors:
+            return True
+        if not cur_aff_raw:
+            return False
+        groups.append((list(cur_authors), list(cur_aff_raw)))
+        cur_authors = []
+        cur_aff_raw = []
+        return True
+
+    for ln in clean_lines:
+        left_txt, has_right_email = _split_wide_gap_email(ln)
+        is_bold, is_italic = _font_flags(ln)
+        cand_name = re.sub(r"[" + re.escape(SYMBOL_MARKER_CHARS) + r"\uf02a\d]", "", left_txt).strip(" ,")
+        is_author_row = False
+        if has_right_email and _is_valid_author_name(cand_name) and not _has_affiliation_hint(cand_name):
+            is_author_row = True
+            saw_wide_email = True
+        elif (
+            is_bold
+            and not is_italic
+            and not EMAIL_OR_URL_LINE_RE.search(left_txt)
+            and _is_valid_author_name(cand_name)
+            and not _has_affiliation_hint(cand_name)
+            and not _is_location_only_line(cand_name)
+        ):
+            is_author_row = True
+
+        if is_author_row:
+            if cur_aff_raw:
+                if not _flush_group():
+                    return None
+            cur_authors.append(cand_name)
+            continue
+
+        if not cur_authors:
+            return None
+        if is_bold and not is_italic:
+            return None
+        if is_italic and not is_bold:
+            saw_bold_author_italic_aff = True
+        raw_aff = _trailing_template_stub_re.sub("", ln["text"].strip()).strip()
+        if not raw_aff or _template_stub_re.match(raw_aff):
+            continue
+        if EMAIL_OR_URL_LINE_RE.search(raw_aff) and not _has_affiliation_hint(raw_aff):
+            continue
+        cur_aff_raw.append(raw_aff)
+
+    if not _flush_group():
+        return None
+    if not groups or (not saw_wide_email and not (saw_bold_author_italic_aff and len(groups) >= 2)):
+        return None
+
+    all_names = [nm for names, _ in groups for nm in names]
+    if len(all_names) < 2:
+        return None
+    author_index = _KnownAuthorIndex(all_names)
+    resolved: list[dict] = []
+    any_strong_org = False
+
+    for names, raw_affs in groups:
+        merged_affs: list[str] = []
+        for idx_a, raw_a in enumerate(raw_affs):
+            cleaned_a = _sanitize_affiliation(raw_a, author_index)
+            if not cleaned_a:
+                continue
+            if merged_affs:
+                prev_raw = raw_affs[idx_a - 1]
+                prev_clean = merged_affs[-1]
+                should_join = (
+                    prev_raw.rstrip().endswith(",")
+                    or _is_location_only_line(cleaned_a)
+                    or _is_known_location_tail(cleaned_a)
+                    or (
+                        _subunit_re.search(prev_clean)
+                        and not _parent_org_re.search(prev_clean)
+                        and _parent_org_re.search(cleaned_a)
+                    )
+                )
+                if should_join:
+                    merged_affs[-1] = f"{prev_clean.rstrip(' ,')}, {cleaned_a}"
+                    continue
+            merged_affs.append(cleaned_a)
+
+        valid_affs: list[str] = []
+        for aff in merged_affs:
+            if _has_affiliation_hint(aff) or _has_strong_unmarked_org_signal(aff):
+                any_strong_org = True
+                valid_affs.append(aff)
+            elif _is_plausible_unmarked_org_text(aff) and not _is_location_only_line(aff):
+                valid_affs.append(aff)
+        if not valid_affs:
+            return None
+        for nm in names:
+            resolved.append({"name": nm, "affiliations": list(valid_affs)})
+
+    if not any_strong_org or len(resolved) != len(all_names):
+        return None
+    evidence = "\n".join(ln["text"] for ln in clean_lines)
+    return resolved, evidence
+
+
 def extract_pdf_page1_authors_legacy(pdf_bytes: bytes) -> dict | None:
     with _PDF_AUTHOR_EXTRACT_LOCK:
         import pdf_author_extract_legacy as _legacy
@@ -3815,6 +4010,21 @@ def _extract_pdf_page1_authors_structured_locked(pdf_bytes: bytes) -> dict | Non
             "sourceEvidenceSha256": ev_sha,
             "sourceDomSha256": _sha256_text(f"{pdf_sha}:{ev_sha}"),
             "authors": inline_authors,
+        }
+
+    # --- Mode F: PMLR-style left-aligned stacked author/affiliation blocks ---
+    pmlr_res = _try_mode_pmlr_stacked_authors(merged_lines, page_w)
+    if pmlr_res is not None:
+        pmlr_authors, pmlr_evidence = pmlr_res
+        ev_sha = _sha256_text(pmlr_evidence)
+        return {
+            "contract": CONTRACT_V2,
+            "mode": "column_blocks",
+            "pdfSha256": pdf_sha,
+            "sourceEvidence": pmlr_evidence,
+            "sourceEvidenceSha256": ev_sha,
+            "sourceDomSha256": _sha256_text(f"{pdf_sha}:{ev_sha}"),
+            "authors": pmlr_authors,
         }
 
     # --- Mode C: Unmarked single shared institution ---
