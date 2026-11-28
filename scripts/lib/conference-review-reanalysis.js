@@ -69,7 +69,7 @@ function findGenerationRecord(runtimeRoot, conferenceId, processId, expectedSema
     fail(`找不到语义 SHA=${expectedSemanticSha} 对应的会议生成记录`);
 }
 
-function verifyReviewFailure(runtimeRoot, failureSha, pageRecord, paperId) {
+function verifyReviewFailure(runtimeRoot, failureSha, pageRecord, paperId, aggregateRecord = null) {
     if (!SHA_RE.test(failureSha || '')) fail(`reviewFailureSha256 格式非法：${paperId}`);
     const filename = path.join(runtimeRoot, 'conference-publications', 'page-review-failures', `${failureSha}.json`);
     const loaded = readRegularJson(filename, `审查失败记录 ${failureSha}`);
@@ -82,8 +82,11 @@ function verifyReviewFailure(runtimeRoot, failureSha, pageRecord, paperId) {
     if (record.passed !== false || record.completed !== true || record.failureKind !== 'content') {
         fail(`审查失败记录不是完整内容拒稿：${failureSha}`);
     }
-    if (record.paperId !== paperId || record.path !== pageRecord.path || record.sha256 !== pageRecord.sourceSha256) {
-        fail(`审查失败记录与目标论文页面 SHA 不一致：${paperId}`);
+    const matchesPaper = record.paperId === paperId && record.path === pageRecord.path && record.sha256 === pageRecord.sourceSha256;
+    const matchesAggregate = record.paperId === null && aggregateRecord
+        && record.path === aggregateRecord.path && record.sha256 === aggregateRecord.sourceSha256;
+    if (!matchesPaper && !matchesAggregate) {
+        fail(`审查失败记录与目标论文页面或汇总页面 SHA 不一致：${paperId}`);
     }
     return loaded;
 }
@@ -105,9 +108,12 @@ function loadAndValidateManifest({ manifestPath, state, runtimeRoot, analysisRoo
 
     const generation = findGenerationRecord(runtimeRoot, manifest.conferenceId, manifest.processId, manifest.baseGenerationSha256);
     const pagesByPaperId = new Map();
+    let aggregateRecord = null;
     for (const file of (generation.value.files || [])) {
         if (file && file.kind === 'paper' && typeof file.paperId === 'string') {
             pagesByPaperId.set(file.paperId, file);
+        } else if (file && file.kind === 'aggregate' && typeof file.path === 'string') {
+            aggregateRecord = file;
         }
     }
 
@@ -141,12 +147,21 @@ function loadAndValidateManifest({ manifestPath, state, runtimeRoot, analysisRoo
 
         const pageRecord = pagesByPaperId.get(paperId);
         if (!pageRecord) fail(`原生成记录缺少论文页面：${paperId}`);
-        verifyReviewFailure(runtimeRoot, reviewFailureSha256, pageRecord, paperId);
+        const verifiedFailure = verifyReviewFailure(runtimeRoot, reviewFailureSha256, pageRecord, paperId, aggregateRecord);
 
         const newExecutionId = reanalysisExecutionId(state.processId, paperId, loaded.sha256);
         if (newExecutionId === previousExecutionId) fail(`新执行 ID 与旧执行 ID 冲突：${paperId}`);
 
-        validatedMembers.push({ ...member, newExecutionId });
+        validatedMembers.push({
+            ...member,
+            newExecutionId,
+            verifiedReviewFailure: {
+                paperId,
+                reviewFailureSha256,
+                stage: verifiedFailure.value.stage || '',
+                issues: Array.isArray(verifiedFailure.value.issues) ? verifiedFailure.value.issues : []
+            }
+        });
     }
     validatedMembers.sort((a, b) => a.paperId.localeCompare(b.paperId));
     return { manifestPath: loaded.filename, manifestSha256: loaded.sha256, manifest, members: validatedMembers };
@@ -178,7 +193,11 @@ async function runReviewReanalysisBatch({ manifestPath, directory, state, shared
                 retryReleases: []
             };
             try {
-                const proof = await processOne(context, shared, syntheticItem, deps);
+                const { withReviewReanalysisGuidance } = require('./conference-analysis-context.js');
+                const runPaper = () => processOne(context, shared, syntheticItem, deps);
+                const proof = await (member.verifiedReviewFailure
+                    ? withReviewReanalysisGuidance(member.verifiedReviewFailure, runPaper)
+                    : runPaper());
                 proofs.set(member.paperId, { member, proof });
                 return { success: true };
             } catch (error) {

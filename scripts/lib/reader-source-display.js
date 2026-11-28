@@ -327,6 +327,12 @@ function projectReaderCellTexDisplayBody(value) {
     if (!output.includes('\\') && !/[_^]\{/.test(output)
         && !/([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])/.test(output)) return output;
     output = output.replace(/\\[,;:]/g, '');
+    // Standard TeX fontmath.ltx arrow delimiter codes leaked by PDF ToUnicode CMaps
+    // (\uparrow = "3222378, \downarrow = "3223379, \updownarrow = "326C33F).
+    output = output
+        .replace(/\\delimiter\s*"3222378(?![0-9A-Fa-f])/g, '↑')
+        .replace(/\\delimiter\s*"3223379(?![0-9A-Fa-f])/g, '↓')
+        .replace(/\\delimiter\s*"326C33F(?![0-9A-Fa-f])/gi, '↕');
     // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
     output = output.replace(/([^\s\\|(){}])\\boldsymbol\{(\\?[A-Za-z]+)\}/gu,
         (whole, visible, name) => {

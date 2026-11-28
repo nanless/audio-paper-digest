@@ -350,3 +350,222 @@ test('analysis-contract recognizes explicit CER/WER/MOS versus comparisons and b
     assert.equal(ac.classifySourceQuantitativeEvidence(nonExpSource), false);
     assert.equal(ac.classifySourceQuantitativeEvidence(ungroundedSpeedup), false);
 });
+
+test('reader-tables strips Unicode significance markers (∗/†/‡) when counting result table measurements', () => {
+    const rt = require('../scripts/lib/reader-tables.js');
+    const sections = [{
+        kind: 'result',
+        heading: 'Zero-shot results',
+        body: [
+            '| Test Set | Macro-F1 | F1 Score (AD+) | F1 Score (Control+) |',
+            '| --- | --- | --- | --- |',
+            '| Pitt-origin | 0.6666∗ | 0.6726∗ | 0.6605∗ |',
+            '| Pitt | 0.5924† | 0.7300‡ | 0.4548∗ |'
+        ].join('\n')
+    }];
+    const artifacts = {
+        tables: [{
+            ordinal: 3,
+            recoveryStatus: 'complete',
+            sourceDomSha256: 'a'.repeat(64),
+            caption: 'Table 3: Kimi-Audio zero-shot and two-shot performance.',
+            matrix: [
+                ['Test Set', 'Macro-F1', 'F1 Score (AD+)', 'F1 Score (Control+)'],
+                ['Pitt-origin', '0.6666', '0.6726', '0.6605'],
+                ['Pitt', '0.5924', '0.7300', '0.4548']
+            ],
+            cells: [
+                { row: 0, column: 0, text: 'Test Set', header: true },
+                { row: 0, column: 1, text: 'Macro-F1', header: true },
+                { row: 0, column: 2, text: 'F1 Score (AD+)', header: true },
+                { row: 0, column: 3, text: 'F1 Score (Control+)', header: true },
+                { row: 1, column: 0, text: 'Pitt-origin', header: false },
+                { row: 1, column: 1, text: '0.6666', header: false },
+                { row: 1, column: 2, text: '0.6726', header: false },
+                { row: 1, column: 3, text: '0.6605', header: false },
+                { row: 2, column: 0, text: 'Pitt', header: false },
+                { row: 2, column: 1, text: '0.5924', header: false },
+                { row: 2, column: 2, text: '0.7300', header: false },
+                { row: 2, column: 3, text: '0.4548', header: false }
+            ]
+        }]
+    };
+    const res = rt.validateReaderResultTableCoverage(sections, artifacts);
+    assert.equal(res.numericResultTables, 1);
+
+    // Negative: non-numeric text cells with ∗ must still NOT count as measurements
+    const textOnlySections = [{
+        kind: 'result',
+        heading: 'Text table',
+        body: [
+            '| Test Set | Metric A | Metric B |',
+            '| --- | --- | --- |',
+            '| Pitt-origin | high∗ | better† |',
+            '| Pitt | low‡ | worse∗ |'
+        ].join('\n')
+    }];
+    assert.throws(() => rt.validateReaderResultTableCoverage(textOnlySections, artifacts), /主结果表覆盖不足/);
+});
+
+test('reader-source-display projects exact fontmath.ltx arrow delimiter codes and leaves unknown delimiters untouched', () => {
+    const display = require('../scripts/lib/reader-source-display.js');
+    assert.equal(display.projectReaderCellTexDisplay('FGD\\delimiter "3223379'), 'FGD↓');
+    assert.equal(display.projectReaderCellTexDisplay('BC\\delimiter "3222378'), 'BC↑');
+    assert.equal(display.projectReaderCellTexDisplay('Delta\\delimiter "326C33F'), 'Delta↕');
+    // Negative: unknown delimiter hex code must stay untouched so bare-TeX gate still catches it
+    assert.equal(display.projectReaderCellTexDisplay('X\\delimiter "9999999'), 'X\\delimiter "9999999');
+});
+
+test('analysis-contract recognizes newline-split PDF FAD result tables and standalone % table columns', () => {
+    const ac = require('../scripts/analysis-contract.js');
+    const newlineSplitFad = [
+        'Results are presented in Table 1.',
+        'Waves', 'Thunder', 'Rain', 'Avg',
+        'FAD↓', 'FAD↓', 'FAD↓', 'FAD↓',
+        'Single-Scale', '2.825', '3.2678', '4.623', '3.572',
+        'Multi-Scale', '1.396', '1.5298', '1.364', '1.430',
+        'Table 1. FAD results across sound categories for different model configurations (↓ lower is better).'
+    ].join('\n');
+    assert.equal(ac.classifySourceQuantitativeEvidence(newlineSplitFad), true);
+
+    // Negative: prose mentioning Table 1 without numeric table rows must remain false
+    const nonResultTable = 'Table 1 lists the recording equipment used during data collection.\nMicrophone A\nMicrophone B\n';
+    assert.equal(ac.classifySourceQuantitativeEvidence(nonResultTable), false);
+
+    // Standalone % column header in PDF table must allow % in core summary for table percentages
+    const standalonePctSrc = 'Category\nSpeakers\nRecordings\n%\nTotal\n461\n1,844\n100\nMale\n310\n1,240\n67\nIstanbul\n381\n1,524\n83\n'
+        + 'TO-HTER\nROCCH-EER\nResNet34-LM\n0.0055\n0.0107\nTitaNet-Large\n0.0812\n0.0591\n';
+    const summaryWithPct = '在 TurkSV-Bench 上，ResNet34-LM 取得 0.0055% TO-HTER 与 0.0107% ROCCH-EER，TitaNet-Large 为 0.0812%，数据集中男性占 67%、伊斯坦布尔口音占 83%。';
+    assert.equal(ac.validateCoreSummarySemanticContract.validateCoreSummarySourceGroundedClaims(summaryWithPct, standalonePctSrc), null);
+    // Negative: invented % without any % table header or % token in source must still fail
+    const noPctSrc = 'ResNet34-LM obtains 0.0055 and 0.0107 on the test set.';
+    assert.match(String(ac.validateCoreSummarySemanticContract.validateCoreSummarySourceGroundedClaims(
+        '模型取得 0.0055% 与 0.0107%。', noPctSrc
+    )), /添加了原文不存在的百分号/);
+});
+
+test('conference-analysis-context scopes verified review reanalysis guidance strictly to matching paperId', () => {
+    const ctx = require('../scripts/lib/conference-analysis-context.js');
+    const pid = 'conference:sigdial:2026:conference-paper-id:2026.sigdial-1.33';
+    const otherPid = 'conference:sigdial:2026:conference-paper-id:2026.sigdial-1.1';
+    const sha = 'a'.repeat(64);
+    assert.equal(ctx.formatReviewReanalysisPromptWarning({ id: pid }), '');
+    ctx.withReviewReanalysisGuidance({
+        paperId: pid,
+        reviewFailureSha256: sha,
+        stage: 'text',
+        issues: [
+            { severity: 'info', description: 'non-blocking note' },
+            { severity: 'error', description: 'Table 4 延迟 0.45s 与 0.53s 对调', fix_instruction: '按原表顺序核正' }
+        ]
+    }, () => {
+        const warning = ctx.formatReviewReanalysisPromptWarning({ id: pid });
+        assert.match(warning, /Table 4 延迟 0\.45s 与 0\.53s 对调/);
+        assert.match(warning, /按原表顺序核正/);
+        assert.doesNotMatch(warning, /non-blocking note/);
+        // Negative: different paperId must receive empty string
+        assert.equal(ctx.formatReviewReanalysisPromptWarning({ id: otherPid }), '');
+    });
+    // Outside scope must return empty string again
+    assert.equal(ctx.formatReviewReanalysisPromptWarning({ id: pid }), '');
+});
+
+test('conference-review-reanalysis accepts SHA-verified aggregate review failures and rejects mismatched SHAs', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'conf-reanalysis-agg-'));
+    try {
+        const runtimeRoot = path.join(tmp, 'runtime');
+        const analysisRoot = path.join(runtimeRoot, 'conference-analysis-executions');
+        const cid = 'impactspeech-2026';
+        const processId = '484f6ba7-8746-469f-8409-eb7564fb12b1';
+        const paperId = 'conference:impactspeech:2026:conference-paper-id:2026.impactspeech-1.6';
+        const prevExec = '0ce0a91f-3c8e-4a67-a83b-fb7894421c4b';
+        const prevAnalysisDir = path.join(analysisRoot, prevExec);
+        fs.mkdirSync(prevAnalysisDir, { recursive: true });
+        const analysisBytes = Buffer.from(JSON.stringify({ status: 'complete' }));
+        fs.writeFileSync(path.join(prevAnalysisDir, 'analysis.json'), analysisBytes);
+        const analysisSha = sha256(analysisBytes);
+
+        const paperSha = '1'.repeat(64);
+        const aggSha = '2'.repeat(64);
+        const genBody = {
+            conferenceId: cid,
+            processId,
+            files: [
+                { kind: 'paper', paperId, path: 'content/posts/p6.md', sourceSha256: paperSha },
+                { kind: 'aggregate', paperId: null, path: 'content/posts/conference-impactspeech-2026.md', sourceSha256: aggSha }
+            ]
+        };
+        const genSha = processApi.stableHash(genBody);
+        const pubDir = path.join(runtimeRoot, 'conference-publications', cid, processId);
+        fs.mkdirSync(pubDir, { recursive: true });
+        fs.writeFileSync(path.join(pubDir, 'generation.json'), JSON.stringify({ ...genBody, generationSha256: genSha }));
+
+        const failDir = path.join(runtimeRoot, 'conference-publications', 'page-review-failures');
+        fs.mkdirSync(failDir, { recursive: true });
+        const aggFailBody = {
+            path: 'content/posts/conference-impactspeech-2026.md',
+            sha256: aggSha,
+            paperId: null,
+            passed: false,
+            completed: true,
+            failureKind: 'content',
+            stage: 'text',
+            issues: [{ severity: 'error', description: '第8篇评分说明量纲错误：说话人数733s' }]
+        };
+        const aggFailSha = processApi.stableHash(aggFailBody);
+        fs.writeFileSync(path.join(failDir, `${aggFailSha}.json`), JSON.stringify({ ...aggFailBody, failureSha256: aggFailSha }));
+
+        const manifestPath = path.join(tmp, 'manifest.json');
+        fs.writeFileSync(manifestPath, JSON.stringify({
+            contract: reviewReanalysis.MANIFEST_CONTRACT,
+            conferenceId: cid,
+            processId,
+            baseGenerationSha256: genSha,
+            members: [{
+                paperId,
+                previousExecutionId: prevExec,
+                previousAnalysisFileSha256: analysisSha,
+                reviewFailureSha256: aggFailSha,
+                reason: 'Aggregate review flagged paper #8 unit mismatch'
+            }]
+        }));
+        const state = {
+            processId,
+            authority: { conferenceId: cid },
+            items: {
+                [paperId]: {
+                    status: 'complete',
+                    analysisRunId: prevExec,
+                    analysisProof: { analysisSha256: analysisSha }
+                }
+            }
+        };
+        const plan = reviewReanalysis.loadAndValidateManifest({ manifestPath, state, runtimeRoot, analysisRoot });
+        assert.equal(plan.members.length, 1);
+        assert.equal(plan.members[0].verifiedReviewFailure.issues.length, 1);
+
+        // Negative: aggregate failure with wrong sha256 must be rejected
+        const badFailBody = { ...aggFailBody, sha256: '3'.repeat(64) };
+        const badFailSha = processApi.stableHash(badFailBody);
+        fs.writeFileSync(path.join(failDir, `${badFailSha}.json`), JSON.stringify({ ...badFailBody, failureSha256: badFailSha }));
+        const badManifestPath = path.join(tmp, 'bad-manifest.json');
+        fs.writeFileSync(badManifestPath, JSON.stringify({
+            contract: reviewReanalysis.MANIFEST_CONTRACT,
+            conferenceId: cid,
+            processId,
+            baseGenerationSha256: genSha,
+            members: [{
+                paperId,
+                previousExecutionId: prevExec,
+                previousAnalysisFileSha256: analysisSha,
+                reviewFailureSha256: badFailSha,
+                reason: 'Mismatched aggregate SHA'
+            }]
+        }));
+        assert.throws(() => reviewReanalysis.loadAndValidateManifest({
+            manifestPath: badManifestPath, state, runtimeRoot, analysisRoot
+        }), /审查失败记录与目标论文页面或汇总页面 SHA 不一致/);
+    } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});

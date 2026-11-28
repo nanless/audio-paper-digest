@@ -408,7 +408,7 @@ function validatePdfFormulaRecord(formula, index, audit, pageCount) {
         if (typeof glyph.text !== 'string' || [...glyph.text].length !== 1
             || typeof glyph.font !== 'string' || !coordinates(glyph.bbox, 4)
             || !coordinates(glyph.origin, 2) || !coordinates(glyph.direction, 2)
-            || !Number.isFinite(glyph.size) || glyph.size <= 0
+            || !Number.isFinite(glyph.size) || glyph.size < 0
             || glyph.bbox[0] < layout.bbox[0] || glyph.bbox[1] < layout.bbox[1]
             || glyph.bbox[2] > layout.bbox[2] || glyph.bbox[3] > layout.bbox[3]) {
             fail('PDF 公式中的字符、字体、字号或位置坐标不符合要求');

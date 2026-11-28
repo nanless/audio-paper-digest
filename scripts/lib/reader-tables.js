@@ -534,7 +534,7 @@ function validateReaderResultTableCoverage(sections, artifacts) {
             || /^(?:年份|指标|说明|备注|条件|配置|设置|方法(?:名称)?|模型(?:名称)?|数据集|语料|数据划分|划分|语言|版本|训练轮数|训练步数|批量大小|学习率|随机种子|(?:训练|测试|验证|总)?(?:样本(?:数|数量)?|片段(?:数|数量)?|说话人(?:数|数量)?|语音时长|音频时长))(?:[（(][^）)]*[）)])?$/.test(label);
     };
     const measurementValue = value => {
-        const text = String(value || '').normalize('NFKC').replace(/[*`]/g, '').trim()
+        const text = String(value || '').normalize('NFKC').replace(/[*`∗†‡]/g, '').trim()
             .replace(/^约\s*(?=[+−-]?(?:\d|\.\d))/, '');
         // 同格明确报告两个结果值的升降，不把远处的方法型号或日期借作结果。
         const number = '[+−-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+−-]?\\d+)?';

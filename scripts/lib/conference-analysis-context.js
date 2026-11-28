@@ -6,6 +6,45 @@ const path = require('node:path');
 const codec = require('./protocol-codec');
 
 const scope = new AsyncLocalStorage();
+const reviewReanalysisGuidanceScope = new AsyncLocalStorage();
+function withReviewReanalysisGuidance(guidance, callback) {
+    if (!guidance || typeof guidance !== 'object' || typeof guidance.paperId !== 'string'
+        || !/^[a-f0-9]{64}$/.test(guidance.reviewFailureSha256 || '')
+        || !Array.isArray(guidance.issues)) {
+        throw new Error('Verified review reanalysis guidance is required');
+    }
+    const blockingIssues = guidance.issues
+        .filter(item => item && typeof item === 'object' && String(item.severity || '').toLowerCase() === 'error'
+            && typeof item.description === 'string' && item.description.trim())
+        .map(item => ({
+            description: item.description.trim().slice(0, 1200),
+            ...(typeof item.fix_instruction === 'string' && item.fix_instruction.trim()
+                ? { fixInstruction: item.fix_instruction.trim().slice(0, 800) } : {})
+        }));
+    const frozen = Object.freeze({
+        paperId: guidance.paperId,
+        reviewFailureSha256: guidance.reviewFailureSha256,
+        stage: String(guidance.stage || ''),
+        issues: Object.freeze(blockingIssues.map(item => Object.freeze(item)))
+    });
+    return reviewReanalysisGuidanceScope.run(frozen, callback);
+}
+function getReviewReanalysisGuidance(paper) {
+    const active = reviewReanalysisGuidanceScope.getStore();
+    if (!active || !active.issues.length) return null;
+    if (paper && paperId(paper) !== active.paperId) return null;
+    return active;
+}
+function formatReviewReanalysisPromptWarning(paper) {
+    const active = getReviewReanalysisGuidance(paper);
+    if (!active) return '';
+    const lines = active.issues.map((item, idx) => (
+        `${idx + 1}. ${item.description}${item.fixInstruction ? `（核对方向：${item.fixInstruction}）` : ''}`
+    ));
+    return `\n\n【上轮独立发布审查指出的事实核对警示（failure=${active.reviewFailureSha256.slice(0, 12)}，stage=${active.stage || 'content'}）】\n`
+        + '请务必严格对照原论文正文、表格矩阵与原图像素逐项核实以下问题，消除跨栏目自相矛盾、行列/图例错位、量纲混写或图文不符；所有陈述仍须 100% 忠实于原论文与原图，严禁编造原文未给出的数字或结论：\n'
+        + lines.join('\n');
+}
 const WEAK_READER_CAPABILITY_POLICY_CONTRACT = codec.contract('conference-reader-weak-unavailable-structure');
 const WEAK_CONFERENCE_CAPABILITIES = Object.freeze({
     fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable'
@@ -215,4 +254,5 @@ module.exports = { WEAK_READER_CAPABILITY_POLICY_CONTRACT, WEAK_CONFERENCE_CAPAB
     WEAK_READER_CAPABILITY_POLICY, withConferenceAnalysisSource, getConferenceAnalysisContext,
     validateWeakReaderCapabilityPolicy,
     getConferenceAnalysisSource, conferenceCoreSummaryRepairContext,
-    conferenceWeakReaderCapabilityPolicy, conferenceReaderAttemptsDirectory };
+    conferenceWeakReaderCapabilityPolicy, conferenceReaderAttemptsDirectory,
+    withReviewReanalysisGuidance, getReviewReanalysisGuidance, formatReviewReanalysisPromptWarning };

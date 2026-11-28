@@ -1698,6 +1698,16 @@ function classifyGenericSourceQuantitativeEvidence(sourceText, sentences = null)
             && /\b(?:compared\s+(?:with|to)|versus|vs\.?|over|than)\b/i.test(wrappedNextLine)) {
             return true;
         }
+        // Newline-split or space-merged PDF results tables ("Table 1. FAD results ... FAD↓ ... 3.572 ... 1.430")
+        // contain a real measured results table block even when sentence splitting breaks on "Table 1." or PDF newlines.
+        const tableCaptionProbe = [observedSentence, values[index + 1] || ''].join(' ');
+        if (/\b(?:Table|Tab\.)\s*\d+\b/i.test(observedSentence)
+            && /\b(?:results?|performance|comparison|evaluation|scores?|metrics?|FAD|WER|CER|MOS|PESQ|STOI|EER|BLEU|SI-SDR|mAP|accuracy|F1)\b/i.test(tableCaptionProbe)) {
+            const tableBlock = values.slice(Math.max(0, index - 30), Math.min(values.length, index + 30)).join('\n');
+            const hasMetricHeader = /\b(?:FAD|WER|CER|MOS|PESQ|STOI|SI-SDR|SDR|EER|UAR|F1|BLEU|ROUGE|CLAP|MCD|PSNR|SSIM|AUROC|AUC|mAP|Accuracy)\s*[↑↓]?(?![A-Za-z0-9_])/i.test(tableBlock);
+            const decimalMatches = tableBlock.match(/(?<![A-Za-z0-9._])[+-]?\d+\.\d+%?(?![A-Za-z0-9._])/g) || [];
+            if (hasMetricHeader && decimalMatches.length >= 4) return true;
+        }
         if (!hasCoreSummaryQuantitativeEvidence(resultSentence)) return false;
         return hasBenchmarkContext
             // Explicit own measured metric comparisons (e.g. "It attains the low-\nest error rates (CER 4.08%, WER 13.11% versus ...)")
@@ -2148,7 +2158,7 @@ function validateCoreSummarySourceGroundedClaims(summary, sourceText) {
         }
     }
     const normalizedSrc = normalizeThousands(srcRaw);
-    const percentTableContextRe = /(?:\(\s*\\?%[^)\n]{0,16}\)|\[\s*\\?%\s*\]|\/\s*\\?%(?![0-9A-Za-z])|(?<![A-Za-z0-9_])in\s+\\?%(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:in|as)\s+percent(?:age|ages)?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:WER|CER|EER|UAR|DER|PER|ACC|Accuracy|Precision|Recall|F1)\s*\\?%(?![0-9]))/giu;
+    const percentTableContextRe = /(?:\(\s*\\?%[^)\n]{0,16}\)|\[\s*\\?%\s*\]|\/\s*\\?%(?![0-9A-Za-z])|(?:^|\n)[ \t]*\\?%[ \t]*(?=\n|$)|(?<![A-Za-z0-9_])in\s+\\?%(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:in|as)\s+percent(?:age|ages)?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:WER|CER|EER|UAR|DER|PER|ACC|Accuracy|Precision|Recall|F1)\s*\\?%(?![0-9]))/giu;
     const pairedRateTableHeaderRe = /(?<![A-Za-z0-9_])(?:WER|CER|PER|EER)\s*\/\s*(?:WER|CER|PER|EER)(?![A-Za-z0-9_])/giu;
     const sourceHasPercentTableContext = percentTableContextRe.test(normalizedSrc)
         || (percentTokens.size > 0 && pairedRateTableHeaderRe.test(normalizedSrc));

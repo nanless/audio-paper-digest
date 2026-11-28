@@ -5277,6 +5277,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             sourceEvidence: fullRegenerationEvidence,
             validationFeedback: [validationFeedback, fullRegenerationTableFeedback,
                 savedInputContinuity?.validationFeedback,
+                require('./lib/conference-analysis-context.js').formatReviewReanalysisPromptWarning(paper),
                 ...(!candidate ? currentIssues.filter(issue => issue.diagnosticOnly === true).map(issueFeedback) : []),
                 indexExamples].filter(Boolean).join('\n'),
             previousDraft: previousDraftPromptView,
@@ -12031,6 +12032,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     } catch (_) {
         verifiedAuthorsPromptHint = '';
     }
+    const reviewReanalysisHint = require('./lib/conference-analysis-context.js').formatReviewReanalysisPromptWarning(paper);
     const prompt = loadPrompt(currentTextStagePromptPath('primaryAnalysis'), {
         hasFullText: hasFullTextIntro + verifiedAuthorsPromptHint,
         title: paper.title,
@@ -12039,7 +12041,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         arxivId: arxivId,
         textForAnalysis: textForAnalysis,
         tagPromptText: TAG_RULES.projection
-    }) + (primaryReviewFeedback ? `\n\n以下反馈已绑定当前封存全文与旧正文，请重新生成完整13节分析并纠正这些事实；不得仅改核心摘要或读者文章：\n${primaryReviewFeedback}` : '');
+    }) + (primaryReviewFeedback ? `\n\n以下反馈已绑定当前封存全文与旧正文，请重新生成完整13节分析并纠正这些事实；不得仅改核心摘要或读者文章：\n${primaryReviewFeedback}` : '')
+        + reviewReanalysisHint;
 
     // 当前提示生成的初稿即使跨次恢复，也必须完成新标题的结构修复。
     // 历史兼容检查点的原指纹不同，局部修复仍保留其旧标题。
@@ -13901,7 +13904,7 @@ async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvide
         existingAnalysis: existingAnalysis,
         textForAnalysis: evidence,
         tagPromptText: TAG_RULES.projection
-    }), 'revision', paper);
+    }), 'revision', paper) + require('./lib/conference-analysis-context.js').formatReviewReanalysisPromptWarning(paper);
     const request = options.callModelFn || callModel;
     const revised = await request([{ role: 'user', content: prompt }], REVISION_MAX_TOKENS,
         { usageContext: { stage: 'revision' } });
