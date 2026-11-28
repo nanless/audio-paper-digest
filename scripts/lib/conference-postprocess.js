@@ -196,9 +196,24 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         || loaded.analysis?.papers?.[0]?.analysisManifest?.stages?.apiReaderArticle?.readerResourceClaimsContractVersion !== undefined
         || loaded.analysis?.papers?.[0]?.analysisManifest?.stages?.apiReaderArticle?.readerResourceClaimsProtocol !== undefined;
     let verifiedPlanPdfSource = null;
+    let usedCanonicalPlanFallback = false;
+    const replayOwnCanonicalSource = () => {
+        const canonicalPaper = loaded.analysis?.papers?.[0];
+        const canonicalIdentity = require('./conference-reader-pdf-identity').projectSavedExecution(loaded);
+        return require('./conference-reader-publication-evidence')
+            .replayCanonicalReaderPdfSource(canonicalPaper, canonicalIdentity);
+    };
     if (!trustEvidence || hasCurrentResourceClaims) {
         try { verifiedPlanPdfSource = (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot); }
-        catch (error) { fail(`会议分析与已核验计划不一致：${error.message}`); }
+        catch (error) {
+            if (!trustEvidence) fail(`会议分析与已核验计划不一致：${error.message}`);
+            try {
+                verifiedPlanPdfSource = replayOwnCanonicalSource();
+                usedCanonicalPlanFallback = true;
+            } catch (fallbackError) {
+                fail(`会议分析与已核验计划不一致：${error.message}（原来源冷重放失败：${fallbackError.message}）`);
+            }
+        }
     }
     const receipt = loaded.run?.completionReceipt; const receiptBody = receipt && structuredClone(receipt); if (receiptBody) delete receiptBody.receiptSha256;
     if (loaded.run?.status !== 'complete' || loaded.analysis?.status !== 'complete' || !ID_RE.test(loaded.run.paperId || '')
@@ -249,11 +264,23 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         authorParser.CONFERENCE_PDF_AUTHOR_PDF_PAGE1,
         'conference-pdf-author-pdf-page1-v3'
     ].includes(sourcePaper.apiReaderAuthors?.identity?.conferencePdfAuthorParser);
-    let readerPdfSourceHandle = loaded.recoveryWindow
+    let readerPdfSourceHandle = null;
+    if (loaded.recoveryWindow
         || require('./conference-source-resource-correction').isSourceCorrectionRecord(sourcePaper)
         || authenticatedPdfFootnotes
-        || usesConferencePdfPage1Authors
-        ? verifiedPlanPdfSource || (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot) : null;
+        || usesConferencePdfPage1Authors) {
+        if (verifiedPlanPdfSource) {
+            readerPdfSourceHandle = verifiedPlanPdfSource;
+        } else {
+            try {
+                readerPdfSourceHandle = (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot);
+            } catch (error) {
+                if (!trustEvidence) throw error;
+                readerPdfSourceHandle = replayOwnCanonicalSource();
+                usedCanonicalPlanFallback = true;
+            }
+        }
+    }
     if (authenticatedPdfBindings.length) {
         const identity = authenticatedPdfBindings[0].authenticatedPdfTableEvidence?.sourceIdentity;
         if (authenticatedPdfBindings.some(binding => stableHash(binding.authenticatedPdfTableEvidence?.sourceIdentity)
@@ -267,7 +294,7 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         // Fixtures without real source authority cannot mint this evidence. A
         // normal plan replay and the helper's independent source replay precede it.
         publicationEvidence = require('./conference-reader-publication-evidence').derivePublicationEvidence({
-            loaded, planHandle, sourceRoot });
+            loaded, planHandle, sourceRoot, allowCanonicalFallback: Boolean(trustEvidence) });
     }
     const qualify = () => {
     const publication = validateReaderAndScoring(sourcePaper, loaded.source.sourceDetails.text);

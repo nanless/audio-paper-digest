@@ -140,14 +140,38 @@ function proseWindows(table, binding, document) {
     return result;
 }
 
-function derivePublicationEvidence({ loaded, planHandle, sourceRoot }) {
+function derivePublicationEvidence({ loaded, planHandle, sourceRoot, allowCanonicalFallback = false }) {
     require('../env-loader').requireExternalRuntime(path.basename(__filename));
     const deps = require('./conference-process').defaultDependencies();
     const current = deps.adapter.loadConferenceAnalysis({ analysisRoot: path.dirname(loaded.directory), executionId: loaded.run.executionId });
     if (current.analysisFileSha256 !== loaded.analysisFileSha256 || current.sourceFileSha256 !== loaded.sourceFileSha256
         || current.runFileSha256 !== loaded.runFileSha256 || current.run.status !== 'complete'
         || !isDeepStrictEqual(current.analysis, loaded.analysis) || !isDeepStrictEqual(current.source, loaded.source)) throw new Error('会议出版补充证据的原分析或来源已变化。');
-    deps.adapter.verifyPlanAuthority(current, planHandle, sourceRoot);
+    try {
+        deps.adapter.verifyPlanAuthority(current, planHandle, sourceRoot);
+    } catch (error) {
+        if (!allowCanonicalFallback) throw error;
+        const binding = current.source.planAuthorityBinding, conferenceId = current.run.conference.id;
+        const prefix = `${conferenceId}-${binding.selectionReceiptSha256.slice(0, 16)}-`;
+        const matches = fs.readdirSync(deps.files.conferenceRunsDir).filter(name => name.startsWith(prefix)
+            && name.endsWith('-run.plan-receipt.json')).map(name => ({ name,
+                ...deps.ledger.readRegularJson(path.join(deps.files.conferenceRunsDir, name)) }))
+            .filter(record => record.sha256 === binding.planReceiptFileSha256);
+        if (matches.length !== 1) throw error;
+        const receipt = deps.plan.normalizeSecureReceipt(matches[0].value), stem = receipt.run.name.slice(0, -'-run.json'.length);
+        const roots = fs.readdirSync(deps.files.conferenceSourceCacheDir).filter(name => /^generation-[a-f0-9]{64}$/u.test(name)
+            && name.startsWith('generation-' + stem.slice(prefix.length)));
+        if (roots.length !== 1) throw error;
+        const staged = deps.ledger.readRegularJson(path.join(deps.files.conferenceStagingDir, stem + '-staging-receipt.json'));
+        const descriptor = { executionId: current.run.executionId, sourceGeneration: roots[0],
+            planReceiptSha256: receipt.receiptSha256, filterId: receipt.filter.filterId,
+            catalogName: sourceReference(deps.files.conferenceDiscoveryCatalogDir, staged.value.discovery.catalogSha256, conferenceId, deps),
+            reportName: sourceReference(deps.files.conferenceDiscoveryReportDir, staged.value.discovery.reportSha256, conferenceId, deps) };
+        const verified = verifyColdSourceChain(current, descriptor, deps);
+        return deriveVerifiedSourceEvidence({ current, sourceRoot: verified.sourceRoot, bound: verified.bound, deps,
+            reference: { planReceiptSha256: descriptor.planReceiptSha256, filterId: descriptor.filterId,
+                catalogName: descriptor.catalogName, reportName: descriptor.reportName } });
+    }
     const authority = deps.plan.planHandleReadOnlyAuthority(planHandle);
     const imported = deps.importer.importHandleSnapshot(authority.importHandle);
     const bound = imported.staging.receipt.members.find(item => item.paperId === current.run.paperId);

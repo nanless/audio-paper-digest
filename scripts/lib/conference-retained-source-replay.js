@@ -228,6 +228,74 @@ function createRetainedSourceReplay(context, deps) {
     return { loadPlan, forItem };
 }
 
+const RETAINED_ENHANCED_EXTRACTOR_PROFILES = Object.freeze([
+    // Pre-38250016 (commit 1458254f) enhanced layout extractor before pdf_author_extract.py Mode F / header-boundary fix.
+    Object.freeze({
+        implementationSha256: 'e34d76ec0eecc776c4e0b6cce625f148d49638729b946f2a842ec1d1dee8e819',
+        dependencySha256s: Object.freeze({
+            'conference_layout_extractor.py': '89eb43d6d38e8c4b54589a0657adf8efbd4be57e2e49fe032ca4a8aa5adc31bd',
+            'conference_extractor.py': '36254b211c07e4070c6b1ed805764ce04b2b63572907ab581d9b21b75f03406b',
+            'pdf_figure_table_extract.py': '9ac8020f84599216c6123c4a56110c3d012d5863bb872927fa7ca2a7c306ea76',
+            'pdf_author_extract.py': '84debbbeaad603738d60c1b3788b32cec03f02118aac6333e86116e7e1fbc27d'
+        })
+    })
+]);
+
+function matchingRetainedEnhancedProfile(receipt) {
+    if (!receipt || typeof receipt !== 'object' || receipt.contract !== extraction.RECEIPT_ENHANCED_CONTRACT) return null;
+    const ext = receipt.extractor;
+    if (!ext || typeof ext !== 'object' || ext.contract !== extraction.EXTRACTOR_ENHANCED_CONTRACT
+        || ext.name !== extraction.EXTRACTOR_ENHANCED_NAME
+        || ext.backend?.name !== extraction.BACKEND_NAME
+        || ext.backend?.version !== extraction.BACKEND_VERSION) return null;
+    if (ext.implementationSha256 === extraction.EXTRACTOR_ENHANCED_IMPLEMENTATION_SHA256) return null;
+    return RETAINED_ENHANCED_EXTRACTOR_PROFILES.find(profile =>
+        ext.implementationSha256 === profile.implementationSha256
+        && api.stableHash(ext.dependencySha256s) === api.stableHash(profile.dependencySha256s)
+        && api.stableHash(ext.dependencySha256s) === profile.implementationSha256
+    ) || null;
+}
+
+function retainedEnhancedSnapshot(root, receiptName, receipt, item, deps, profile) {
+    if (receipt.status !== 'ready' || receipt.textReplayable !== true || receipt.blockedReason !== null) {
+        throw new Error('原会议增强抽取凭证状态无效。');
+    }
+    const names = { receipt: receiptName, request: receipt.request?.file,
+        metadata: receipt.source?.metadata?.file, pdf: receipt.source?.pdf?.file,
+        text: receipt.text?.file, artifacts: receipt.artifacts?.file };
+    if (Object.values(names).some(name => typeof name !== 'string'
+        || !/^[a-z0-9][a-z0-9._-]{0,164}\.(?:json|pdf|txt)$/.test(name))) {
+        throw new Error('原会议增强抽取文件名不安全。');
+    }
+    const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+    const read = key => deps.discovery.safeAbsoluteFile(path.join(root, names[key]), `retained enhanced ${key}`, 256 * 1024 * 1024);
+    const requestFile = read('request'), request = JSON.parse(requestFile.bytes), metadataFile = read('metadata'),
+        pdf = read('pdf'), text = read('text'), artifacts = read('artifacts'), receiptFile = read('receipt');
+    if (request.paperId !== item.paperId || request.sourceIdentity !== item.sourceIdentity
+        || request.source?.metadata?.file !== names.metadata || request.source?.pdf?.file !== names.pdf
+        || request.outputs?.textFile !== names.text || request.outputs?.artifactsFile !== names.artifacts
+        || request.outputs?.receiptFile !== names.receipt || receipt.request?.file !== names.request
+        || receipt.request?.sha256 !== sha(requestFile.bytes)
+        || api.stableHash(request.source) !== api.stableHash(receipt.source)
+        || request.source.metadata.sha256 !== sha(metadataFile.bytes) || request.source.pdf.sha256 !== sha(pdf.bytes)
+        || receipt.text?.file !== names.text || receipt.text?.sha256 !== sha(text.bytes)
+        || receipt.artifacts?.file !== names.artifacts || receipt.artifacts?.sha256 !== sha(artifacts.bytes)
+        || receipt.text?.utf8Bytes !== text.bytes.length || pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+        throw new Error('原会议增强抽取来源字节或身份绑定漂移。');
+    }
+    const verification = { contract: extraction.VERIFICATION_ENHANCED_CONTRACT, status: 'verified',
+        paperId: item.paperId, sourceIdentity: item.sourceIdentity, requestSha256: sha(requestFile.bytes),
+        metadataSha256: sha(metadataFile.bytes), pdfSha256: sha(pdf.bytes), textSha256: sha(text.bytes),
+        artifactsSha256: sha(artifacts.bytes), receiptFileSha256: sha(receiptFile.bytes),
+        receiptSha256: receipt.receiptSha256 };
+    verification.verificationSha256 = api.stableHash(verification);
+    return { paperId: item.paperId, sourceIdentity: item.sourceIdentity, metadata: request.source.metadata,
+        pdf: request.source.pdf,
+        text: { sha256: sha(text.bytes), provenance: { extractor: extraction.EXTRACTOR_ENHANCED_NAME, implementationSha256: profile.implementationSha256 } },
+        artifacts: { sha256: sha(artifacts.bytes), provenance: { extractor: extraction.EXTRACTOR_ENHANCED_NAME, implementationSha256: profile.implementationSha256 } },
+        receipt: { receiptSha256: receipt.receiptSha256 }, verification };
+}
+
 function verifyRetainedExtraction(item, bound, deps) {
     if (!bound || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(bound.extractionReceiptName || '')) {
         throw new Error('原会议暂存清单缺少本篇抽取凭证。');
@@ -240,6 +308,7 @@ function verifyRetainedExtraction(item, bound, deps) {
         || receiptSha256 !== bound.extractionReceiptSha256 || receipt.paperId !== item.paperId
         || receipt.sourceIdentity !== item.sourceIdentity) throw new Error('原会议抽取凭证身份或 SHA 不一致。');
     let snapshot;
+    const retainedEnhanced = matchingRetainedEnhancedProfile(receipt);
     if (codec.hasValidHeader(receipt.extractor, 'conference-retained-pdf-extractor', 'version')) {
         const names = { receipt: bound.extractionReceiptName, request: receipt.request?.file,
             metadata: receipt.source?.metadata?.file, pdf: receipt.source?.pdf?.file,
@@ -249,6 +318,8 @@ function verifyRetainedExtraction(item, bound, deps) {
             throw new Error('原会议抽取文件名不安全。');
         }
         snapshot = require('./conference-source-upgrade').retainedLegacySnapshot(root, names, receipt, item, deps);
+    } else if (retainedEnhanced) {
+        snapshot = retainedEnhancedSnapshot(root, bound.extractionReceiptName, receipt, item, deps, retainedEnhanced);
     } else {
         snapshot = extraction.extractionHandleSnapshot(extraction.loadExtractionHandle(root,
             bound.extractionReceiptName, { replay: false }));
