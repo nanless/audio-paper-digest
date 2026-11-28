@@ -1336,7 +1336,8 @@ def mask_rendered_currency_dollars(text):
 
 def inspect_html(markdown, rendered, image_records, image_base):
     from markdown_hugo_gate import (math_and_emphasis_issues, mask_rendered_symbolic_table_cells,
-                                    mask_source_bound_figure_caption_dollars)
+                                    mask_source_bound_figure_caption_dollars,
+                                    mask_source_bound_literal_asterisks)
 
     page = Page(rendered)
     body = markdown
@@ -1379,7 +1380,9 @@ def inspect_html(markdown, rendered, image_records, image_base):
     issues = math_and_emphasis_issues(body_for_format, 'Markdown')
     # 用可见文本核对 TeX 是否保留；表内字面量交给共用的 HTML 遮罩处理。
     rendered_body = mask_rendered_symbolic_table_cells(
-        mask_source_bound_figure_caption_dollars(''.join(page.body_html), {'body': body}))
+        mask_source_bound_literal_asterisks(
+            mask_source_bound_figure_caption_dollars(''.join(page.body_html), {'body': body}),
+            {'body': body}))
     rendered_body = mask_rendered_currency_dollars(rendered_body)
     issues += math_and_emphasis_issues(rendered_body,
                                       'HTML', rendered_html=True)

@@ -222,15 +222,18 @@ function colonNumericVectors(value) {
 
 function hasSourceBoundRepeatedColonVector(cell, context = {}, duplicate = null) {
     const candidates = colonNumericVectors(cell);
-    // 这个例外要收窄：整个比值被复制会产生多个向量，
-    // 即使原表里有一份干净副本，也仍然算失败。
-    if (candidates.length !== 1) return false;
-    const candidate = candidates[0];
-    if (duplicate && !(duplicate.index >= candidate.index
-        && duplicate.index + duplicate.length <= candidate.index + candidate.length)) return false;
+    // 允许单元格内出现多个互不相同的源绑冒号向量（如时长均值与标准差 `0:05:05 (0:02:02)`），
+    // 但若同一比值/向量在单元格内重复粘贴两次（如 `1:1:2 1:1:2`），仍判失败。
+    if (!candidates.length) return false;
+    if (new Set(candidates.map(item => item.sequence)).size !== candidates.length) return false;
+    const matched = duplicate
+        ? candidates.find(item => duplicate.index >= item.index
+            && duplicate.index + duplicate.length <= item.index + item.length)
+        : candidates[0];
+    if (!matched) return false;
     const sourceSequences = new Set((Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
         .flatMap(colonNumericVectors).map(vector => vector.sequence));
-    return sourceSequences.has(candidate.sequence);
+    return candidates.every(item => sourceSequences.has(item.sequence));
 }
 
 function hasSourceBoundRepeatedSlashVector(cell, context = {}, duplicate = null) {

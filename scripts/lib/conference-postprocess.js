@@ -870,9 +870,24 @@ function repairPreservedPage(markdown) {
 }
 function repairCurrencyDollars(markdown) {
     // 货币符号是行文里的普通字符，不是 Goldmark 的数学分隔符。
-    // 这个修复只处理紧跟数字的美元符号，
-    // 普通的 `$x$` 这类 TeX 写法仍留给 repairDollarMath 处理。
-    return String(markdown).replace(/(?<!\\)\$(?=\s*[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)/g, '\\\$');
+    // 这个修复只处理紧跟数字的美元符号，但不能把同行闭合的行内 LaTeX 公式
+    // （如 `$10^4$`、`$1/T$`、`$0 \le \delta \le s1$`、`$1.60 \times 10^{-3}$`）
+    // 的开定界符误转义为 `\$`，否则会导致后续 `$...$` 错位配对。
+    return String(markdown).split('\n').map(line => line.replace(
+        /(?<!\\)\$(?=\s*[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)/g,
+        (match, offset) => {
+            const rest = line.slice(offset + 1);
+            const nextDollar = rest.search(/(?<!\\)\$/);
+            if (nextDollar !== -1) {
+                const inside = rest.slice(0, nextDollar);
+                if (inside.length > 0 && !/^\s/.test(inside) && !/\s$/.test(inside)
+                    && (/[\\^_/{}=<>×±]/.test(inside) || /^[+-]?\d+(?:\.\d+)?$/.test(inside))) {
+                    return match;
+                }
+            }
+            return '\\$';
+        }
+    )).join('\n');
 }
 function repairTechnicalNotationAsterisks(markdown) {
     // H1*-H2* 这种紧凑写法是科技文本，不是 Markdown 强调。

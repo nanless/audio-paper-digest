@@ -393,7 +393,7 @@ function runExtractorHelper(itemRoot, mode) {
     const runtime = path.resolve(__dirname, '..', 'python-runtime.sh');
     const script = path.resolve(__dirname, '..', 'conference-filter-evidence-extract.py');
     const child = spawnSync('bash', [runtime, script, `--${mode}`, '--manifest', 'request.json', '--source-root', itemRoot], {
-        cwd: path.resolve(__dirname, '..', '..'), encoding: 'utf8', timeout: 5 * 60 * 1000,
+        cwd: path.resolve(__dirname, '..', '..'), encoding: 'utf8', timeout: 15 * 60 * 1000,
         maxBuffer: 8 * 1024 * 1024, env: buildChildProcessEnv({}, EXTRACTOR_ALLOWED_ENV_KEYS), stdio: ['ignore', 'pipe', 'pipe']
     });
     if (child.status !== 0) fail(`pinned extractor failed: ${String(child.stderr || child.error?.message || '').trim().split(/\r?\n/).at(-1)}`);
