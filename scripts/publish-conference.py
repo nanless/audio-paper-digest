@@ -2469,16 +2469,58 @@ def _bridge_unminified_review_pages(repo, generation, reviewed_pages, commit, im
     return minified_pages
 
 
+def _bridge_descendant_template_review_pages(repo, generation, reviewed_pages, commit, image_commit):
+    """当远端 main 后继提交仅升级站内展示模板且逐字节保留本批全部已审文件时，
+    按远端 main 重新运行完整本地 Hugo 机械门禁并用于线上实际 HTML 验收。"""
+    if not commit or not reviewed_pages:
+        return None
+    try:
+        remote_main = git(repo, 'rev-parse', 'origin/main').stdout.strip()
+    except Exception:
+        return None
+    if not remote_main or remote_main == commit:
+        return None
+    try:
+        ancestor = subprocess.run(
+            ['git', '-C', str(repo), 'merge-base', '--is-ancestor', commit, remote_main],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return None
+    if ancestor.returncode != 0:
+        return None
+    try:
+        verify_published_tree(repo, remote_main, generation['remoteIdentitySha256'], generation['files'])
+        descendant_pages = run_hugo(
+            repo,
+            {**generation, 'baseHead': remote_main, 'renderTree': remote_main, 'renderImageTree': image_commit},
+            minify=True,
+        )['pages']
+    except Exception:
+        return None
+    if len(descendant_pages) != len(reviewed_pages):
+        return None
+    for reviewed, descendant in zip(reviewed_pages, descendant_pages):
+        if any(reviewed.get(k) != descendant.get(k)
+               for k in ('path', 'sourceSha256', 'url', 'formulaCount')):
+            return None
+    return descendant_pages
+
+
 def verify_reviewed_publication_urls(repo, pages, image_records, generation, commit, image_commit):
     try:
         return verify_conference_publication_urls(pages, image_records, generation)
     except ValueError as exc:
-        if '线上标题、H1或多级研究分类与已审HTML不一致' not in str(exc):
-            raise
-        bridged = _bridge_unminified_review_pages(repo, generation, pages, commit, image_commit)
-        if not bridged:
-            raise
-        return verify_conference_publication_urls(bridged, image_records, generation)
+        msg = str(exc)
+        if '线上标题、H1或多级研究分类与已审HTML不一致' in msg:
+            bridged = _bridge_unminified_review_pages(repo, generation, pages, commit, image_commit)
+            if bridged:
+                return verify_conference_publication_urls(bridged, image_records, generation)
+        if '线上正文/图片/表格/公式未匹配已审 HTML' in msg or '线上标题、H1或多级研究分类与已审HTML不一致' in msg:
+            descendant = _bridge_descendant_template_review_pages(repo, generation, pages, commit, image_commit)
+            if descendant:
+                return verify_conference_publication_urls(descendant, image_records, generation)
+        raise
 
 
 def accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote):
