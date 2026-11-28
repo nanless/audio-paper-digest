@@ -483,6 +483,27 @@ function assertState(value, expected = null) {
         if (hasMaintenanceAdoption && !validMaintenanceAdoption) {
             throw new Error(`Conference process text maintenance adoption integrity failed: ${paperId}`);
         }
+        const reviewReanalysisAdoption = item.reviewReanalysisAdoption;
+        const hasReviewReanalysisAdoption = reviewReanalysisAdoption !== undefined && reviewReanalysisAdoption !== null;
+        const validReviewReanalysisAdoption = hasReviewReanalysisAdoption
+            && typeof reviewReanalysisAdoption === 'object' && !Array.isArray(reviewReanalysisAdoption)
+            && typeof reviewReanalysisAdoption.manifestFile === 'string' && Boolean(reviewReanalysisAdoption.manifestFile.trim())
+            && /^[a-f0-9]{64}$/u.test(reviewReanalysisAdoption.manifestSha256 || '')
+            && /^[a-f0-9]{64}$/u.test(reviewReanalysisAdoption.reviewFailureSha256 || '')
+            && strictUuidRe.test(reviewReanalysisAdoption.previousExecutionId || '')
+            && /^[a-f0-9]{64}$/u.test(reviewReanalysisAdoption.previousAnalysisFileSha256 || '')
+            && /^[a-f0-9]{64}$/u.test(reviewReanalysisAdoption.previousStateSha256 || '')
+            && /^[a-f0-9]{64}$/u.test(reviewReanalysisAdoption.previousItemSha256 || '')
+            && strictUuidRe.test(reviewReanalysisAdoption.newExecutionId || '')
+            && reviewReanalysisAdoption.newExecutionId !== reviewReanalysisAdoption.previousExecutionId
+            && reviewReanalysisAdoption.newExecutionId === deterministicUuid(value.processId, paperId,
+                `review-reanalysis:${reviewReanalysisAdoption.manifestSha256}`)
+            && typeof reviewReanalysisAdoption.receiptFile === 'string' && Boolean(reviewReanalysisAdoption.receiptFile.trim())
+            && /^[a-f0-9]{64}$/u.test(reviewReanalysisAdoption.receiptSha256 || '')
+            && (item.analysisRunId === reviewReanalysisAdoption.newExecutionId || validMaintenanceAdoption);
+        if (hasReviewReanalysisAdoption && !validReviewReanalysisAdoption) {
+            throw new Error(`Conference process review reanalysis adoption integrity failed: ${paperId}`);
+        }
         if (revision) {
             const { revisionSha256, ...body } = revision;
             const additional = codec.hasValidHeader(revision, 'conference-reader-recovery-window');
@@ -498,7 +519,8 @@ function assertState(value, expected = null) {
                     revision.parentExecutionId, revision.parentAnalysisFileSha256, revision);
             const allowedParentExecutionId = preservedComplete.has(paperId)
                 || revision.parentExecutionId === deterministicUuid(value.processId, paperId, 'analysis')
-                || validMaintenanceAdoption;
+                || validMaintenanceAdoption
+                || (validReviewReanalysisAdoption && revision.parentExecutionId === reviewReanalysisAdoption.newExecutionId);
             if (revisionSha256 !== stableHash(body) || (!validOriginal && !validWindow)
                 || revision.paperId !== paperId || revision.executionId !== item.analysisRunId
                 || !allowedParentExecutionId) {
@@ -506,6 +528,7 @@ function assertState(value, expected = null) {
             }
         }
         if (item.paperId !== paperId || (!revision && !preservedComplete.has(paperId) && !validSourceAdoption
+            && !validReviewReanalysisAdoption
             && item.analysisRunId !== deterministicUuid(value.processId, paperId, 'analysis'))
             || preservedComplete.has(paperId) && (!(item.preservedOriginalComplete || item.preservedPriorUpgradeComplete)
                 || !/^[a-f0-9-]{36}$/i.test(item.analysisRunId || ''))

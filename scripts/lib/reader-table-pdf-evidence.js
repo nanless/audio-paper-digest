@@ -219,6 +219,20 @@ function assertSavedScientificDomBindings(paper) {
             // sourceText values with their already-rendered Unicode surfaces.
             || /^[+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)×10[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+$/.test(cell.renderedText || ''))));
     if (!marked.length) return;
+    // Conference PDF papers bind sealed tables through conference-analysis-adapter / conference-postprocess
+    // rather than dailyFreshSourceRunsDir. When every cell in a marked conference table matches its
+    // verbatim sealed sourceText (not a LaTeXML scientific-notation-duplicate rewrite), do not demand
+    // daily freshRewriteProvenance.
+    if (paper?.source === 'conference' && !paper?.arxivId
+        && paper?.analysisSource === 'conference_pdf_text'
+        && typeof paper?.conferencePaperId === 'string' && paper.conferencePaperId.startsWith('conference:')
+        && marked.every(binding => (binding.cellBindings || []).every(cell => (
+            require('./source-cell-math-display').strictSourceCellMathDisplay(cell.sourceText)?.kind !== 'scientific-notation-duplicate'
+            && (cell.renderedText === cell.sourceText
+                || require('./reader-tables').unescapeMarkdownTableCell(cell.renderedText) === cell.sourceText)
+        )))) {
+        return;
+    }
     const provenance = paper.freshRewriteProvenance;
     if (!isFreshSourceProvenance(provenance)
         || !isDeepStrictEqual(provenance, paper.analysisManifest?.freshRewriteProvenance)

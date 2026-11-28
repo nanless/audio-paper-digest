@@ -12,7 +12,7 @@ const cli = require('./conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 const retainedSourceReplay = require('./lib/conference-retained-source-replay.js');
 
-const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--postprocess-concurrency 1..5] [--reuse-complete-pages] [--retry-failed] [--postprocess-only [--preserve-failed-readers]] [--source-corrections ABSOLUTE_PATH] [--reader-review-feedback ABSOLUTE_PATH [--reader-review-window ABSOLUTE_PATH]] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
+const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1..60] [--postprocess-concurrency 1..5] [--reuse-complete-pages] [--retry-failed] [--postprocess-only [--preserve-failed-readers]] [--source-corrections ABSOLUTE_PATH] [--reader-review-feedback ABSOLUTE_PATH [--reader-review-window ABSOLUTE_PATH]] [--review-reanalysis-manifest ABSOLUTE_PATH] [--recovery-manifest ABSOLUTE_PATH] [--reader-corrections ABSOLUTE_PATH]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
@@ -24,7 +24,7 @@ function parseArgs(argv) {
             if (Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
             values[flag] = true; index += 1; continue;
         }
-        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--postprocess-concurrency', '--recovery-manifest', '--reader-corrections', '--source-corrections', '--reader-review-feedback', '--reader-review-window'].includes(flag)
+        if (!['--catalog', '--report', '--filter', '--from', '--concurrency', '--postprocess-concurrency', '--recovery-manifest', '--reader-corrections', '--source-corrections', '--reader-review-feedback', '--reader-review-window', '--review-reanalysis-manifest'].includes(flag)
             || !value || Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
         values[flag] = value; index += 2;
     }
@@ -40,7 +40,12 @@ function parseArgs(argv) {
         || (values['--reader-review-window'] && (!path.isAbsolute(values['--reader-review-window']) || !values['--reader-review-feedback']))
         || (values['--reader-review-feedback'] && (!path.isAbsolute(values['--reader-review-feedback'])
             || values['--recovery-manifest'] || values['--reader-corrections'] || values['--source-corrections']
-            || values['--postprocess-only'] || values['--preserve-failed-readers'] || values['--retry-failed']))
+            || values['--postprocess-only'] || values['--preserve-failed-readers'] || values['--retry-failed']
+            || values['--review-reanalysis-manifest']))
+        || (values['--review-reanalysis-manifest'] && (!path.isAbsolute(values['--review-reanalysis-manifest'])
+            || values['--recovery-manifest'] || values['--reader-corrections'] || values['--source-corrections']
+            || values['--postprocess-only'] || values['--preserve-failed-readers'] || values['--retry-failed']
+            || values['--reader-review-feedback'] || values['--reader-review-window']))
         || (values['--source-corrections'] && (!path.isAbsolute(values['--source-corrections'])
             || !values['--postprocess-only'] || values['--reader-corrections']))) {
         throw new Error(`命令写法不对，用法：${USAGE}`);
@@ -54,6 +59,7 @@ function parseArgs(argv) {
         ...(values['--recovery-manifest'] ? { recoveryManifest: values['--recovery-manifest'] } : {}),
         ...(values['--reader-review-window'] ? { readerReviewWindow: values['--reader-review-window'] } : {}),
         ...(values['--reader-review-feedback'] ? { readerReviewFeedback: values['--reader-review-feedback'] } : {}),
+        ...(values['--review-reanalysis-manifest'] ? { reviewReanalysisManifest: values['--review-reanalysis-manifest'] } : {}),
         ...(values['--reader-corrections'] ? { readerCorrections: values['--reader-corrections'] } : {}),
         ...(values['--source-corrections'] ? { sourceCorrections: values['--source-corrections'] } : {}) };
 }
@@ -254,8 +260,12 @@ function migrateAndRun(options, runtime = {}) {
     const postprocessConcurrency = options.postprocessConcurrency ?? options.concurrency;
     if ((options.readerReviewWindow && !options.readerReviewFeedback)
         || (options.readerReviewFeedback && (options.postprocessOnly || options.preserveFailedReaders
-            || options.retryFailed || options.recoveryManifest || options.readerCorrections || options.sourceCorrections))) {
-        throw new Error('Reader review maintenance requires its exclusive normal feedback mode');
+            || options.retryFailed || options.recoveryManifest || options.readerCorrections || options.sourceCorrections
+            || options.reviewReanalysisManifest))
+        || (options.reviewReanalysisManifest && (options.postprocessOnly || options.preserveFailedReaders
+            || options.retryFailed || options.recoveryManifest || options.readerCorrections || options.sourceCorrections
+            || options.readerReviewFeedback || options.readerReviewWindow))) {
+        throw new Error('Reader review maintenance or review reanalysis requires its exclusive mode');
     }
     if (options.preserveFailedReaders && (!options.postprocessOnly || options.retryFailed
         || options.recoveryManifest || options.readerCorrections || options.sourceCorrections)) {
@@ -329,6 +339,15 @@ function migrateAndRun(options, runtime = {}) {
             if (maintenance.status !== 'adopted') return maintenance;
             state = maintenance.state;
             // Continue existing current-implementation stage and aggregate gates.
+        }
+        if (options.reviewReanalysisManifest) {
+            // Preserve prior complete execution, failure record and billing history;
+            // run a fresh paid analysis + staging under a new deterministic executionId.
+            const reanalysis = await require('./lib/conference-review-reanalysis')
+                .runReviewReanalysisBatch({ manifestPath: options.reviewReanalysisManifest,
+                    directory, state, shared, context, options }, deps);
+            if (reanalysis.status !== 'adopted') return reanalysis;
+            state = reanalysis.state;
         }
         if (options.readerCorrections) {
             if (!grantHandle || lifecycleNeedsRefresh) {

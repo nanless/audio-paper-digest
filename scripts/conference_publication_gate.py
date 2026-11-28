@@ -1389,9 +1389,22 @@ def inspect_html(markdown, rendered, image_records, image_base):
     if issues:
         raise ValueError('; '.join(issues))
     formulas = re.findall(r'\\\[(.*?)\\\]|\\\((.*?)\\\)', body_for_format, re.S)
+    compact_text = re.sub(r'\s+', '', text)
+
+    def _katex_healed_formula(raw_formula):
+        healed = raw_formula
+        for src, dst in (
+            ('∥', r'\parallel'), ('′', "'"), ('µ', r'\mu'), ('∆', r'\Delta'),
+            ('∅', r'\emptyset'), ('⊤', r'\top'), ('⋆', r'\star'), ('√', r'\surd'), ('–', '-'),
+        ):
+            healed = healed.replace(src, dst)
+        healed = re.sub(r'([\u4e00-\u9fff]+)', r'\\text{\1}', healed)
+        return re.sub(r'\s+', '', healed)
+
     for display, inline in formulas:
-        formula = re.sub(r'\s+', '', html.unescape(display or inline))
-        if formula not in re.sub(r'\s+', '', text):
+        raw_formula = html.unescape(display or inline)
+        formula = re.sub(r'\s+', '', raw_formula)
+        if formula not in compact_text and _katex_healed_formula(raw_formula) not in compact_text:
             raise ValueError(f'HTML 公式内容丢失/被 Markdown 改写：{formula}')
     if formulas and not page.has_math_rendering():
         raise ValueError('HTML 公式缺少数学渲染运行时或构建期 KaTeX SSR 输出；仅完成静态检查')

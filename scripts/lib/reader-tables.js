@@ -601,6 +601,36 @@ function isFullWidthDividerRow(table, rowIndex) {
         && Number(coveringCells[0].rowspan || 1) === 1;
 }
 
+// PDF 表格抽取有时会把首列名称与第二列数值粘连进第一格，导致整行左移且末列变空
+// （例如 `["Qwen2.5-Omni-7B (baseline) [11] 83.16", "56.42", ""]`）。
+// 仅在至少半数（且不少于两行）其他数据行首列无尾随小数且末列非空时触发，
+// 避免误伤合法的稀疏表格。
+function findShiftedPdfTableRow(matrix, headerRows) {
+    const width = matrix?.[0]?.length;
+    if (!Array.isArray(matrix) || matrix.length < 3 || !Number.isInteger(width) || width < 3) return null;
+    const headers = new Set(Array.isArray(headerRows) ? headerRows : [0]);
+    const dataIndices = matrix.map((_row, index) => index).filter(index => !headers.has(index));
+    if (dataIndices.length < 2) return null;
+    const trailingDecimalRe = /\S+\s+[+\-\u2212]?\d+\.\d+%?$/;
+    const normalRows = dataIndices.filter(index => {
+        const row = matrix[index];
+        return String(row[0] || '').trim() !== ''
+            && !trailingDecimalRe.test(String(row[0] || '').trim())
+            && String(row[width - 1] || '').trim() !== '';
+    });
+    if (normalRows.length < Math.max(2, Math.ceil(dataIndices.length / 2))) return null;
+    for (const rowIndex of dataIndices) {
+        const row = matrix[rowIndex];
+        const first = String(row[0] || '').trim();
+        const last = String(row[width - 1] || '').trim();
+        const middleFilled = row.slice(1, width - 1).every(value => String(value || '').trim() !== '');
+        if (first && trailingDecimalRe.test(first) && middleFilled && last === '') {
+            return { row: rowIndex, column: 0 };
+        }
+    }
+    return null;
+}
+
 function assessReaderTableSelectionEligibility(table) {
     const reasons = [];
     const add = (code, detail = {}) => reasons.push({ code, ...detail });
@@ -651,6 +681,8 @@ function assessReaderTableSelectionEligibility(table) {
                 if (unsafeMarkdownCell(projectReaderMathSymbols(displayCell))) add('unsafe_markdown_cell', { row, column });
             }
         }
+        const shiftedSelectionRow = findShiftedPdfTableRow(matrix, effectiveReaderTableRows(table).headerRows);
+        if (shiftedSelectionRow) add('source_display_cleanup_required', shiftedSelectionRow);
     }
     const complete = reasons.length ? assessReaderCompleteTableEligibility(table) : null;
     return { contract: READER_TABLE_ELIGIBILITY_CONTRACT, eligible: reasons.length === 0,
@@ -719,6 +751,8 @@ function assessReaderCompleteTableEligibility(table) {
                     if (unsafeMarkdownCell(projectReaderMathSymbols(visible))) add('unsafe_markdown_cell', { row, column });
                 }
             }
+            const shiftedCompleteRow = findShiftedPdfTableRow(surfaces, effectiveReaderTableRows(table).headerRows);
+            if (shiftedCompleteRow) add('source_display_cleanup_required', shiftedCompleteRow);
         }
     }
     return { contract: READER_COMPLETE_TABLE_ELIGIBILITY_CONTRACT, eligible: reasons.length === 0,

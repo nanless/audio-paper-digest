@@ -1946,7 +1946,11 @@ function findMissingComparisonUnits(text, options = {}) {
                 match => ' '.repeat(match.length)
             )
             .replace(
-                new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:或|和|、|至|到|[-–—])\\s*\\d+(?:\\.\\d+)?\\s*${unit}`, 'giu'),
+                new RegExp(`\\d+(?:\\.\\d+)?(?:\\s*±\\s*\\d+(?:\\.\\d+)?)?(?:\\s*(?:或|和|与|、|至|到|[-–—])\\s*\\d+(?:\\.\\d+)?(?:\\s*±\\s*\\d+(?:\\.\\d+)?)?)+\\s*${unit}`, 'giu'),
+                match => ' '.repeat(match.length)
+            )
+            .replace(
+                new RegExp(`\\d+(?:\\.\\d+)?\\s*±\\s*\\d+(?:\\.\\d+)?\\s*${unit}`, 'giu'),
                 match => ' '.repeat(match.length)
             )
             // ASVspoof 用年份区分评测版本（例如 "ASVspoof 2024"）。

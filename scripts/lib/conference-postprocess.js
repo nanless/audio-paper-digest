@@ -929,8 +929,11 @@ function repairUnpairedMarkdownStars(markdown) {
     }).join('\n');
 }
 function repairDollarMath(markdown) {
-    return String(markdown).replace(/(?<!\\)\$(?!\$)([\s\S]*?)(?<!\\)\$(?!\$)/g,
-        (_match, body) => `\\(${body.replace(/\\\(/g, '(').replace(/\\\)/g, ')')}\\)`);
+    return String(markdown)
+        .replace(/(?<!\\)\$\$([\s\S]+?)(?<!\\)\$\$/g,
+            (_match, body) => `\\[${body.replace(/\\\[/g, '[').replace(/\\\]/g, ']')}\\]`)
+        .replace(/(?<![\\$])\$(?!\$)([\s\S]*?)(?<![\\$])\$(?!\$)/g,
+            (_match, body) => `\\(${body.replace(/\\\(/g, '(').replace(/\\\)/g, ')')}\\)`);
 }
 function safeStageChild(directory, name, label) {
     if (typeof name !== 'string' || !/^[a-f0-9]{64}$/i.test(name)) fail(`${label} directory name is invalid`);
