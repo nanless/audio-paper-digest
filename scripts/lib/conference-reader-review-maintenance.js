@@ -2273,9 +2273,11 @@ async function recoverUnissuedMaintenanceChild(batch,member,handle,deps,shared) 
     const selected=effectiveMember(batch,member),saved=progressFor(batch).value.members[member.paperId];
     const messages=['Text maintenance cannot change resources or scoring',
         '定向修订需要完整的读者文章，且正文、写作计划和分析阶段的 SHA 记录须一致。'];
+    const legacyUnissuedPreflightError=saved?.failure?.message==='Text maintenance: private real unissued scoring capability required';
     if(selected.window||!saved||saved.status!=='failed'||saved.executionId!==selected.executionId
-        ||saved.attempts!==0||saved.failure?.retryable!==false||saved.failure?.systemic
-        ||!messages.includes(saved.failure?.message))return false;
+        ||saved.attempts!==0||saved.failure?.retryable!==false
+        ||(saved.failure?.systemic&&!legacyUnissuedPreflightError)
+        ||(!messages.includes(saved.failure?.message)&&!legacyUnissuedPreflightError))return false;
     return deps.engine.withPaperAnalysisLock({id:member.paperId},()=>require('./analysis-stop-control').withModelRequestsForbidden(async()=>{
         assertCurrentBatch(batch);const parent=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:member.parentExecutionId});bindCompletedParent(handle,parent);
         const initial=readUnissuedMaintenanceChild(batch,selected),paper=parent.analysis.papers[0];
