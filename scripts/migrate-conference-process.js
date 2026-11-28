@@ -282,10 +282,24 @@ function migrateAndRun(options, runtime = {}) {
     const migrationFile = path.join(directory, 'implementation-migration.json');
     const runLocked = async () => {
         let state = processApi.assertState(cli.readSafeJson(stateFile));
-        if (!options.readerReviewFeedback && ((state.readerReviewMaintenanceObligations || []).length
-            || fs.existsSync(path.join(directory, 'review-reader-maintenance')))) {
-            require('./lib/conference-reader-review-maintenance').assertNoPendingReaderReviewMaintenance({
-                processDirectory: directory, analysisRoot: deps.files.conferenceAnalysisDir, state });
+        const hasMaintenanceObligation = (state.readerReviewMaintenanceObligations || []).length
+            || fs.existsSync(path.join(directory, 'review-reader-maintenance'));
+        let deferredMaintenanceCompleteCheck = false;
+        if (!options.readerReviewFeedback && hasMaintenanceObligation) {
+            try {
+                require('./lib/conference-reader-review-maintenance').assertNoPendingReaderReviewMaintenance({
+                    processDirectory: directory, analysisRoot: deps.files.conferenceAnalysisDir, state });
+            } catch (error) {
+                const resumableReviewReanalysis = error?.code === 'CONFERENCE_READER_REVIEW_MAINTENANCE_INTEGRITY'
+                    && error.message === 'Text maintenance: new complete process required'
+                    && !options.postprocessOnly
+                    && state.status === 'running'
+                    && Object.values(state.items || {}).length > 0
+                    && Object.values(state.items || {}).every(item => item.status === 'complete')
+                    && Object.values(state.items || {}).some(item => Boolean(item.reviewReanalysisAdoption));
+                if (!resumableReviewReanalysis) throw error;
+                deferredMaintenanceCompleteCheck = true;
+            }
         }
         const grants = options.recoveryManifest ? require('./lib/conference-recovery-grant') : null;
         const grantHandle = grants ? grants.openRecoveryGrant({ manifestPath: options.recoveryManifest,
@@ -648,9 +662,15 @@ function migrateAndRun(options, runtime = {}) {
         }
         if (savedChildren.failures.length) return { status: 'partial', processId: options.fromProcessId,
             savedChildAdoptionBlocked: true, failures: savedChildren.failures, newApiRequests: 0 };
-        return processApi.runConferenceProcessLocked(grant ? { ...options, recoveryGrantId: grant.grantId,
+        const finalResult = await processApi.runConferenceProcessLocked(grant ? { ...options, recoveryGrantId: grant.grantId,
             recoveryGrantSha256: grant.grantSha256 } : options, migrationDeps, context,
             options.fromProcessId, directory);
+        if (deferredMaintenanceCompleteCheck) {
+            const finalState = processApi.assertState(cli.readSafeJson(stateFile));
+            require('./lib/conference-reader-review-maintenance').assertNoPendingReaderReviewMaintenance({
+                processDirectory: directory, analysisRoot: deps.files.conferenceAnalysisDir, state: finalState });
+        }
+        return finalResult;
     };
     return deps.engine.withFileLock(operation, () => require('./lib/analysis-stop-control')
         .withAnalysisStopControl(runLocked), {
