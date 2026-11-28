@@ -485,6 +485,10 @@ function assertState(value, expected = null) {
         }
         const reviewReanalysisAdoption = item.reviewReanalysisAdoption;
         const hasReviewReanalysisAdoption = reviewReanalysisAdoption !== undefined && reviewReanalysisAdoption !== null;
+        const reviewReanalysisOwnerProcessId = preservedComplete.has(paperId)
+            && value.sourceUpgradePromotion?.originalProcessId
+            ? value.sourceUpgradePromotion.originalProcessId
+            : value.processId;
         const validReviewReanalysisAdoption = hasReviewReanalysisAdoption
             && typeof reviewReanalysisAdoption === 'object' && !Array.isArray(reviewReanalysisAdoption)
             && typeof reviewReanalysisAdoption.manifestFile === 'string' && Boolean(reviewReanalysisAdoption.manifestFile.trim())
@@ -496,7 +500,7 @@ function assertState(value, expected = null) {
             && /^[a-f0-9]{64}$/u.test(reviewReanalysisAdoption.previousItemSha256 || '')
             && strictUuidRe.test(reviewReanalysisAdoption.newExecutionId || '')
             && reviewReanalysisAdoption.newExecutionId !== reviewReanalysisAdoption.previousExecutionId
-            && reviewReanalysisAdoption.newExecutionId === deterministicUuid(value.processId, paperId,
+            && reviewReanalysisAdoption.newExecutionId === deterministicUuid(reviewReanalysisOwnerProcessId, paperId,
                 `review-reanalysis:${reviewReanalysisAdoption.manifestSha256}`)
             && typeof reviewReanalysisAdoption.receiptFile === 'string' && Boolean(reviewReanalysisAdoption.receiptFile.trim())
             && /^[a-f0-9]{64}$/u.test(reviewReanalysisAdoption.receiptSha256 || '')

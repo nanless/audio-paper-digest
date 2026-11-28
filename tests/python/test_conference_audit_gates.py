@@ -150,6 +150,25 @@ class ConferenceAuditRootCauseGatesTest(unittest.TestCase):
         )
         self.assertEqual(math_and_emphasis_issues(good_tbl, 'ok.md'), [])
 
+        # R/ANOVA significance stars in tables and prose pass in both Markdown and rendered HTML
+        sig_md = (
+            '| Term | p-value |\n'
+            '| --- | --- |\n'
+            '| A | 0.0083780 ** |\n'
+            '| B | < 2.2e-16 *** |\n\n'
+            '显著性标注 **** p < .0001 或 ** p < .01。\n'
+        )
+        self.assertEqual(math_and_emphasis_issues(sig_md, 'sig.md'), [])
+        sig_html = (
+            '<table><tr><td>A</td><td>0.0083780 **</td></tr>'
+            '<tr><td>B</td><td>&lt; 2.2e-16 ***</td></tr></table>'
+            '<p>显著性标注 **** p &lt; .0001 或 ** p &lt; .01。</p>'
+        )
+        self.assertEqual(math_and_emphasis_issues(sig_html, 'sig.html', rendered_html=True), [])
+        # Genuine unpaired bold still fails in both modes
+        self.assertTrue(any('未配对' in i for i in math_and_emphasis_issues('**未闭合加粗', 'bad.md')))
+        self.assertTrue(any('未配对' in i for i in math_and_emphasis_issues('<p>**未闭合加粗</p>', 'bad.html', rendered_html=True)))
+
     def test_pixel_edge_clipping_gate_blocks_chopped_figures_and_allows_clean_or_fullbleed(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location('publish_to_blog_mod', SCRIPTS / 'publish-to-blog.py')

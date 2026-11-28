@@ -2991,3 +2991,70 @@ test('assertState 接受合法的 sourceResourceCorrectionAdoption 与链式 tex
     strayRandomPaperB.items[paperB].analysisRunId = '88888888-2222-4333-8444-555555555555';
     assert.throws(() => processApi.assertState(resign(strayRandomPaperB)), /item integrity failed/);
 });
+
+test('assertState 接受源升级晋升中保留原完成项绑定的 reviewReanalysisAdoption 并拒绝越权绑定', async t => {
+    const f = fixture(t, 2);
+    const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
+        filterId: f.authority.filterId, concurrency: 1 };
+    const completed = await processApi.runConferenceProcess(options, { ...f.deps,
+        processPaper: async (_context, _shared, item) => success(item) });
+    const directory = path.join(f.files.conferenceProcessDir, completed.processId);
+    const baseState = JSON.parse(fs.readFileSync(path.join(directory, 'state.json')));
+    const codec = require('../scripts/lib/protocol-codec');
+    const [paperA, paperB] = f.members.map(m => m.paperId).sort();
+    const manifestSha = H('review-reanalysis-manifest');
+    const origReanalysisId = processApi.deterministicUuid(baseState.processId, paperA, `review-reanalysis:${manifestSha}`);
+    const planSha = H('source-upgrade-plan');
+    const promotedProcessId = processApi.deterministicUuid(planSha, codec.contract('conference-source-upgrade-process'));
+    const promoted = structuredClone(baseState);
+    promoted.processId = promotedProcessId;
+    promoted.status = 'running';
+    promoted.aggregate = null;
+    promoted.completionReceiptSha256 = null;
+    promoted.sourceUpgradePromotion = {
+        ...codec.recordHeader('conference-source-upgrade-promotion', 'conference-source-upgrade-promotion'),
+        planSha256: planSha,
+        originalProcessId: baseState.processId,
+        sourceImplementationSha256: baseState.authority.implementationSha256,
+        preferUpgrade: true,
+        upgradedPaperIds: [paperB],
+        preservedOriginalCompletePaperIds: [paperA]
+    };
+    promoted.items[paperA] = {
+        ...promoted.items[paperA],
+        preservedOriginalComplete: true,
+        analysisRunId: origReanalysisId,
+        reviewReanalysisAdoption: {
+            manifestFile: '/tmp/review-reanalysis-manifest.json',
+            manifestSha256: manifestSha,
+            reviewFailureSha256: H('review-failure'),
+            previousExecutionId: baseState.items[paperA].analysisRunId,
+            previousAnalysisFileSha256: baseState.items[paperA].analysisProof.analysisSha256,
+            previousStateSha256: baseState.stateSha256,
+            previousItemSha256: H(baseState.items[paperA]),
+            newExecutionId: origReanalysisId,
+            receiptFile: '/tmp/review-reanalysis-receipt.json',
+            receiptSha256: H('review-reanalysis-receipt')
+        }
+    };
+    promoted.items[paperB] = {
+        ...promoted.items[paperB],
+        analysisRunId: processApi.deterministicUuid(promotedProcessId, paperB, 'analysis')
+    };
+    const resign = candidate => {
+        candidate.stateSha256 = processApi.stateDigest(candidate);
+        return candidate;
+    };
+    assert.equal(processApi.assertState(resign(promoted)).items[paperA].analysisRunId, origReanalysisId);
+
+    const forgedOwner = structuredClone(promoted);
+    forgedOwner.items[paperA].reviewReanalysisAdoption.newExecutionId = processApi.deterministicUuid(
+        '99999999-2222-4333-8444-555555555555', paperA, `review-reanalysis:${manifestSha}`);
+    forgedOwner.items[paperA].analysisRunId = forgedOwner.items[paperA].reviewReanalysisAdoption.newExecutionId;
+    assert.throws(() => processApi.assertState(resign(forgedOwner)), /review reanalysis adoption integrity failed/);
+
+    const nonPreservedItem = structuredClone(promoted);
+    nonPreservedItem.sourceUpgradePromotion.preservedOriginalCompletePaperIds = [];
+    nonPreservedItem.sourceUpgradePromotion.upgradedPaperIds = [paperA, paperB];
+    assert.throws(() => processApi.assertState(resign(nonPreservedItem)), /review reanalysis adoption integrity failed/);
+});
