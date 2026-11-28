@@ -35,15 +35,49 @@ function getReviewReanalysisGuidance(paper) {
     if (paper && paperId(paper) !== active.paperId) return null;
     return active;
 }
-function formatReviewReanalysisPromptWarning(paper) {
+function formatStructuredTablesForReviewReanalysis(paper, maxChars = 16000) {
+    try {
+        const activeCtx = scope.getStore();
+        if (!activeCtx) return '';
+        const sourceDetails = getConferenceAnalysisSource(paper || { id: activeCtx.paperId });
+        const tables = Array.isArray(sourceDetails?.structuredArtifacts?.tables)
+            ? sourceDetails.structuredArtifacts.tables : [];
+        if (!tables.length) return '';
+        const chunks = [];
+        let used = 0;
+        for (const table of tables) {
+            if (!Array.isArray(table?.matrix) || table.matrix.length < 2) continue;
+            const rows = table.matrix
+                .filter(row => Array.isArray(row) && row.length > 0)
+                .map(row => '| ' + row.map(cell => String(cell ?? '').replace(/\s+/g, ' ').replace(/\|/g, '\\|').trim()).join(' | ') + ' |');
+            if (rows.length < 2) continue;
+            const header = `Table ${table.ordinal || chunks.length + 1}${table.caption ? ` (${String(table.caption).replace(/\s+/g, ' ').trim().slice(0, 180)})` : ''}:`;
+            const block = `${header}\n${rows.join('\n')}`;
+            if (used + block.length > maxChars) {
+                if (chunks.length === 0) chunks.push(block.slice(0, maxChars));
+                break;
+            }
+            chunks.push(block);
+            used += block.length + 2;
+        }
+        if (!chunks.length) return '';
+        return '\n\n【封存原论文结构化表格矩阵（供精确核对列头与同行归属，防止纯文本抽取列错位）】\n' + chunks.join('\n\n');
+    } catch (_) {
+        return '';
+    }
+}
+function formatReviewReanalysisPromptWarning(paper, options = {}) {
     const active = getReviewReanalysisGuidance(paper);
     if (!active) return '';
     const lines = active.issues.map((item, idx) => (
         `${idx + 1}. ${item.description}${item.fixInstruction ? `（核对方向：${item.fixInstruction}）` : ''}`
     ));
+    const tablesBlock = options && options.includeStructuredTables === true
+        ? formatStructuredTablesForReviewReanalysis(paper)
+        : '';
     return `\n\n【上轮独立发布审查指出的事实核对警示（failure=${active.reviewFailureSha256.slice(0, 12)}，stage=${active.stage || 'content'}）】\n`
         + '请务必严格对照原论文正文、表格矩阵与原图像素逐项核实以下问题，消除跨栏目自相矛盾、行列/图例错位、量纲混写或图文不符；所有陈述仍须 100% 忠实于原论文与原图，严禁编造原文未给出的数字或结论：\n'
-        + lines.join('\n');
+        + lines.join('\n') + tablesBlock;
 }
 const WEAK_READER_CAPABILITY_POLICY_CONTRACT = codec.contract('conference-reader-weak-unavailable-structure');
 const WEAK_CONFERENCE_CAPABILITIES = Object.freeze({

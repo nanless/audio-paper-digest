@@ -76,6 +76,19 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
         self.assertEqual(fixed, '均值项目成本为113.54 美元，高于中位数成本93.80 美元。')
         self.assertEqual(math_and_emphasis_issues(fixed, 'Reader'), [])
 
+    def test_chinese_context_single_digit_decimal_dollars_render_as_currency(self):
+        text = '平均每场景 4.1 次调用，约 $7.8 每分钟。直接生成仅 1.0 次、5–8 min 与 $1.9 ，通用迭代修复为 3.8 次。'
+        fixed = sanitize_markdown_for_publish(text)
+        self.assertEqual(
+            fixed,
+            '平均每场景 4.1 次调用，约 7.8 美元每分钟。直接生成仅 1.0 次、5–8 min 与 1.9 美元 ，通用迭代修复为 3.8 次。',
+        )
+        self.assertEqual(math_and_emphasis_issues(fixed, 'Reader'), [])
+        # Negative controls: English/bare decimals and math-like expressions must remain untouched.
+        self.assertEqual(fix_latex_delimiters('$0.2'), '$0.2')
+        self.assertEqual(fix_latex_delimiters('$0.2 and $1.0'), '$0.2 and $1.0')
+        self.assertEqual(fix_latex_delimiters('约 $5.2 + x'), '约 $5.2 + x')
+
     def test_explicit_chinese_price_context_integer_dollar_is_rendered_as_currency(self):
         text = '而树莓派 5 4 GB 裸板即标价 $110 且仍需另配这些部件。'
         fixed = sanitize_markdown_for_publish(text)

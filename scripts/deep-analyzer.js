@@ -787,6 +787,8 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
     // 评分只准改评分字段；正文中的已证实错误须先由正文重写阶段处理。
     scoringFactReview.validateRepairedClaims('primaryAnalysis', analysis);
     const factFeedback = scoringFactReview.reviewFeedback('scoringAudit');
+    const reviewReanalysisScoringHint = require('./lib/conference-analysis-context.js')
+        .formatReviewReanalysisPromptWarning(null, { includeStructuredTables: true });
     let lastError = null;
     let validationFeedback = '这是第一次输出，没有上一次校验错误。';
     // 没有另外提供证据上下文时，评分审查会把已有分析章节整理成带引用 ID 的内容。
@@ -802,7 +804,7 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
     );
     for (let attempt = 1; attempt <= 3; attempt++) {
         const prompt = renderScoringAuditPrompt(scoringAuditPromptPath, auditInputAnalysis,
-            evidenceContext, validationFeedback, factFeedback);
+            evidenceContext, validationFeedback, factFeedback) + reviewReanalysisScoringHint;
         const request = options.callModelFn || callModel;
         const raw = await request(
             [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
@@ -12082,7 +12084,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     } catch (_) {
         verifiedAuthorsPromptHint = '';
     }
-    const reviewReanalysisHint = require('./lib/conference-analysis-context.js').formatReviewReanalysisPromptWarning(paper);
+    const reviewReanalysisHint = require('./lib/conference-analysis-context.js')
+        .formatReviewReanalysisPromptWarning(paper, { includeStructuredTables: true });
     const prompt = loadPrompt(currentTextStagePromptPath('primaryAnalysis'), {
         hasFullText: hasFullTextIntro + verifiedAuthorsPromptHint,
         title: paper.title,
@@ -13954,7 +13957,8 @@ async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvide
         existingAnalysis: existingAnalysis,
         textForAnalysis: evidence,
         tagPromptText: TAG_RULES.projection
-    }), 'revision', paper) + require('./lib/conference-analysis-context.js').formatReviewReanalysisPromptWarning(paper);
+    }), 'revision', paper) + require('./lib/conference-analysis-context.js')
+        .formatReviewReanalysisPromptWarning(paper, { includeStructuredTables: true });
     const request = options.callModelFn || callModel;
     const revised = await request([{ role: 'user', content: prompt }], REVISION_MAX_TOKENS,
         { usageContext: { stage: 'revision' } });
@@ -14384,7 +14388,9 @@ async function repairCoreSummarySection(
         const prompt = (!originalCorePromptBinding && !useExecutiveSummary
             ? loadRegisteredPrompt(coreRepairPromptPath, promptVars,
                 { originalFileSha256: LEGACY_CORE_SUMMARY_REPAIR_PROMPT_SHA256 })
-            : loadPrompt(coreRepairPromptPath, promptVars)) + selfCheckChecklist;
+            : loadPrompt(coreRepairPromptPath, promptVars)) + selfCheckChecklist
+            + require('./lib/conference-analysis-context.js')
+                .formatReviewReanalysisPromptWarning(paper, { includeStructuredTables: true });
         const diagnosticApi = require('./lib/reader-request-diagnostics');
         const diagnostic = diagnosticApi.beginCoreSummaryDiagnostic(recordRoot, {
             identity: diagnosticIdentity, attempt, prompt, inputAnalysis: original,

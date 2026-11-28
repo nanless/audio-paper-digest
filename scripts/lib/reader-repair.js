@@ -4257,11 +4257,27 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
     }
     const conceptGuidance = atomicOperation?.kind === 'complete_existing_concept_bridges_v1'
         ? atomicOperation.requiredPostconditions.join('；') : '';
-    const lengthGuidance = issues.some(issue => readerLengthShortfall(issue) > 0)
+    const isReindexOnlyOperation = atomicOperation?.kind === 'complete_reindexed_table_bindings_v1';
+    const reindexGuidance = isReindexOnlyOperation
+        ? atomicOperation.requiredPostconditions.join('；')
+            + '。本轮严禁扩写、删改或润色任何正文字符，篇幅检查将在下一轮单独处理。'
+        : '';
+    const promptIssues = isReindexOnlyOperation
+        ? issues.filter(issue => issue?.code !== 'reader_length_preflight')
+        : issues;
+    const lengthGuidance = !isReindexOnlyOperation && promptIssues.some(issue => readerLengthShortfall(issue) > 0)
         ? '篇幅不足时，在允许正文内补充原文支持的机制分工或执行过程，按当前诊断缺额补足并多留至少100中文字余量；若任意扩写小节正文超过900中文字，请补充 #### 子标题分层；保留正确旧文，不回传仍低于下限的原段，也不复制其他小节凑数。' : '';
-    const supplementalSourceGuidance = scientificDoubleRenderingGuidance(draft, issues, targets, sourceText)
-        + repairTableEvidenceGuidance(draft, issues, targets, sourceText, options);
-    const targetGuidance = lengthGuidance + conceptGuidance + (atomicOperation?.kind === 'add_existing_tail_quote_table_v1'
+    const draftTables = locateReaderDraftTables(draft);
+    const missingPrecedingTableGuidance = !atomicOperation
+        && Array.isArray(draft.tableBindings) && draftTables.length < draft.tableBindings.length
+        && promptIssues.some(issue => issue?.code === TABLE_BINDING_ORDER_ISSUE_CODE)
+        ? `当前正文仅含 ${draftTables.length} 张表（含选择标记），少于 tableBindings 的 ${draft.tableBindings.length} 项，`
+            + '导致后面的 [[TABLE_k]] 错位；请在允许的小节正文对应位置补出缺失的 Markdown 表格（须严格对齐已有 tableBindings 前序记录的来源原句/单元格），使正文表序与 tableBindings 一一对应。'
+        : '';
+    const supplementalSourceGuidance = scientificDoubleRenderingGuidance(draft, promptIssues, targets, sourceText)
+        + repairTableEvidenceGuidance(draft, promptIssues, targets, sourceText, options);
+    const targetGuidance = lengthGuidance + conceptGuidance + reindexGuidance + missingPrecedingTableGuidance
+        + (atomicOperation?.kind === 'add_existing_tail_quote_table_v1'
         ? atomicOperation.requiredPostconditions.join('；') + '。' : '')
         + (atomicOperation?.kind === 'remove_duplicate_table_v1'
         ? atomicOperation.requiredPostconditions.join('；') + '。' : '')
@@ -4275,7 +4291,7 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance + noDomTableGuidance.join('\n')
         + '\n' + supplementalSourceGuidance;
     const evidence = budgetReaderRepairSourceEvidence(sourceEvidence, supplementalSourceGuidance, options);
-    return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
+    return { draftSha256: hashDraft(draft), targets, issues: promptIssues, evidence, atomicOperation, targetGuidance,
         ...(atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseSectionIndexGroups(draft)
             ? sectionFormat.contextFields()
             : atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseBodyFieldIndexGroups(draft)

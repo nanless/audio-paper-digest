@@ -692,3 +692,89 @@ test('reader-authenticated-pdf-table-evidence matches space-percent headers and 
     assert.equal(api.matchLiteralTable(rendered, [readerQuote], noMethodDoc, raw), null);
 });
 
+test('reader-repair suppresses conflicting lengthGuidance/preflight during complete_reindexed_table_bindings_v1 and hints when prose misses preceding table', () => {
+    const repair = require('../scripts/lib/reader-repair.js');
+    const draftReindex = {
+        readerTitle: 'Test',
+        oneSentenceThesis: 'Test thesis.',
+        sections: [
+            { kind: 'problem', heading: 'H0', body: 'Intro paragraph.\n\n| A | B |\n| --- | --- |\n| 1 | 2 |' },
+            { kind: 'method_overview', heading: 'H1', body: 'Method paragraph.\n\n| C | D |\n| --- | --- |\n| 3 | 4 |' },
+            { kind: 'results', heading: 'H2', body: 'Results paragraph.\n\n[[TABLE_2]]' }
+        ],
+        tableBindings: [
+            { tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [], sourceQuotes: ['A 1 B 2'] },
+            { tableIndex: 2, sourceType: 'artifact_table', sourceTableOrdinal: 1, selection: { tableOrdinal: 1, rowIndices: [0, 1], columnIndices: [0, 1] } }
+        ],
+        figurePlacements: [],
+        formulaBindings: [],
+        conceptBridges: [],
+        implementationSpecs: {}
+    };
+    const reindexIssues = [
+        { path: null, code: 'reader_table_binding_order_ambiguous', message: '读者文章 tableBindings[1] [[TABLE_2]] 与实际正文表格顺序不一致' },
+        { path: null, code: 'reader_length_preflight', diagnosticOnly: true, message: '读者文章篇幅预估为 3538 个汉字，目前估计至少还需 262 字。修复表格时同时扩写已有方法段落。' }
+    ];
+    const reindexCtx = repair.buildRepairContext(draftReindex, reindexIssues, '', '');
+    assert.equal(reindexCtx.atomicOperation?.kind, 'complete_reindexed_table_bindings_v1');
+    assert.equal(reindexCtx.issues.some(i => i.code === 'reader_length_preflight'), false);
+    assert.equal(reindexCtx.targetGuidance.includes('篇幅不足时'), false);
+    assert.equal(reindexCtx.targetGuidance.includes('本轮严禁扩写'), true);
+
+    // Negative control / second case: prose has fewer tables than tableBindings (orphan preceding tableBinding)
+    const draftMissingPreceding = {
+        ...draftReindex,
+        sections: [
+            { kind: 'problem', heading: 'H0', body: 'Intro paragraph without table.' },
+            { kind: 'results', heading: 'H1', body: 'Results paragraph.\n\n[[TABLE_2]]' }
+        ]
+    };
+    const missingCtx = repair.buildRepairContext(draftMissingPreceding, reindexIssues, '', '');
+    assert.equal(missingCtx.atomicOperation, null);
+    assert.equal(missingCtx.issues.some(i => i.code === 'reader_length_preflight'), true);
+    assert.equal(missingCtx.targetGuidance.includes('补出缺失的 Markdown 表格'), true);
+});
+
+test('conference-analysis-context review reanalysis warning injects structured PDF tables only when requested', () => {
+    const ctx = require('../scripts/lib/conference-analysis-context.js');
+    const paperId = 'conference:ijcai:2026:conference-paper-id:ijcai2026-0465';
+    const paper = { id: paperId, conferencePaperId: paperId, title: 'Bridge' };
+    const sourceDetails = {
+        source: 'conference_pdf_text',
+        text: 'Table 1 quantitative comparison on COCO2017.',
+        conferencePaperId: paperId,
+        structuredArtifacts: {
+            tables: [{
+                ordinal: 1,
+                caption: 'Table 1: Quantitative comparison on COCO2017',
+                matrix: [
+                    ['Metric', 'VAEJSCC', 'SGD-JSCC', 'Bridge'],
+                    ['PSNR↑', '15.59', '21.40', '26.97']
+                ]
+            }]
+        }
+    };
+    const guidance = {
+        paperId,
+        reviewFailureSha256: 'a'.repeat(64),
+        stage: 'text',
+        issues: [{ severity: 'error', description: '核心摘要与主表列归属相反', fix_instruction: '按主表核对 Bridge=26.97' }]
+    };
+    ctx.withConferenceAnalysisSource({ paperId, sourceDetails, executionDir: '/tmp/fake-exec' }, () => {
+        ctx.withReviewReanalysisGuidance(guidance, () => {
+            const plain = ctx.formatReviewReanalysisPromptWarning(paper);
+            assert.equal(plain.includes('核心摘要与主表列归属相反'), true);
+            assert.equal(plain.includes('结构化表格矩阵'), false);
+            const withTables = ctx.formatReviewReanalysisPromptWarning(paper, { includeStructuredTables: true });
+            assert.equal(withTables.includes('结构化表格矩阵'), true);
+            assert.equal(withTables.includes('| PSNR↑ | 15.59 | 21.40 | 26.97 |'), true);
+            // Also works when paper arg is omitted (e.g., scoringAudit inside ALS scope)
+            const withoutPaperArg = ctx.formatReviewReanalysisPromptWarning(null, { includeStructuredTables: true });
+            assert.equal(withoutPaperArg.includes('| PSNR↑ | 15.59 | 21.40 | 26.97 |'), true);
+        });
+        // Outside review reanalysis scope, warning is empty
+        assert.equal(ctx.formatReviewReanalysisPromptWarning(paper, { includeStructuredTables: true }), '');
+    });
+});
+
+
