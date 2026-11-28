@@ -332,7 +332,11 @@ function projectReaderCellTexDisplayBody(value) {
     output = output
         .replace(/\\delimiter\s*"3222378(?![0-9A-Fa-f])/g, '↑')
         .replace(/\\delimiter\s*"3223379(?![0-9A-Fa-f])/g, '↓')
-        .replace(/\\delimiter\s*"326C33F(?![0-9A-Fa-f])/gi, '↕');
+        .replace(/\\delimiter\s*"326C33F(?![0-9A-Fa-f])/gi, '↕')
+        // 括号内独立方向箭头命令（如 (\downarrow ) / (\uparrow)）在 CVPR/WACV 等 PDF 表格表头常见。
+        .replace(/\(\s*\\uparrow\s*\)/g, '(↑)')
+        .replace(/\(\s*\\downarrow\s*\)/g, '(↓)')
+        .replace(/\(\s*\\updownarrow\s*\)/g, '(↕)');
     // 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
     output = output.replace(/([^\s\\|(){}])\\boldsymbol\{(\\?[A-Za-z]+)\}/gu,
         (whole, visible, name) => {

@@ -167,11 +167,28 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
             if (quote.length < 12 || quote.length > 4000 || document.normalizedFullText.split(quote).length !== 2) continue;
             const rowQuotes = originalQuotes.filter(value => {
                 const normalized = value.replace(/\s+/gu, ' ').trim();
-                if (document.normalizedFullText.split(normalized).length !== 2) return false;
-                if (quote.includes(normalized)) return true;
+                if (document.normalizedFullText.split(normalized).length === 2) {
+                    if (quote.includes(normalized)) return true;
+                    if (bottomCaption && normalized.includes(quote)) {
+                        const before = normalized.slice(0, normalized.indexOf(quote));
+                        return !/(?:^|\s)(?:Table|Figure)\s+(?:\d+|[MDCLXVI]+)\s*[:.]/iu.test(before);
+                    }
+                    return false;
+                }
+                // Bottom-caption PDF tables with multi-column super-headers (e.g. "Method / Style Accuracy / Style Consistency / Top-1 %")
+                // may have the row-label column header reordered relative to super-headers between the reading-order extractor and raw fitz text.
+                // Require the exact rest of the quote to match the unique fitz table+caption verbatim, and require the same row-label header to exist
+                // within the 4 lines directly above the column headers in fitz.
                 if (bottomCaption && normalized.includes(quote)) {
-                    const before = normalized.slice(0, normalized.indexOf(quote));
-                    return !/(?:^|\s)(?:Table|Figure)\s+(?:\d+|[MDCLXVI]+)\s*[:.]/iu.test(before);
+                    const startIdx = normalized.indexOf(quote);
+                    const before = normalized.slice(0, startIdx).trim();
+                    const after = normalized.slice(startIdx + quote.length).trim();
+                    if (!after && before && compact(before) === compact(table.header[0])) {
+                        const priorLines = lines.slice(Math.max(0, first - width - 4), first - width);
+                        if (priorLines.some(line => compact(line.value) === compact(table.header[0]))) {
+                            return true;
+                        }
+                    }
                 }
                 return false;
             });

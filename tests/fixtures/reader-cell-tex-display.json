@@ -480,6 +480,22 @@
     {
       "input": "Unknown\\delimiter \"9999999",
       "expected": "Unknown\\delimiter \"9999999"
+    },
+    {
+      "input": "Goal-reaching error(\\downarrow ) Pos.",
+      "expected": "Goal-reaching error(↓) Pos."
+    },
+    {
+      "input": "Score (\\uparrow)",
+      "expected": "Score (↑)"
+    },
+    {
+      "input": "Range (\\updownarrow )",
+      "expected": "Range (↕)"
+    },
+    {
+      "input": "Metric (\\unknown)",
+      "expected": "Metric (\\unknown)"
     }
   ]
 }

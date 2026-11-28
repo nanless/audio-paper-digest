@@ -653,5 +653,42 @@ test('reader-authenticated-pdf-table-evidence matches space-percent headers and 
     const noPct = raw.replace('Top-1 % ↑', 'Top-1 ↑');
     const noPctDoc = { ...doc, rawFullText: noPct, normalizedFullText: noPct.replace(/\s+/g, ' ').trim() };
     assert.equal(api.matchLiteralTable(rendered, [noPct], noPctDoc, noPct), null);
+
+    // Positive: fitz text has super-headers between Method and Top-1 % while reading-order sourceText has Method right above Top-1 %
+    const fitzRaw = [
+        'Method',
+        'Style Accuracy',
+        'Style Consistency',
+        'Top-1 % ↑',
+        'Top-3 % ↑',
+        'Top-5 % ↑',
+        'Mean CosSim ↑',
+        'w/o ScAT',
+        '38.26',
+        '76.74',
+        '91.21',
+        '0.5882',
+        'Full',
+        '48.84',
+        '79.07',
+        '95.37',
+        '0.7565',
+        'Table 4: Ablation Study on ScAT Components for Style Consistency and Accuracy'
+    ].join('\n');
+    const fitzDoc = {
+        contract: 'reader-sealed-pdf-quotes-v1',
+        available: true,
+        rawFullText: fitzRaw,
+        normalizedFullText: fitzRaw.replace(/\s+/g, ' ').trim()
+    };
+    const readerQuote = raw.slice(raw.indexOf('Method'));
+    const reorderedMatch = api.matchLiteralTable(rendered, [readerQuote], fitzDoc, raw);
+    assert.ok(reorderedMatch);
+    assert.deepEqual(reorderedMatch.columns.map(c => [c.metric, c.unit]), [['Top-1', '%'], ['Top-3', '%'], ['Top-5', '%']]);
+
+    // Negative: if fitz does not contain Method within 4 lines above column headers, reject
+    const noMethodFitz = fitzRaw.replace('Method\n', '');
+    const noMethodDoc = { ...fitzDoc, rawFullText: noMethodFitz, normalizedFullText: noMethodFitz.replace(/\s+/g, ' ').trim() };
+    assert.equal(api.matchLiteralTable(rendered, [readerQuote], noMethodDoc, raw), null);
 });
 

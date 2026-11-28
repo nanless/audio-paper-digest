@@ -5369,6 +5369,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     ? start.temperature
                     : (conceptTermsContext ? EXTRACTION_REPAIR_TEMPERATURE : API_READER_REPAIR_TEMPERATURE),
                 ...(conceptTermsContext ? { reasoningStage: 'apiReaderConceptTerms' } : {}),
+                ...(!repairContext && transportFailures > 0
+                    && /aborted|ECONNRESET|ETIMEDOUT|REQUEST_STREAM_IDLE_TIMEOUT|socket hang up|Client network socket disconnected/i
+                        .test(String(recovered?.lastTransportError || ''))
+                    ? { reasoningEffortOverride: 'high' } : {}),
                 ...(ordinalCapability ? { readerTargetOrdinalCapability: ordinalCapability } : {}),
                 overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
                 maxRetries: API_READER_TRANSPORT_MAX_RETRIES,
@@ -9927,6 +9931,8 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
     let lastError = null;
     let reportedSuspendedMs = 0;
     let reasoningEffortOverride = cfg.reasoningEffortOverride || '';
+    let preTlsRetries = 0;
+    const MAX_PRE_TLS_RETRIES = 2;
     const stageName = cfg.reasoningStage || cfg.usageContext?.stage || cfg.stage || '';
     const budget = createActiveTimeBudget(overallTimeoutMs);
 
@@ -9953,6 +9959,23 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
                     reportedSuspendedMs = suspendedMs;
                 }
                 console.log(`    [api] ⚠️  模型调用失败 (尝试 ${attempt}/${maxRetries}) | active=${duration}s | ${classified.code} | ${classified.message}`);
+
+                const isPreTlsHandshakeReset = attemptElapsedMs < 15_000
+                    && /Client network socket disconnected before secure TLS connection was established/i
+                        .test(String(classified.message || ''));
+                if (isPreTlsHandshakeReset && preTlsRetries < MAX_PRE_TLS_RETRIES) {
+                    preTlsRetries += 1;
+                    const delay = preTlsRetries * 10_000;
+                    if (getActiveRemainingTimeoutMs(overallTimeoutMs, budget.elapsedMs()) <= delay) {
+                        throw createOverallTimeoutError(
+                            budget.elapsedMs(), lastError, overallTimeoutMs
+                        );
+                    }
+                    console.log(`    [api] ⏳  TLS 握手前瞬断（未发送请求体），${delay/1000}s 后第 ${preTlsRetries}/${MAX_PRE_TLS_RETRIES} 次握手重试...`);
+                    await sleepFn(delay);
+                    attempt -= 1;
+                    continue;
+                }
 
                 if (attempt < maxRetries) {
                     const disconnectCode = String(classified.code || '').toUpperCase();

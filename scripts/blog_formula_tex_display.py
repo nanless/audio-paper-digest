@@ -1357,6 +1357,10 @@ def _project_reader_cell_tex_display_body(value):
     output = re.sub(r'\\delimiter\s*"3222378(?![0-9A-Fa-f])', '↑', output)
     output = re.sub(r'\\delimiter\s*"3223379(?![0-9A-Fa-f])', '↓', output)
     output = re.sub(r'\\delimiter\s*"326C33F(?![0-9A-Fa-f])', '↕', output, flags=re.I)
+    # 括号内独立方向箭头命令（如 (\downarrow ) / (\uparrow)）。
+    output = re.sub(r'\(\s*\\uparrow\s*\)', '(↑)', output)
+    output = re.sub(r'\(\s*\\downarrow\s*\)', '(↓)', output)
+    output = re.sub(r'\(\s*\\updownarrow\s*\)', '(↕)', output)
     # 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
     def bold(match):
         visible, name = match.group(1), match.group(2)
