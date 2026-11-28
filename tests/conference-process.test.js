@@ -3047,6 +3047,12 @@ test('assertState 接受源升级晋升中保留原完成项绑定的 reviewRean
     };
     assert.equal(processApi.assertState(resign(promoted)).items[paperA].analysisRunId, origReanalysisId);
 
+    const postPromotionReanalysisId = processApi.deterministicUuid(promotedProcessId, paperA, `review-reanalysis:${manifestSha}`);
+    const postPromoted = structuredClone(promoted);
+    postPromoted.items[paperA].analysisRunId = postPromotionReanalysisId;
+    postPromoted.items[paperA].reviewReanalysisAdoption.newExecutionId = postPromotionReanalysisId;
+    assert.equal(processApi.assertState(resign(postPromoted)).items[paperA].analysisRunId, postPromotionReanalysisId);
+
     const forgedOwner = structuredClone(promoted);
     forgedOwner.items[paperA].reviewReanalysisAdoption.newExecutionId = processApi.deterministicUuid(
         '99999999-2222-4333-8444-555555555555', paperA, `review-reanalysis:${manifestSha}`);

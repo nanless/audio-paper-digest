@@ -229,6 +229,9 @@ async function runReviewReanalysisBatch({ manifestPath, directory, state, shared
         const { proof } = proofs.get(member.paperId);
         const previousItem = structuredClone(state.items[member.paperId]);
         const previousItemSha256 = processApi.stableHash(previousItem);
+        const receiptFile = `review-reanalysis-adoption-${member.newExecutionId}-${previousStateSha256.slice(0, 12)}.json`;
+        const receiptPath = path.join(directory, receiptFile);
+        const existingReceipt = fs.existsSync(receiptPath) ? readRegularJson(receiptPath, `已有采纳回执 ${receiptFile}`).value : null;
         const receiptBody = {
             contract: RECEIPT_CONTRACT,
             processId: state.processId,
@@ -245,12 +248,11 @@ async function runReviewReanalysisBatch({ manifestPath, directory, state, shared
             previousItem,
             newExecutionId: member.newExecutionId,
             proof,
-            adoptedAt: deps.now()
+            adoptedAt: typeof existingReceipt?.adoptedAt === 'string' ? existingReceipt.adoptedAt : deps.now()
         };
         const receiptSha256 = processApi.stableHash(receiptBody);
         const receipt = { ...receiptBody, receiptSha256 };
-        const receiptFile = `review-reanalysis-adoption-${member.newExecutionId}-${previousStateSha256.slice(0, 12)}.json`;
-        processApi.exactFile(path.join(directory, receiptFile), processApi.canonicalBytes(receipt));
+        processApi.exactFile(receiptPath, processApi.canonicalBytes(receipt));
         adoptions.push({
             paperId: member.paperId,
             newExecutionId: member.newExecutionId,
