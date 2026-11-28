@@ -83,6 +83,7 @@ class Page(HTMLParser):
         self.h1s = []
         self.tag_sections = []
         self.tag_depth = None
+        self._suppress_endtag_html = False
         self.feed(source)
         self.close()
         if self.bodies != 1 or self.depth is not None:
@@ -140,14 +141,18 @@ class Page(HTMLParser):
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
         if tag not in self.VOID:
-            self.handle_endtag(tag)
+            self._suppress_endtag_html = True
+            try:
+                self.handle_endtag(tag)
+            finally:
+                self._suppress_endtag_html = False
 
     def handle_endtag(self, tag):
         if tag in self.VOID:
             return
         if not self.stack or self.stack[-1] != tag:
             raise ValueError(f'HTML 标签嵌套不闭合：遇到 </{tag}>，当前栈顶为 {self.stack[-1] if self.stack else None}')
-        if self.depth is not None:
+        if self.depth is not None and not self._suppress_endtag_html:
             self.body_html.append(f'</{tag}>')
         if self.depth is not None and tag in {'th', 'td'} and self.cell is not None:
             if not self.tables:

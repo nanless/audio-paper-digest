@@ -1410,6 +1410,7 @@ function isCurrentOrVerifiedDescendant(batch,item,adopted) {
     }
     let current=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:item.analysisRunId});
     check(current.analysisFileSha256===item.analysisProof.analysisSha256,'current pointer analysis CAS');
+    let currentReviewReanalysis=item?.reviewReanalysisAdoption||null;
     for(let depth=0;depth<16;depth++) {
         if(current.run.executionId===adopted.executionId) {
             const matches=current.analysisFileSha256===adopted.analysisFileSha256
@@ -1420,7 +1421,30 @@ function isCurrentOrVerifiedDescendant(batch,item,adopted) {
             }
             return matches;
         }
-        const file=path.join(current.directory,'reader-revision.json');if(!fs.existsSync(file))return false;
+        const file=path.join(current.directory,'reader-revision.json');
+        if(!fs.existsSync(file)) {
+            const rr=currentReviewReanalysis;
+            if(!rr||rr.newExecutionId!==current.run.executionId)return false;
+            check(UUID.test(rr.previousExecutionId||'')&&SHA.test(rr.previousAnalysisFileSha256||'')
+                &&SHA.test(rr.receiptSha256||'')&&typeof rr.receiptFile==='string'
+                &&rr.receiptFile.length>0&&path.basename(rr.receiptFile)===rr.receiptFile,'review reanalysis adoption locator');
+            const receipt=read(path.join(batch.processDirectory,rr.receiptFile)).value;
+            self(receipt,'receiptSha256');
+            check(receipt.contract==='conference-review-reanalysis-adoption-v1'
+                &&receipt.processId===batch.m.processId&&receipt.paperId===item.paperId
+                &&receipt.receiptSha256===rr.receiptSha256
+                &&receipt.newExecutionId===current.run.executionId
+                &&receipt.previousExecutionId===rr.previousExecutionId
+                &&receipt.previousAnalysisFileSha256===rr.previousAnalysisFileSha256
+                &&receipt.proof?.analysisProof?.analysisSha256===current.analysisFileSha256,'review reanalysis adoption receipt');
+            const prev=adapter().loadConferenceAnalysis({analysisRoot:batch.analysisRoot,executionId:rr.previousExecutionId});
+            check(prev.run.status==='complete'&&prev.analysis.status==='complete'
+                &&prev.analysisFileSha256===rr.previousAnalysisFileSha256
+                &&prev.sourceFileSha256===current.sourceFileSha256,'review reanalysis previous CAS');
+            current=prev;
+            currentReviewReanalysis=receipt.previousItem?.reviewReanalysisAdoption||null;
+            continue;
+        }
         // Raw immutable ordinary-chain verification avoids a recursive call
         // through a later maintenance batch's own cold admission gate.
         const revision=read(file).value;self(revision,'revisionSha256');

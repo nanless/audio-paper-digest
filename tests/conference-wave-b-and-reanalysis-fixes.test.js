@@ -165,3 +165,119 @@ test('migrate-conference-process CLI and reviewReanalysisAdoption state integrit
         fs.rmSync(tmp, { recursive: true, force: true });
     }
 });
+
+test('conference-reader-review-maintenance traverses verified reviewReanalysisAdoption and rejects tampered receipts', () => {
+    const evidence = require('../scripts/lib/conference-reader-review-maintenance-evidence.js');
+    const src = fs.readFileSync(path.resolve(__dirname, '../scripts/lib/conference-reader-review-maintenance.js'), 'utf8');
+    const fnStart = src.indexOf('function isCurrentOrVerifiedDescendant(');
+    const fnEnd = src.indexOf('\nfunction assertCurrentBatch(');
+    assert.ok(fnStart > 0 && fnEnd > fnStart, 'isCurrentOrVerifiedDescendant must exist');
+    const fnCode = src.slice(fnStart, fnEnd);
+
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-maint-test-'));
+    try {
+        const procDir = path.join(tmp, 'proc');
+        const aRoot = path.join(tmp, 'analyses');
+        const oldExec = '11111111-1111-4111-8111-111111111111';
+        const newExec = '22222222-2222-4222-8222-222222222222';
+        const procId = '33333333-3333-4333-8333-333333333333';
+        const paperId = 'conference:dc:2026:conference-paper-id:chandra26_dc';
+        fs.mkdirSync(procDir, { recursive: true });
+        fs.mkdirSync(path.join(aRoot, oldExec), { recursive: true });
+        fs.mkdirSync(path.join(aRoot, newExec), { recursive: true });
+
+        const oldAnalysisSha = 'a'.repeat(64);
+        const newAnalysisSha = 'b'.repeat(64);
+        const oldRunSha = 'c'.repeat(64);
+        const newRunSha = 'd'.repeat(64);
+        const sourceSha = 'e'.repeat(64);
+
+        const receiptBody = {
+            contract: 'conference-review-reanalysis-adoption-v1',
+            processId: procId,
+            paperId,
+            newExecutionId: newExec,
+            previousExecutionId: oldExec,
+            previousAnalysisFileSha256: oldAnalysisSha,
+            previousItem: { analysisRunId: oldExec },
+            proof: { analysisProof: { analysisSha256: newAnalysisSha } }
+        };
+        const receipt = { ...receiptBody, receiptSha256: evidence.stable(receiptBody) };
+        const receiptFile = 'review-reanalysis-adoption-test.json';
+        fs.writeFileSync(path.join(procDir, receiptFile), JSON.stringify(receipt));
+
+        const records = {
+            [oldExec]: {
+                directory: path.join(aRoot, oldExec),
+                run: { executionId: oldExec, status: 'complete' },
+                analysis: { status: 'complete' },
+                analysisFileSha256: oldAnalysisSha,
+                runFileSha256: oldRunSha,
+                sourceFileSha256: sourceSha
+            },
+            [newExec]: {
+                directory: path.join(aRoot, newExec),
+                run: { executionId: newExec, status: 'complete' },
+                analysis: { status: 'complete' },
+                analysisFileSha256: newAnalysisSha,
+                runFileSha256: newRunSha,
+                sourceFileSha256: sourceSha
+            }
+        };
+
+        const check = (v, msg) => { if (!v) throw new Error(`Text maintenance: ${msg}`); };
+        const fail = msg => { throw new Error(`Text maintenance: ${msg}`); };
+        const read = f => {
+            const bytes = fs.readFileSync(f);
+            return { value: JSON.parse(bytes.toString('utf8')), sha256: sha256(bytes) };
+        };
+        const self = (value, field) => {
+            const copy = { ...value };
+            const expected = copy[field];
+            delete copy[field];
+            check(evidence.stable(copy) === expected, `${field} mismatch`);
+        };
+        const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
+        const SHA = /^[a-f0-9]{64}$/u;
+        const verifiedAdoptedChildIdentities = new WeakMap();
+        const adapter = () => ({ loadConferenceAnalysis: ({ executionId }) => records[executionId] });
+
+        const isCurrentOrVerifiedDescendant = new Function(
+            'fs', 'path', 'UUID', 'SHA', 'check', 'fail', 'read', 'self', 'adapter', 'stable', 'verifiedAdoptedChildIdentities',
+            `${fnCode}\nreturn isCurrentOrVerifiedDescendant;`
+        )(fs, path, UUID, SHA, check, fail, read, self, adapter, evidence.stable, verifiedAdoptedChildIdentities);
+
+        const batch = { processDirectory: procDir, analysisRoot: aRoot, m: { processId: procId } };
+        const adopted = { executionId: oldExec, analysisFileSha256: oldAnalysisSha, runFileSha256: oldRunSha, sourceFileSha256: sourceSha };
+        const item = {
+            paperId,
+            analysisRunId: newExec,
+            analysisProof: { analysisSha256: newAnalysisSha },
+            reviewReanalysisAdoption: {
+                newExecutionId: newExec,
+                previousExecutionId: oldExec,
+                previousAnalysisFileSha256: oldAnalysisSha,
+                receiptFile,
+                receiptSha256: receipt.receiptSha256
+            }
+        };
+
+        // Positive: valid review-reanalysis receipt bridges back to previously adopted maintenance execution
+        assert.equal(isCurrentOrVerifiedDescendant(batch, item, adopted), true);
+
+        // Negative 1: missing reviewReanalysisAdoption returns false (fails closed)
+        const itemNoAdoption = { paperId, analysisRunId: newExec, analysisProof: { analysisSha256: newAnalysisSha } };
+        assert.equal(isCurrentOrVerifiedDescendant(batch, itemNoAdoption, adopted), false);
+
+        // Negative 2: path traversal in receiptFile throws integrity error
+        const itemTraversal = structuredClone(item);
+        itemTraversal.reviewReanalysisAdoption.receiptFile = '../evil.json';
+        assert.throws(() => isCurrentOrVerifiedDescendant(batch, itemTraversal, adopted), /review reanalysis adoption locator/);
+
+        // Negative 3: tampered receipt content fails self-hash
+        fs.writeFileSync(path.join(procDir, receiptFile), JSON.stringify({ ...receipt, paperId: 'forged' }));
+        assert.throws(() => isCurrentOrVerifiedDescendant(batch, item, adopted), /receiptSha256 mismatch/);
+    } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
