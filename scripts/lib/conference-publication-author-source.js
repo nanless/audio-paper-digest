@@ -35,7 +35,77 @@ function readReceipt(file) {
         return JSON.parse(bytes.toString('utf8'));
     } finally { fs.closeSync(fd); }
 }
+const RETAINED_ENHANCED_EXTRACTOR_PROFILES = Object.freeze([
+    // Pre-38250016 (commit 1458254f) enhanced layout extractor before pdf_author_extract.py Mode F / header-boundary fix.
+    Object.freeze({
+        implementationSha256: 'e34d76ec0eecc776c4e0b6cce625f148d49638729b946f2a842ec1d1dee8e819',
+        dependencySha256s: Object.freeze({
+            'conference_layout_extractor.py': '89eb43d6d38e8c4b54589a0657adf8efbd4be57e2e49fe032ca4a8aa5adc31bd',
+            'conference_extractor.py': '36254b211c07e4070c6b1ed805764ce04b2b63572907ab581d9b21b75f03406b',
+            'pdf_figure_table_extract.py': '9ac8020f84599216c6123c4a56110c3d012d5863bb872927fa7ca2a7c306ea76',
+            'pdf_author_extract.py': '84debbbeaad603738d60c1b3788b32cec03f02118aac6333e86116e7e1fbc27d'
+        })
+    })
+]);
+function matchingRetainedEnhancedProfile(receipt) {
+    if (!receipt || typeof receipt !== 'object' || receipt.contract !== extraction.RECEIPT_ENHANCED_CONTRACT) return null;
+    const ext = receipt.extractor;
+    if (!ext || typeof ext !== 'object' || ext.contract !== extraction.EXTRACTOR_ENHANCED_CONTRACT
+        || ext.name !== extraction.EXTRACTOR_ENHANCED_NAME
+        || ext.backend?.name !== extraction.BACKEND_NAME
+        || ext.backend?.version !== extraction.BACKEND_VERSION) return null;
+    if (ext.implementationSha256 === extraction.EXTRACTOR_ENHANCED_IMPLEMENTATION_SHA256) return null;
+    return RETAINED_ENHANCED_EXTRACTOR_PROFILES.find(profile =>
+        ext.implementationSha256 === profile.implementationSha256
+        && same(ext.dependencySha256s, profile.dependencySha256s)
+        && stable(ext.dependencySha256s) === profile.implementationSha256
+    ) || null;
+}
+function retainedEnhancedSnapshot(sourceRoot, receiptName, receipt, item, profile) {
+    if (receipt.status !== 'ready' || receipt.textReplayable !== true || receipt.blockedReason !== null) {
+        fail('原增强抽取凭证状态无效');
+    }
+    const { receiptSha256, ...body } = receipt;
+    if (receiptSha256 !== stable(body) || receiptSha256 !== item.sourceProof?.receiptSha256
+        || receipt.paperId !== item.paperId || receipt.sourceIdentity !== item.sourceIdentity) {
+        fail('原增强抽取凭证与当前成员或原SHA不一致');
+    }
+    const names = { receipt: receiptName, request: receipt.request?.file,
+        metadata: receipt.source?.metadata?.file, pdf: receipt.source?.pdf?.file,
+        text: receipt.text?.file, artifacts: receipt.artifacts?.file };
+    if (Object.values(names).some(name => typeof name !== 'string'
+        || !/^[a-z0-9][a-z0-9._-]{0,164}\.(?:json|pdf|txt)$/.test(name))) fail('原增强抽取文件名不安全');
+    const read = key => discovery.safeAbsoluteFile(path.join(sourceRoot, names[key]), `retained enhanced ${key}`, 256 * 1024 * 1024);
+    const requestFile = read('request'), request = JSON.parse(requestFile.bytes), metadataFile = read('metadata'),
+        pdf = read('pdf'), text = read('text'), artifacts = read('artifacts'), receiptFile = read('receipt');
+    if (request.paperId !== item.paperId || request.sourceIdentity !== item.sourceIdentity
+        || request.source?.metadata?.file !== names.metadata || request.source?.pdf?.file !== names.pdf
+        || request.outputs?.textFile !== names.text || request.outputs?.artifactsFile !== names.artifacts
+        || request.outputs?.receiptFile !== names.receipt || receipt.request?.file !== names.request
+        || receipt.request?.sha256 !== hash(requestFile.bytes)
+        || !same(request.source, receipt.source)
+        || request.source.metadata.sha256 !== hash(metadataFile.bytes) || request.source.pdf.sha256 !== hash(pdf.bytes)
+        || receipt.text?.file !== names.text || receipt.text?.sha256 !== hash(text.bytes)
+        || receipt.artifacts?.file !== names.artifacts || receipt.artifacts?.sha256 !== hash(artifacts.bytes)
+        || receipt.text?.utf8Bytes !== text.bytes.length || pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+        fail('原增强抽取来源字节或身份绑定漂移');
+    }
+    const verification = { contract: extraction.VERIFICATION_ENHANCED_CONTRACT, status: 'verified',
+        paperId: item.paperId, sourceIdentity: item.sourceIdentity, requestSha256: hash(requestFile.bytes),
+        metadataSha256: hash(metadataFile.bytes), pdfSha256: hash(pdf.bytes), textSha256: hash(text.bytes),
+        artifactsSha256: hash(artifacts.bytes), receiptFileSha256: hash(receiptFile.bytes),
+        receiptSha256: receipt.receiptSha256 };
+    verification.verificationSha256 = stable(verification);
+    return { paperId: item.paperId, sourceIdentity: item.sourceIdentity, metadata: request.source.metadata,
+        pdf: request.source.pdf, text: { sha256: hash(text.bytes), provenance: { extractor: extraction.EXTRACTOR_ENHANCED_NAME, implementationSha256: profile.implementationSha256 } },
+        artifacts: { sha256: hash(artifacts.bytes), provenance: { extractor: extraction.EXTRACTOR_ENHANCED_NAME, implementationSha256: profile.implementationSha256 } },
+        receipt: { receiptSha256: receipt.receiptSha256 }, verification };
+}
 function loadPublicationExtractionSnapshot(sourceRoot, receiptName, receipt, item) {
+    const retainedEnhanced = matchingRetainedEnhancedProfile(receipt);
+    if (retainedEnhanced) {
+        return retainedEnhancedSnapshot(sourceRoot, receiptName, receipt, item, retainedEnhanced);
+    }
     if (!require('./protocol-codec').hasValidHeader(receipt.extractor, 'conference-retained-pdf-extractor', 'version')) {
         return extraction.extractionHandleSnapshot(extraction.loadExtractionHandle(sourceRoot, receiptName, { replay: false }));
     }

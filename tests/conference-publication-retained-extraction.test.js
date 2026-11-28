@@ -90,3 +90,43 @@ test('legacy receipt self hash, exact member, safe filenames and every original 
     f.restore();receipt=f.save(structuredClone(f.legacy));f.item.sourceProof.receiptSha256='0'.repeat(64);
     assert.throws(()=>load(f.root,f.generated.receiptName,receipt,f.item),/原SHA/);
 });
+
+test('pinned pre-38250016 enhanced extraction uses retained publication reader while rejecting unknown or tampered enhanced receipts', t => {
+    const f=fixture(t);
+    const prevDeps = {
+        'conference_layout_extractor.py': '89eb43d6d38e8c4b54589a0657adf8efbd4be57e2e49fe032ca4a8aa5adc31bd',
+        'conference_extractor.py': '36254b211c07e4070c6b1ed805764ce04b2b63572907ab581d9b21b75f03406b',
+        'pdf_figure_table_extract.py': '9ac8020f84599216c6123c4a56110c3d012d5863bb872927fa7ca2a7c306ea76',
+        'pdf_author_extract.py': '84debbbeaad603738d60c1b3788b32cec03f02118aac6333e86116e7e1fbc27d'
+    };
+    const prevImpl = 'e34d76ec0eecc776c4e0b6cce625f148d49638729b946f2a842ec1d1dee8e819';
+    const enhanced = structuredClone(f.original);
+    delete enhanced.schemaFingerprint;
+    enhanced.contract = extraction.RECEIPT_ENHANCED_CONTRACT;
+    enhanced.extractor = {
+        contract: extraction.EXTRACTOR_ENHANCED_CONTRACT,
+        name: extraction.EXTRACTOR_ENHANCED_NAME,
+        implementationSha256: prevImpl,
+        dependencySha256s: prevDeps,
+        backend: { name: extraction.BACKEND_NAME, version: extraction.BACKEND_VERSION }
+    };
+    f.save(enhanced);
+    const before = f.snapshot();
+    assert.throws(() => extraction.loadExtractionHandle(f.root, f.generated.receiptName, { replay: false }), /增强布局抽取器/);
+    const retained = load(f.root, f.generated.receiptName, enhanced, f.item);
+    assert.equal(retained.verification.contract, extraction.VERIFICATION_ENHANCED_CONTRACT);
+    assert.equal(retained.verification.receiptSha256, enhanced.receiptSha256);
+    assert.equal(retained.text.provenance.implementationSha256, prevImpl);
+    assert.deepEqual(f.snapshot(), before);
+    // Unknown dependency SHA must still be rejected
+    const unknown = structuredClone(enhanced);
+    unknown.extractor.dependencySha256s = { ...prevDeps, 'pdf_author_extract.py': 'f'.repeat(64) };
+    unknown.extractor.implementationSha256 = stable(unknown.extractor.dependencySha256s);
+    f.save(unknown);
+    assert.throws(() => load(f.root, f.generated.receiptName, unknown, f.item), /增强布局抽取器/);
+    // Tampered text file must fail byte binding
+    f.restore();
+    f.save(structuredClone(enhanced));
+    fs.appendFileSync(path.join(f.root, f.generated.names.text), '\ntampered');
+    assert.throws(() => load(f.root, f.generated.receiptName, enhanced, f.item), /绑定漂移/);
+});
