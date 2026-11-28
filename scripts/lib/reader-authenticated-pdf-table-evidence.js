@@ -41,8 +41,8 @@ const _ZH_SI_UNIT_MAP = Object.freeze({
 });
 function declaration(value) {
     const surface = text(value);
-    const match = /^([A-Za-z][A-Za-z0-9 ._-]{0,63}?)\s*(?:\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)|\[\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\])$/iu.exec(surface);
-    if (match) return { metric: compact(match[1]), unit: (match[2] || match[3]).toLowerCase() };
+    const match = /^([A-Za-z][A-Za-z0-9 ._-]{0,63}?)\s*(?:\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)|\[\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\]|\s+(%))$/iu.exec(surface);
+    if (match) return { metric: compact(match[1]), unit: (match[2] || match[3] || match[4]).toLowerCase() };
     const zhMatch = /^([A-Za-z][A-Za-z0-9 ._-]{0,63}?)\s*(?:\(\s*(毫秒|秒|小时|赫兹|千赫兹|兆赫兹|分贝|百分比)\s*\)|\[\s*(毫秒|秒|小时|赫兹|千赫兹|兆赫兹|分贝|百分比)\s*\])$/u.exec(surface);
     if (zhMatch) return { metric: compact(zhMatch[1]), unit: _ZH_SI_UNIT_MAP[zhMatch[2] || zhMatch[3]] };
     return null;
@@ -85,17 +85,22 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
         || typeof document.rawFullText !== 'string') return null;
     const lines = literalLines(document.rawFullText), candidates = [];
     const captions = lines.map((line, index) => TABLE_CAPTION.test(line.value) ? index : -1).filter(index => index >= 0);
-    for (const captionIndex of captions) {
-        const next = lines.findIndex((line,index) => index > captionIndex && NEXT_CAPTION.test(line.value));
-        const limit = next < 0 ? lines.length : next;
-        for (let first = captionIndex + 2; first + 2 < limit; first++) {
-            if (lines[first].start - lines[captionIndex].start > 6000 || numeric(lines[first].value) !== null) continue;
+    const scanWindow = (captionIndex, firstMin, limit, bottomCaption) => {
+        for (let first = firstMin; first + 2 < limit; first++) {
+            if (bottomCaption) {
+                if (lines[captionIndex].start - lines[first].start > 6000 || numeric(lines[first].value) !== null) continue;
+            } else if (lines[first].start - lines[captionIndex].start > 6000 || numeric(lines[first].value) !== null) {
+                continue;
+            }
             let width = 0;
             while (first + 1 + width < limit && numeric(lines[first + 1 + width].value) !== null) width++;
-            if (width < 1 || width > 15 || first - width <= captionIndex) continue;
+            if (width < 1 || width > 15) continue;
+            if (bottomCaption ? (first - width < firstMin - 1) : (first - width <= captionIndex)) continue;
             const headers = lines.slice(first - width, first).map(line => line.value);
             const explicit = headers.map(declaration);
-            const caption = lines.slice(captionIndex, first - width).map(line => line.value).join(' ');
+            const caption = bottomCaption
+                ? lines[captionIndex].value
+                : lines.slice(captionIndex, first - width).map(line => line.value).join(' ');
             const percentCaption = PERCENT_CAPTION.test(caption);
             const captionColumns = percentCaption && headers.every(header => /^[A-Za-z][A-Za-z0-9 ._-]{0,63}$/u.test(header))
                 ? headers.map(metric => ({ metric: compact(metric), unit: '%' })) : null;
@@ -131,14 +136,11 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
                 cursor += width + 1;
             }
             if (sourceRows.length < 2) continue;
+            // Bottom-caption tables must abut the caption line directly with zero intervening text.
+            if (bottomCaption && cursor !== captionIndex) continue;
             const repeatedLabels = mixedUnits && new Set(sourceRows.map(row => compact(row.label))).size !== sourceRows.length;
             let conditionColumns = null;
             if (repeatedLabels) {
-                // A labelled input dimension is an explicit condition, unlike
-                // WER/RTF or another measured result. Repeated method names may
-                // use that condition only when the reader retains EVERY original
-                // numeric column and the complete label+condition is unique.
-                // Result values are checked afterwards, never used to pick a row.
                 const conditions = headers.flatMap((header, sourceColumn) => text(header) === 'Dim'
                     ? [{ sourceColumn, header: text(header) }] : []);
                 const complete = table.header.length === width + 1 && headers.every((header, index) =>
@@ -151,11 +153,27 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
                 }
                 conditionColumns = conditions;
             }
-            const quote = document.rawFullText.slice(lines[captionIndex].start, sourceRows.at(-1).end).replace(/\s+/gu, ' ').trim();
+            let quoteStart = lines[captionIndex].start;
+            let quoteEnd = sourceRows.at(-1).end;
+            if (bottomCaption) {
+                const labelHeaderIndex = first - width - 1;
+                const headerStart = labelHeaderIndex >= Math.max(0, firstMin - 1)
+                    && compact(lines[labelHeaderIndex].value) === compact(table.header[0])
+                    ? labelHeaderIndex : (first - width);
+                quoteStart = lines[headerStart].start;
+                quoteEnd = lines[captionIndex].end;
+            }
+            const quote = document.rawFullText.slice(quoteStart, quoteEnd).replace(/\s+/gu, ' ').trim();
             if (quote.length < 12 || quote.length > 4000 || document.normalizedFullText.split(quote).length !== 2) continue;
             const rowQuotes = originalQuotes.filter(value => {
                 const normalized = value.replace(/\s+/gu, ' ').trim();
-                return quote.includes(normalized) && document.normalizedFullText.split(normalized).length === 2;
+                if (document.normalizedFullText.split(normalized).length !== 2) return false;
+                if (quote.includes(normalized)) return true;
+                if (bottomCaption && normalized.includes(quote)) {
+                    const before = normalized.slice(0, normalized.indexOf(quote));
+                    return !/(?:^|\s)(?:Table|Figure)\s+(?:\d+|[MDCLXVI]+)\s*[:.]/iu.test(before);
+                }
+                return false;
             });
             const mapped = table.rows.map((row, index) => {
                 const matches = sourceRows.map((original, sourceRow) => ({ original, sourceRow }))
@@ -173,10 +191,6 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
                     return null;
                 }
                 const { original, sourceRow } = matches[0];
-                // Mixed tables may put dimensionless/unknown-unit columns
-                // between selected metrics. Require the complete original row's
-                // numeric sequence, including those intervening cells; a sparse
-                // target-value subsequence is not a quotation of that row.
                 const numbers = columns.flatMap(column => require('../deep-analyzer').readerNumericTokens(row[column.column]));
                 if (!rowQuotes.some(quote => mixedUnits
                     ? quote.replace(/\s+/gu, ' ').trim().includes(original.quote)
@@ -194,6 +208,17 @@ function matchLiteralTable(table, quotes, document, sourceText, reasons = []) {
             if (mapped.some(value => value === null)) continue;
             candidates.push({ quote, columns, rows: mapped });
         }
+    };
+    for (const captionIndex of captions) {
+        const next = lines.findIndex((line,index) => index > captionIndex && NEXT_CAPTION.test(line.value));
+        const limit = next < 0 ? lines.length : next;
+        scanWindow(captionIndex, captionIndex + 2, limit, false);
+        let prev = -1;
+        for (let i = captionIndex - 1; i >= Math.max(0, captionIndex - 160); i--) {
+            if (NEXT_CAPTION.test(lines[i].value)) { prev = i; break; }
+        }
+        const bottomMin = Math.max(prev + 2, captionIndex - 160);
+        if (captionIndex - bottomMin >= 3) scanWindow(captionIndex, bottomMin, captionIndex, true);
     }
     return candidates.length === 1 ? candidates[0] : null;
 }

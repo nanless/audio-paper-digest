@@ -882,11 +882,20 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
             max_output_tokens: maxTokens
         };
         if (Number.isFinite(temperature)) body.temperature = temperature;
-        const reasoningEffort = resolveStageReasoningEffort(
+        const resolvedReasoningEffort = resolveStageReasoningEffort(
             process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT,
             model,
             options.reasoningStage || options.usageContext?.stage || options.stage || ''
         );
+        const overrideEffort = options.reasoningEffortOverride
+            ? normalizeReasoningEffort(options.reasoningEffortOverride, model)
+            : '';
+        const allowedEfforts = reasoningEffortsFor(model);
+        const reasoningEffort = (resolvedReasoningEffort && overrideEffort
+            && allowedEfforts.indexOf(overrideEffort) >= 0
+            && allowedEfforts.indexOf(overrideEffort) < allowedEfforts.indexOf(resolvedReasoningEffort))
+            ? overrideEffort
+            : resolvedReasoningEffort;
         if (reasoningEffort) {
             body.reasoning = { effort: reasoningEffort };
         }

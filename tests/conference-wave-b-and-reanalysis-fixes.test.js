@@ -569,3 +569,89 @@ test('conference-review-reanalysis accepts SHA-verified aggregate review failure
         fs.rmSync(tmp, { recursive: true, force: true });
     }
 });
+
+test('utils buildRequestBody reasoningEffortOverride only steps strictly downward from stage ceiling', () => {
+    const utils = require('../scripts/utils.js');
+    const prev = process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
+    const prevTiered = process.env.PD_TIERED_REASONING_EFFORT;
+    process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT = 'xhigh';
+    delete process.env.PD_TIERED_REASONING_EFFORT;
+    try {
+        const msgs = [{ role: 'user', content: 'hello' }];
+        const base = utils.buildRequestBody('openai_responses', 'muse-spark-1.3-contributor', msgs, 128000, 0.6, {
+            usageContext: { stage: 'apiReaderArticle' }
+        });
+        assert.equal(base.reasoning?.effort, 'xhigh');
+
+        // Downward step-down xhigh -> high is allowed
+        const steppedDown = utils.buildRequestBody('openai_responses', 'muse-spark-1.3-contributor', msgs, 128000, 0.6, {
+            usageContext: { stage: 'apiReaderArticle' },
+            reasoningEffortOverride: 'high'
+        });
+        assert.equal(steppedDown.reasoning?.effort, 'high');
+
+        // Upward override on a low stage is ignored (never exceeds stage ceiling)
+        const lowAttempt = utils.buildRequestBody('openai_responses', 'muse-spark-1.3-contributor', msgs, 16000, 0.1, {
+            usageContext: { stage: 'dailyFilter' },
+            reasoningEffortOverride: 'xhigh'
+        });
+        assert.equal(lowAttempt.reasoning?.effort, 'low');
+    } finally {
+        if (prev === undefined) delete process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT;
+        else process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT = prev;
+        if (prevTiered === undefined) delete process.env.PD_TIERED_REASONING_EFFORT;
+        else process.env.PD_TIERED_REASONING_EFFORT = prevTiered;
+    }
+});
+
+test('reader-authenticated-pdf-table-evidence matches space-percent headers and bottom-caption tables without stray gap', () => {
+    const api = require('../scripts/lib/reader-authenticated-pdf-table-evidence.js');
+    const { extractMarkdownTables } = require('../scripts/analysis-contract.js');
+    const raw = [
+        'Style Accuracy',
+        'Style Consistency',
+        'Method',
+        'Top-1 % ↑',
+        'Top-3 % ↑',
+        'Top-5 % ↑',
+        'Mean CosSim ↑',
+        'w/o ScAT',
+        '38.26',
+        '76.74',
+        '91.21',
+        '0.5882',
+        'Full',
+        '48.84',
+        '79.07',
+        '95.37',
+        '0.7565',
+        'Table 4: Ablation Study on ScAT Components for Style Consistency and Accuracy'
+    ].join('\n');
+    const doc = {
+        contract: 'reader-sealed-pdf-quotes-v1',
+        available: true,
+        rawFullText: raw,
+        normalizedFullText: raw.replace(/\s+/g, ' ').trim()
+    };
+    const rendered = extractMarkdownTables(
+        '| Method | Top-1 % ↑ | Top-3 % ↑ | Top-5 % ↑ | Mean CosSim ↑ |\n'
+        + '|---|---|---|---|---|\n'
+        + '| w/o ScAT | 38.26 | 76.74 | 91.21 | 0.5882 |\n'
+        + '| Full | 48.84 | 79.07 | 95.37 | 0.7565 |'
+    )[0];
+    const match = api.matchLiteralTable(rendered, [raw], doc, raw);
+    assert.ok(match);
+    assert.deepEqual(match.columns.map(c => [c.metric, c.unit]), [['Top-1', '%'], ['Top-3', '%'], ['Top-5', '%']]);
+    assert.equal(match.rows.length, 2);
+
+    // Negative: stray prose line between last data row and bottom caption must reject
+    const withGap = raw.replace('Table 4:', 'Some intervening prose paragraph.\nTable 4:');
+    const gapDoc = { ...doc, rawFullText: withGap, normalizedFullText: withGap.replace(/\s+/g, ' ').trim() };
+    assert.equal(api.matchLiteralTable(rendered, [withGap], gapDoc, withGap), null);
+
+    // Negative: missing % in source column must reject
+    const noPct = raw.replace('Top-1 % ↑', 'Top-1 ↑');
+    const noPctDoc = { ...doc, rawFullText: noPct, normalizedFullText: noPct.replace(/\s+/g, ' ').trim() };
+    assert.equal(api.matchLiteralTable(rendered, [noPct], noPctDoc, noPct), null);
+});
+

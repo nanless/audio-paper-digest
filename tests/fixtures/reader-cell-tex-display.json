@@ -464,6 +464,22 @@
     {
       "input": "0.93⁠ dB",
       "expected": "0.93⁠ dB"
+    },
+    {
+      "input": "FGD\\delimiter \"3223379",
+      "expected": "FGD↓"
+    },
+    {
+      "input": "BC\\delimiter \"3222378",
+      "expected": "BC↑"
+    },
+    {
+      "input": "Span\\delimiter \"326C33F",
+      "expected": "Span↕"
+    },
+    {
+      "input": "Unknown\\delimiter \"9999999",
+      "expected": "Unknown\\delimiter \"9999999"
     }
   ]
 }

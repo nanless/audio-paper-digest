@@ -1352,6 +1352,11 @@ def _project_reader_cell_tex_display_body(value):
             and not re.search(r'([^|\n=]{1,12}=[0-9]+(?:\.[0-9]+)?)\1(?![0-9.])', output):
         return output
     output = re.sub(r'\\[,;:]', '', output)
+    # 与 JS reader-source-display.js 同步：PDF ToUnicode CMap 漏出的标准 TeX fontmath.ltx
+    # 箭头定界符代码（\uparrow = "3222378, \downarrow = "3223379, \updownarrow = "326C33F）。
+    output = re.sub(r'\\delimiter\s*"3222378(?![0-9A-Fa-f])', '↑', output)
+    output = re.sub(r'\\delimiter\s*"3223379(?![0-9A-Fa-f])', '↓', output)
+    output = re.sub(r'\\delimiter\s*"326C33F(?![0-9A-Fa-f])', '↕', output, flags=re.I)
     # 可见 Unicode 数学字母/粗体与同值 \boldsymbol 注解只保留可见副本。
     def bold(match):
         visible, name = match.group(1), match.group(2)

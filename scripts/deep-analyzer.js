@@ -18,6 +18,7 @@ const {
     detectApiType,
     buildApiUrl,
     buildRequestBody,
+    resolveStageReasoningEffort,
     buildHeaders,
     parseResponseText,
     getResponsesOutputTruncationError,
@@ -9925,20 +9926,26 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
 
     let lastError = null;
     let reportedSuspendedMs = 0;
+    let reasoningEffortOverride = cfg.reasoningEffortOverride || '';
+    const stageName = cfg.reasoningStage || cfg.usageContext?.stage || cfg.stage || '';
     const budget = createActiveTimeBudget(overallTimeoutMs);
 
     try {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            const attemptStartMs = budget.elapsedMs();
             try {
                 const timeoutMs = getActiveRemainingTimeoutMs(overallTimeoutMs, budget.elapsedMs());
                 const result = await _callModelOnce(safeMessages, maxTokens, {
-                    ...cfg, usageContext: { ...cfg.usageContext, transportAttempt: attempt }
+                    ...cfg,
+                    ...(reasoningEffortOverride ? { reasoningEffortOverride } : {}),
+                    usageContext: { ...cfg.usageContext, transportAttempt: attempt }
                 }, budget, apiType, timeoutMs);
                 return result;
             } catch (err) {
                 const classified = classifyModelRequestError(err, cfg);
                 lastError = classified;
                 if (classified.retryable === false) throw classified;
+                const attemptElapsedMs = budget.elapsedMs() - attemptStartMs;
                 const duration = (budget.elapsedMs() / 1000).toFixed(1);
                 const suspendedMs = budget.suspendedMs();
                 if (suspendedMs - reportedSuspendedMs >= 1000) {
@@ -9948,6 +9955,25 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
                 console.log(`    [api] ⚠️  模型调用失败 (尝试 ${attempt}/${maxRetries}) | active=${duration}s | ${classified.code} | ${classified.message}`);
 
                 if (attempt < maxRetries) {
+                    const disconnectCode = String(classified.code || '').toUpperCase();
+                    const isLongGatewayDrop = (classified.category === 'network' || classified.category === 'stream_terminal')
+                        && (disconnectCode === 'ECONNRESET'
+                            || disconnectCode === 'ETIMEDOUT'
+                            || disconnectCode === 'REQUEST_STREAM_IDLE_TIMEOUT'
+                            || /socket hang up|ECONNRESET/i.test(String(classified.message || '')));
+                    const currentResolvedEffort = reasoningEffortOverride || resolveStageReasoningEffort(
+                        process.env.PD_OPENAI_RESPONSES_REASONING_EFFORT,
+                        cfg.model,
+                        stageName
+                    );
+                    if (apiType === 'openai_responses'
+                        && stageName === 'apiReaderArticle'
+                        && isLongGatewayDrop
+                        && attemptElapsedMs >= 240_000
+                        && currentResolvedEffort === 'xhigh') {
+                        reasoningEffortOverride = 'high';
+                        console.log(`    [api] ⬇️  单次长文请求耗时 ${(attemptElapsedMs / 1000).toFixed(1)}s 触及网关上限，下一次传输重试降档 reasoning.effort: xhigh → high`);
+                    }
                     const delay = Math.pow(2, attempt) * API_RETRY_BASE_DELAY_MS;
                     if (getActiveRemainingTimeoutMs(overallTimeoutMs, budget.elapsedMs()) <= delay) {
                         throw createOverallTimeoutError(
@@ -10051,6 +10077,7 @@ function buildConfiguredModelRequestBody(messages, maxTokens, config, apiType) {
     return buildRequestBody(apiType, config.model, messages, maxTokens, temperature,
         { usageContext: config.usageContext,
             reasoningStage: config.reasoningStage,
+            reasoningEffortOverride: config.reasoningEffortOverride,
             promptCacheKey: config.promptCacheKey || buildStagePromptCacheKey(config),
             auxiliaryThinkingMode: resolveAuxiliaryRequestPolicy(config.usageContext?.stage, config)?.thinkingMode,
             readerResponseFormat: ['apiReaderArticle', 'apiReaderRepair'].includes(config.usageContext?.stage)
