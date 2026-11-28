@@ -1484,7 +1484,15 @@ def generate(conference_id, process_id, *, figure_crop_manifest=None, figure_cro
         bundle = process_bundle(conference_id, process_id)
         # Raw source/stage/science qualification always precedes any projection.
         existing = publication_dir(conference_id, process_id) / 'generation.json'
-        expected_view = read_json(existing).get('figurePublicationView') if existing.exists() else None
+        existing_record = read_json(existing) if existing.exists() else None
+        existing_completion_matches = (
+            isinstance(existing_record, dict)
+            and existing_record.get('completionReceiptSha256') == bundle['completion']['receiptSha256']
+        )
+        expected_view = (
+            existing_record.get('figurePublicationView')
+            if existing_completion_matches else None
+        )
         if figure_crop_manifest is not None:
             bundle = _publication_figure_view_bundle(bundle, conference_id, process_id,
                 selection={'manifestPath': str(Path(figure_crop_manifest).resolve()),
