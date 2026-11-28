@@ -131,6 +131,16 @@ def _strip_core_summary_non_result_numerals(text):
     value = re.sub(r'\b(?:pp?\.|pages?)\s*\d+(?:\s*[–—~-]\s*\d+)?', ' ', value, flags=re.IGNORECASE)
     value = re.sub(r'\b(?:vol|no)\.\s*\d+(?:\s*[–—~-]\s*\d+)?', ' ', value, flags=re.IGNORECASE)
     value = re.sub(
+        r'([,;])\s+\d{1,2}(?=\s+(?:so|and|but|or|which|that|where|when|while|who|because|as|in|on|for|with|the|a|an|it|this|these|they|we)\b)',
+        r'\1 ', value,
+    )
+    value = re.sub(r'(\.\s+)\d{1,2}\.\d{1,2}(?:\.\d{1,2})?\s+(?=[A-Z][a-z]+)', r'\1', value)
+    value = re.sub(r'\(\s*Steps?\s+\d+(?:\s*[–—-]\s*\d+)?\s*\)', ' ', value, flags=re.IGNORECASE)
+    value = re.sub(
+        r'\b(?:a|an)\s+\d+(?:\.\d+)?\s*-?\s*(?:second|sec|minute|min|hour|hr|ms|millisecond)s?\s+(?:audio|speech|video|input|sample|clip|utterance|segment)(?:\s+(?:clip|segment|sample|file|input))?(?=,?\s+for\s+example\b)',
+        ' ', value, flags=re.IGNORECASE,
+    )
+    value = re.sub(
         r'(?<![A-Za-z0-9_])\d+(?:,\d{3})*(?:\.\d+)?\s*(?:种\s*)?(?:languages?|语言)(?![A-Za-z0-9_])',
         ' ', value, flags=re.IGNORECASE,
     )

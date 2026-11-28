@@ -1504,6 +1504,14 @@ function stripCoreSummaryNonResultNumerals(text) {
         // 实测准确率）。只删这些定位记号，句内真正的测量值保留并照常判定。
         .replace(/\b(?:pp?\.|pages?)\s*\d+(?:\s*[–—~-]\s*\d+)?/gi, ' ')
         .replace(/\b(?:vol|no)\.\s*\d+(?:\s*[–—~-]\s*\d+)?/gi, ' ')
+        // 会议 PDF 抽取会把正文里的上标脚注编号（如 "vocals, 10 so a comparison"）、
+        // 软换行拼入句中的小节编号与步骤范围（如 ". 3.2 Data Flow ... (Steps 1–8)"）
+        // 以及 "a 30-second audio clip, for example" 这类假设输入时长示例保留为裸数字，
+        // 它们不是实测结果；仅移除这些结构化非结果记号，保留同句中的真实指标数值。
+        .replace(/(?<=[,;])\s+\d{1,2}(?=\s+(?:so|and|but|or|which|that|where|when|while|who|because|as|in|on|for|with|the|a|an|it|this|these|they|we)\b)/g, ' ')
+        .replace(/(?<=\.\s+)\d{1,2}\.\d{1,2}(?:\.\d{1,2})?\s+(?=[A-Z][a-z]+)/g, ' ')
+        .replace(/\(\s*Steps?\s+\d+(?:\s*[–—-]\s*\d+)?\s*\)/gi, ' ')
+        .replace(/\b(?:a|an)\s+\d+(?:\.\d+)?\s*-?\s*(?:second|sec|minute|min|hour|hr|ms|millisecond)s?\s+(?:audio|speech|video|input|sample|clip|utterance|segment)(?:\s+(?:clip|segment|sample|file|input))?(?=,?\s+for\s+example\b)/gi, ' ')
         // Calendar intervals and decades describe recording/composition history,
         // not a measured from/to improvement. Other numbers in the sentence stay.
         .replace(/\b(?:from|between)\s+(?:[12]?[0-9]|3[01])\s+(?:to|and)\s+(?:[12]?[0-9]|3[01])\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)(?:\s+(?:19|20)\d{2})?\b/gi, ' ')

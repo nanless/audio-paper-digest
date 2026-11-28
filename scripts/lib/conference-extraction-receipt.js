@@ -610,7 +610,7 @@ function verifyWithPinnedPython(sourceRoot, requestName) {
     try {
         stdout = execFileSync('bash', [runtime, script, '--verify', '--manifest', requestName, '--source-root', sourceRoot], {
             cwd: path.resolve(__dirname, '..', '..'), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
-            timeout: 10 * 60 * 1000, env: buildChildProcessEnv({}, EXTRACTOR_ALLOWED_ENV_KEYS), stdio: ['ignore', 'pipe', 'pipe']
+            timeout: 45 * 60 * 1000, env: buildChildProcessEnv({}, EXTRACTOR_ALLOWED_ENV_KEYS), stdio: ['ignore', 'pipe', 'pipe']
         });
     } catch (error) {
         const stderr = String(error?.stderr || '').trim().split(/\r?\n/).at(-1) || error.message;

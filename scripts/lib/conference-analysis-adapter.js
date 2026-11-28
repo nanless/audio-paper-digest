@@ -1109,6 +1109,15 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             }
             let readerReviewUnissuedResourceScoring;
             if (readerReview && mode !== 'reader-only') {
+                if (!readerReview.unissuedScoringRecoveryHandle) {
+                    throw Object.assign(new Error('Text maintenance cannot change resources or scoring'), {
+                        code: 'CONFERENCE_READER_REVIEW_MAINTENANCE_RESOURCE_DRIFT',
+                        category: 'paper',
+                        scope: 'paper',
+                        retryable: false,
+                        systemic: false
+                    });
+                }
                 readerReviewUnissuedResourceScoring = require('./conference-reader-review-maintenance')
                     .readVerifiedUnissuedScoringRecovery(readerReview.unissuedScoringRecoveryHandle,
                         { loaded, parent, mode, resourcePreflightFileSha256 });

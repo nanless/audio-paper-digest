@@ -85,3 +85,15 @@ test('数据结果仍需正确计数角色与实际清洗产物，不能借本�
   createSummary().replace('修复去重后得到96句唯一句子','保留旧版本文本')
  ])assert.match(c.validateCoreSummarySemanticContract(summary,{sourceText:corpus}),/已有证据包含关键定量结果/);
 });
+test('PDF内联脚注编号、小节步骤编号与假设时长示例不误判为定量结果，真指标仍判为真',()=>{
+ for(const source of [
+  'There are early versions with Ian Curtis on vocals, 10 so a comparison of approaches can be carried out; Curtis is less accurate with the pitch. This evaluation discusses qualitative style.',
+  'Prometheus dashboards offer per-module latency and throughput metrics. 3.2 Data Flow (Baseline Pipeline) The manager executes a predefined baseline pipeline (Steps 1–8).',
+  'All services run sequentially; a 30-second audio clip, for example, still incurs cumulative latency that can exceed the sub-second round-trip time end-users expect in evaluation.'
+ ]) assert.equal(c.classifySourceQuantitativeEvidence(source),false,source);
+ for(const source of [
+  'In our evaluation, our method achieves WER of 4.2%, outperforming the baseline 6.8%.',
+  'On the test set, our model reduces latency from 120 ms to 30 ms compared to the baseline.',
+  'In Table 2, accuracy reaches 92.5% versus 88.1% for the baseline.'
+ ]) assert.equal(c.classifySourceQuantitativeEvidence(source),true,source);
+});
