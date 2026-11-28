@@ -2240,8 +2240,40 @@ def review(conference_id, process_id):
         generation, _, _ = validate_generation(
             conference_id, process_id, repo, images, allow_committed=True)
         require_content_review_runtime(repo)
-        # 先运行免费的本地 Hugo 机械门禁，再发起付费语义与多模态审查。
-        # 整个 review 对博客仓库和图片仓库都是只读的。
+        # 先运行免费的本地 Markdown 门禁并把阻断页落盘为正式失败记录（便于定向重分析），
+        # 再跑本地 Hugo 渲染门禁与付费语义/多模态审查。整个 review 对博客和图片仓库均只读。
+        from markdown_hugo_gate import parse_frontmatter_content, validate_markdown_format_gate
+        module = load_publish_to_blog()
+        protocol = content_review_protocol(module)
+        md_results = []
+        md_failures = []
+        for record in publication_page_files(generation):
+            relative = safe_relative(record['path'], 'review 页面')
+            raw = target_bytes(repo, record)
+            digest = sha_bytes(raw)
+            if digest != record['sourceSha256']:
+                raise ConferencePublicationError(f'review 页面 SHA 漂移: {relative}')
+            content = raw.decode('utf-8')
+            frontmatter, body = parse_frontmatter_content(relative, content)
+            issues = validate_markdown_format_gate(relative, frontmatter, body)
+            if issues:
+                try:
+                    raise_content_review_failure(
+                        record, digest, protocol, 'markdown', issues,
+                        f'Markdown gate 失败: {relative}: {issues}')
+                except ConferenceContentReviewFailure as rejected:
+                    md_failures.append(rejected.result)
+                    md_results.append(rejected.result)
+            else:
+                md_results.append({'path': relative, 'sha256': digest, 'passed': True})
+        if md_failures:
+            batch_body = {**current_header('conference-page-content-review-batch-failure'),
+                          'status': 'blocked', 'protocol': protocol, 'pages': md_results}
+            batch_digest = stable(batch_body)
+            write_exact(PUBLICATION_ROOT / 'page-review-batch-failures' / f'{batch_digest}.json',
+                        json_bytes({**batch_body, 'batchSha256': batch_digest}))
+            raise ConferencePublicationError('；'.join(item['message'] for item in md_failures)
+                + f'；Markdown 门禁阻断 {len(md_failures)} 页，失败原因记录: {batch_digest}')
         hugo = run_hugo(repo, generation)
         from conference_publication_figure_view import review_contexts_from_generation
         content_review = review_pages(repo, publication_page_files(generation),

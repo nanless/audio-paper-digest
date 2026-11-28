@@ -4292,6 +4292,70 @@ def repair_formula_delimiters(markdown):
     return fm_prefix + ''.join(rebuilt)
 
 
+def merge_pdf_wrapped_table_hyphens(article):
+    """Display-only repair for PDF-wrapped hyphenated continuation rows in Markdown tables.
+
+    When PyMuPDF splits a single multi-line PDF table cell across two Markdown rows
+    (e.g., `... Gi-` followed by a continuation row whose only populated cell in the same
+    column starts with `gaSpeech ...`), join the hyphenated word cleanly onto the preceding
+    row without altering any sealed source or table-binding records.
+    """
+    if not isinstance(article, str) or '|' not in article or '-' not in article:
+        return article
+    lines = article.splitlines(keepends=True)
+    out = []
+    in_fence = False
+    i = 0
+    while i < len(lines):
+        raw_line = lines[i]
+        stripped = raw_line.strip()
+        if re.match(r'^(`{3,}|~{3,})', stripped):
+            in_fence = not in_fence
+            out.append(raw_line)
+            i += 1
+            continue
+        if in_fence or not re.match(r'^\s*\|.*\|\s*$', raw_line):
+            out.append(raw_line)
+            i += 1
+            continue
+        block_start = i
+        while i < len(lines) and re.match(r'^\s*\|.*\|\s*$', lines[i]):
+            i += 1
+        block = lines[block_start:i]
+        sep_idx = next(
+            (idx for idx, line in enumerate(block)
+             if re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line)),
+            None,
+        )
+        if sep_idx is None or sep_idx + 2 > len(block):
+            out.extend(block)
+            continue
+        out.extend(block[:sep_idx + 1])
+        merged_rows = []
+        for raw_row in block[sep_idx + 1:]:
+            eol = '\r\n' if raw_row.endswith('\r\n') else ('\n' if raw_row.endswith('\n') else '')
+            body = raw_row[:-len(eol)] if eol else raw_row
+            inner = body.strip()[1:-1]
+            cells = [cell.strip() for cell in re.split(r'(?<!\\)\|', inner)]
+            if merged_rows:
+                prev_cells, prev_eol, _prev_raw = merged_rows[-1]
+                non_empty = [idx for idx, cell in enumerate(cells) if cell]
+                if (len(cells) == len(prev_cells) and len(cells) >= 2 and len(non_empty) == 1):
+                    col = non_empty[0]
+                    prev_val = prev_cells[col]
+                    curr_val = cells[col]
+                    if (re.search(r'[A-Za-z]{2,}-$', prev_val)
+                            and not prev_val.endswith('--')
+                            and re.match(r'^[a-z]{2,}', curr_val)):
+                        prev_cells[col] = prev_val[:-1] + curr_val
+                        rebuilt = '| ' + ' | '.join(prev_cells) + ' |' + prev_eol
+                        merged_rows[-1] = (prev_cells, prev_eol, rebuilt)
+                        continue
+            merged_rows.append((cells, eol, raw_row))
+        out.extend(row[2] for row in merged_rows)
+    return ''.join(out)
+
+
 def render_packet(packet):
     if 'aggregatePresentationBatch' in packet:
         if set(packet) != {'aggregatePresentationBatch'}:
@@ -4347,6 +4411,7 @@ def render_packet(packet):
     if r'G.711 μ\mu-law' in article:
         article = publisher._project_source_quoted_codec_display(article, paper)
     article = normalize_repeated_bold_prefixes(article)
+    article = merge_pdf_wrapped_table_hyphens(article)
     assets = []
     if capabilities in (FULL, PDF_VISUAL, PDF_VISUAL_TABLES):
         asset_by_url = {}

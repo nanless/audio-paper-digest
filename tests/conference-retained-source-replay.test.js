@@ -337,3 +337,45 @@ test('all ordinary ancestors use identity; revision/item CAS, cycle and16-depth 
  rows.get('execution-1').parent=first;assert.throws(()=>sourceOnlyTestApi.completionItemProjections(item,deps),/父链循环/);rows.get('execution-1').parent=rows.get('execution-2');
  fs.writeFileSync(path.join(rows.get('execution-2').directory,'reader-revision.json'),'{}');assert.throws(()=>sourceOnlyTestApi.completionItemProjections(item,deps),/父链超过16层/);
 });
+
+test('completionItemProjections 沿合法 reviewReanalysisAdoption 回执投影原完成项并拒绝篡改回执', t => {
+ const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'retained-reanalysis-chain-'));
+ t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+ const api = require('../scripts/lib/conference-process');
+ const ledger = require('../scripts/lib/conference-source-ledger');
+ const prevItem = {
+  paperId: 'conference:test:2026:conference-paper-id:p1',
+  analysisRunId: '11111111-1111-4111-8111-111111111111',
+  sourceProof: { pdfSha256: 'a'.repeat(64), textSha256: 'b'.repeat(64), artifactsSha256: 'c'.repeat(64) },
+  analysisProof: { analysisSha256: 'd'.repeat(64), completionReceiptSha256: 'e'.repeat(64), sourceSnapshotSha256: 'f'.repeat(64) }
+ };
+ const newExec = '22222222-2222-4222-8222-222222222222';
+ const receiptFile = `review-reanalysis-adoption-${newExec}-1234567890ab.json`;
+ const receiptBody = {
+  contract: 'conference-review-reanalysis-adoption-v1',
+  paperId: prevItem.paperId,
+  previousExecutionId: prevItem.analysisRunId,
+  newExecutionId: newExec,
+  previousItem: prevItem
+ };
+ const receiptSha256 = api.stableHash(receiptBody);
+ fs.writeFileSync(path.join(dir, receiptFile), JSON.stringify({ ...receiptBody, receiptSha256 }), { mode: 0o600 });
+ const adoptedItem = {
+  ...prevItem,
+  analysisRunId: newExec,
+  analysisProof: { ...prevItem.analysisProof, analysisSha256: '9'.repeat(64) },
+  reviewReanalysisAdoption: {
+   receiptFile,
+   receiptSha256,
+   previousExecutionId: prevItem.analysisRunId,
+   newExecutionId: newExec,
+   previousItemSha256: api.stableHash(prevItem)
+  }
+ };
+ const projected = sourceOnlyTestApi.completionItemProjections(adoptedItem, { ledger }, new Set(), dir);
+ assert.deepEqual(projected.map(x => x.analysisRunId), [newExec, prevItem.analysisRunId]);
+
+ const tampered = structuredClone(adoptedItem);
+ tampered.reviewReanalysisAdoption.receiptSha256 = '0'.repeat(64);
+ assert.throws(() => sourceOnlyTestApi.completionItemProjections(tampered, { ledger }, new Set(), dir), /采纳回执与当前成员原凭证不一致/);
+});

@@ -220,6 +220,39 @@ class ConferenceAuditRootCauseGatesTest(unittest.TestCase):
             self.assertTrue(passed, issues)
             self.assertEqual(len(llm_calls), 2)
 
+    def test_merge_pdf_wrapped_table_hyphens_repairs_split_cells_and_passes_gate(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('conference_page_render_mod', SCRIPTS / 'conference-page-render.py')
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        broken = (
+            '| Task | Stage | Datasets | Hours |\n'
+            '| --- | --- | --- | --- |\n'
+            '| ASR | ASR | MGB-3/5 (Ali et al., 2017, 2019), Gi- | 12,000h |\n'
+            '|  |  | gaSpeech (Chen et al., 2021), GALE,1 |  |\n'
+            '|  |  | CV (ar/en), SPGIS- |  |\n'
+            '|  |  | peech (O’Neill et al., 2021) |  |\n\n'
+            '| ColA | ColB |\n'
+            '| --- | --- |\n'
+            '| mother so I could have re recov- |  |\n'
+            '| ery okay |  |\n'
+        )
+        repaired = mod.merge_pdf_wrapped_table_hyphens(broken)
+        self.assertIn('GigaSpeech (Chen et al., 2021), GALE,1', repaired)
+        self.assertIn('SPGISpeech (O’Neill et al., 2021)', repaired)
+        self.assertIn('mother so I could have re recovery okay', repaired)
+        self.assertEqual(math_and_emphasis_issues(repaired, 'repaired.md'), [])
+
+        # Multi-column continuation row is NOT altered
+        multi = (
+            '| A | B |\n'
+            '| --- | --- |\n'
+            '| foo- | 1 |\n'
+            '| bar | 2 |\n'
+        )
+        self.assertEqual(mod.merge_pdf_wrapped_table_hyphens(multi), multi)
+
 
 if __name__ == '__main__':
     unittest.main()

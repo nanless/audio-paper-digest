@@ -54,7 +54,7 @@ function readCompletion(state, directory, deps) {
         }
     }
     const currentItems = Object.values(state.items);
-    const projections = new Map(currentItems.map(item => [item.paperId, completionItemProjections(item, deps)]));
+    const projections = new Map(currentItems.map(item => [item.paperId, completionItemProjections(item, deps, new Set(), directory)]));
     const matching = candidates.filter(receipt =>
         api.stableHash(receipt.sourceUpgradePromotion) === api.stableHash(state.sourceUpgradePromotion)
         && Array.isArray(receipt.items) && receipt.items.length === currentItems.length
@@ -101,7 +101,7 @@ function sourceIdentityReaderRevision(executionId, deps) {
         ? deps.adapter.loadConferenceReaderRevision(options)
         : deps.adapter.loadConferenceReaderRevisionIdentity(options);
 }
-function completionItemProjections(item, deps, sourceAncestors = new Set()) {
+function completionItemProjections(item, deps, sourceAncestors = new Set(), directory = null) {
     const result = [completionItem(item)];
     if (item.sourceResourceCorrectionAdoption) {
         if (sourceAncestors.has(item.analysisRunId) || sourceAncestors.size >= 16) {
@@ -110,7 +110,31 @@ function completionItemProjections(item, deps, sourceAncestors = new Set()) {
         const next = new Set(sourceAncestors); next.add(item.analysisRunId);
         const original = require('./conference-source-resource-correction')
             .readPreviousSourceIdentityItem(item);
-        return [...result, ...completionItemProjections(original, deps, next)];
+        return [...result, ...completionItemProjections(original, deps, next, directory)];
+    }
+    if (item.reviewReanalysisAdoption && directory) {
+        if (sourceAncestors.has(item.analysisRunId) || sourceAncestors.size >= 16) {
+            throw new Error('审查重分析原完成凭证投影循环或超过16层。');
+        }
+        const adoption = item.reviewReanalysisAdoption;
+        const receiptFile = adoption.receiptFile;
+        if (typeof receiptFile !== 'string' || !/^review-reanalysis-adoption-[a-f0-9-]+-[a-f0-9]{12}\.json$/.test(receiptFile)) {
+            throw new Error('保留的审查重分析采纳回执文件名不合法。');
+        }
+        const loaded = deps.ledger.readRegularJson(path.join(directory, receiptFile));
+        const receipt = loaded.value;
+        const { receiptSha256, ...body } = receipt;
+        if (receiptSha256 !== adoption.receiptSha256
+            || receiptSha256 !== api.stableHash(body)
+            || receipt.paperId !== item.paperId
+            || receipt.newExecutionId !== adoption.newExecutionId
+            || receipt.previousExecutionId !== adoption.previousExecutionId
+            || !receipt.previousItem || typeof receipt.previousItem !== 'object'
+            || api.stableHash(receipt.previousItem) !== adoption.previousItemSha256) {
+            throw new Error('保留的审查重分析采纳回执与当前成员原凭证不一致。');
+        }
+        const next = new Set(sourceAncestors); next.add(item.analysisRunId);
+        return [...result, ...completionItemProjections(receipt.previousItem, deps, next, directory)];
     }
     if (!item.readerRevision) return result;
     let current = sourceIdentityReaderRevision(item.analysisRunId, deps);
